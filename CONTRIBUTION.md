@@ -7,7 +7,7 @@ We welcome contributions to **Metis** — whether it's fixing bugs, improving do
 1. Fork the repo and clone your fork:
 
 ```bash
-git clone https://github.com/Arm/metis.git
+git clone https://github.com/arm/metis.git
 cd metis
 ```
 
