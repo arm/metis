@@ -5,9 +5,10 @@
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache2.0-yellow.svg)](LICENSE)
 
-![Logo](.github/logo.png)
+![Logo](.github/logo-light.png#gh-light-mode-only)
+![Logo](.github/logo-dark.png#gh-dark-mode-only)
 
-Metis is an open-source, AI-driven tool for deep security code review. It helps engineers detect subtle vulnerabilities, improve secure coding practices, and reduce review fatigue. This is especially valuable in large, complex, or legacy codebases where traditional tooling often falls short.
+Metis is an open-source, AI-driven tool for deep security code review, created by [Arm's Product Security Team](https://www.arm.com/products/product-security). It helps engineers detect subtle vulnerabilities, improve secure coding practices, and reduce review fatigue. This is especially valuable in large, complex, or legacy codebases where traditional tooling often falls short.
 
 The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and counsel.
 
