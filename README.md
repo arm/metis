@@ -3,6 +3,7 @@
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
 [![Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/arm-software/metis/badge)](https://securityscorecards.dev/viewer/?uri=github.com/arm/metis)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache2.0-yellow.svg)](LICENSE)
 
 ![Logo](.github/logo-light.png#gh-light-mode-only)
