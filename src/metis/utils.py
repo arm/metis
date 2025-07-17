@@ -4,6 +4,8 @@
 import codecs
 import json
 import os
+import difflib
+import re
 
 import tiktoken
 
@@ -80,3 +82,33 @@ def read_file_content(file_path):
             return f.read()
     except Exception:
         return ""
+
+
+def normalize_lines(lines):
+    """Remove all whitespace characters from the joined lines."""
+    joined = "".join(lines)
+    return re.sub(r"\s+", "", joined)
+
+
+def find_snippet_line(snippet, file_path, threshold=0.80):
+    """
+    Finds the first line number where the snippet matches a window in the file
+    above the given similarity threshold. Returns 1 if not found.
+    """
+    with open(file_path, "r", encoding="utf-8") as f:
+        file_lines = f.readlines()
+
+    snippet_lines = snippet.strip().splitlines()
+    snippet_len = len(snippet_lines)
+    norm_snippet = normalize_lines(snippet_lines)
+
+    for i in range(len(file_lines) - snippet_len + 1):
+
+        window = file_lines[i : i + snippet_len]
+        norm_window = normalize_lines(window)
+
+        score = difflib.SequenceMatcher(None, norm_window, norm_snippet).ratio()
+        if score >= threshold:
+            return i + 1
+
+    return 1

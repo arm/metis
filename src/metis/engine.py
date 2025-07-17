@@ -27,6 +27,7 @@ from metis.utils import (
     parse_json_output,
     read_file_content,
     split_snippet,
+    find_snippet_line,
 )
 
 logger = logging.getLogger("metis")
@@ -427,6 +428,12 @@ class MetisEngine:
             if "reviews" not in parsed_review:
                 continue
 
+            # Add line numbers to issues
+            for issue in parsed_review["reviews"]:
+                snippet_text = issue.get("code_snippet", "").strip()
+                line_number = find_snippet_line(snippet_text, file_path)
+                issue["line_number"] = line_number
+
             if validate:
                 system_prompt_validation = language_prompts["validation_review"]
                 validation_output = self._validate_review(
@@ -442,7 +449,11 @@ class MetisEngine:
         if not accumulated["reviews"]:
             return None
 
-        result = {"file": relative_path, "reviews": accumulated["reviews"]}
+        result = {
+            "file": relative_path,
+            "file_path": file_path,
+            "reviews": accumulated["reviews"],
+        }
         if validate and validations:
             result["validation"] = validations
         return result

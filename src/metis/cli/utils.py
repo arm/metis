@@ -8,6 +8,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from metis.sarif.writer import generate_sarif
+
 console = Console()
 
 try:
@@ -59,10 +61,15 @@ def with_spinner(task_description, fn, *args, **kwargs):
     return result
 
 
-def save_output(output_file, data, quiet=False):
+def save_output(output_file, data, quiet=False, sarif=False):
+
+    dump_data = data
+    if sarif:
+        dump_data = generate_sarif(data)
+
     if output_file:
         with open(output_file, "w") as f:
-            json.dump(data, f, indent=4)
+            json.dump(dump_data, f, indent=4)
         print_console(f"[blue]Results saved to {output_file}[/blue]", quiet)
 
 
@@ -91,6 +98,11 @@ def pretty_print_reviews(results, quiet=False):
                 if r.get("code_snippet"):
                     print_console(
                         f"    [cyan]Snippet:[/cyan] [dim]{(r['code_snippet'][:100] + '...') if len(r['code_snippet']) > 100 else r['code_snippet']}",
+                        quiet,
+                    )
+                if r.get("line_number"):
+                    print_console(
+                        f"    [cyan]Line number:[/cyan] {r['line_number']}",
                         quiet,
                     )
                 if r.get("reasoning"):

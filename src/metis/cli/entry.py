@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-
 import argparse
 import logging
 from pathlib import Path
@@ -41,59 +40,63 @@ from .utils import (
 
 console = Console()
 logger = logging.getLogger("metis")
+
 COMMANDS = {
-    "index": {"func": run_index, "args_required": 0, "usage": "index"},
-    "review_patch": {
-        "func": run_review,
-        "args_required": 1,
-        "usage": "review_patch <patch_file>",
-    },
-    "review_code": {
-        "func": run_review_code,
-        "args_required": 0,
-        "usage": "review_code",
-    },
-    "update": {"func": run_update, "args_required": 1, "usage": "update <patch_file>"},
-    "review_file": {
-        "func": run_file_review,
-        "args_required": 1,
-        "usage": "review_file <file_path>",
-    },
-    "ask": {"func": run_ask, "args_required": 1, "usage": "ask <question>"},
-    "help": {"func": show_help, "args_required": 0, "usage": "help"},
-    "exit": {"func": None, "args_required": 0, "usage": "exit"},
+    "index": run_index,
+    "review_patch": run_review,
+    "review_code": run_review_code,
+    "update": run_update,
+    "review_file": run_file_review,
+    "ask": run_ask,
+    "help": show_help,
+    "exit": None,
 }
+completer = WordCompleter(list(COMMANDS), ignore_case=True)
 
-completer = WordCompleter(COMMANDS, ignore_case=True)
 
+def determine_output_file(cmd, args, cmd_args):
+    """
+    Set args.output_file if not provided, or extract from cmd_args if present.
+    """
+    if "--output-file" in cmd_args:
+        idx = cmd_args.index("--output-file")
+        if idx + 1 < len(cmd_args):
+            args.output_file = cmd_args[idx + 1]
+            del cmd_args[idx : idx + 2]
+            return
 
-def execute_command(
-    engine, cmd, cmd_args, output_file=None, verbose=False, quiet=False
-):
-    if cmd not in COMMANDS:
-        print_console(f"[red]Unknown command:[/red] {cmd}", quiet)
+    if args.output_file:
         return
 
-    command_info = COMMANDS[cmd]
-    if len(cmd_args) < command_info["args_required"]:
-        print_console(f"[red]Usage:[/red] {command_info['usage']}", quiet)
+    Path("results").mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.output_file = f"results/{cmd}_{timestamp}.json"
+
+
+def execute_command(engine, cmd, cmd_args, args):
+    if cmd not in COMMANDS:
+        print_console(f"[red]Unknown command:[/red] {cmd}", args.quiet)
         return
 
     if cmd == "exit":
-        print_console("[magenta]Goodbye![/magenta]", quiet)
+        print_console("[magenta]Goodbye![/magenta]", args.quiet)
         exit(0)
-    elif cmd == "help":
-        command_info["func"]()
+
+    if cmd == "help":
+        show_help()
         return
 
-    if cmd in {"review_patch", "review_code", "review_file"}:
-        command_info["func"](engine, *(cmd_args), output_file, quiet)
+    determine_output_file(cmd, args, cmd_args)
+    func = COMMANDS[cmd]
+
+    if cmd in ("review_patch", "review_file", "update"):
+        func(engine, cmd_args[0], args)
     elif cmd == "ask":
-        command_info["func"](engine, " ".join(cmd_args))
+        func(engine, " ".join(cmd_args))
     elif cmd == "index":
-        command_info["func"](engine, verbose, quiet)
-    elif cmd == "update":
-        command_info["func"](engine, cmd_args[0], quiet)
+        func(engine, args.verbose, args.quiet)
+    elif cmd == "review_code":
+        func(engine, args)
 
 
 def main():
@@ -106,42 +109,42 @@ def main():
     parser.add_argument("--codebase-path", type=str, default=".")
     parser.add_argument("--language-plugin", type=str, default="c")
     parser.add_argument(
-        "--backend",
-        type=str,
-        default="chroma",
-        choices=["chroma", "postgres"],
+        "--backend", type=str, default="chroma", choices=["chroma", "postgres"]
     )
     parser.add_argument("--log-file", type=str)
+    parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-    )
-    parser.add_argument("--output-file", type=str)
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output (default: off)",
-    )
-    parser.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Run Metis in non-interactive mode",
-    )
-    parser.add_argument(
-        "--command",
-        type=str,
-        help="Command to run in non-interactive mode (e.g., 'review_patch file.patch').",
+        "-v", "--verbose", action="store_true", help="Enable verbose output"
     )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="Suppress output in CLI"
     )
+    parser.add_argument(
+        "--output-file", type=str, help="Save analysis results to this file"
+    )
+    parser.add_argument(
+        "--sarif", action="store_true", help="Flag to generate SARIF output"
+    )
+    parser.add_argument(
+        "--non-interactive", action="store_true", help="Run in non-interactive mode"
+    )
+    parser.add_argument(
+        "--command",
+        type=str,
+        help="Command to run in non-interactive mode (e.g., 'review_patch file.patch')",
+    )
+
     args = parser.parse_args()
 
     if args.quiet and args.verbose:
         print_console(
-            "[red]Error:[/red] --quiet and --verbose cannot be used together.", False
+            "[red]Error:[/red] --quiet and --verbose cannot be used together.",
+            False,
+        )
+        exit(1)
+    if args.sarif and not args.output_file:
+        print_console(
+            "[red]Error:[/red] --sarif requires the --output-file argument", args.quiet
         )
         exit(1)
 
@@ -176,24 +179,13 @@ def main():
                 args.quiet,
             )
             exit(1)
-
-        cmd_parts = args.command.strip().split()
-        cmd, cmd_args = cmd_parts[0], cmd_parts[1:]
-
-        output_file = args.output_file
-        if not output_file:
-            Path("results").mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = f"results/{cmd}_{timestamp}.json"
-
+        parts = args.command.strip().split()
+        cmd, cmd_args = parts[0], parts[1:]
         try:
-            execute_command(
-                engine, cmd, cmd_args, output_file, args.verbose, args.quiet
-            )
+            execute_command(engine, cmd, cmd_args, args)
         except Exception as e:
             print_console(f"[bold red]Error:[/bold red] {e}", args.quiet)
             exit(1)
-
         exit(0)
 
     print_console(
@@ -207,14 +199,13 @@ def main():
             user_input = prompt("> ", completer=completer, history=history).strip()
             if not user_input:
                 continue
-
-            cmd_parts = user_input.split()
-            cmd, cmd_args = cmd_parts[0], cmd_parts[1:]
+            parts = user_input.split()
+            cmd, cmd_args = parts[0], parts[1:]
 
             if PG_SUPPORTED and isinstance(vector_backend, PGVectorStoreImpl):
                 if cmd == "index" and vector_backend.check_project_schema_exists():
                     print_console(
-                        "[red]Schema already exists. Cannot reindex.[/red]", args.quiet
+                        "[red]Schema exists. Cannot re-index.[/red]", args.quiet
                     )
                     continue
                 elif (
@@ -222,23 +213,12 @@ def main():
                     and not vector_backend.check_project_schema_exists()
                 ):
                     print_console(
-                        "[red]Schema is missing. Did you forget to index?[/red]",
+                        "[red]Schema missing. Did you forget to index?[/red]",
                         args.quiet,
                     )
                     continue
 
-            output_file = None
-            if "--output-file" in cmd_args:
-                idx = cmd_args.index("--output-file")
-                if len(cmd_args) > idx + 1:
-                    output_file = cmd_args[idx + 1]
-                    del cmd_args[idx : idx + 2]
-            else:
-                Path("results").mkdir(exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_file = f"results/{cmd}_{timestamp}.json"
-
-            execute_command(engine, cmd, cmd_args, output_file, args.verbose)
+            execute_command(engine, cmd, cmd_args, args)
 
         except (EOFError, KeyboardInterrupt):
             print_console("\n[magenta]Bye![/magenta]", args.quiet)
