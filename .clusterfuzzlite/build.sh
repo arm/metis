@@ -1,13 +1,18 @@
-#!/bin/bash -eu
+#!/bin/bash
+set -eux
 
-# build project
-# e.g.
-# ./autogen.sh
-# ./configure
-# make -j$(nproc) all
+pip3 install .
 
-# build fuzzers
-# e.g.
-# $CXX $CXXFLAGS -std=c++11 -Iinclude \
-#     /path/to/name_of_fuzzer.cc -o $OUT/name_of_fuzzer \
-#     $LIB_FUZZING_ENGINE /path/to/library.a
+for fuzzer in $(find "$SRC/tests/fuzzing" -name '*_fuzzer.py'); do
+  name=$(basename -s .py "$fuzzer")
+  pkg="${name}.pkg"
+
+  pyinstaller --distpath "$OUT" --onefile --name "$pkg" "$fuzzer"
+
+  cat > "$OUT/$name" << 'EOF'
+#!/bin/sh
+dir=$(dirname "$0")
+"$dir/${pkg}" "$@"
+EOF
+  chmod +x "$OUT/$name"
+done
