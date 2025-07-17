@@ -3,18 +3,18 @@
 
 import atheris
 import sys
-from unidiff import PatchSet
+from metis.utils import safe_decode_unicode
 
 
-def TestOneInput(data: bytes) -> None:
-    """Fuzz entry point: attempt to parse `data` as a unified diff."""
+def TestOneInput(data):
+    s = data.decode("utf-8", errors="ignore")
     try:
-        PatchSet(data.decode("utf-8", errors="ignore"))
+        _ = safe_decode_unicode(s)
     except Exception:
         pass
 
 
-def main() -> None:
+def main():
     atheris.Setup(sys.argv, TestOneInput)
     atheris.Fuzz()
 
