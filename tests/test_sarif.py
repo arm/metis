@@ -33,7 +33,7 @@ def test_create_fingerprint_deterministic_and_unique():
     assert fp1 != fp4
     # Fingerprint format is hex string of expected length
     assert isinstance(fp1, str)
-    assert len(fp1) == len(hashlib.sha1().hexdigest())
+    assert len(fp1) == len(hashlib.sha256().hexdigest())
 
 
 def test_generate_sarif_single_issue(tmp_path):

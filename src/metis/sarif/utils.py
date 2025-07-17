@@ -14,4 +14,4 @@ def read_file_lines(file_path):
 
 def create_fingerprint(file_path, line_number, rule_id):
     key = f"{file_path}:{line_number}:{rule_id}"
-    return hashlib.sha1(key.encode("utf-8")).hexdigest()
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
