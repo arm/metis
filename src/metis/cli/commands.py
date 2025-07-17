@@ -43,17 +43,17 @@ Options:
     )
 
 
-def run_review(engine, patch_file, output_file=None, quiet=False):
+def run_review(engine, patch_file, args):
     if not check_file_exists(patch_file):
         return
     results = with_spinner(
         "Reviewing patch...", engine.review_patch, patch_file=patch_file
     )
-    pretty_print_reviews(results, quiet)
-    save_output(output_file, results, quiet)
+    pretty_print_reviews(results, args.quiet)
+    save_output(args.output_file, results, args.quiet, args.sarif)
 
 
-def run_file_review(engine, file_path, output_file=None, quiet=False):
+def run_file_review(engine, file_path, args):
     if not check_file_exists(file_path):
         return
     raw_result = with_spinner(
@@ -65,16 +65,16 @@ def run_file_review(engine, file_path, output_file=None, quiet=False):
     else:
         results = {"reviews": []}
 
-    pretty_print_reviews(results, quiet)
-    save_output(output_file, results, quiet)
+    pretty_print_reviews(results, args.quiet)
+    save_output(args.output_file, results, args.quiet, args.sarif)
 
 
-def run_review_code(engine, output_file=None, verbose=False, quiet=False):
+def run_review_code(engine, args):
     results = with_spinner(
-        "Reviewing entire codebase...", engine.review_code, False, verbose
+        "Reviewing codebase...", engine.review_code, False, args.verbose
     )
-    pretty_print_reviews(results, quiet)
-    save_output(output_file, results, quiet)
+    pretty_print_reviews(results, args.quiet)
+    save_output(args.output_file, results, args.quiet, args.sarif)
 
 
 def run_index(engine, verbose=False, quiet=False):
@@ -82,12 +82,12 @@ def run_index(engine, verbose=False, quiet=False):
     print_console("[green]Indexing completed successfully.[/green]", quiet)
 
 
-def run_update(engine, patch_file, verbose=False, quiet=False):
+def run_update(engine, patch_file, args):
     if not check_file_exists(patch_file):
         return
     file_diff = read_file_content(patch_file)
-    with_spinner("Updating index...", engine.update_index, file_diff, verbose)
-    print_console("[green]Index update completed.[/green]", quiet)
+    with_spinner("Updating index...", engine.update_index, file_diff, args.verbose)
+    print_console("[green]Index update completed.[/green]", args.quiet)
 
 
 def run_ask(engine, question):

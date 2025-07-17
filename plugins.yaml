@@ -11,7 +11,7 @@ general_prompts:
         - List all identified security issues in a JSON array.
         - Each element of the array must be a JSON object inside a list under the \"reviews\"key, with the following keys:
           - \"issue\": A short description of the vulnerability.
-          - \"code_snippet\": The specific code that exibits this vulnerability.
+          - \"code_snippet\": The exact lines of code that exibit this vulnerability. This field should only contain code found in the file.
           - \"reasoning\": A detailed explanation of why you identified this as a vulnerability.
           - \"mitigation\": A recommended approach or fix to resolve the issue.
           - \"confidence\": A float between 0 and 1 indicating your confidence in the finding.
