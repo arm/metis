@@ -1,7 +1,8 @@
 #!/bin/bash
 set -eux
 
-pip3 install .
+export PIP_IGNORE_REQUIRES_PYTHON=1
+pip3 install --ignore-requires-python .
 
 for fuzzer in $(find "$SRC/tests/fuzzing" -name '*_fuzzer.py'); do
   name=$(basename -s .py "$fuzzer")
