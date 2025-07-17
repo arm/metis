@@ -4,7 +4,9 @@ set -eux
 export PIP_IGNORE_REQUIRES_PYTHON=1
 pip3 install --ignore-requires-python .
 
-for fuzzer in $(find "$SRC/tests/fuzzing" -name '*_fuzzer.py'); do
+cd "$(dirname "$0")"/..
+
+find tests/fuzzing -type f -name '*_fuzzer.py' | while read -r fuzzer; do
   name=$(basename -s .py "$fuzzer")
   pkg="${name}.pkg"
 
