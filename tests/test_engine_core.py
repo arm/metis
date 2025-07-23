@@ -11,6 +11,7 @@ def test_supported_languages():
     langs = MetisEngine.supported_languages()
     assert "c" in langs
     assert "python" in langs
+    assert "rust" in langs
 
 
 def test_get_existing_plugin(engine):
