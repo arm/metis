@@ -45,7 +45,7 @@ plugins:
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
         by the specific changes or context provided.
         You will be given:
-        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for modified.
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
         2. RELEVANT_CONTEXT - information about what these changes do.
         3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
@@ -109,7 +109,7 @@ plugins:
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
         by the specific changes or context provided.
         You will be given:
-        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for modified.
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
         2. RELEVANT_CONTEXT - information about what these changes do.
         3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
@@ -148,7 +148,7 @@ plugins:
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
         by the specific changes or context provided.
         You will be given:
-        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for modified.
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
         2. RELEVANT_CONTEXT - information about what these changes do.
         3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
