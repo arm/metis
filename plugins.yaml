@@ -135,10 +135,6 @@ plugins:
         1. FILE - A source code file
         2. RELEVANT_CONTEXT - information about what these changes do.
 
-        Your tasks are:
-        1. Security Review Scope
-           - Review the security implications of the FILE.
-        If it is empty, ignore it.
   rust:
     supported_extensions: [".rs", ".rlib"]
     splitting:
