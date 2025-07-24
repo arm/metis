@@ -21,6 +21,7 @@ from metis.exceptions import (
 from metis.vector_store.base import BaseVectorStore
 from metis.plugins.c_plugin import CPlugin
 from metis.plugins.python_plugin import PythonPlugin
+from metis.plugins.rust_plugin import RustPlugin
 from metis.utils import (
     count_tokens,
     llm_call,
@@ -36,7 +37,11 @@ logger = logging.getLogger("metis")
 class MetisEngine:
 
     plugin_config = load_plugin_config("plugins.yaml")
-    plugins = [CPlugin(plugin_config), PythonPlugin(plugin_config)]
+    plugins = [
+        CPlugin(plugin_config),
+        PythonPlugin(plugin_config),
+        RustPlugin(plugin_config),
+    ]
 
     def __init__(
         self,
