@@ -73,6 +73,44 @@ plugins:
                  while a job, firmware thread, or callback is still referencing it.
            - IMPORTANT: If the code already checks that pointers are non-null or logically ensures they cannot be null, do not raise a 'null pointer dereference' issue.
            - Do not report on issues that do not affect security.
+      functional_review_file: |-
+        You are a senior software engineer specializing in C/C++.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in the FILE.
+        If it is empty, ignore it.
+      functional_review: |-
+        You are a senior software engineer specializing in C/C++.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+        If it is empty, ignore it.
+      functional_review_checks: |-
+        2. What to Check
+           - Look for potential functional issues such as:
+             - Logical errors or bugs
+             - Off-by-one errors
+             - Incorrect algorithm implementation
+             - Performance issues or inefficiencies
+             - Non-adherence to best practices or coding standards
+             - Lack of comments or unclear documentation
+             - Redundant or dead code
+           - Do not report on security issues.
+      snippet_functional_summary: |-
+        You are a senior software engineer specializing in C/C++.
+        You will be given a concatenated list all identified functional issues that have been identified in a code review.
+        Summarize all the issues in a single paragraph and explain what changed in the code patch and how it affects functionality.
       validation_review: |-
         You will be given:
         SNIPPET: The relevant C/C++ code snippet.
@@ -124,6 +162,42 @@ plugins:
              - Hardcoded secrets
              - Insecure use of libraries
            - Do not report on issues that do not affect security.
+      functional_review_file: |-
+        You are a senior software engineer specializing in Python.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in the FILE.
+        If it is empty, ignore it.
+      functional_review: |-
+        You are a senior software engineer specializing in Python.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+        If it is empty, ignore it.
+      functional_review_checks: |-
+        2. What to Check
+           - Look for potential functional issues such as:
+             - Logical errors or bugs (e.g., off-by-one, incorrect logic)
+             - Unhandled exceptions or edge cases
+             - Performance bottlenecks (e.g., inefficient loops, slow library usage)
+             - Non-idiomatic Python (not following PEP 8 or common practices)
+             - Lack of type hints
+             - Unclear variable names or code structure
+             - Missing or incomplete docstrings
+             - Redundant or dead code
+           - Do not report on security issues.
+      snippet_functional_summary: "Summarize the functional implications of these Python code changes."
       validation_review: "Validate the following Python review for security concerns."
       snippet_security_summary: "Summarize the security implications of these Python code changes."
       attempt_fix: "Based on the issues detected in the Python code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
@@ -180,6 +254,40 @@ plugins:
           - Insecure use of libraries
         - IMPORTANT: Rusts ownership model and borrow checker prevent many classes of bugs by design. Do not raise issues that are already statically prevented unless overridden by `unsafe` or FFI.
         - Do not report on issues that do not affect security.
+      functional_review_file: |-
+        You are a senior software engineer specializing in Rust.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in the FILE.
+        If it is empty, ignore it.
+      functional_review: |-
+        You are a senior software engineer specializing in Rust.
+        Your task is to perform a functional code review.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Functional Review Scope
+           - Review the functionality, logic, and quality of the code in FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+        If it is empty, ignore it.
+      functional_review_checks: |-
+        2. What to Check
+           - Look for potential functional issues such as:
+             - Logical errors or bugs (e.g., panics, incorrect logic)
+             - Performance issues (e.g., unnecessary allocations, inefficient algorithms)
+             - Clippy warnings or non-idiomatic Rust
+             - Unclear code, lack of comments, or poor naming
+             - Redundant or dead code
+             - Misuse of `unsafe` blocks for non-FFI/performance critical code.
+           - Do not report on security issues.
+      snippet_functional_summary: "Summarize the functional implications of these Rust code changes."
       validation_review: "Validate the following Rust review for security concerns."
       snippet_security_summary: "Summarize the security implications of these Rust code changes."
       attempt_fix: "Based on the issues detected in the Rust code changes, propose a fix patch. Issues: {issues} Patch: {patch}"

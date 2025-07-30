@@ -111,6 +111,13 @@ def main():
     parser.add_argument(
         "--backend", type=str, default="chroma", choices=["chroma", "postgres"]
     )
+    parser.add_argument(
+        "--review-type",
+        type=str,
+        default="security",
+        choices=["security", "functional"],
+        help="Type of review to perform (security or functional).",
+    )
     parser.add_argument("--log-file", type=str)
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument(

@@ -1,0 +1,32 @@
+2025-07-30 22:11:30,400 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,402 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,404 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,406 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,407 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,409 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,411 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,412 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,414 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,416 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,418 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,419 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,421 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,423 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,425 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,426 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,428 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,430 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,432 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,433 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,435 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,437 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,460 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:30,472 - ERROR - Error initializing ChromaStore: Could not connect to tenant default_tenant. Are you sure it exists?
+2025-07-30 22:11:31,323 - ERROR - Error querying index: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+2025-07-30 22:11:31,328 - ERROR - Error querying index: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+2025-07-30 22:11:31,407 - ERROR - Error querying index: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+2025-07-30 22:11:31,433 - ERROR - Error querying index: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+2025-07-30 22:11:31,608 - ERROR - Error calling OpenAI API: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+2025-07-30 22:11:31,682 - ERROR - Error calling OpenAI API: Error code: 401 - {'error': {'message': 'Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+⠇ Reviewing codebase...
+Error: Vector store initialization error: Unable to initialize the vector store.

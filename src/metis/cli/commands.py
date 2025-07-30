@@ -47,7 +47,10 @@ def run_review(engine, patch_file, args):
     if not check_file_exists(patch_file):
         return
     results = with_spinner(
-        "Reviewing patch...", engine.review_patch, patch_file=patch_file
+        "Reviewing patch...",
+        engine.review_patch,
+        patch_file=patch_file,
+        review_type=args.review_type,
     )
     pretty_print_reviews(results, args.quiet)
     save_output(args.output_file, results, args.quiet, args.sarif)
@@ -57,7 +60,10 @@ def run_file_review(engine, file_path, args):
     if not check_file_exists(file_path):
         return
     raw_result = with_spinner(
-        f"Reviewing file {file_path}...", engine.review_file, file_path=file_path
+        f"Reviewing file {file_path}...",
+        engine.review_file,
+        file_path=file_path,
+        review_type=args.review_type,
     )
 
     if raw_result and isinstance(raw_result.get("reviews"), list):
@@ -71,7 +77,11 @@ def run_file_review(engine, file_path, args):
 
 def run_review_code(engine, args):
     results = with_spinner(
-        "Reviewing codebase...", engine.review_code, False, args.verbose
+        "Reviewing codebase...",
+        engine.review_code,
+        validate=False,
+        verbose=args.verbose,
+        review_type=args.review_type,
     )
     pretty_print_reviews(results, args.quiet)
     save_output(args.output_file, results, args.quiet, args.sarif)
