@@ -6,6 +6,7 @@ import json
 import os
 import difflib
 import re
+import sys
 
 import tiktoken
 
@@ -112,3 +113,25 @@ def find_snippet_line(snippet, file_path, threshold=0.80):
             return i + 1
 
     return 1
+
+
+def retry_on_recursion_error(fn, *args, bump=5000, retries=10, **kwargs):
+    """
+    Calls `fn(*args, **kwargs)`, catching RecursionError up to `retries` times.
+    On each failure, increase the recursion limit by `bump` * `attempt` and retry.
+    Restores the original limit before returning.
+    """
+    original_limit = sys.getrecursionlimit()
+    try:
+        return fn(*args, **kwargs)
+    except RecursionError as e:
+        for attempt in range(1, retries + 1):
+            new_limit = original_limit + bump * attempt
+            sys.setrecursionlimit(new_limit)
+            try:
+                return fn(*args, **kwargs)
+            except RecursionError:
+                continue
+        raise e
+    finally:
+        sys.setrecursionlimit(original_limit)
