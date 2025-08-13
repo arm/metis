@@ -29,6 +29,7 @@ from metis.utils import (
     read_file_content,
     split_snippet,
     find_snippet_line,
+    retry_on_recursion_error,
 )
 
 logger = logging.getLogger("metis")
@@ -169,7 +170,11 @@ class MetisEngine:
             elif ext in code_supported_exts:
                 code_docs.append(doc)
 
-        nodes_code = code_splitter.get_nodes_from_documents(code_docs)
+        # Workaround for potential recursion issues in code splitting
+        nodes_code = retry_on_recursion_error(
+            code_splitter.get_nodes_from_documents, code_docs
+        )
+
         nodes_docs = doc_splitter.get_nodes_from_documents(doc_docs)
         logger.info(
             f"Created {len(nodes_code)} code nodes and {len(nodes_docs)} documentation nodes."
