@@ -52,10 +52,14 @@ class ChromaStore(BaseVectorStore):
     ):
         try:
             index_code = VectorStoreIndex.from_vector_store(
-                self.vector_store_code, storage_context=self.storage_context_code
+                self.vector_store_code,
+                storage_context=self.storage_context_code,
+                embed_model=self.embed_model_code,
             )
             index_docs = VectorStoreIndex.from_vector_store(
-                self.vector_store_docs, storage_context=self.storage_context_docs
+                self.vector_store_docs,
+                storage_context=self.storage_context_docs,
+                embed_model=self.embed_model_docs,
             )
 
             llm_query_class = llm_provider.get_query_engine_class()

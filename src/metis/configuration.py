@@ -38,21 +38,38 @@ def load_runtime_config(config_path="config.yaml", enable_psql=False):
             pg_db_name=secrets.get("database_name"),
         )
 
-    llm_provider = cfg.get("llm_provider", {}).get("name", "").lower()
-    if llm_provider == "openai":
+    llm_cfg = cfg.get("llm_provider", {})
+    runtime["code_embedding_model"] = llm_cfg.get("code_embedding_model", "")
+    runtime["docs_embedding_model"] = llm_cfg.get("docs_embedding_model", "")
+
+    llm_provider_name = cfg.get("llm_provider", {}).get("name", "").lower()
+    runtime["llm_provider_name"] = llm_provider_name
+    if llm_provider_name == "openai":
         llm_api_key = os.environ.get("OPENAI_API_KEY")
         if not llm_api_key:
             raise RuntimeError(
                 "OPENAI_API_KEY environment variable is required for OpenAI provider but not set."
             )
         runtime["llm_api_key"] = llm_api_key
+        runtime["model"] = llm_cfg.get("model", "")
+    elif llm_provider_name == "azure_openai":
+        llm_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        if not llm_api_key:
+            raise RuntimeError(
+                "AZURE_OPENAI_API_KEY environment variable is required for Azure OpenAI provider but not set."
+            )
+        runtime["llm_api_key"] = llm_api_key
+        runtime["azure_endpoint"] = llm_cfg.get("azure_endpoint", "")
+        runtime["azure_api_version"] = llm_cfg.get("azure_api_version", "")
+        runtime["chat_deployment_name"] = llm_cfg.get("chat_deployment_name", "")
+        runtime["code_embedding_deployment"] = llm_cfg.get(
+            "code_embedding_deployment", ""
+        )
+        runtime["docs_embedding_deployment"] = llm_cfg.get(
+            "docs_embedding_deployment", ""
+        )
     else:
-        raise ValueError(f"Unsupported LLM provider: {llm_provider}")
-
-    llm_cfg = cfg.get("llm_provider", {})
-    runtime["model"] = llm_cfg.get("model", "")
-    runtime["code_embedding_model"] = llm_cfg.get("code_embedding_model", "")
-    runtime["docs_embedding_model"] = llm_cfg.get("docs_embedding_model", "")
+        raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
     # Engine/vector store settings
     engine_cfg = cfg.get("metis_engine", {})
@@ -71,7 +88,7 @@ def load_runtime_config(config_path="config.yaml", enable_psql=False):
 
     # Query config
     query_cfg = cfg.get("query", {})
-    runtime["llama_query_model"] = query_cfg.get("model", runtime["model"])
+    runtime["llama_query_model"] = query_cfg.get("model", "")
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)

@@ -1,0 +1,15 @@
+llm_provider:
+  name: "azure_openai"
+
+  azure_endpoint: "https://my-metis-eu.openai.azure.com/"
+  azure_api_version: "2024-02-15-preview"
+
+  chat_deployment_name: "gpt-4o-mini"
+
+  code_embedding_model: "text-embedding-3-large"
+  code_embedding_deployment: "text-embedding-3-large"
+  docs_embedding_model: "text-embedding-3-large"
+  docs_embedding_deployment: "text-embedding-3-large"
+
+  llama_query_temperature: 0.0
+  llama_query_max_tokens: 512

@@ -13,7 +13,6 @@ from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
-from metis.providers.openai import OpenAIProvider
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -150,7 +149,17 @@ def main():
 
     configure_logger(logger, args)
     runtime = load_runtime_config(enable_psql=(args.backend == "postgres"))
-    llm_provider = OpenAIProvider(runtime)
+
+    # Construct the correct provider from runtime config
+    llm_provider_name = runtime.get("llm_provider_name", "openai").lower()
+    if llm_provider_name == "openai":
+        from metis.providers.openai import OpenAIProvider
+
+        llm_provider = OpenAIProvider(runtime)
+    elif llm_provider_name == "azure_openai":
+        from metis.providers.azure_openai import AzureOpenAIProvider
+
+        llm_provider = AzureOpenAIProvider(runtime)
 
     embed_model_code = llm_provider.get_embed_model_code()
     embed_model_docs = llm_provider.get_embed_model_docs()
