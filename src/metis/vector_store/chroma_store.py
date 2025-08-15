@@ -6,6 +6,7 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from chromadb import PersistentClient
 from metis.exceptions import VectorStoreInitError, QueryEngineInitError
 from metis.vector_store.base import BaseVectorStore
+from chromadb.config import Settings
 
 import logging
 
@@ -23,7 +24,9 @@ class ChromaStore(BaseVectorStore):
 
     def init(self):
         try:
-            client = PersistentClient(path=self.persist_dir)
+            client = PersistentClient(
+                path=self.persist_dir, settings=Settings(anonymized_telemetry=False)
+            )
             code_collection = client.get_or_create_collection("code")
             docs_collection = client.get_or_create_collection("docs")
 
