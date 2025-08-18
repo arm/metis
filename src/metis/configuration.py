@@ -61,7 +61,8 @@ def load_runtime_config(config_path="config.yaml", enable_psql=False):
         runtime["llm_api_key"] = llm_api_key
         runtime["azure_endpoint"] = llm_cfg.get("azure_endpoint", "")
         runtime["azure_api_version"] = llm_cfg.get("azure_api_version", "")
-        runtime["chat_deployment_name"] = llm_cfg.get("chat_deployment_name", "")
+        runtime["engine"] = llm_cfg.get("engine", "")
+        runtime["chat_deployment_model"] = llm_cfg.get("chat_deployment_model", "")
         runtime["code_embedding_deployment"] = llm_cfg.get(
             "code_embedding_deployment", ""
         )

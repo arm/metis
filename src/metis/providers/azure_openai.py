@@ -4,6 +4,7 @@
 import logging
 
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_openai import AzureOpenAI as LlamaAzureOpenAI
 from openai import AzureOpenAI
 
 from metis.providers.base import LLMProvider
@@ -17,12 +18,16 @@ class AzureOpenAIProvider(LLMProvider):
         self.api_key = config["llm_api_key"]
         self.azure_endpoint = config["azure_endpoint"]
         self.api_version = config["azure_api_version"]
-        self.chat_deployment_name = config["chat_deployment_name"]
+        self.engine = config["engine"]
+        self.chat_deployment_model = config["chat_deployment_model"]
 
-        if not self.chat_deployment_name:
+        if not self.engine:
+            raise ValueError("Missing 'engine' (Azure deployment name).")
+
+        if not self.chat_deployment_model:
             raise ValueError(
-                "Missing 'chat_deployment_name' "
-                "Azure calls must specify a deployment name."
+                "Missing 'chat_deployment_model' "
+                "Azure calls must specify a deployment model."
             )
 
         self.code_embedding_model = config["code_embedding_model"]
@@ -38,13 +43,16 @@ class AzureOpenAIProvider(LLMProvider):
         self.max_tokens = int(config.get("llama_query_max_tokens", 512))
 
     def get_query_engine_class(self):
-        return AzureOpenAI
+        return LlamaAzureOpenAI
 
     def get_query_model_kwargs(self):
         return {
-            "deployment_name": self.chat_deployment_name,
+            "model": self.chat_deployment_model,
+            "engine": self.engine,
+            "api_key": self.api_key,
+            "azure_endpoint": self.azure_endpoint,
+            "api_version": self.api_version,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
         }
 
     def get_embed_model_code(self):
@@ -74,7 +82,7 @@ class AzureOpenAIProvider(LLMProvider):
 
     def call_llm(self, system_prompt, prompt, deployment_name=None, **kwargs):
         client = self.get_llm_client()
-        deployment = deployment_name or self.chat_deployment_name
+        deployment = deployment_name or self.engine
 
         try:
             response = client.chat.completions.create(

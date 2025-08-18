@@ -4,7 +4,8 @@ llm_provider:
   azure_endpoint: "https://my-metis-eu.openai.azure.com/"
   azure_api_version: "2024-02-15-preview"
 
-  chat_deployment_name: "gpt-4o-mini"
+  engine: "gpt-4o-mini"
+  chat_deployment_model: "gpt-4o-mini"
 
   code_embedding_model: "text-embedding-3-large"
   code_embedding_deployment: "text-embedding-3-large"
