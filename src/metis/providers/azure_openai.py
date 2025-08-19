@@ -42,6 +42,9 @@ class AzureOpenAIProvider(LLMProvider):
         self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 512))
 
+        self.model_token_param = config.get("model_token_param", "max_completion_tokens")
+        self.supports_temperature = config.get("supports_temperature", False)
+
     def get_query_engine_class(self):
         return LlamaAzureOpenAI
 
@@ -84,12 +87,7 @@ class AzureOpenAIProvider(LLMProvider):
         client = self.get_llm_client()
         deployment = deployment_name or self.engine
 
-        # Detect o3 model and use max_completion_tokens
-        model_name = (deployment or self.chat_deployment_model or "").lower()
-        is_o3_model = "o3" in model_name
-
         try:
-
             api_params = {
                 "model": deployment,
                 "messages": [
@@ -97,13 +95,12 @@ class AzureOpenAIProvider(LLMProvider):
                     {"role": "user", "content": prompt or ""},
                 ],
             }
-
-            if is_o3_model:
-                api_params["max_completion_tokens"] = kwargs.get("max_completion_tokens", kwargs.get("max_tokens", self.max_tokens))
-            else:
-                api_params["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
+            
+            if self.supports_temperature:
                 api_params["temperature"] = kwargs.get("temperature", self.temperature)
-
+            
+            token_value = kwargs.get("max_tokens", self.max_tokens)
+            api_params[self.model_token_param] = token_value
             response = client.chat.completions.create(**api_params)
             return (response.choices[0].message.content or "").strip()
         except Exception as e:
