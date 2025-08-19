@@ -84,9 +84,14 @@ class AzureOpenAIProvider(LLMProvider):
         client = self.get_llm_client()
         deployment = deployment_name or self.engine
 
-        # Detect o3 model and use max_completion_tokens
+        # Detect o models and use max_completion_tokens
         model_name = (deployment or self.chat_deployment_model or "").lower()
-        is_o3_model = "o3" in model_name
+        is_reasoning = (
+            "o1" in model_name
+            or "o3" in model_name
+            or "o4" in model_name
+            or "gpt-5" in model_name
+        )
 
         try:
 
@@ -98,8 +103,10 @@ class AzureOpenAIProvider(LLMProvider):
                 ],
             }
 
-            if is_o3_model:
-                api_params["max_completion_tokens"] = kwargs.get("max_completion_tokens", kwargs.get("max_tokens", self.max_tokens))
+            if is_reasoning:
+                api_params["max_completion_tokens"] = kwargs.get(
+                    "max_completion_tokens", kwargs.get("max_tokens", self.max_tokens)
+                )
             else:
                 api_params["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
                 api_params["temperature"] = kwargs.get("temperature", self.temperature)
