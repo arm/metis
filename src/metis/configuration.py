@@ -69,6 +69,8 @@ def load_runtime_config(config_path="config.yaml", enable_psql=False):
         runtime["docs_embedding_deployment"] = llm_cfg.get(
             "docs_embedding_deployment", ""
         )
+        runtime["model_token_param"] = llm_cfg.get("model_token_param", "max_completion_tokens")
+        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)        
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
