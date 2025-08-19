@@ -14,3 +14,6 @@ llm_provider:
 
   llama_query_temperature: 0.0
   llama_query_max_tokens: 512
+
+  model_token_param: "max_completion_tokens"
+  supports_temperature: false
