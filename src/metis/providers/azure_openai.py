@@ -84,16 +84,27 @@ class AzureOpenAIProvider(LLMProvider):
         client = self.get_llm_client()
         deployment = deployment_name or self.engine
 
+        # Detect o3 model and use max_completion_tokens
+        model_name = (deployment or self.chat_deployment_model or "").lower()
+        is_o3_model = "o3" in model_name
+
         try:
-            response = client.chat.completions.create(
-                model=deployment,
-                messages=[
+
+            api_params = {
+                "model": deployment,
+                "messages": [
                     {"role": "system", "content": system_prompt or ""},
                     {"role": "user", "content": prompt or ""},
                 ],
-                temperature=kwargs.get("temperature", self.temperature),
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-            )
+            }
+
+            if is_o3_model:
+                api_params["max_completion_tokens"] = kwargs.get("max_completion_tokens", kwargs.get("max_tokens", self.max_tokens))
+            else:
+                api_params["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
+                api_params["temperature"] = kwargs.get("temperature", self.temperature)
+
+            response = client.chat.completions.create(**api_params)
             return (response.choices[0].message.content or "").strip()
         except Exception as e:
             logger.exception("Error calling Azure OpenAI API: %s", e)
