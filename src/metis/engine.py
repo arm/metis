@@ -174,7 +174,6 @@ class MetisEngine:
         nodes_code = retry_on_recursion_error(
             code_splitter.get_nodes_from_documents, code_docs
         )
-
         nodes_docs = doc_splitter.get_nodes_from_documents(doc_docs)
         logger.info(
             f"Created {len(nodes_code)} code nodes and {len(nodes_docs)} documentation nodes."
@@ -186,11 +185,18 @@ class MetisEngine:
 
         # Build and persist the VectorStoreIndex
         VectorStoreIndex(
-            nodes_code, storage_context=storage_context_code, show_progress=verbose
+            nodes_code,
+            storage_context=storage_context_code,
+            show_progress=verbose,
+            embed_model=self.llm_provider.get_embed_model_code(),
         )
         logger.info("Code indexing complete.")
+
         VectorStoreIndex(
-            nodes_docs, storage_context=storage_context_docs, show_progress=verbose
+            nodes_docs,
+            storage_context=storage_context_docs,
+            show_progress=verbose,
+            embed_model=self.llm_provider.get_embed_model_docs(),
         )
         logger.info("Documentation indexing complete.")
 
@@ -339,12 +345,14 @@ class MetisEngine:
             self.vector_backend.vector_store_code,
             storage_context=storage_context_code,
             show_progress=verbose,
+            embed_model=self.llm_provider.get_embed_model_code(),
         )
 
         index_docs = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_docs,
             storage_context=storage_context_docs,
             show_progress=verbose,
+            embed_model=self.llm_provider.get_embed_model_docs(),
         )
 
         for file_diff in patch_set:

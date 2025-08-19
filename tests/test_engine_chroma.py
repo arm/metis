@@ -4,7 +4,6 @@
 import pytest
 import os
 from metis.engine import MetisEngine
-from unittest.mock import Mock
 from metis.vector_store.chroma_store import ChromaStore
 from llama_index.core.settings import Settings
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
@@ -29,18 +28,26 @@ def test_chroma_backend_indexing(tmp_path):
         "docs_embedding_model": "test-docs-embed",
     }
 
+    embed = MockEmbedding(embed_dim=8)
     backend = ChromaStore(
         persist_dir=str(chroma_dir),
-        embed_model_code=Mock(),
-        embed_model_docs=Mock(),
+        embed_model_code=embed,
+        embed_model_docs=embed,
         query_config=runtime,
     )
+
+    class _Provider:
+        def get_embed_model_code(self):
+            return embed
+
+        def get_embed_model_docs(self):
+            return embed
 
     engine = MetisEngine(
         codebase_path="tests/data",
         vector_backend=backend,
         language_plugin="c",
-        llm_provider=Mock(),
+        llm_provider=_Provider(),
         **runtime,
     )
 
