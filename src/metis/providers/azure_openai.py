@@ -95,7 +95,6 @@ class AzureOpenAIProvider(LLMProvider):
                     {"role": "user", "content": prompt or ""},
                 ],
             }
-            
             if self.supports_temperature:
                 api_params["temperature"] = kwargs.get("temperature", self.temperature)
             
