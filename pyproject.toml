@@ -1,6 +1,6 @@
 [project]
 name = "metis"
-version = "0.1.1"
+version = "0.1.2"
 description = "Metis is a command line tool for performing security code reviews using LLMs"
 readme = "README.md"
 license = { file = "LICENSE.md" }

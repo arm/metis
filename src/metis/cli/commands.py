@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import importlib
 from rich.console import Console
 
 from metis.utils import read_file_content, safe_decode_unicode
@@ -39,8 +40,14 @@ Options:
     --project-schema SCHEMA    (Optional) Project identifier if postresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
+    --version                  (Optional) Show program version
 """
     )
+
+
+def show_version():
+    version = importlib.metadata.version("metis")
+    console.print("Metis [green]" + version + "[/green]")
 
 
 def run_review(engine, patch_file, args):
