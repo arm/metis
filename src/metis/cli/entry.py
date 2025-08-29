@@ -28,6 +28,7 @@ from .commands import (
     run_review_code,
     run_update,
     show_help,
+    show_version,
 )
 from .utils import (
     configure_logger,
@@ -48,6 +49,7 @@ COMMANDS = {
     "review_file": run_file_review,
     "ask": run_ask,
     "help": show_help,
+    "version": show_version,
     "exit": None,
 }
 completer = WordCompleter(list(COMMANDS), ignore_case=True)
@@ -81,6 +83,10 @@ def execute_command(engine, cmd, cmd_args, args):
         print_console("[magenta]Goodbye![/magenta]", args.quiet)
         exit(0)
 
+    if cmd == "version":
+        show_version()
+        return
+
     if cmd == "help":
         show_help()
         return
@@ -112,6 +118,7 @@ def main():
     )
     parser.add_argument("--log-file", type=str)
     parser.add_argument("--log-level", type=str, default="INFO")
+    parser.add_argument("--version", action="store_true", help="Show program version")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose output"
     )
@@ -180,6 +187,10 @@ def main():
         vector_backend=vector_backend,
         **runtime,
     )
+
+    if args.version:
+        show_version()
+        exit(0)
 
     if args.non_interactive:
         if not args.command:
