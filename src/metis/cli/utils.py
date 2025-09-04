@@ -47,7 +47,13 @@ def configure_logger(logger, args):
 
 def print_console(message, quiet=False, **kwargs):
     if not quiet:
-        console.print(message, **kwargs)
+        try:
+            console.print(message, **kwargs)
+        except Exception:
+            # If markup parsing fails, print without markup
+            kwargs_no_markup = kwargs.copy()
+            kwargs_no_markup['markup'] = False
+            console.print(message, **kwargs_no_markup)
 
 
 def with_spinner(task_description, fn, *args, **kwargs):
