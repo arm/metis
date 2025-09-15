@@ -4,6 +4,7 @@
 
 import importlib
 from rich.console import Console
+from rich.markup import escape
 
 from metis.utils import read_file_content, safe_decode_unicode
 from .utils import (
@@ -103,11 +104,11 @@ def run_ask(engine, question):
     if isinstance(answer, dict):
         if "code" in answer:
             print_console(
-                f"[bold yellow]Code Context:[/bold yellow] {safe_decode_unicode(answer['code'])} \n"
+                f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n"
             )
         if "docs" in answer:
             print_console(
-                f"[bold blue]Documentation Context:[/bold blue] {safe_decode_unicode(answer['docs'])}"
+                f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}"
             )
     else:
-        print_console(str(answer))
+        print_console(escape(str(answer)))
