@@ -21,7 +21,7 @@ class RustPlugin(BaseLanguagePlugin):
         return (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})
-            .get("supported_extensions", [".rs", ".rlib"])
+            .get("supported_extensions", [".rs"])
         )
 
     def get_splitter(self):
