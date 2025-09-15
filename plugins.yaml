@@ -140,7 +140,7 @@ plugins:
            - Review the security implications of the FILE.
         If it is empty, ignore it.
   rust:
-    supported_extensions: [".rs", ".rlib"]
+    supported_extensions: [".rs"]
     splitting:
       chunk_lines: 40
       chunk_lines_overlap: 15
