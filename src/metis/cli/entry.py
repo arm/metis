@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 from rich.console import Console
+from rich.markup import escape
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import InMemoryHistory
@@ -76,7 +77,7 @@ def determine_output_file(cmd, args, cmd_args):
 
 def execute_command(engine, cmd, cmd_args, args):
     if cmd not in COMMANDS:
-        print_console(f"[red]Unknown command:[/red] {cmd}", args.quiet)
+        print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
         return
 
     if cmd == "exit":
@@ -204,7 +205,7 @@ def main():
         try:
             execute_command(engine, cmd, cmd_args, args)
         except Exception as e:
-            print_console(f"[bold red]Error:[/bold red] {e}", args.quiet)
+            print_console(f"[bold red]Error:[/bold red] {escape(e)}", args.quiet)
             exit(1)
         exit(0)
 
@@ -244,4 +245,4 @@ def main():
             print_console("\n[magenta]Bye![/magenta]", args.quiet)
             break
         except Exception as e:
-            print_console(f"[bold red]Error:[/bold red] {e}", args.quiet)
+            print_console(f"[bold red]Error:[/bold red] {escape(e)}", args.quiet)
