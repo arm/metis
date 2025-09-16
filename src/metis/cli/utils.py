@@ -52,7 +52,7 @@ def print_console(message, quiet=False, **kwargs):
         except Exception:
             # If markup parsing fails, print without markup
             kwargs_no_markup = kwargs.copy()
-            kwargs_no_markup['markup'] = False
+            kwargs_no_markup["markup"] = False
             console.print(message, **kwargs_no_markup)
 
 
