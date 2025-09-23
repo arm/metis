@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from metis.sarif.writer import generate_sarif
@@ -70,12 +71,12 @@ def save_output(output_file, data, quiet=False, sarif=False):
     if output_file:
         with open(output_file, "w") as f:
             json.dump(dump_data, f, indent=4)
-        print_console(f"[blue]Results saved to {output_file}[/blue]", quiet)
+        print_console(f"[blue]Results saved to {escape(output_file)}[/blue]", quiet)
 
 
 def check_file_exists(file_path, quiet=False):
     if not Path(file_path).is_file():
-        print_console(f"[red]File not found:[/red] {file_path}", quiet)
+        print_console(f"[red]File not found:[/red] {escape(file_path)}", quiet)
         return False
     return True
 
@@ -89,10 +90,10 @@ def pretty_print_reviews(results, quiet=False):
         file = file_review.get("file", "UNKNOWN FILE")
         reviews = file_review.get("reviews", [])
         if reviews:
-            print_console(f"\n[bold blue]File: {file}[/bold blue]", quiet)
+            print_console(f"\n[bold blue]File: {escape(file)}[/bold blue]", quiet)
             for idx, r in enumerate(reviews, 1):
                 print_console(
-                    f" [yellow]Identified issue {idx}:[/yellow] [bold]{r.get('issue','-')}[/bold]",
+                    f" [yellow]Identified issue {idx}:[/yellow] [bold]{escape(r.get('issue','-'))}[/bold]",
                     quiet,
                 )
                 if r.get("code_snippet"):
@@ -106,17 +107,20 @@ def pretty_print_reviews(results, quiet=False):
                         quiet,
                     )
                 if r.get("reasoning"):
-                    print_console(f"    [white]Why:[/white] {r['reasoning']}", quiet)
+                    print_console(
+                        f"    [white]Why:[/white] {escape(r['reasoning'])}", quiet
+                    )
                 if r.get("mitigation"):
                     print_console(
-                        f"    [green]Mitigation:[/green] {r['mitigation']}", quiet
+                        f"    [green]Mitigation:[/green] {escape(r['mitigation'])}",
+                        quiet,
                     )
                 if r.get("confidence") is not None:
                     print_console(
                         f"    [magenta]Confidence:[/magenta] {r['confidence']}\n", quiet
                     )
         else:
-            print_console(f"[green]No issues in {file}[/green]", quiet)
+            print_console(f"[green]No issues in {escape(file)}[/green]", quiet)
 
 
 def build_pg_backend(args, runtime, embed_model_code, embed_model_docs, quiet=False):
