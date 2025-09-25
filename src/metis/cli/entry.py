@@ -139,6 +139,21 @@ def main():
         type=str,
         help="Command to run in non-interactive mode (e.g., 'review_patch file.patch')",
     )
+    parser.add_argument(
+        "--cvss-fast-mode",
+        action="store_true",
+        help="Reduce CVSS calls by requesting all metrics in a single prompt",
+    )
+    parser.add_argument(
+        "--no-cvss",
+        action="store_true",
+        help="Skip CVSS enrichment during analysis",
+    )
+    parser.add_argument(
+        "--all-in-one",
+        action="store_true",
+        help="Have the LLM return security findings and CVSS data in a single prompt",
+    )
 
     args = parser.parse_args()
 
@@ -180,12 +195,23 @@ def main():
             args, runtime, embed_model_code, embed_model_docs
         )
 
+    engine_kwargs = dict(runtime)
+    fast_mode = engine_kwargs.pop("cvss_fast_mode", False)
+    if args.all_in_one:
+        fast_mode = False
+    elif args.cvss_fast_mode:
+        fast_mode = True
+    engine_kwargs["cvss_fast_mode"] = fast_mode
+    if args.no_cvss:
+        engine_kwargs["cvss_enabled"] = False
+    engine_kwargs["cvss_all_in_one"] = args.all_in_one
+
     engine = MetisEngine(
         codebase_path=args.codebase_path,
         language_plugin=args.language_plugin,
         llm_provider=llm_provider,
         vector_backend=vector_backend,
-        **runtime,
+        **engine_kwargs,
     )
 
     if args.version:

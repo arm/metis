@@ -7,8 +7,11 @@ import os
 import difflib
 import re
 import sys
+import logging
 
 import tiktoken
+
+logger = logging.getLogger("metis")
 
 
 def safe_decode_unicode(s):
@@ -46,6 +49,12 @@ def split_snippet(snippet, max_tokens, model="gpt-4"):
 
 
 def llm_call(provider, system_prompt, prompt, **kwargs):
+    logger.info(
+        "LLM call - system_prompt: %s | prompt: %s | kwargs: %s",
+        system_prompt,
+        prompt,
+        kwargs,
+    )
     return provider.call_llm(system_prompt, prompt, **kwargs)
 
 

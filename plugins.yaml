@@ -19,6 +19,90 @@ general_prompts:
             while concurrency checks are removed), add an 'explanation' key to detail the contradiction.
         - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
 
+  cvss_metrics:
+    AV: |-
+      You are advising on the CVSS v4.0 Attack Vector (AV) metric.
+      Consider the vulnerability details provided and choose exactly one of the following values:
+        - N (Network): Exploitable from remote networks without needing a local foothold.
+        - A (Adjacent): Requires access to the same shared physical or logical network.
+        - L (Local): Requires local or logical access to the target system.
+        - P (Physical): Requires physical interaction with the vulnerable component.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    AC: |-
+      You are advising on the CVSS v4.0 Attack Complexity (AC) metric.
+      Choose one value based on the most realistic exploitation path:
+        - L (Low): No specialized conditions beyond the stated vulnerability are required.
+        - H (High): Successful exploitation depends on additional conditions or precise timing.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    AT: |-
+      You are advising on the CVSS v4.0 Attack Requirements (AT) metric.
+      Choose one value:
+        - N (None): No additional security requirements or dependent assets are needed beyond the described vulnerability.
+        - P (Present): Exploitation depends on additional security conditions, assets, or configurations that must exist.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    PR: |-
+      You are advising on the CVSS v4.0 Privileges Required (PR) metric.
+      Choose one value:
+        - N (None): The attacker requires no authentication or authorization.
+        - L (Low): The attacker requires basic user or limited privileges.
+        - H (High): The attacker must already have elevated or administrative privileges.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    UI: |-
+      You are advising on the CVSS v4.0 User Interaction (UI) metric.
+      Choose one value:
+        - N (None): No user other than the attacker needs to perform any action.
+        - P (Passive): A user other than the attacker must perform a predictable action, such as reading content or leaving a feature enabled.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    VC: |-
+      You are advising on the CVSS v4.0 Vulnerable System Confidentiality (VC) metric.
+      Choose one value based on the expected confidentiality impact to the vulnerable system:
+        - H (High): Complete loss of confidentiality, or access to all sensitive information.
+        - L (Low): Limited information disclosure that does not directly compromise the system.
+        - N (None): No confidentiality impact.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    VI: |-
+      You are advising on the CVSS v4.0 Vulnerable System Integrity (VI) metric.
+      Choose one value based on the potential for unauthorized modification:
+        - H (High): Complete or critical loss of integrity.
+        - L (Low): Limited modification that does not fundamentally change the system.
+        - N (None): No integrity impact.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    VA: |-
+      You are advising on the CVSS v4.0 Vulnerable System Availability (VA) metric.
+      Choose one value based on the expected disruption:
+        - H (High): Complete or significant denial of service.
+        - L (Low): Reduced performance or intermittent disruptions.
+        - N (None): No availability impact.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    SC: |-
+      You are advising on the CVSS v4.0 Safety (SC) metric, which captures safety impacts to the environment or equipment.
+      Choose one value:
+        - H (High): Serious safety impact, such as risk of injury or major property damage.
+        - L (Low): Minor safety impact.
+        - N (None): No safety impact.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    SI: |-
+      You are advising on the CVSS v4.0 Safety Integrity (SI) metric, covering unauthorized modifications that affect safety controls.
+      Choose one value:
+        - H (High): Safety-critical functions can be altered or bypassed.
+        - L (Low): Safety functions are impacted in a limited way.
+        - N (None): No impact on safety integrity.
+      Respond strictly as JSON: {"value": "<letter>"}.
+    SA: |-
+      You are advising on the CVSS v4.0 Safety Availability (SA) metric, representing the availability of safety mechanisms.
+      Choose one value:
+        - H (High): Safety systems can be fully disabled or prevented from operating.
+        - L (Low): Safety system availability is partially reduced.
+        - N (None): No impact on availability of safety systems.
+      Respond strictly as JSON: {"value": "<letter>"}.
+  cvss_combined: |-
+    You are scoring a vulnerability using CVSS v4.0 base and safety metrics.
+    Review the provided context and return a JSON object with a "metrics" key mapping each
+    required metric to its single-letter value. Use only uppercase letters.
+    Metrics to report: AV, AC, AT, PR, UI, VC, VI, VA, SC, SI, SA.
+    Example response: {"metrics": {"AV": "N", "AC": "L", ...}}
+    If insufficient information is available for any metric, use "X" for that metric.
+
 plugins:
   c:
     supported_extensions: [".c", ".cpp", ".h", ".hpp", ".cc"]

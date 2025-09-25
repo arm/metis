@@ -15,7 +15,8 @@ dependencies = [
     "unidiff>=0.7.5",
     "tree-sitter>=0.24.0",
     "tree-sitter-language-pack>=0.8.0",
-    "chromadb>=1.0.13"
+    "chromadb>=1.0.13",
+    "cvss>=3.6.0"
 ]
 
 [build-system]
