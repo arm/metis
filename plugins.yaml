@@ -95,14 +95,6 @@ general_prompts:
         - L (Low): Safety system availability is partially reduced.
         - N (None): No impact on availability of safety systems.
       Respond strictly as JSON: {"value": "<letter>"}.
-  cvss_combined: |-
-    You are scoring a vulnerability using CVSS v4.0 base and safety metrics.
-    Review the provided context and return a JSON object with a "metrics" key mapping each
-    required metric to its single-letter value. Use only uppercase letters.
-    Metrics to report: AV, AC, AT, PR, UI, VC, VI, VA, SC, SI, SA.
-    Example response: {"metrics": {"AV": "N", "AC": "L", ...}}
-    If insufficient information is available for any metric, use "X" for that metric.
-
 plugins:
   c:
     supported_extensions: [".c", ".cpp", ".h", ".hpp", ".cc"]

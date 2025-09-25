@@ -27,7 +27,6 @@ from metis.cvss import (
     compute_cvss_severity,
     format_cvss_vector,
     normalize_metric_values,
-    populate_cvss_data,
 )
 from metis.utils import (
     count_tokens,
@@ -78,9 +77,7 @@ class MetisEngine:
 
         self.language_plugin = language_plugin or "c"
         self.llm_provider = llm_provider
-        self.cvss_fast_mode = kwargs.get("cvss_fast_mode", False)
         self.cvss_enabled = kwargs.get("cvss_enabled", True)
-        self.cvss_all_in_one = kwargs.get("cvss_all_in_one", False)
         self.set_code_plugin(self.language_plugin)
 
     @staticmethod
@@ -446,12 +443,6 @@ class MetisEngine:
         report_prompt = general_prompts.get(
             "security_review_report", ""
         )
-        if self.cvss_all_in_one and self.cvss_enabled:
-            report_prompt += (
-                "\n        - Include CVSS reporting for each issue with the following keys:"\
-                "\n          - \"cvss_rating\": One of LOW, MEDIUM, HIGH, CRITICAL (case-insensitive)."\
-                "\n          - \"cvss_metrics\": Optional object mapping CVSS metrics (AV, AC, AT, PR, UI, VC, VI, VA, SC, SI, SA) to their single-letter values."\
-            )
         for chunk in chunks:
             system_prompt = f"{language_prompts[default_prompt_key]} \n {language_prompts['security_review_checks']} \n {report_prompt}"
             review = self._perform_security_review(
@@ -468,8 +459,6 @@ class MetisEngine:
                 snippet_text = issue.get("code_snippet", "").strip()
                 line_number = find_snippet_line(snippet_text, file_path)
                 issue["line_number"] = line_number
-                if self.cvss_all_in_one and self.cvss_enabled:
-                    populate_cvss_data(issue)
 
             if validate:
                 system_prompt_validation = language_prompts["validation_review"]
@@ -488,17 +477,12 @@ class MetisEngine:
 
         general_prompts = self.code_plugin.plugin_config.get("general_prompts", {})
         cvss_prompts = general_prompts.get("cvss_metrics", {})
-        if (
-            self.cvss_enabled
-            and not self.cvss_all_in_one
-            and cvss_prompts
-        ):
+        if self.cvss_enabled and cvss_prompts:
             self._attach_cvss_scoring(
                 file_path,
                 combined_context,
                 accumulated["reviews"],
                 cvss_prompts,
-                general_prompts.get("cvss_combined", ""),
             )
 
         result = {
@@ -602,29 +586,20 @@ class MetisEngine:
             return ""
 
     def _attach_cvss_scoring(
-        self, file_path, combined_context, reviews, cvss_prompts, combined_prompt
+        self, file_path, combined_context, reviews, cvss_prompts
     ):
         """Annotate each review with CVSS metrics, vector and score."""
 
         expected_metrics = {metric.upper() for metric in cvss_prompts.keys()}
-        if self.cvss_fast_mode and combined_prompt:
-            scorer = lambda ctx: self._score_cvss_combined(
-                combined_prompt, ctx, expected_metrics
-            )
-        else:
-            scorer = None
 
         for issue in reviews:
             metrics = {}
             prompt_context = self._build_cvss_context(
                 file_path, issue, combined_context
             )
-            if scorer:
-                metrics = scorer(prompt_context)
-            else:
-                metrics = self._score_cvss_metrics_parallel(
-                    cvss_prompts, prompt_context
-                )
+            metrics = self._score_cvss_metrics_parallel(
+                cvss_prompts, prompt_context
+            )
 
             for metric, system_prompt in cvss_prompts.items():
                 metric_key = metric.upper()
@@ -727,39 +702,6 @@ class MetisEngine:
                     continue
                 if value:
                     metrics[metric.upper()] = value
-        return metrics
-
-    def _score_cvss_combined(self, system_prompt, prompt_context, expected_metrics):
-        try:
-            response = llm_call(
-                self.llm_provider,
-                system_prompt,
-                prompt_context,
-                model=self.llama_query_model,
-            )
-        except Exception as exc:
-            logger.error("Error while querying combined CVSS metrics: %s", exc)
-            return {}
-
-        parsed = parse_json_output(response)
-        if isinstance(parsed, dict):
-            metrics_block = parsed.get("metrics")
-            if isinstance(metrics_block, dict):
-                parsed_metrics = metrics_block
-            else:
-                parsed_metrics = parsed
-        else:
-            parsed_metrics = {}
-
-        metrics = {}
-        for metric in expected_metrics:
-            value = parsed_metrics.get(metric)
-            if not isinstance(value, str):
-                continue
-            normalized = value.strip().upper()
-            if len(normalized) != 1 or normalized == "X":
-                continue
-            metrics[metric] = normalized
         return metrics
 
     def _build_cvss_context(self, file_path, issue, combined_context):

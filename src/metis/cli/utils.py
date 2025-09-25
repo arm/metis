@@ -105,8 +105,6 @@ def pretty_print_reviews(results, quiet=False):
                         f"    [cyan]Line number:[/cyan] {r['line_number']}",
                         quiet,
                     )
-                if r.get("cwe"):
-                    print_console(f"    [red]CWE:[/red] {r['cwe']}", quiet)
                 if r.get("reasoning"):
                     print_console(f"    [white]Why:[/white] {r['reasoning']}", quiet)
                 if r.get("mitigation"):
