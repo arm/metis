@@ -37,7 +37,7 @@ logger = logging.getLogger("metis")
 
 class MetisEngine:
 
-    plugin_config = load_plugin_config("plugins.yaml")
+    plugin_config = load_plugin_config()
     plugins = [
         CPlugin(plugin_config),
         PythonPlugin(plugin_config),
