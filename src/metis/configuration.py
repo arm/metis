@@ -2,7 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import logging
 import yaml
+
+from importlib.resources import files, as_file
+from pathlib import Path
+
+
+logger = logging.getLogger("metis")
 
 
 def load_yaml(path):
@@ -10,9 +17,9 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def load_runtime_config(config_path="config.yaml", enable_psql=False):
+def load_runtime_config(config_path=None, enable_psql=False):
+    cfg = load_metis_config(config_path)
 
-    cfg = load_yaml(config_path)
     runtime: dict[str, object] = {}
     if enable_psql:
         db_cfg = cfg.get("psql_database", {})
@@ -102,5 +109,37 @@ def load_runtime_config(config_path="config.yaml", enable_psql=False):
     return runtime
 
 
-def load_plugin_config(plugins_path="plugins.yaml"):
-    return load_yaml(plugins_path)
+def load_plugin_config(plugins_path: str | Path | None = None):
+    return config_path_fallback("plugins.yaml", "metis.plugins", plugins_path)
+
+
+def load_metis_config(config_path: str | Path | None = None):
+    return config_path_fallback("metis.yaml", "metis", config_path)
+
+
+def config_path_fallback(
+    filename: str, anchor: str, config_path: str | Path | None = None
+):
+    """
+    Loads the config from either a given path, the current working
+    directory or from the packaged resource directory.
+    """
+    if config_path is not None:
+        config_path = Path(config_path)
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Config not found: {config_path}")
+        logger.info(f"Loading {filename} from {config_path}")
+        return load_yaml(config_path)
+
+    cwd_path = Path.cwd() / filename
+    if cwd_path.is_file():
+        logger.info(f"Loading {filename} from {cwd_path}")
+        return load_yaml(cwd_path)
+
+    resource = files(anchor) / filename
+    if not resource.is_file():
+        raise FileNotFoundError(f"No {filename} found in CWD or package resources")
+    # ensure we have a real path
+    with as_file(resource) as real_path:
+        logger.info(f"Loading default {filename}")
+        return load_yaml(real_path)

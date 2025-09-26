@@ -86,9 +86,9 @@ review_code
 ```
 ## Configuration
 
-**Metis Configuration (`config.yaml`)**
+**Metis Configuration (`metis.yaml`)**
 
-Metis uses a YAML configuration file located at the project root (typically `config.yaml`). This file defines all runtime parameters including:
+Metis configuration can be over-ridden using a YAML configuration file (`metis.yaml`) in the working directory when running metis. The default configuration is in src/metis/metis.yaml. This file defines all runtime parameters including:
 
 - **LLM provider:** OpenAI model names, embedding models, token limits
 - **Engine behavior:** max workers, max token length, similarity top-k
