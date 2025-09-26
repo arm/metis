@@ -305,7 +305,7 @@ class MetisEngine:
             relative_path = os.path.relpath(file_diff.path, base_path)
 
             review_dict = self._process_file_reviews(
-                file_diff.path,
+                os.path.join(base_path, file_diff.path),
                 snippet,
                 combined_context,
                 language_prompts,
