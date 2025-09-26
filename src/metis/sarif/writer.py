@@ -113,6 +113,15 @@ def generate_sarif(
             context = "".join(block).strip() or "<context unavailable>"
 
             # Append result entry
+            properties = {}
+            cwe_id = issue.get("cwe")
+            if isinstance(cwe_id, str) and cwe_id.strip():
+                properties["cwe"] = cwe_id.strip()
+
+            severity = issue.get("severity")
+            if isinstance(severity, str) and severity.strip():
+                properties["severity"] = severity.strip()
+
             run["results"].append(
                 {
                     "ruleId": RULES[0]["id"],
@@ -139,6 +148,7 @@ def generate_sarif(
                         }
                     ],
                     "partialFingerprints": {"primaryLocationLineHash": fingerprint},
+                    "properties": properties if properties else None,
                 }
             )
 

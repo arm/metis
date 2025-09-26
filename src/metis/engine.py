@@ -451,6 +451,19 @@ class MetisEngine:
                 snippet_text = issue.get("code_snippet", "").strip()
                 line_number = find_snippet_line(snippet_text, file_path)
                 issue["line_number"] = line_number
+                issue.setdefault("cwe", "CWE-Unknown")
+                severity_value = issue.get("severity")
+                if isinstance(severity_value, str) and severity_value.strip():
+                    normalized = severity_value.strip().upper()
+                    issue["severity"] = {
+                        "LOW": "Low",
+                        "MED": "Medium",
+                        "MEDIUM": "Medium",
+                        "MID": "Medium",
+                        "HIGH": "High",
+                        "CRIT": "Critical",
+                        "CRITICAL": "Critical",
+                    }.get(normalized, severity_value.strip())
 
             if validate:
                 system_prompt_validation = language_prompts["validation_review"]
