@@ -116,7 +116,7 @@ def pretty_print_reviews(results, quiet=False):
                         "Critical": "magenta",
                     }.get(severity, "bright_black")
                     print_console(
-                        f"    [bright_black]Severity:[/bright_black] [bold {severity_color}]{severity}[/bold {severity_color}]",
+                        f"    [bright_black]Severity:[/bright_black] [bold {severity_color}]{escape(severity)}[/bold {severity_color}]",
                         quiet,
                     )
                 if reasoning := r.get("reasoning"):
