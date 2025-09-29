@@ -130,7 +130,7 @@ def pretty_print_reviews(results, quiet=False):
                     )
                 if r.get("confidence") is not None:
                     print_console(
-                        f"    [magenta]Confidence:[/magenta] {r['confidence']}", quiet
+                        f"    [magenta]Confidence:[/magenta] {escape(confidence)}", quiet
                     )
                 if any(r.get(field) for field in ("confidence", "severity", "cwe")):
                     print_console("", quiet)
