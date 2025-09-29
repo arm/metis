@@ -108,8 +108,7 @@ def pretty_print_reviews(results, quiet=False):
                     )
                 if r.get("cwe"):
                     print_console(f"    [red]CWE:[/red] {r['cwe']}", quiet)
-                severity = r.get("severity")
-                if severity:
+                if severity := r.get("severity"):
                     severity_color = {
                         "Low": "green",
                         "Medium": "yellow",
