@@ -128,7 +128,7 @@ def pretty_print_reviews(results, quiet=False):
                         f"    [green]Mitigation:[/green] {escape(r['mitigation'])}",
                         quiet,
                     )
-                if r.get("confidence") is not None:
+                if confidence := r.get("confidence"):
                     print_console(
                         f"    [magenta]Confidence:[/magenta] {escape(confidence)}", quiet
                     )
