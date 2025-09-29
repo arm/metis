@@ -119,9 +119,9 @@ def pretty_print_reviews(results, quiet=False):
                         f"    [bright_black]Severity:[/bright_black] [bold {severity_color}]{severity}[/bold {severity_color}]",
                         quiet,
                     )
-                if r.get("reasoning"):
+                if reasoning := r.get("reasoning"):
                     print_console(
-                        f"    [white]Why:[/white] {escape(r['reasoning'])}", quiet
+                        f"    [white]Why:[/white] {escape(reasoning)}", quiet
                     )
                 if r.get("mitigation"):
                     print_console(
