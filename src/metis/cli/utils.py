@@ -120,9 +120,7 @@ def pretty_print_reviews(results, quiet=False):
                         quiet,
                     )
                 if reasoning := r.get("reasoning"):
-                    print_console(
-                        f"    [white]Why:[/white] {escape(reasoning)}", quiet
-                    )
+                    print_console(f"    [white]Why:[/white] {escape(reasoning)}", quiet)
                 if r.get("mitigation"):
                     print_console(
                         f"    [green]Mitigation:[/green] {escape(r['mitigation'])}",
@@ -130,7 +128,8 @@ def pretty_print_reviews(results, quiet=False):
                     )
                 if confidence := r.get("confidence"):
                     print_console(
-                        f"    [magenta]Confidence:[/magenta] {escape(confidence)}", quiet
+                        f"    [magenta]Confidence:[/magenta] {escape(confidence)}",
+                        quiet,
                     )
                 if any(r.get(field) for field in ("confidence", "severity", "cwe")):
                     print_console("", quiet)
