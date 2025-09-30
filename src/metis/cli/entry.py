@@ -205,7 +205,7 @@ def main():
         try:
             execute_command(engine, cmd, cmd_args, args)
         except Exception as e:
-            print_console(f"[bold red]Error:[/bold red] {escape(e)}", args.quiet)
+            print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
             exit(1)
         exit(0)
 
