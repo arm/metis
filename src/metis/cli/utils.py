@@ -106,19 +106,33 @@ def pretty_print_reviews(results, quiet=False):
                         f"    [cyan]Line number:[/cyan] {r['line_number']}",
                         quiet,
                     )
-                if r.get("reasoning"):
+                if r.get("cwe"):
+                    print_console(f"    [red]CWE:[/red] {r['cwe']}", quiet)
+                if severity := r.get("severity"):
+                    severity_color = {
+                        "Low": "green",
+                        "Medium": "yellow",
+                        "High": "red",
+                        "Critical": "magenta",
+                    }.get(severity, "bright_black")
                     print_console(
-                        f"    [white]Why:[/white] {escape(r['reasoning'])}", quiet
+                        f"    [bright_black]Severity:[/bright_black] [bold {severity_color}]{escape(severity)}[/bold {severity_color}]",
+                        quiet,
                     )
+                if reasoning := r.get("reasoning"):
+                    print_console(f"    [white]Why:[/white] {escape(reasoning)}", quiet)
                 if r.get("mitigation"):
                     print_console(
                         f"    [green]Mitigation:[/green] {escape(r['mitigation'])}",
                         quiet,
                     )
-                if r.get("confidence") is not None:
+                if confidence := r.get("confidence"):
                     print_console(
-                        f"    [magenta]Confidence:[/magenta] {r['confidence']}\n", quiet
+                        f"    [magenta]Confidence:[/magenta] {escape(confidence)}",
+                        quiet,
                     )
+                if any(r.get(field) for field in ("confidence", "severity", "cwe")):
+                    print_console("", quiet)
         else:
             print_console(f"[green]No issues in {escape(file)}[/green]", quiet)
 
