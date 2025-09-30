@@ -128,7 +128,7 @@ def pretty_print_reviews(results, quiet=False):
                     )
                 if confidence := r.get("confidence"):
                     print_console(
-                        f"    [magenta]Confidence:[/magenta] {escape(confidence)}",
+                        f"    [magenta]Confidence:[/magenta] {escape(str(confidence))}",
                         quiet,
                     )
                 if any(r.get(field) for field in ("confidence", "severity", "cwe")):
