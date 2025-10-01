@@ -77,7 +77,7 @@ def with_spinner(task_description, fn, *args, **kwargs):
     return result
 
 
-def save_output(output_files, data, quiet=False, sarif=False):
+def save_output(output_files, data, quiet=False):
     if not output_files:
         return
 
@@ -151,9 +151,7 @@ def save_output(output_files, data, quiet=False, sarif=False):
             continue
 
         # default to JSON
-        payload = generate_sarif(data) if sarif else json_payload
-        label = "SARIF results" if sarif else "Results"
-        _write_payload(output_path, payload, label)
+        _write_payload(output_path, json_payload, "Results")
 
 
 def _generate_html_report(output_path: Path, report_data, quiet=False):

@@ -142,9 +142,6 @@ def main():
         help="Alternative syntax to provide multiple output files",
     )
     parser.add_argument(
-        "--sarif", action="store_true", help="Flag to generate SARIF output"
-    )
-    parser.add_argument(
         "--non-interactive", action="store_true", help="Run in non-interactive mode"
     )
     parser.add_argument(
@@ -168,12 +165,6 @@ def main():
             False,
         )
         exit(1)
-    if args.sarif and not args.output_file:
-        print_console(
-            "[red]Error:[/red] --sarif requires the --output-file argument", args.quiet
-        )
-        exit(1)
-
     configure_logger(logger, args)
     runtime = load_runtime_config(enable_psql=(args.backend == "postgres"))
 

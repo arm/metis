@@ -58,7 +58,7 @@ def run_review(engine, patch_file, args):
         "Reviewing patch...", engine.review_patch, patch_file=patch_file
     )
     pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet, args.sarif)
+    save_output(args.output_file, results, args.quiet)
 
 
 def run_file_review(engine, file_path, args):
@@ -74,7 +74,7 @@ def run_file_review(engine, file_path, args):
         results = {"reviews": []}
 
     pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet, args.sarif)
+    save_output(args.output_file, results, args.quiet)
 
 
 def run_review_code(engine, args):
@@ -82,7 +82,7 @@ def run_review_code(engine, args):
         "Reviewing codebase...", engine.review_code, False, args.verbose
     )
     pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet, args.sarif)
+    save_output(args.output_file, results, args.quiet)
 
 
 def run_index(engine, verbose=False, quiet=False):
