@@ -19,14 +19,16 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from metis.sarif.writer import generate_sarif
 
 try:
-    METIS_VERSION = importlib.metadata.version('metis')
+    METIS_VERSION = importlib.metadata.version("metis")
 except importlib.metadata.PackageNotFoundError:
-    METIS_VERSION = 'unknown'
+    METIS_VERSION = "unknown"
 
 
 console = Console()
 logger = logging.getLogger("metis")
-REPORT_TEMPLATE = files("metis.cli").joinpath("report_template.html").read_text(encoding="utf-8")
+REPORT_TEMPLATE = (
+    files("metis.cli").joinpath("report_template.html").read_text(encoding="utf-8")
+)
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -117,27 +119,31 @@ def save_output(output_files, data, quiet=False):
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 with output_path.open("w", encoding="utf-8", newline="") as csv_file:
                     writer = csv.writer(csv_file)
-                    writer.writerow([
-                        "File",
-                        "Line",
-                        "Severity",
-                        "CWE",
-                        "Issue",
-                        "Reasoning",
-                        "Mitigation",
-                        "Confidence",
-                    ])
+                    writer.writerow(
+                        [
+                            "File",
+                            "Line",
+                            "Severity",
+                            "CWE",
+                            "Issue",
+                            "Reasoning",
+                            "Mitigation",
+                            "Confidence",
+                        ]
+                    )
                     for issue in issues:
-                        writer.writerow([
-                            issue.get("file", ""),
-                            issue.get("line", ""),
-                            issue.get("severity", ""),
-                            issue.get("cwe", ""),
-                            issue.get("issue", ""),
-                            issue.get("reasoning", ""),
-                            issue.get("mitigation", ""),
-                            issue.get("confidence", ""),
-                        ])
+                        writer.writerow(
+                            [
+                                issue.get("file", ""),
+                                issue.get("line", ""),
+                                issue.get("severity", ""),
+                                issue.get("cwe", ""),
+                                issue.get("issue", ""),
+                                issue.get("reasoning", ""),
+                                issue.get("mitigation", ""),
+                                issue.get("confidence", ""),
+                            ]
+                        )
                 print_console(
                     f"[blue]CSV report saved to {escape(str(output_path))}[/blue]",
                     quiet,
@@ -253,9 +259,11 @@ def _build_html_document(issues, source_name):
         cwe_counts[cwe] += 1
 
         file_name = issue.get("file") or "Unknown"
-        folder_name = issue.get("folder") or (
-            file_name.split("/", 1)[0] if "/" in file_name else file_name
-        ) or "Unknown"
+        folder_name = (
+            issue.get("folder")
+            or (file_name.split("/", 1)[0] if "/" in file_name else file_name)
+            or "Unknown"
+        )
         stats = file_stats.setdefault(
             file_name,
             {
@@ -307,8 +315,7 @@ def _build_html_document(issues, source_name):
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     template = REPORT_TEMPLATE
     return (
-        template
-        .replace("__TITLE__", html.escape(title))
+        template.replace("__TITLE__", html.escape(title))
         .replace("__GENERATED_AT__", html.escape(generated_at))
         .replace("__DATA_JSON__", data_json)
         .replace("__METIS_VERSION__", html.escape(METIS_VERSION))
