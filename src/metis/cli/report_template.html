@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>__TITLE__</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #081229; color: #f4f5f7; }
+        h1 { margin-bottom: 0.25rem; color: #ffffff; }
+        .meta { color: #9ca3c7; margin-bottom: 1.5rem; }
+        .mode-toggle { position: fixed; top: 1.25rem; right: 1.5rem; z-index: 10000; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(8, 18, 41, 0.85); color: #f4f5f7; cursor: pointer; transition: background 0.2s ease, transform 0.2s ease; }
+        .mode-toggle:hover { background: rgba(59, 130, 246, 0.25); transform: translateY(-1px); }
+        body.light-theme { background: #f5f7fb; color: #101828; }
+        body.light-theme h1 { color: #0b1120; }
+        body.light-theme .meta { color: #4b5565; }
+        body.light-theme .chart-card { background: #ffffff; border-color: #d0d5e0; box-shadow: 0 12px 30px -18px rgba(15, 23, 42, 0.15); }
+        body.light-theme .chart-card.selected { border-color: #2563eb; box-shadow: 0 18px 38px -18px rgba(37, 99, 235, 0.35); }
+        body.light-theme .chart-card.selected { border-color: #2563eb; box-shadow: 0 18px 38px -18px rgba(37, 99, 235, 0.35); }
+        body.light-theme .chart-card h2 { color: #111827; }
+        body.light-theme .chart-card .echart { cursor: pointer; }
+        body.light-theme .chart-button { color: #1e293b; border-color: rgba(148, 163, 184, 0.4); background: rgba(148, 163, 184, 0.18); }
+        body.light-theme .chart-button:hover { background: rgba(59, 130, 246, 0.2); }
+        body.light-theme #no-issues { background: #fdf2d0; color: #92400e; }
+        body.light-theme .counts { color: #364152; }
+        body.light-theme .chart-empty { color: #4a5565; }
+        body.light-theme .filters label { color: #1f2a3d; }
+        body.light-theme .filters select { background: #ffffff; color: #1f2a3d; border-color: #c5cfe3; }
+        body.light-theme details.issue { background: #ffffff; border-color: #d0d7e4; box-shadow: 0 12px 28px -20px rgba(15, 23, 42, 0.18); }
+        body.light-theme details.issue summary { color: #111827; }
+        body.light-theme details.issue[open] summary { background: linear-gradient(90deg, rgba(37,99,235,0.15), rgba(37,99,235,0.05)); color: #0b1120; }
+        body.light-theme .summary-file { color: #334155; }
+        body.light-theme .issue-body { background: #f6f8fc; border-top-color: #d0d7e4; color: #1f2a3d; }
+        body.light-theme .issue-body h3 { color: #1d4ed8; }
+        body.light-theme .code-snippet { background: #1f2937; color: #f8fafc; border-color: #1e293b; }
+        body.light-theme .chart-card.maximized { background: #ffffff; }
+        body.light-theme .mode-toggle { background: rgba(248, 250, 252, 0.9); color: #111827; border-color: rgba(71, 85, 105, 0.3); }
+        body.light-theme .mode-toggle:hover { background: rgba(59, 130, 246, 0.18); }
+        .filters { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
+        .filters label { font-weight: 600; font-size: 0.95rem; color: #d1d5f0; }
+        .filters select { margin-left: 0.35rem; padding: 0.35rem 0.5rem; border: 1px solid #314170; border-radius: 6px; background: #0f1e3a; color: #f4f5f7; }
+        .filters select:focus { outline: 2px solid #3b82f6; }
+        .counts { margin-bottom: 1rem; font-weight: 600; color: #cbd5ff; }
+        #no-issues { padding: 1.5rem; background: #102345; color: #facc15; border-radius: 8px; display: none; }
+        .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        .charts.maximized-active { grid-template-columns: 1fr; }
+        .charts.maximized-active .chart-card:not(.maximized) { display: none; }
+        .chart-card { position: relative; background: #0d1a33; border: 1px solid #1f2c4d; border-radius: 12px; padding: 1rem 1.25rem 1.5rem; box-shadow: 0 10px 30px -15px rgba(15, 23, 42, 0.8); min-height: 320px; display: flex; flex-direction: column; transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
+        .chart-card.selected { border-color: #3b82f6; box-shadow: 0 20px 45px -18px rgba(59, 130, 246, 0.45); }
+        .chart-card.selected { border-color: #3b82f6; box-shadow: 0 20px 45px -18px rgba(59, 130, 246, 0.45); }
+        .chart-card h2 { font-size: 1.05rem; margin-bottom: 0.75rem; color: #f4f5f7; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+        .chart-actions { display: inline-flex; gap: 0.5rem; }
+        .chart-button { background: rgba(148, 163, 184, 0.15); border: 1px solid rgba(148, 163, 184, 0.3); color: #cbd5ff; padding: 0.25rem 0.55rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; transition: background 0.2s ease, transform 0.2s ease; }
+        .chart-button:hover { background: rgba(59, 130, 246, 0.35); transform: translateY(-1px); }
+        .chart-card.maximized { margin: 0; border-radius: 16px; padding: 1.5rem 1.75rem 2rem; box-shadow: 0 20px 50px -20px rgba(8, 11, 31, 0.6); min-height: 420px; }
+        .chart-card.maximized canvas,
+        .chart-card.maximized .echart { height: 380px !important; }
+        .chart-card canvas,
+        .chart-card .echart { flex: 1 1 auto; height: 260px !important; cursor: pointer; }
+        .chart-empty { margin-top: 1rem; text-align: center; color: #94a3de; font-size: 0.9rem; display: none; }
+        #results { display: flex; flex-direction: column; gap: 1rem; margin-top: 1.5rem; }
+        .report-footer { margin-top: 2rem; text-align: center; font-size: 0.85rem; color: #94a3de; }
+        body.light-theme .report-footer { color: #4a5565; }
+
+        details.issue { background: #0d1b36; border: 1px solid #1d2a4b; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 25px -20px rgba(8, 15, 35, 0.9); }
+        details.issue summary { cursor: pointer; padding: 0.85rem 1.1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: baseline; font-weight: 600; color: #e2e8f8; }
+        details.issue[open] summary { background: linear-gradient(90deg, rgba(59,130,246,0.2), rgba(59,130,246,0.05)); }
+        .summary-pill { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.65rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+        .summary-pill a { color: inherit; text-decoration: none; }
+        .summary-pill a:hover { text-decoration: underline; }
+        .severity-Critical { background: rgba(185, 28, 28, 0.25); color: #fda4af; border: 1px solid rgba(185, 28, 28, 0.35); }
+        .severity-High { background: rgba(239, 68, 68, 0.22); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.32); }
+        .severity-Medium { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+        .severity-Low { background: rgba(250, 204, 21, 0.18); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.3); }
+        .severity-Unknown { background: rgba(148, 163, 184, 0.2); color: #cbd5f5; border: 1px solid rgba(148, 163, 184, 0.3); }
+        .summary-file { color: #94a3de; font-size: 0.9rem; }
+        .summary-meta { color: #cbd5ff; font-size: 0.8rem; }
+        body.light-theme .severity-Critical { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+        body.light-theme .severity-High { background: #fecaca; color: #c2410c; border: 1px solid #fca5a5; }
+        body.light-theme .severity-Medium { background: #fed7aa; color: #b45309; border: 1px solid #fdba74; }
+        body.light-theme .severity-Low { background: #fef08a; color: #a16207; border: 1px solid #fde047; }
+        body.light-theme .severity-Unknown { background: #e2e8f0; color: #475569; border: 1px solid #cbd5f5; }
+        body.light-theme .summary-meta { color: #2563eb; }
+        .issue-body { padding: 1rem 1.1rem 1.25rem; border-top: 1px solid #1d2a4b; display: grid; gap: 0.75rem; background: #09132a; }
+        .issue-body section { display: grid; gap: 0.35rem; }
+        .issue-body h3 { margin: 0; font-size: 0.9rem; color: #94a3de; text-transform: uppercase; letter-spacing: 0.08em; }
+        .code-snippet { background: #071024; border: 1px solid #1f2c4d; padding: 0.75rem; border-radius: 8px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.85rem; color: #cbd5f5; overflow-x: auto; white-space: pre-wrap; }
+        @media (max-width: 900px) {
+            body { margin: 1rem; }
+            details.issue summary { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+            .chart-card { min-height: 260px; }
+            .chart-card canvas,
+            .chart-card .echart { min-height: 200px; }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+    <button id="modeToggle" class="mode-toggle" aria-label="Toggle color mode" title="Toggle color mode">&#9788;</button>
+    <div class="header">
+        <div class="title-block">
+            <h1>__TITLE__</h1>
+            <div class="meta">Generated at __GENERATED_AT__</div>
+        </div>
+    </div>
+    <div class="charts">
+        <div class="chart-card" id="severityCard">
+            <h2>
+                Issues by Severity
+                <span class="chart-actions">
+                    <button class="chart-button chart-toggle" data-chart="severityChart" aria-label="Toggle full size" title="View full size">&#x26F6;</button>
+                </span>
+            </h2>
+            <div id="severityChart" class="echart"></div>
+            <div class="chart-empty">No data available.</div>
+        </div>
+        <div class="chart-card" id="cweCard">
+            <h2>
+                Top CWEs
+                <span class="chart-actions">
+                    <button class="chart-button chart-toggle" data-chart="cweChart" aria-label="Toggle full size" title="View full size">&#x26F6;</button>
+                </span>
+            </h2>
+            <div id="cweChart" class="echart"></div>
+            <div class="chart-empty">No data available.</div>
+        </div>
+        <div class="chart-card" id="treemapCard">
+            <h2>
+                File Treemap
+                <span class="chart-actions">
+                    <button class="chart-button chart-toggle" data-chart="treemapChart" aria-label="Toggle full size" title="View full size">&#x26F6;</button>
+                </span>
+            </h2>
+            <div id="treemapChart" class="echart"></div>
+            <div class="chart-empty">No data available.</div>
+        </div>
+    </div>
+    <div class="filters">
+        <label>Severity
+            <select id="severityFilter">
+                <option value="">All</option>
+            </select>
+        </label>
+        <label>CWE
+            <select id="cweFilter">
+                <option value="">All</option>
+            </select>
+        </label>
+        <label>Folder
+            <select id="folderFilter">
+                <option value="">All</option>
+            </select>
+        </label>
+        <label>File
+            <select id="fileFilter">
+                <option value="">All</option>
+            </select>
+        </label>
+        <label>Sort
+            <select id="sortFilter">
+                <option value="severity-desc">Severity (Critical→Low)</option>
+                <option value="severity-asc">Severity (Low→Critical)</option>
+            </select>
+        </label>
+    </div>
+    <div class="counts">Showing <span id="resultsCount">0</span> issues</div>
+    <div id="no-issues">No issues match the current filters.</div>
+    <div id="results"></div>
+
+    <script id="report-data" type="application/json">__DATA_JSON__</script>
+    <footer class="report-footer">Generated by Metis v__METIS_VERSION__</footer>
+    <script>
+        const payload = JSON.parse(document.getElementById('report-data').textContent || '{}');
+        const issues = payload.issues || [];
+        const severityCounts = payload.severityCounts || {};
+        const cweCounts = payload.cweCounts || {};
+        const fileStats = payload.fileStats || {};
+        const severityFilter = document.getElementById('severityFilter');
+        const cweFilter = document.getElementById('cweFilter');
+        const folderFilter = document.getElementById('folderFilter');
+        const fileFilter = document.getElementById('fileFilter');
+        const sortFilter = document.getElementById('sortFilter');
+        const chartsContainer = document.querySelector('.charts');
+        let treemapEntries = [];
+        const chartCards = {
+            severity: document.getElementById('severityCard'),
+            cwe: document.getElementById('cweCard'),
+            treemap: document.getElementById('treemapCard')
+        };
+        const resultsContainer = document.getElementById('results');
+        const resultsCount = document.getElementById('resultsCount');
+        const noIssues = document.getElementById('no-issues');
+
+        const severityColors = {
+            'Critical': '#b91c1c',
+            'High': '#f87171',
+            'Medium': '#fb923c',
+            'Low': '#facc15',
+            'Unknown': '#94a3b8'
+        };
+
+        const severityRank = {
+            'Critical': 5,
+            'High': 4,
+            'Medium': 3,
+            'Low': 2,
+            'Unknown': 1
+        };
+
+        let severityChartInstance = null;
+        let cweChartInstance = null;
+        let treemapChartInstance = null;
+
+        function toggleFilter(select, value) {
+            if (!select) return;
+            if (select.value === value) {
+                select.value = '';
+            } else {
+                select.value = value;
+            }
+            applyFilters();
+        }
+
+        function updateToggleButtonState(button, expanded) {
+            if (!button) return;
+            button.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+            button.innerHTML = expanded ? '&#x2715;' : '&#x26F6;';
+            button.title = expanded ? 'Exit full size' : 'View full size';
+        }
+
+        function normalizePath(path) {
+            return (path || '')
+                .replace(/\\/g, '/')
+                .replace(/^\/+/, '')
+                .replace(/\/+$/, '');
+        }
+
+        function collectFolderOptions() {
+            const folders = new Set();
+            issues.forEach(issue => {
+                const filePath = normalizePath(issue.file || '');
+                if (filePath) {
+                    const parts = filePath.split('/');
+                    if (parts.length > 1) {
+                        parts.pop();
+                        let prefix = '';
+                        parts.forEach(part => {
+                            if (!part) return;
+                            prefix = prefix ? prefix + '/' + part : part;
+                            folders.add(prefix);
+                        });
+                    } else if (issue.folder) {
+                        folders.add(issue.folder);
+                    }
+                } else if (issue.folder) {
+                    folders.add(issue.folder);
+                }
+            });
+            return Array.from(folders).sort((a, b) => a.localeCompare(b));
+        }
+
+        function matchesFolder(issue, folderValue) {
+            if (!folderValue) return true;
+            const normalizedValue = normalizePath(folderValue);
+            const filePath = normalizePath(issue.file || '');
+            if (filePath) {
+                if (filePath === normalizedValue) return true;
+                if (filePath.startsWith(normalizedValue + '/')) return true;
+            }
+            const issueFolder = normalizePath(issue.folder || '');
+            if (issueFolder === normalizedValue) return true;
+            return false;
+        }
+
+        function uniqueValues(key) {
+            const values = new Set();
+            issues.forEach(issue => {
+                const value = issue[key] || '';
+                if (value) {
+                    values.add(value);
+                }
+            });
+            return Array.from(values).sort((a, b) => a.localeCompare(b));
+        }
+
+        function populateFilters() {
+            const severityOrder = ['Critical', 'High', 'Medium', 'Low', 'Unknown'];
+            const severities = uniqueValues('severity');
+            const sortedSeverities = severityOrder.filter(value => severities.includes(value));
+            const remainingSeverities = severities.filter(value => !severityOrder.includes(value)).sort((a, b) => a.localeCompare(b));
+            fillSelect(severityFilter, [...sortedSeverities, ...remainingSeverities]);
+            fillSelect(cweFilter, uniqueValues('cwe'));
+            fillSelect(folderFilter, collectFolderOptions());
+            fillSelect(fileFilter, uniqueValues('file'));
+        }
+
+        function fillSelect(select, values) {
+            if (!select) return;
+            select.innerHTML = '';
+
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'All';
+            select.appendChild(defaultOption);
+
+            values.forEach(rawValue => {
+                const value = String(rawValue);
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = value;
+                select.appendChild(option);
+            });
+        }
+
+        function applyFilters() {
+            const severityValue = severityFilter.value;
+            const cweValue = cweFilter.value;
+            const folderValue = folderFilter.value;
+            const fileValue = fileFilter.value;
+
+            const filtered = issues.filter(issue => (
+                (!severityValue || issue.severity === severityValue) &&
+                (!cweValue || issue.cwe === cweValue) &&
+                matchesFolder(issue, folderValue) &&
+                (!fileValue || issue.file === fileValue)
+            ));
+
+            const sorted = sortIssues(filtered.slice());
+            renderIssues(sorted);
+            resultsCount.textContent = filtered.length;
+            noIssues.style.display = filtered.length ? 'none' : 'block';
+            updateChartHighlights();
+        }
+
+        function sortIssues(rows) {
+            if (!rows || !rows.length) {
+                return rows;
+            }
+
+            const sortValue = (sortFilter && sortFilter.value) || 'severity-desc';
+
+            const compareSeverity = (a, b, direction = 'desc') => {
+                const rankA = severityRank[a.severity] || 0;
+                const rankB = severityRank[b.severity] || 0;
+                return direction === 'asc' ? rankA - rankB : rankB - rankA;
+            };
+
+            const comparators = {
+                'severity-desc': (a, b) => compareSeverity(a, b, 'desc'),
+                'severity-asc': (a, b) => compareSeverity(a, b, 'asc'),
+            };
+
+            const comparator = comparators[sortValue] || comparators['severity-desc'];
+            return rows.sort((a, b) => {
+                const primary = comparator(a, b);
+                if (primary !== 0) return primary;
+                // tie-breaker: keep deterministic order by file name
+                const fileA = (a.file || '').toString().toLowerCase();
+                const fileB = (b.file || '').toString().toLowerCase();
+                if (fileA === fileB) return 0;
+                return fileA < fileB ? -1 : 1;
+            });
+        }
+
+        function updateChartHighlights() {
+            if (chartCards.severity) {
+                chartCards.severity.classList.toggle('selected', Boolean(severityFilter.value));
+            }
+            if (chartCards.cwe) {
+                chartCards.cwe.classList.toggle('selected', Boolean(cweFilter.value));
+            }
+            if (chartCards.treemap) {
+                const active = Boolean(folderFilter.value || fileFilter.value);
+                chartCards.treemap.classList.toggle('selected', active);
+            }
+            highlightSeveritySlice(severityFilter.value);
+            highlightCweBar(cweFilter.value);
+            highlightTreemapSelection(folderFilter.value, fileFilter.value);
+        }
+
+        function highlightSeveritySlice(selectedValue) {
+            if (!severityChartInstance) return;
+            const option = severityChartInstance.getOption();
+            if (!option.series || !option.series.length) return;
+            const isLight = document.body.classList.contains('light-theme');
+            const baseBorder = isLight ? '#e2e8f0' : '#0d1a33';
+            const data = (option.series[0].data || []).map(item => {
+                const name = item.name;
+                const selected = Boolean(selectedValue && name === selectedValue);
+                return {
+                    ...item,
+                    selected,
+                    itemStyle: {
+                        ...(item.itemStyle || {}),
+                        color: severityColors[name] || severityColors.Unknown,
+                        borderColor: selected ? '#3b82f6' : baseBorder,
+                        borderWidth: selected ? 3 : 1
+                    }
+                };
+            });
+            severityChartInstance.setOption({ series: [{ data }] }, false, false);
+            severityChartInstance.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+            if (selectedValue) {
+                const index = data.findIndex(item => item.name === selectedValue);
+                if (index >= 0) {
+                    severityChartInstance.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: index });
+                }
+            }
+        }
+
+        function highlightCweBar(selectedValue) {
+            if (!cweChartInstance) return;
+            const option = cweChartInstance.getOption();
+            if (!option.series || !option.series.length || !option.xAxis || !option.xAxis.length) return;
+            const labels = option.xAxis[0].data || [];
+            const seriesData = option.series[0].data || [];
+            const isLight = document.body.classList.contains('light-theme');
+            const baseColor = isLight ? '#ea580c' : '#f97316';
+            const borderColor = isLight ? '#1d4ed8' : '#bfdbfe';
+            const newData = labels.map((label, idx) => {
+                const raw = seriesData[idx];
+                const value = typeof raw === 'object' && raw !== null ? raw.value : raw;
+                const selected = Boolean(selectedValue && label === selectedValue);
+                return {
+                    value,
+                    itemStyle: {
+                        color: baseColor,
+                        borderColor: selected ? borderColor : 'transparent',
+                        borderWidth: selected ? 2 : 0
+                    }
+                };
+            });
+            cweChartInstance.setOption({ series: [{ data: newData }] }, false, false);
+            cweChartInstance.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+            if (selectedValue) {
+                const index = labels.indexOf(selectedValue);
+                if (index >= 0) {
+                    cweChartInstance.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: index });
+                }
+            }
+        }
+
+        function highlightTreemapSelection(selectedFolderValue, selectedFileValue) {
+            if (!treemapChartInstance || !treemapEntries.length) return;
+            const focusPath = selectedFileValue || selectedFolderValue || '';
+            const isLight = document.body.classList.contains('light-theme');
+            const data = buildTreemapHierarchy(treemapEntries, focusPath, isLight);
+            treemapChartInstance.setOption({ series: [{ data }] }, false, false);
+        }
+
+        function renderIssues(rows) {
+            resultsContainer.innerHTML = '';
+            rows.forEach(row => {
+                const detailsEl = document.createElement('details');
+                detailsEl.className = 'issue';
+
+                const summary = document.createElement('summary');
+                const severityClass = 'summary-pill severity-' + (row.severity || 'Unknown').replace(/[\s]+/g, '-');
+                const severitySpan = document.createElement('span');
+                severitySpan.className = severityClass;
+                severitySpan.textContent = row.severity || 'Unknown';
+
+                const cweSpan = document.createElement('span');
+                cweSpan.className = 'summary-pill';
+                const cweValue = row.cwe || 'CWE-Unknown';
+                const cweLink = row.cweLink || '';
+                if (cweLink) {
+                    const anchor = document.createElement('a');
+                    anchor.href = cweLink;
+                    anchor.target = '_blank';
+                    anchor.rel = 'noopener noreferrer';
+                    anchor.textContent = cweValue;
+                    cweSpan.appendChild(anchor);
+                } else {
+                    cweSpan.textContent = cweValue;
+                }
+
+                const fileSpan = document.createElement('span');
+                fileSpan.className = 'summary-file';
+                fileSpan.textContent = (row.file || 'Unknown') + (row.line ? ' • line ' + row.line : '');
+
+                const issueTitle = document.createElement('span');
+                issueTitle.textContent = row.issue || 'Issue';
+
+                const confidenceSpan = document.createElement('span');
+                confidenceSpan.className = 'summary-meta';
+                confidenceSpan.textContent = row.confidence ? 'Confidence: ' + row.confidence : '';
+
+                summary.appendChild(severitySpan);
+                summary.appendChild(cweSpan);
+                summary.appendChild(issueTitle);
+                summary.appendChild(fileSpan);
+                if (confidenceSpan.textContent) {
+                    summary.appendChild(confidenceSpan);
+                }
+
+                const body = document.createElement('div');
+                body.className = 'issue-body';
+
+                appendSection(body, 'Reasoning', row.reasoning);
+                appendSection(body, 'Mitigation', row.mitigation);
+                appendSnippet(body, row.snippet);
+                if (row.line) {
+                    appendSection(body, 'Location', row.file + ' • line ' + row.line);
+                }
+
+                detailsEl.appendChild(summary);
+                detailsEl.appendChild(body);
+                resultsContainer.appendChild(detailsEl);
+            });
+        }
+
+        function appendSection(parent, heading, content) {
+            if (!content) return;
+            const section = document.createElement('section');
+            const title = document.createElement('h3');
+            title.textContent = heading;
+            const paragraph = document.createElement('p');
+            paragraph.textContent = content;
+            section.appendChild(title);
+            section.appendChild(paragraph);
+            parent.appendChild(section);
+        }
+
+        function appendSnippet(parent, snippet) {
+            if (!snippet) return;
+            const section = document.createElement('section');
+            const title = document.createElement('h3');
+            title.textContent = 'Code Snippet';
+            const pre = document.createElement('pre');
+            pre.className = 'code-snippet';
+            pre.textContent = snippet;
+            section.appendChild(title);
+            section.appendChild(pre);
+            parent.appendChild(section);
+        }
+
+        populateFilters();
+        if (sortFilter) {
+            sortFilter.value = 'severity-desc';
+        }
+        applyFilters();
+        [severityFilter, cweFilter, folderFilter, fileFilter, sortFilter]
+            .filter(Boolean)
+            .forEach(select => select.addEventListener('change', applyFilters));
+
+        renderCharts();
+        setupChartControls();
+
+        function renderCharts() {
+            renderSeverityChart();
+            renderCweChart();
+            renderTreemapChart();
+            resizeCharts();
+            updateChartHighlights();
+        }
+
+        function setTheme(theme) {
+            if (theme === 'light') {
+                document.body.classList.add('light-theme');
+                modeToggle.innerHTML = '&#9790;';
+                modeToggle.setAttribute('data-mode', 'light');
+                localStorage.setItem('metis-report-theme', 'light');
+            } else {
+                document.body.classList.remove('light-theme');
+                modeToggle.innerHTML = '&#9788;';
+                modeToggle.setAttribute('data-mode', 'dark');
+                localStorage.setItem('metis-report-theme', 'dark');
+            }
+            renderCharts();
+            requestAnimationFrame(() => {
+                applyFilters();
+                resizeCharts();
+            });
+        }
+
+        const modeToggle = document.getElementById('modeToggle');
+        const storedTheme = localStorage.getItem('metis-report-theme');
+        const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+        setTheme(storedTheme || (prefersLight ? 'light' : 'dark'));
+
+        modeToggle.addEventListener('click', () => {
+            const current = modeToggle.getAttribute('data-mode');
+            setTheme(current === 'light' ? 'dark' : 'light');
+        });
+
+        function setupChartControls() {
+            const buttons = document.querySelectorAll('.chart-toggle');
+            buttons.forEach(button => {
+                updateToggleButtonState(button, false);
+                button.addEventListener('click', () => {
+                    const card = button.closest('.chart-card');
+                    if (!card) return;
+
+                    const alreadyMaximized = card.classList.contains('maximized');
+                    if (!alreadyMaximized && chartsContainer) {
+                        chartsContainer.classList.add('maximized-active');
+                    }
+                    document.querySelectorAll('.chart-card.maximized').forEach(el => {
+                        el.classList.remove('maximized');
+                        updateToggleButtonState(el.querySelector('.chart-toggle'), false);
+                    });
+
+                    if (!alreadyMaximized) {
+                        card.classList.add('maximized');
+                    } else if (chartsContainer) {
+                        chartsContainer.classList.remove('maximized-active');
+                    }
+
+                    updateToggleButtonState(button, !alreadyMaximized);
+                    requestAnimationFrame(resizeCharts);
+                });
+            });
+
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    document.querySelectorAll('.chart-card.maximized').forEach(el => {
+                        el.classList.remove('maximized');
+                        updateToggleButtonState(el.querySelector('.chart-toggle'), false);
+                    });
+                    if (chartsContainer) {
+                        chartsContainer.classList.remove('maximized-active');
+                    }
+                    requestAnimationFrame(resizeCharts);
+                }
+            });
+        }
+
+        function clearAllFilters(exceptSelect = null) {
+            [severityFilter, cweFilter, folderFilter, fileFilter]
+                .filter(select => select && select !== exceptSelect)
+                .forEach(select => {
+                    select.value = '';
+                });
+            updateChartHighlights();
+        }
+
+        function renderSeverityChart() {
+            const container = document.getElementById('severityChart');
+            if (!container || typeof echarts === 'undefined') return;
+            const empty = container.parentElement ? container.parentElement.querySelector('.chart-empty') : null;
+            const severityOrder = ['Critical', 'High', 'Medium', 'Low', 'Unknown'];
+            const orderedEntries = severityOrder
+                .map(name => ({ name, value: severityCounts[name] || 0 }))
+                .filter(entry => entry.value > 0);
+            const additionalEntries = Object.entries(severityCounts)
+                .filter(([name, value]) => value > 0 && !severityOrder.includes(name))
+                .map(([name, value]) => ({ name, value }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+            const entries = [...orderedEntries, ...additionalEntries];
+
+            if (!entries.length) {
+                if (empty) empty.style.display = 'block';
+                if (severityChartInstance) {
+                    severityChartInstance.dispose();
+                    severityChartInstance = null;
+                }
+                return;
+            }
+
+            if (empty) empty.style.display = 'none';
+
+            if (severityChartInstance) {
+                severityChartInstance.dispose();
+            }
+
+            severityChartInstance = echarts.init(container);
+            const isLight = document.body.classList.contains('light-theme');
+            severityChartInstance.setOption({
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'item',
+                    formatter: params => `${params.name}: ${params.value}`
+                },
+                legend: {
+                    orient: 'vertical',
+                    left: 0,
+                    top: 'middle',
+                    textStyle: { color: isLight ? '#1f2937' : '#e2e8f0' }
+                },
+                series: [{
+                    name: 'Severity',
+                    type: 'pie',
+                    radius: ['45%', '70%'],
+                    center: ['60%', '50%'],
+                    avoidLabelOverlap: false,
+                    itemStyle: {
+                        borderColor: isLight ? '#e2e8f0' : '#0d1a33',
+                        borderWidth: 1
+                    },
+                    label: {
+                        color: isLight ? '#1f2937' : '#e2e8f0'
+                    },
+                    labelLine: {
+                        length: 15,
+                        length2: 10
+                    },
+                    data: entries.map(entry => ({
+                        value: entry.value,
+                        name: entry.name,
+                        itemStyle: { color: severityColors[entry.name] || severityColors.Unknown }
+                    }))
+                }]
+            });
+
+            severityChartInstance.off('click');
+            severityChartInstance.on('click', params => {
+                if (!params || !params.name) return;
+                clearAllFilters(severityFilter);
+                toggleFilter(severityFilter, params.name);
+            });
+
+            highlightSeveritySlice(severityFilter.value);
+        }
+
+        function renderTreemapChart() {
+            const container = document.getElementById('treemapChart');
+            if (!container || typeof echarts === 'undefined') return;
+            const empty = container.parentElement ? container.parentElement.querySelector('.chart-empty') : null;
+            const entries = Object.entries(fileStats || {});
+            const isLight = document.body.classList.contains('light-theme');
+            const activeTreemapPath = (fileFilter && fileFilter.value) || (folderFilter && folderFilter.value) || '';
+            treemapEntries = entries;
+
+            if (!entries.length) {
+                if (empty) empty.style.display = 'block';
+                if (treemapChartInstance) {
+                    treemapChartInstance.dispose();
+                    treemapChartInstance = null;
+                }
+                return;
+            }
+
+            if (empty) empty.style.display = 'none';
+
+            const data = buildTreemapHierarchy(entries, activeTreemapPath, isLight);
+
+            if (treemapChartInstance) {
+                treemapChartInstance.dispose();
+            }
+
+            treemapChartInstance = echarts.init(container);
+            treemapChartInstance.setOption({
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'item',
+                    textStyle: { color: isLight ? '#1f2937' : '#f8fafc' },
+                    backgroundColor: isLight ? 'rgba(248, 250, 252, 0.95)' : 'rgba(11, 23, 42, 0.95)',
+                    borderColor: isLight ? '#d0d7e4' : '#1f2c4d',
+                    borderWidth: 1,
+                    formatter: info => {
+                        const data = info.data || {};
+                        const counts = data.severityCounts || {};
+                        const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+                        const severityLines = Object.entries(counts)
+                            .filter(([, value]) => value > 0)
+                            .sort((a, b) => (severityRank[b[0]] || 0) - (severityRank[a[0]] || 0))
+                            .map(([severity, value]) => `${severity}: ${value}`);
+                        const path = data.isFile ? data.fullPath : data.fullPath || data.name;
+                        const severity = data.severity || 'Unknown';
+                        const details = [
+                            `<strong>${path}</strong>`,
+                            `Severity: ${severity}`,
+                            `Total issues: ${total}`
+                        ];
+                        if (severityLines.length) {
+                            details.push(severityLines.join('<br/>'));
+                        }
+                        if (data.filterType === 'file') {
+                            details.push('Click to filter by file');
+                        } else if (data.filterType === 'folder') {
+                            details.push('Click to filter by folder');
+                        }
+                        return details.join('<br/>');
+                    }
+                },
+                series: [{
+                    type: 'treemap',
+                    data,
+                    roam: true,
+                    nodeClick: false,
+                    visibleMin: 1,
+                   label: {
+                        color: isLight ? '#1f2937' : '#f4f5f7',
+                        formatter: params => params.name
+                    },
+                    upperLabel: {
+                        show: true,
+                        color: isLight ? '#1f2937' : '#f4f5f7',
+                        height: 24
+                    },
+                    breadcrumb: {
+                        show: false
+                    },
+                    itemStyle: {
+                        borderColor: isLight ? '#d0d7e4' : '#0d1a33',
+                        borderWidth: 1,
+                        gapWidth: 2
+                    },
+                    levels: [
+                        {
+                            itemStyle: {
+                                borderWidth: 1,
+                                borderColor: isLight ? '#e2e8f0' : '#1f2c4d',
+                                gapWidth: 4
+                            }
+                        },
+                        {
+                            itemStyle: {
+                                borderWidth: 1,
+                                borderColor: isLight ? '#e2e8f0' : '#1f2c4d',
+                                gapWidth: 2
+                            }
+                        }
+                    ]
+                }]
+            });
+
+            treemapChartInstance.off('click');
+            treemapChartInstance.on('click', params => {
+                const dataPoint = params && params.data;
+                if (!dataPoint) return;
+                if (dataPoint.filterType === 'file' && dataPoint.filterValue) {
+                    clearAllFilters(fileFilter);
+                    toggleFilter(fileFilter, dataPoint.filterValue);
+                } else if (dataPoint.filterType === 'folder' && dataPoint.filterValue) {
+                    clearAllFilters(folderFilter);
+                    toggleFilter(folderFilter, dataPoint.filterValue);
+                }
+            });
+
+            highlightTreemapSelection(folderFilter.value, fileFilter.value);
+
+            resizeCharts();
+        }
+
+        function buildTreemapHierarchy(entries, activePath = '', isLightTheme = false) {
+            const root = { name: 'root', children: [] };
+
+            entries.forEach(([filePath, info]) => {
+                const parts = filePath.split(/[\\/]/).filter(Boolean);
+                if (!parts.length) return;
+                let current = root;
+                let accumulatedPath = '';
+
+                parts.forEach((part, index) => {
+                    accumulatedPath = accumulatedPath ? accumulatedPath + '/' + part : part;
+                    let child = (current.children || []).find(node => node.name === part);
+                    if (!child) {
+                        child = {
+                            name: part,
+                            id: accumulatedPath,
+                            children: [],
+                            severityCounts: {},
+                            severity: 'Unknown',
+                            value: 0,
+                            fullPath: accumulatedPath
+                        };
+                        child.filterType = 'folder';
+                        child.filterValue = accumulatedPath;
+                        current.children = current.children || [];
+                        current.children.push(child);
+                    } else if (child.filterType !== 'file') {
+                        child.filterType = 'folder';
+                        child.filterValue = accumulatedPath;
+                        child.fullPath = accumulatedPath;
+                    }
+
+                    if (index === parts.length - 1) {
+                        child.isFile = true;
+                        child.filterType = 'file';
+                        child.filterValue = filePath;
+                        child.fullPath = filePath;
+                        child.id = filePath;
+                        child.value = (info && typeof info.count === 'number') ? info.count : 0;
+                        const counts = Object.assign({}, (info && info.severityCounts) || {});
+                        child.severityCounts = counts;
+                        const declaredSeverity = info && info.maxSeverity;
+                        child.severity = declaredSeverity || deriveMaxSeverityFromCounts(counts);
+                    }
+
+                    current = child;
+                });
+            });
+
+            const finalizeNode = node => {
+                const isMatch = activePath && node.fullPath === activePath;
+                const baseBorder = isLightTheme ? '#d0d7e4' : '#0d1a33';
+                const highlightBorder = '#3b82f6';
+                if (node.children && node.children.length) {
+                    let total = 0;
+                    const counts = {};
+                    node.children.forEach(child => {
+                        finalizeNode(child);
+                        total += child.value || 0;
+                        const childCounts = child.severityCounts || {};
+                        Object.keys(childCounts).forEach(key => {
+                            counts[key] = (counts[key] || 0) + childCounts[key];
+                        });
+                    });
+                    node.value = total;
+                    node.severityCounts = counts;
+                    const derivedSeverity = deriveMaxSeverityFromCounts(counts);
+                    if (derivedSeverity) {
+                        node.severity = derivedSeverity;
+                    }
+                }
+
+                if (!node.severityCounts) {
+                    node.severityCounts = {};
+                }
+
+                const colorKey = node.severity && severityColors[node.severity] ? node.severity : 'Unknown';
+                node.itemStyle = node.itemStyle || {};
+                node.itemStyle.color = severityColors[colorKey] || severityColors.Unknown;
+                node.itemStyle.borderColor = isMatch ? highlightBorder : baseBorder;
+                node.itemStyle.borderWidth = isMatch ? 3 : 1;
+                node.emphasis = node.emphasis || {};
+                node.emphasis.itemStyle = Object.assign({}, node.emphasis.itemStyle, {
+                    borderColor: highlightBorder,
+                    borderWidth: 4
+                });
+            };
+
+            (root.children || []).forEach(finalizeNode);
+            return root.children || [];
+        }
+
+        function deriveMaxSeverityFromCounts(counts) {
+            if (!counts) return 'Unknown';
+            let maxSeverity = 'Unknown';
+            let maxRank = 0;
+            Object.entries(counts).forEach(([severity, value]) => {
+                if (!value) return;
+                const rank = severityRank[severity] || 0;
+                if (rank > maxRank) {
+                    maxRank = rank;
+                    maxSeverity = severity;
+                }
+            });
+            return maxSeverity;
+        }
+
+        function resizeCharts() {
+            if (severityChartInstance) {
+                severityChartInstance.resize();
+            }
+            if (cweChartInstance) {
+                cweChartInstance.resize();
+            }
+            if (treemapChartInstance) {
+                treemapChartInstance.resize();
+            }
+        }
+
+        window.addEventListener('resize', resizeCharts);
+
+        function renderCweChart() {
+            const container = document.getElementById('cweChart');
+            if (!container || typeof echarts === 'undefined') return;
+            const empty = container.parentElement ? container.parentElement.querySelector('.chart-empty') : null;
+            const entries = Object.entries(cweCounts)
+                .filter(([, value]) => value > 0)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+
+            if (!entries.length) {
+                if (empty) empty.style.display = 'block';
+                if (cweChartInstance) {
+                    cweChartInstance.dispose();
+                    cweChartInstance = null;
+                }
+                return;
+            }
+
+            if (empty) empty.style.display = 'none';
+
+            const labels = entries.map(([label]) => label);
+            const data = entries.map(([, value]) => value);
+
+            if (cweChartInstance) {
+                cweChartInstance.dispose();
+            }
+
+            cweChartInstance = echarts.init(container);
+            const isLight = document.body.classList.contains('light-theme');
+            cweChartInstance.setOption({
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' }
+                },
+                grid: {
+                    left: '6%',
+                    right: '4%',
+                    bottom: '12%',
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'category',
+                    data: labels,
+                    axisLabel: {
+                        color: isLight ? '#1f2937' : '#e2e8f0',
+                        interval: 0,
+                        rotate: labels.length > 5 ? 30 : 0
+                    },
+                    axisLine: { lineStyle: { color: isLight ? 'rgba(100, 116, 139, 0.35)' : 'rgba(148, 163, 184, 0.35)' } },
+                    axisTick: { alignWithLabel: true }
+                },
+                yAxis: {
+                    type: 'value',
+                    minInterval: 1,
+                    axisLabel: { color: isLight ? '#1f2937' : '#e2e8f0' },
+                    axisLine: { lineStyle: { color: isLight ? 'rgba(100, 116, 139, 0.35)' : 'rgba(148, 163, 184, 0.35)' } },
+                    splitLine: { lineStyle: { color: isLight ? 'rgba(148, 163, 184, 0.25)' : 'rgba(148, 163, 184, 0.15)' } }
+                },
+                series: [{
+                    name: 'Findings',
+                    type: 'bar',
+                    barWidth: '55%',
+                    itemStyle: {
+                        color: isLight ? '#ea580c' : '#f97316',
+                        borderRadius: [6, 6, 0, 0]
+                    },
+                    data
+                }]
+            });
+
+            cweChartInstance.off('click');
+            cweChartInstance.on('click', params => {
+                if (!params || !params.name) return;
+                const value = params.name;
+                clearAllFilters(cweFilter);
+                toggleFilter(cweFilter, value);
+            });
+
+            highlightCweBar(cweFilter.value);
+        }
+
+    </script>
+</body>
+</html>

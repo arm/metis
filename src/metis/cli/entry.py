@@ -57,22 +57,27 @@ completer = WordCompleter(list(COMMANDS), ignore_case=True)
 
 
 def determine_output_file(cmd, args, cmd_args):
-    """
-    Set args.output_file if not provided, or extract from cmd_args if present.
-    """
-    if "--output-file" in cmd_args:
+    """Set args.output_file list if not provided, or extract from cmd_args."""
+    existing_outputs = list(args.output_file or [])
+    overrides: list[str] = []
+
+    while "--output-file" in cmd_args:
         idx = cmd_args.index("--output-file")
         if idx + 1 < len(cmd_args):
-            args.output_file = cmd_args[idx + 1]
-            del cmd_args[idx : idx + 2]
-            return
+            overrides.append(cmd_args[idx + 1])
+        del cmd_args[idx : idx + 2]
 
-    if args.output_file:
+    if overrides:
+        args.output_file = overrides
+        return
+
+    if existing_outputs:
+        args.output_file = existing_outputs
         return
 
     Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.output_file = f"results/{cmd}_{timestamp}.json"
+    args.output_file = [f"results/{cmd}_{timestamp}.json"]
 
 
 def execute_command(engine, cmd, cmd_args, args):
@@ -127,7 +132,14 @@ def main():
         "-q", "--quiet", action="store_true", help="Suppress output in CLI"
     )
     parser.add_argument(
-        "--output-file", type=str, help="Save analysis results to this file"
+        "--output-file",
+        action="append",
+        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif)",
+    )
+    parser.add_argument(
+        "--output-files",
+        nargs="+",
+        help="Alternative syntax to provide multiple output files",
     )
     parser.add_argument(
         "--sarif", action="store_true", help="Flag to generate SARIF output"
@@ -142,6 +154,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.output_files:
+        if args.output_file:
+            args.output_file.extend(args.output_files)
+        else:
+            args.output_file = list(args.output_files)
+        args.output_files = None
 
     if args.quiet and args.verbose:
         print_console(
