@@ -240,7 +240,8 @@ def _coerce_to_string(value):
 
 def _build_html_document(issues, source_name):
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    title = f"Metis Security Report - {source_name}"
+    display_name = Path(source_name).stem if source_name else source_name
+    title = f"Metis Security Report - {display_name}"
     severity_counts = Counter()
     cwe_counts = Counter()
     severity_priority = {
