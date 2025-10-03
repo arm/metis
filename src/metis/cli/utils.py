@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import json
-import html
 import logging
 import importlib.metadata
 import re
-from collections import Counter
-from datetime import datetime
 from pathlib import Path
 from importlib.resources import files
 
@@ -16,7 +12,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from metis.sarif.writer import generate_sarif
+from .exporters import export_csv, export_html, export_sarif
 
 try:
     METIS_VERSION = importlib.metadata.version("metis")
@@ -104,48 +100,39 @@ def save_output(output_files, data, quiet=False):
         suffix = output_path.suffix.lower()
 
         if suffix == ".html":
-            _generate_html_report(output_path, data, quiet)
+            try:
+                html_path = export_html(data, output_path, REPORT_TEMPLATE, METIS_VERSION)
+                print_console(
+                    f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
+                    quiet,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to generate HTML report: %s", exc)
+                print_console("[red]Failed to generate HTML report.[/red]", quiet)
             continue
 
         if suffix == ".sarif":
-            if sarif_payload is None:
-                sarif_payload = generate_sarif(data)
-            _write_payload(output_path, sarif_payload, "SARIF report")
+            try:
+                sarif_path, sarif_payload = export_sarif(
+                    data, output_path, sarif_payload
+                )
+                print_console(
+                    f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
+                    quiet,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to generate SARIF report: %s", exc)
+                print_console(
+                    f"[red]Failed to generate SARIF report at {escape(str(output_path))}[/red]",
+                    quiet,
+                )
             continue
 
         if suffix == ".csv":
             try:
-                issues = _flatten_issues(data)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with output_path.open("w", encoding="utf-8", newline="") as csv_file:
-                    writer = csv.writer(csv_file)
-                    writer.writerow(
-                        [
-                            "File",
-                            "Line",
-                            "Severity",
-                            "CWE",
-                            "Issue",
-                            "Reasoning",
-                            "Mitigation",
-                            "Confidence",
-                        ]
-                    )
-                    for issue in issues:
-                        writer.writerow(
-                            [
-                                issue.get("file", ""),
-                                issue.get("line", ""),
-                                issue.get("severity", ""),
-                                issue.get("cwe", ""),
-                                issue.get("issue", ""),
-                                issue.get("reasoning", ""),
-                                issue.get("mitigation", ""),
-                                issue.get("confidence", ""),
-                            ]
-                        )
+                csv_path = export_csv(data, output_path)
                 print_console(
-                    f"[blue]CSV report saved to {escape(str(output_path))}[/blue]",
+                    f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
                     quiet,
                 )
             except Exception as exc:  # pragma: no cover - defensive
@@ -158,169 +145,6 @@ def save_output(output_files, data, quiet=False):
 
         # default to JSON
         _write_payload(output_path, json_payload, "Results")
-
-
-def _generate_html_report(output_path: Path, report_data, quiet=False):
-    html_path = output_path.with_suffix(".html")
-    try:
-        issues = _flatten_issues(report_data)
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        document = _build_html_document(issues, output_path.name)
-        html_path.write_text(document, encoding="utf-8")
-        print_console(
-            f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
-            quiet,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Failed to generate HTML report: %s", exc)
-        print_console("[red]Failed to generate HTML report.[/red]", quiet)
-
-
-def _flatten_issues(report_data):
-    issues = []
-    if not isinstance(report_data, dict):
-        return issues
-
-    reviews = report_data.get("reviews", [])
-    for file_entry in reviews:
-        file_name = file_entry.get("file") or file_entry.get("file_path") or "Unknown"
-        try:
-            file_name = str(file_name)
-        except Exception:  # pragma: no cover - defensive
-            file_name = "Unknown"
-
-        for issue in file_entry.get("reviews", []):
-            severity = issue.get("severity") or "Unknown"
-            if isinstance(severity, str):
-                severity = severity.strip() or "Unknown"
-            else:
-                severity = str(severity)
-
-            cwe = issue.get("cwe") or "CWE-Unknown"
-            if isinstance(cwe, (list, tuple)):
-                cwe = ", ".join(str(item) for item in cwe if item)
-            else:
-                cwe = str(cwe)
-
-            cwe_match = re.search(r"(\d+)", cwe)
-            cwe_link = (
-                f"https://cwe.mitre.org/data/definitions/{cwe_match.group(1)}.html"
-                if cwe_match
-                else ""
-            )
-
-            folder = file_name.split("/", 1)[0] if "/" in file_name else file_name
-            issues.append(
-                {
-                    "file": file_name,
-                    "line": str(issue.get("line_number") or ""),
-                    "severity": severity,
-                    "cwe": cwe,
-                    "cweLink": cwe_link,
-                    "issue": _coerce_to_string(issue.get("issue")),
-                    "reasoning": _coerce_to_string(issue.get("reasoning")),
-                    "mitigation": _coerce_to_string(issue.get("mitigation")),
-                    "confidence": _coerce_to_string(issue.get("confidence")),
-                    "snippet": _coerce_to_string(issue.get("code_snippet")),
-                    "folder": folder,
-                }
-            )
-
-    return issues
-
-
-def _coerce_to_string(value):
-    if value is None:
-        return ""
-    try:
-        return str(value)
-    except Exception:  # pragma: no cover - defensive
-        return ""
-
-
-def _build_html_document(issues, source_name):
-    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    display_name = Path(source_name).stem if source_name else source_name
-    title = f"Metis Security Report - {display_name}"
-    severity_counts = Counter()
-    cwe_counts = Counter()
-    severity_priority = {
-        "Critical": 4,
-        "High": 3,
-        "Medium": 2,
-        "Low": 1,
-        "Unknown": 0,
-    }
-    file_stats: dict[str, dict[str, object]] = {}
-    folder_stats: dict[str, dict[str, object]] = {}
-    for issue in issues:
-        severity = issue.get("severity") or "Unknown"
-        cwe = issue.get("cwe") or "CWE-Unknown"
-        severity_counts[severity] += 1
-        cwe_counts[cwe] += 1
-
-        file_name = issue.get("file") or "Unknown"
-        folder_name = (
-            issue.get("folder")
-            or (file_name.split("/", 1)[0] if "/" in file_name else file_name)
-            or "Unknown"
-        )
-        stats = file_stats.setdefault(
-            file_name,
-            {
-                "count": 0,
-                "severityCounts": Counter(),
-                "maxSeverity": "Unknown",
-            },
-        )
-        stats["count"] = int(stats["count"]) + 1
-        stats["severityCounts"][severity] += 1
-        current_max = stats["maxSeverity"]
-        if severity_priority.get(severity, 0) > severity_priority.get(current_max, 0):
-            stats["maxSeverity"] = severity
-
-        folder_entry = folder_stats.setdefault(
-            folder_name,
-            {
-                "count": 0,
-                "severityCounts": Counter(),
-            },
-        )
-        folder_entry["count"] = int(folder_entry["count"]) + 1
-        folder_entry["severityCounts"][severity] += 1
-
-    file_stats_serialized = {
-        file_name: {
-            "count": details["count"],
-            "severityCounts": dict(details["severityCounts"]),
-            "maxSeverity": details["maxSeverity"],
-        }
-        for file_name, details in file_stats.items()
-    }
-
-    folder_stats_serialized = {
-        folder_name: {
-            "count": details["count"],
-            "severityCounts": dict(details["severityCounts"]),
-        }
-        for folder_name, details in folder_stats.items()
-    }
-
-    payload = {
-        "issues": issues,
-        "severityCounts": dict(severity_counts),
-        "cweCounts": dict(cwe_counts),
-        "fileStats": file_stats_serialized,
-        "folderStats": folder_stats_serialized,
-    }
-    data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-    template = REPORT_TEMPLATE
-    return (
-        template.replace("__TITLE__", html.escape(title))
-        .replace("__GENERATED_AT__", html.escape(generated_at))
-        .replace("__DATA_JSON__", data_json)
-        .replace("__METIS_VERSION__", html.escape(METIS_VERSION))
-    )
 
 
 def check_file_exists(file_path, quiet=False):
