@@ -101,7 +101,9 @@ def save_output(output_files, data, quiet=False):
 
         if suffix == ".html":
             try:
-                html_path = export_html(data, output_path, REPORT_TEMPLATE, METIS_VERSION)
+                html_path = export_html(
+                    data, output_path, REPORT_TEMPLATE, METIS_VERSION
+                )
                 print_console(
                     f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
                     quiet,

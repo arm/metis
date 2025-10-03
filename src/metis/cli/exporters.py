@@ -20,9 +20,7 @@ def export_html(
 ) -> Path:
     """Render the HTML report template with the provided data."""
     issues = _flatten_issues(report_data)
-    document = _build_html_document(
-        issues, output_path.name, template, metis_version
-    )
+    document = _build_html_document(issues, output_path.name, template, metis_version)
     html_path = output_path.with_suffix(".html")
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(document, encoding="utf-8")
@@ -33,7 +31,9 @@ def export_sarif(
     report_data, output_path: Path, sarif_payload=None
 ) -> Tuple[Path, dict]:
     """Generate SARIF payload (or reuse) and persist it to disk."""
-    payload = sarif_payload if sarif_payload is not None else generate_sarif(report_data)
+    payload = (
+        sarif_payload if sarif_payload is not None else generate_sarif(report_data)
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=4)
