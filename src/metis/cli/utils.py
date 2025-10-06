@@ -3,15 +3,28 @@
 
 import json
 import logging
+import importlib.metadata
+import re
 from pathlib import Path
+from importlib.resources import files
 
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from metis.sarif.writer import generate_sarif
+from .exporters import export_csv, export_html, export_sarif
+
+try:
+    METIS_VERSION = importlib.metadata.version("metis")
+except importlib.metadata.PackageNotFoundError:
+    METIS_VERSION = "unknown"
+
 
 console = Console()
+logger = logging.getLogger("metis")
+REPORT_TEMPLATE = (
+    files("metis.cli").joinpath("report_template.html").read_text(encoding="utf-8")
+)
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -62,16 +75,78 @@ def with_spinner(task_description, fn, *args, **kwargs):
     return result
 
 
-def save_output(output_file, data, quiet=False, sarif=False):
+def save_output(output_files, data, quiet=False):
+    if not output_files:
+        return
 
-    dump_data = data
-    if sarif:
-        dump_data = generate_sarif(data)
+    if isinstance(output_files, (str, Path)):
+        files = [output_files]
+    else:
+        files = list(output_files)
+    json_payload = data
+    sarif_payload = None
 
-    if output_file:
-        with open(output_file, "w") as f:
-            json.dump(dump_data, f, indent=4)
-        print_console(f"[blue]Results saved to {escape(output_file)}[/blue]", quiet)
+    def _write_payload(path: Path, payload, label: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+        print_console(
+            f"[blue]{label} saved to {escape(str(path))}[/blue]",
+            quiet,
+        )
+
+    for file_entry in files:
+        output_path = Path(file_entry)
+        suffix = output_path.suffix.lower()
+
+        if suffix == ".html":
+            try:
+                html_path = export_html(
+                    data, output_path, REPORT_TEMPLATE, METIS_VERSION
+                )
+                print_console(
+                    f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
+                    quiet,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to generate HTML report: %s", exc)
+                print_console("[red]Failed to generate HTML report.[/red]", quiet)
+            continue
+
+        if suffix == ".sarif":
+            try:
+                sarif_path, sarif_payload = export_sarif(
+                    data, output_path, sarif_payload
+                )
+                print_console(
+                    f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
+                    quiet,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to generate SARIF report: %s", exc)
+                print_console(
+                    f"[red]Failed to generate SARIF report at {escape(str(output_path))}[/red]",
+                    quiet,
+                )
+            continue
+
+        if suffix == ".csv":
+            try:
+                csv_path = export_csv(data, output_path)
+                print_console(
+                    f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
+                    quiet,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to generate CSV report: %s", exc)
+                print_console(
+                    f"[red]Failed to generate CSV report at {escape(str(output_path))}[/red]",
+                    quiet,
+                )
+            continue
+
+        # default to JSON
+        _write_payload(output_path, json_payload, "Results")
 
 
 def check_file_exists(file_path, quiet=False):
@@ -107,7 +182,19 @@ def pretty_print_reviews(results, quiet=False):
                         quiet,
                     )
                 if r.get("cwe"):
-                    print_console(f"    [red]CWE:[/red] {r['cwe']}", quiet)
+                    cwe_text = str(r["cwe"])
+                    match = re.search(r"(\d+)", cwe_text)
+                    if match:
+                        cwe_url = f"https://cwe.mitre.org/data/definitions/{match.group(1)}.html"
+                        print_console(
+                            f"    [red]CWE:[/red] [link={cwe_url}]{escape(cwe_text)}[/link]",
+                            quiet,
+                        )
+                    else:
+                        print_console(
+                            f"    [red]CWE:[/red] {escape(cwe_text)}",
+                            quiet,
+                        )
                 if severity := r.get("severity"):
                     severity_color = {
                         "Low": "green",
