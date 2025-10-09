@@ -10,10 +10,10 @@ class CPlugin(BaseLanguagePlugin):
     def __init__(self, plugin_config):
         self.plugin_config = plugin_config
 
-    def get_name(self) -> str:
+    def get_name(self):
         return "c"
 
-    def can_handle(self, extension: str) -> bool:
+    def can_handle(self, extension):
         supported = self.get_supported_extensions()
         return extension.lower() in supported
 
@@ -21,7 +21,7 @@ class CPlugin(BaseLanguagePlugin):
         return (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})
-            .get("supported_extensions", [".c", ".cpp", ".h", ".hpp", ".cc"])
+            .get("supported_extensions", [".c", ".cc"])
         )
 
     def get_splitter(self):
@@ -37,7 +37,7 @@ class CPlugin(BaseLanguagePlugin):
             max_chars=splitting_cfg.get("max_chars"),
         )
 
-    def get_prompts(self) -> dict:
+    def get_prompts(self):
         return (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})

@@ -10,10 +10,13 @@ from metis.utils import read_file_content, safe_decode_unicode
 from .utils import (
     check_file_exists,
     with_spinner,
+    collect_reviews,
+    iterate_with_progress,
     pretty_print_reviews,
     save_output,
     print_console,
 )
+
 
 console = Console()
 
@@ -35,7 +38,6 @@ Type one of the following commands (with arguments):
 - [magenta]help[/magenta]   (show this message)
 
 Options:
-    --language-plugin NAME     Select the language plugin to use. (default: c).
     --backend chroma|postgres  Vector backend to use (default: chroma).
     --output-file PATH         Save analysis results to this file.
     --project-schema SCHEMA    (Optional) Project identifier if postresql is used.
@@ -78,15 +80,22 @@ def run_file_review(engine, file_path, args):
 
 
 def run_review_code(engine, args):
-    results = with_spinner(
-        "Reviewing codebase...", engine.review_code, False, args.verbose
-    )
+    if args.verbose:
+        print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
+        total = len(engine.get_code_files())
+        file_reviews = iterate_with_progress(total, engine.review_code(False))
+        results = {"reviews": file_reviews}
+    else:
+        results = with_spinner("Reviewing codebase...", collect_reviews, engine, False)
     pretty_print_reviews(results, args.quiet)
     save_output(args.output_file, results, args.quiet)
 
 
 def run_index(engine, verbose=False, quiet=False):
-    with_spinner("Indexing codebase...", engine.index_codebase, verbose)
+    if verbose:
+        engine.index_codebase(verbose)
+    else:
+        with_spinner("Indexing codebase...", engine.index_codebase, verbose)
     print_console("[green]Indexing completed successfully.[/green]", quiet)
 
 
@@ -94,7 +103,7 @@ def run_update(engine, patch_file, args):
     if not check_file_exists(patch_file):
         return
     file_diff = read_file_content(patch_file)
-    with_spinner("Updating index...", engine.update_index, file_diff, args.verbose)
+    with_spinner("Updating index...", engine.update_index, file_diff)
     print_console("[green]Index update completed.[/green]", args.quiet)
 
 

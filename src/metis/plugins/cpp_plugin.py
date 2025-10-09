@@ -6,23 +6,24 @@ from llama_index.core.node_parser import CodeSplitter
 from metis.plugins.base import BaseLanguagePlugin
 
 
-class PythonPlugin(BaseLanguagePlugin):
+class CppPlugin(BaseLanguagePlugin):
     def __init__(self, plugin_config):
         self.plugin_config = plugin_config
 
     def get_name(self):
-        return "python"
+        return "cpp"
 
     def can_handle(self, extension):
         supported = self.get_supported_extensions()
         return extension.lower() in supported
 
     def get_supported_extensions(self):
-        return (
+        exts = (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})
-            .get("supported_extensions", [".py"])
+            .get("supported_extensions", [".cpp", ".h", ".hpp"])
         )
+        return [e.lower() for e in exts]
 
     def get_splitter(self):
         splitting_cfg = (
@@ -32,9 +33,9 @@ class PythonPlugin(BaseLanguagePlugin):
         )
         return CodeSplitter(
             language=self.get_name(),
-            chunk_lines=splitting_cfg["chunk_lines"],
-            chunk_lines_overlap=splitting_cfg["chunk_lines_overlap"],
-            max_chars=splitting_cfg["max_chars"],
+            chunk_lines=splitting_cfg.get("chunk_lines"),
+            chunk_lines_overlap=splitting_cfg.get("chunk_lines_overlap"),
+            max_chars=splitting_cfg.get("max_chars"),
         )
 
     def get_prompts(self):

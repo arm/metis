@@ -10,7 +10,15 @@ from importlib.resources import files
 
 from rich.console import Console
 from rich.markup import escape
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from .exporters import export_csv, export_html, export_sarif
 
@@ -57,6 +65,17 @@ def configure_logger(logger, args):
         level = getattr(logging, args.log_level.upper(), None)
         if level:
             logger.setLevel(level)
+    for name in (
+        "httpx",
+        "httpcore",
+        "openai",
+        "openai._base_client",
+        "azure",
+        "urllib3",
+    ):
+        noisy = logging.getLogger(name)
+        noisy.setLevel(logging.WARNING)
+        noisy.propagate = False
 
 
 def print_console(message, quiet=False, **kwargs):
@@ -73,6 +92,39 @@ def with_spinner(task_description, fn, *args, **kwargs):
         progress.update(task, completed=1)
         progress.stop()
     return result
+
+
+def collect_reviews(engine, validate):
+    return {"reviews": [r for r in engine.review_code(validate)]}
+
+
+def iterate_with_progress(total, iterable):
+    results = []
+    if total <= 0:
+        return results
+    with Progress(
+        SpinnerColumn(style="cyan"),
+        BarColumn(bar_width=None, complete_style="green", finished_style="green"),
+        TaskProgressColumn(),
+        TextColumn("[bright_black]elapsed"),
+        TimeElapsedColumn(),
+        TextColumn("[bright_black]eta"),
+        TimeRemainingColumn(),
+        transient=True,
+        console=console,
+        redirect_stdout=True,
+        redirect_stderr=True,
+    ) as progress:
+        task = progress.add_task("", total=total)
+        for item in iterable:
+            if item is not None:
+                results.append(item)
+            progress.advance(task, 1)
+        try:
+            progress.update(task, completed=progress.tasks[task].total)
+        except Exception:
+            pass
+    return results
 
 
 def save_output(output_files, data, quiet=False):
