@@ -118,7 +118,6 @@ def main():
     parser.add_argument("--project-schema", type=str, default="myproject-main")
     parser.add_argument("--chroma-dir", type=str, default="./chromadb")
     parser.add_argument("--codebase-path", type=str, default=".")
-    parser.add_argument("--language-plugin", type=str, default="c")
     parser.add_argument(
         "--backend", type=str, default="chroma", choices=["chroma", "postgres"]
     )
@@ -193,7 +192,6 @@ def main():
 
     engine = MetisEngine(
         codebase_path=args.codebase_path,
-        language_plugin=args.language_plugin,
         llm_provider=llm_provider,
         vector_backend=vector_backend,
         **runtime,
@@ -204,6 +202,8 @@ def main():
         exit(0)
 
     if args.non_interactive:
+        # In non-interactive mode, only print detailed output when --verbose is set
+        args.quiet = not args.verbose
         if not args.command:
             print_console(
                 "[red]Error:[/red] --command is required in non-interactive mode.",
@@ -255,4 +255,4 @@ def main():
             print_console("\n[magenta]Bye![/magenta]", args.quiet)
             break
         except Exception as e:
-            print_console(f"[bold red]Error:[/bold red] {escape(e)}", args.quiet)
+            print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)

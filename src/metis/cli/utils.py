@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import logging
 import importlib.metadata
 import re
@@ -10,7 +11,15 @@ from importlib.resources import files
 
 from rich.console import Console
 from rich.markup import escape
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from .exporters import export_csv, export_html, export_sarif
 
@@ -57,6 +66,17 @@ def configure_logger(logger, args):
         level = getattr(logging, args.log_level.upper(), None)
         if level:
             logger.setLevel(level)
+    for name in (
+        "httpx",
+        "httpcore",
+        "openai",
+        "openai._base_client",
+        "azure",
+        "urllib3",
+    ):
+        noisy = logging.getLogger(name)
+        noisy.setLevel(logging.WARNING)
+        noisy.propagate = False
 
 
 def print_console(message, quiet=False, **kwargs):
@@ -64,7 +84,14 @@ def print_console(message, quiet=False, **kwargs):
         console.print(message, **kwargs)
 
 
-def with_spinner(task_description, fn, *args, **kwargs):
+def with_spinner(task_description, fn, *args, quiet: bool = False, **kwargs):
+    """
+    Run a function optionally displaying a spinner.
+    When quiet=True (e.g., non-interactive without --verbose), suppress any spinner.
+    """
+    if quiet:
+        return fn(*args, **kwargs)
+
     with Progress(
         SpinnerColumn(), TextColumn("[bold cyan]{task.description}"), console=console
     ) as progress:
@@ -73,6 +100,84 @@ def with_spinner(task_description, fn, *args, **kwargs):
         progress.update(task, completed=1)
         progress.stop()
     return result
+
+
+def with_timer(task_description, fn, *args, quiet: bool = False, **kwargs):
+    """
+    Run a function while showing an elapsed-time timer.
+    Shown only when quiet=False (e.g., verbose mode). In quiet=True, runs silently.
+    """
+    if quiet:
+        return fn(*args, **kwargs)
+
+    with Progress(
+        TextColumn("[bold cyan]{task.description}"),
+        TextColumn("[bright_black]elapsed"),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+        redirect_stdout=True,
+        redirect_stderr=True,
+    ) as progress:
+        task = progress.add_task(task_description, total=1)
+        result = fn(*args, **kwargs)
+        try:
+            progress.update(task, completed=1)
+        except Exception:
+            pass
+    return result
+
+
+def collect_reviews(engine, validate):
+    return {"reviews": [r for r in engine.review_code(validate)]}
+
+
+def iterate_with_progress(total, iterable):
+    results = []
+    if total <= 0:
+        return results
+    with Progress(
+        SpinnerColumn(style="cyan"),
+        BarColumn(bar_width=None, complete_style="green", finished_style="green"),
+        TaskProgressColumn(),
+        TextColumn("[bright_black]elapsed"),
+        TimeElapsedColumn(),
+        TextColumn("[bright_black]eta"),
+        TimeRemainingColumn(),
+        transient=True,
+        console=console,
+        redirect_stdout=True,
+        redirect_stderr=True,
+    ) as progress:
+        task = progress.add_task("", total=total)
+        for item in iterable:
+            if item is not None:
+                results.append(item)
+            progress.advance(task, 1)
+        try:
+            progress.update(task, completed=progress.tasks[task].total)
+        except Exception:
+            pass
+    return results
+
+
+def count_index_items(engine):
+    """
+    Count total items to index (code + docs files).
+    Used to size the progress bar for verbose indexing.
+    """
+
+    docs_exts = engine.plugin_config.get("docs", {})
+    code_count = len(engine.get_code_files())
+
+    doc_count = 0
+    base_path = os.path.abspath(engine.codebase_path)
+    for _, _, _files in os.walk(base_path):
+        for f in _files:
+            if os.path.splitext(f)[1].lower() in docs_exts:
+                doc_count += 1
+
+    return code_count + doc_count
 
 
 def save_output(output_files, data, quiet=False):
@@ -86,7 +191,7 @@ def save_output(output_files, data, quiet=False):
     json_payload = data
     sarif_payload = None
 
-    def _write_payload(path: Path, payload, label: str) -> None:
+    def _write_payload(path, payload, label):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4)
