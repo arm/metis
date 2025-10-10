@@ -85,10 +85,9 @@ def print_console(message, quiet=False, **kwargs):
 
 
 def with_spinner(task_description, fn, *args, quiet: bool = False, **kwargs):
-    """Run a function optionally displaying a spinner.
-
-    When quiet=True (e.g., non-interactive without --verbose), suppress any spinner
-    so that logs/output remain clean.
+    """
+    Run a function optionally displaying a spinner.
+    When quiet=True (e.g., non-interactive without --verbose), suppress any spinner.
     """
     if quiet:
         return fn(*args, **kwargs)
@@ -104,8 +103,8 @@ def with_spinner(task_description, fn, *args, quiet: bool = False, **kwargs):
 
 
 def with_timer(task_description, fn, *args, quiet: bool = False, **kwargs):
-    """Run a function while showing an elapsed-time timer.
-
+    """
+    Run a function while showing an elapsed-time timer.
     Shown only when quiet=False (e.g., verbose mode). In quiet=True, runs silently.
     """
     if quiet:
@@ -163,8 +162,8 @@ def iterate_with_progress(total, iterable):
 
 
 def count_index_items(engine):
-    """Count total items to index (code + docs files).
-
+    """
+    Count total items to index (code + docs files).
     Used to size the progress bar for verbose indexing.
     """
 
