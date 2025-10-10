@@ -36,8 +36,7 @@ from .helpers import (
     perform_security_review,
     extract_content_from_diff,
     process_diff_file,
-    build_nodes_for_indexing,
-    run_with_timer,
+    prepare_nodes_iter,
 )
 
 
@@ -150,16 +149,27 @@ class MetisEngine:
         logger.info(combined_result)
         return combined_result
 
-    def index_codebase(self, verbose=False):
+    def index_codebase(self):
         """
         Reads files from the codebase, splits documents using language-specific
         splitters, builds vector indexes for code and documentation, and persists them.
+        """
+
+        self.index_prepare_nodes()
+        self.index_finalize_embeddings()
+
+    def index_prepare_nodes_iter(self):
+        """
+        Parse documents and prepare nodes for indexing, yielding one step per file.
+        Stores prepared nodes internally for a subsequent call to
+        `index_finalize_embeddings`.
         """
         # Read docs and code supported extensions from config
         docs_supported_exts = self.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
         code_supported_exts = self._get_all_supported_code_extensions()
+
         logger.info(f"Indexing codebase at: {self.codebase_path}")
         reader = SimpleDirectoryReader(
             input_dir=self.codebase_path,
@@ -167,9 +177,9 @@ class MetisEngine:
             required_exts=code_supported_exts + docs_supported_exts,
             filename_as_id=True,
         )
-
         documents = reader.load_data()
         logger.info(f"Loaded {len(documents)} documents from {self.codebase_path}")
+
         self.vector_backend.init()
         doc_splitter = SentenceSplitter()
         base_path = os.path.abspath(self.codebase_path)
@@ -186,35 +196,49 @@ class MetisEngine:
             elif ext in code_supported_exts:
                 code_docs.append(doc)
 
-        nodes_code, nodes_docs = build_nodes_for_indexing(
+        nodes_code, nodes_docs = yield from prepare_nodes_iter(
             code_docs,
             doc_docs,
             self._get_plugin_for_extension,
             self._get_splitter_cached,
             doc_splitter,
-            verbose,
         )
 
+        # Store nodes for embedding phase
+        self._pending_nodes = (nodes_code, nodes_docs)
+        return
+
+    def index_prepare_nodes(self):
+        """
+        Prepare nodes without exposing an iterator.
+        Consumes the iterator so non-verbose callers avoid a no-op loop.
+        """
+        for _ in self.index_prepare_nodes_iter():
+            pass
+
+    def index_finalize_embeddings(self):
+        """Build vector indexes from previously prepared nodes."""
+        pending = getattr(self, "_pending_nodes", None)
+        if not pending:
+            # Nothing to do
+            return
+        nodes_code, nodes_docs = pending
         storage_context_code, storage_context_docs = (
             self.vector_backend.get_storage_contexts()
         )
-        run_with_timer(
-            "Indexing code embeddings",
-            VectorStoreIndex,
+        VectorStoreIndex(
             nodes_code,
             storage_context=storage_context_code,
             embed_model=self.llm_provider.get_embed_model_code(),
         )
 
-        run_with_timer(
-            "Indexing docs embeddings",
-            VectorStoreIndex,
+        VectorStoreIndex(
             nodes_docs,
             storage_context=storage_context_docs,
             embed_model=self.llm_provider.get_embed_model_docs(),
         )
-
-        logger.info("Indexing completed.")
+        # Clear pending nodes
+        self._pending_nodes = None
 
     def review_file(self, file_path, validate=False):
         """
@@ -367,16 +391,12 @@ class MetisEngine:
             self.vector_backend.get_storage_contexts()
         )
 
-        index_code = run_with_timer(
-            "Initializing code index",
-            VectorStoreIndex.from_vector_store,
+        index_code = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_code,
             storage_context=storage_context_code,
             embed_model=self.llm_provider.get_embed_model_code(),
         )
-        index_docs = run_with_timer(
-            "Initializing docs index",
-            VectorStoreIndex.from_vector_store,
+        index_docs = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_docs,
             storage_context=storage_context_docs,
             embed_model=self.llm_provider.get_embed_model_docs(),

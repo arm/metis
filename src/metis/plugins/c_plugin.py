@@ -21,7 +21,7 @@ class CPlugin(BaseLanguagePlugin):
         return (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})
-            .get("supported_extensions", [".c", ".cc"])
+            .get("supported_extensions", [".c", ".h", ".cc"])
         )
 
     def get_splitter(self):

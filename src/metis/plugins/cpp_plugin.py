@@ -21,7 +21,7 @@ class CppPlugin(BaseLanguagePlugin):
         exts = (
             self.plugin_config.get("plugins", {})
             .get(self.get_name(), {})
-            .get("supported_extensions", [".cpp", ".h", ".hpp"])
+            .get("supported_extensions", [".cpp", ".hpp"])
         )
         return [e.lower() for e in exts]
 
