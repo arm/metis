@@ -23,12 +23,12 @@ general_prompts:
 
 plugins:
   c:
-    supported_extensions: [".c", ".cpp", ".h", ".hpp", ".cc"]
-    splitting:
+    supported_extensions: [".c", ".h", ".cc"]
+    splitting: &c_cpp_splitting
       chunk_lines: 40
       chunk_lines_overlap: 15
       max_chars: 1500
-    prompts:
+    prompts: &c_cpp_prompts
       security_review_file: |-
         You are a thorough security engineer specializing in C/C++.
         Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
@@ -98,6 +98,10 @@ plugins:
         {patch}\n
         Please update the patch file so that is fixes these vulnerabilities.
         Do not include any commentary—only output the patch diff.
+  cpp:
+    supported_extensions: [".cpp", ".hpp"]
+    splitting: *c_cpp_splitting
+    prompts: *c_cpp_prompts
   python:
     supported_extensions: [".py"]
     splitting:
