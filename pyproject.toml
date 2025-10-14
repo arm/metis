@@ -1,21 +1,21 @@
 [project]
 name = "metis"
-version = "0.2.0"
+version = "0.3.0"
 description = "Metis is a command line tool for performing security code reviews using LLMs"
 readme = "README.md"
 license = { file = "LICENSE.md" }
 keywords = ["security", "llm", "code-review"]
 requires-python = ">=3.12.0"
 dependencies = [
-    "llama-index>=0.13.1",
-    "llama-index-vector-stores-chroma>=0.5.0",
+    "llama-index>=0.14.4",
+    "llama-index-vector-stores-chroma>=0.5.3",
     "rich>=14.0.0",
     "PyYAML>=6.0.2",
     "prompt_toolkit>=3.0.51",
     "unidiff>=0.7.5",
-    "tree-sitter>=0.24.0",
-    "tree-sitter-language-pack>=0.8.0",
-    "chromadb>=1.0.13"
+    "tree-sitter>=0.25.2",
+    "tree-sitter-language-pack>=0.9.0",
+    "chromadb>=1.1.1"
 ]
 
 [build-system]
