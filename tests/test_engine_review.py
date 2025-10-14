@@ -12,9 +12,9 @@ def test_ask_question(engine):
 
 def test_review_code_runs(engine):
     engine.review_file = Mock(return_value={"file": "test.py", "reviews": ["Issue"]})
-    result = engine.review_code()
-    assert "reviews" in result
-    assert len(result["reviews"]) >= 1
+    results = list(engine.review_code())
+    assert len(results) >= 1
+    assert all("reviews" in r for r in results)
 
 
 def test_review_patch_parses_and_reviews(engine):
