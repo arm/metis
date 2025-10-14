@@ -9,7 +9,7 @@ psql_database:
 
 metis_engine:
   max_token_length: 100000
-  max_workers: 5
+  max_workers: 10
   embed_dim: 3072
   hnsw_kwargs:
     hnsw_m: 16
@@ -19,12 +19,12 @@ metis_engine:
 
 llm_provider:
   name: "openai"
-  model: "gpt-5-mini"
+  model: "gpt-4.1"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"
 
 query:
-  model: "gpt-5-mini"
+  model: "gpt-4.1"
   similarity_top_k: 5
   response_mode: "tree_summarize"
   max_tokens: 5000
