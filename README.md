@@ -118,6 +118,16 @@ You can also configure the chunking parameters for source code and documentation
 - `chunk_lines_overlap`: Overlap between chunks
 - `max_chars`: Max characters per chunk
 
+### Plugins
+Metis discovers language plugins using Setuptools entry points. Packages can expose plugins by declaring the group `metis.plugins` in their packaging metadata. Each entry should resolve to a class implementing `metis.plugins.base.BaseLanguagePlugin` and optionally accept `plugin_config` in the constructor.
+
+Example `pyproject.toml` for a third-party plugin:
+
+```
+[project.entry-points."metis.plugins"]
+my_lang = "my_pkg.my_module:MyLanguagePlugin"
+```
+
 ## Running Metis
 
 Metis provides an interactive CLI with several built-in commands. After launching, you can run the following:
@@ -155,7 +165,7 @@ metis --non-interactive --command "<command> [args...]" [--output-file <file.jso
 #### Example 1: Chroma (default)
 
 ```bash
-metis --codebase-path <path_to_src>  --language-plugin python
+metis --codebase-path <path_to_src>
 ```
 
 #### Example 2: Postgres
@@ -176,7 +186,6 @@ Then, run Metis with the PostgreSQL backend:
 metis \
   --project-schema myproject_main \
   --codebase-path <path_to_src> \
-  --language-plugin c \
   --backend postgres
 ```
 

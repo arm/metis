@@ -17,10 +17,7 @@ from metis.exceptions import (
     ParsingError,
 )
 from metis.vector_store.base import BaseVectorStore
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
-from metis.plugins.python_plugin import PythonPlugin
-from metis.plugins.rust_plugin import RustPlugin
+from metis.plugin_loader import load_plugins, discover_supported_language_names
 from metis.utils import (
     parse_json_output,
     read_file_content,
@@ -73,12 +70,7 @@ class MetisEngine:
 
         self.llm_provider = llm_provider
         self.plugin_config = load_plugin_config()
-        self.plugins = [
-            CPlugin(self.plugin_config),
-            CppPlugin(self.plugin_config),
-            PythonPlugin(self.plugin_config),
-            RustPlugin(self.plugin_config),
-        ]
+        self.plugins = load_plugins(self.plugin_config)
 
         # Cache splitters and extension/plugin lookups
         self._splitter_cache = {}
@@ -99,13 +91,7 @@ class MetisEngine:
         # Cache to avoid repeated plugin instantiation in repeated calls
         if cls._SUPPORTED_LANGUAGES is None:
             plugin_config = load_plugin_config()
-            plugins = [
-                CPlugin(plugin_config),
-                CppPlugin(plugin_config),
-                PythonPlugin(plugin_config),
-                RustPlugin(plugin_config),
-            ]
-            cls._SUPPORTED_LANGUAGES = [p.get_name() for p in plugins]
+            cls._SUPPORTED_LANGUAGES = discover_supported_language_names(plugin_config)
         return cls._SUPPORTED_LANGUAGES
 
     def get_plugin_from_name(self, name):
