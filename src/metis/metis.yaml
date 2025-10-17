@@ -8,7 +8,7 @@ psql_database:
     database_name: "metis_db"
 
 metis_engine:
-  max_token_length: 100000
+  max_token_length: 250000
   max_workers: 10
   embed_dim: 3072
   hnsw_kwargs:

@@ -1,6 +1,6 @@
 [project]
 name = "metis"
-version = "0.3.0"
+version = "0.4.0"
 description = "Metis is a command line tool for performing security code reviews using LLMs"
 readme = "README.md"
 license = { file = "LICENSE.md" }
@@ -53,3 +53,10 @@ include-package-data = true
 metis = ["metis.yaml"]
 "metis.plugins" = ["plugins.yaml"]
 "metis.cli" = ["report_template.html"]
+
+[project.entry-points."metis.plugins"]
+python = "metis.plugins.python_plugin:PythonPlugin"
+c = "metis.plugins.c_plugin:CPlugin"
+cpp = "metis.plugins.cpp_plugin:CppPlugin"
+rust = "metis.plugins.rust_plugin:RustPlugin"
+tablegen = "metis.plugins.tb_plugin:TableGenPlugin"

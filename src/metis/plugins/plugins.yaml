@@ -5,6 +5,7 @@ general_prompts:
   retrieve_context: |-
     You are a senior software engineer and your task is to explain what the following FILE does and what its purpose is.
     Include any data flows, function calls, or dependencies that could impact security.
+    Make sure you flag any function input that is externally controlled.
     FILE: {file_path}
   security_review_report: |-
     3. How to Report
@@ -74,6 +75,7 @@ plugins:
                + Pay special attention to scenarios where an object is freed or a resource is terminated
                  while a job, firmware thread, or callback is still referencing it.
            - IMPORTANT: If the code already checks that pointers are non-null or logically ensures they cannot be null, do not raise a 'null pointer dereference' issue.
+           - Pay extra attention to variables that are externally controlled.
            - Do not report on issues that do not affect security.
       validation_review: |-
         You will be given:
@@ -102,6 +104,57 @@ plugins:
     supported_extensions: [".cpp", ".hpp"]
     splitting: *c_cpp_splitting
     prompts: *c_cpp_prompts
+  tablegen:
+    supported_extensions: [".td"]
+    splitting:
+      chunk_lines: 60
+      chunk_lines_overlap: 10
+      max_chars: 4000
+    prompts:
+      security_review_file: |-
+        1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
+        Always tie identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce conclusions that are not supported by the .td contents or provided context.
+
+        You will be given:
+        1) FILE — a TableGen file (e.g., instruction/operand/register definitions, patterns, features).
+        2) RELEVANT_CONTEXT — notes about target, subtarget features, expected semantics, and patches.
+
+      security_review_checks: |-
+        Your tasks:
+
+          - Identify security-relevant mis-specifications in FILE that could alter program semantics or expose unsafe code paths. Focus on:
+            * Incorrect codegen or pattern matches that generate unintended instructions.
+            * Privileged or system instructions enabled on unsupported subtargets.
+            * Missing side-effect or memory flags (e.g., hasSideEffects, mayLoad, mayStore) that allow illegal optimization or reordering.
+            * Overly permissive immediates or operand definitions that permit invalid encodings.
+            * Pseudo-instruction expansions dropping required barriers, implicit defs/uses, or side effects.
+            * Incorrect ImplicitUses or ImplicitDefs that permit register clobbers or privilege transitions.
+            * Missing Predicates or Requires clauses that fail to restrict instructions to correct modes or features.
+            * Compression or relaxation patterns that unintentionally modify control flow or privilege level.
+            * Scheduling or itinerary omissions that skip necessary fences or barriers, compromising temporal safety.
+
+          - Validate correctness of the following TableGen constructs and attributes:
+            * Instruction flags: hasSideEffects, mayLoad, mayStore, isBarrier, isPseudo, isCall, isReturn, isBranch, isTrap, isTerminator.
+            * Feature gating: Predicates, Requires, and SubtargetFeature usage.
+            * Operand and register definitions: RegisterClass, RegisterOperand, OperandWithDefaultOps, and AsmOperandClass.
+            * Immediate constraints: ImmLeaf, ComplexPattern, and constant range validation.
+            * Pseudo lowering: UsesCustomInserter, ExpandPseudo — verify preservation of side effects and operand semantics.
+            * Pattern breadth: Pat<> and Pattern= constructs — flag overly generic operand or type matches.
+            * ImplicitUses / ImplicitDefs accuracy — ensure all implicit dependencies are correctly modeled.
+
+          - Perform Security Impact Analysis:
+            * For each issue, describe the specific failure mode (e.g., “mayStore=0 on a memory op allows reordering across fences”).
+            * Classify severity (HIGH, MEDIUM, LOW, CRITICAL) and identify relevant preconditions (target, subtarget feature, or execution mode).
+            * Distinguish between compile-time acceptance issues (assembler/matcher) and runtime miscompiles or privilege violations.
+
+          - Propose Minimal Reproduction Tests (non-executable):
+            * Describe 1-2 targeted lit tests (TableGen/MC/CodeGen) that could expose the issue.
+            * Include relevant patterns, features, or intrinsics to trigger the vulnerable behavior.
+
+          - Recommend Remediation:
+            * Provide specific TableGen fixes (flags, predicates, operand constraints, pseudo-lowering adjustments).
+            * Include additional feature gating, implicit defs/uses, or barrier insertion as necessary.
   python:
     supported_extensions: [".py"]
     splitting:
