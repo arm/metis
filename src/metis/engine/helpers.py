@@ -166,9 +166,7 @@ def apply_custom_guidance(base_prompt, custom_guidance, precedence_note):
     """
     if not custom_guidance:
         return base_prompt
-    sections = []
+    guidance_block = f"Custom Guidance:\n{custom_guidance.strip()}"
     if precedence_note:
-        sections.append(precedence_note.strip())
-    sections.append("Custom Guidance:\n" + custom_guidance.strip())
-    sections.append(base_prompt)
-    return "\n\n".join(sections)
+        return f"{precedence_note.strip()}\n\n{guidance_block}\n\n{base_prompt}"
+    return f"{guidance_block}\n\n{base_prompt}"
