@@ -156,3 +156,19 @@ def prepare_nodes_iter(
             yield None
 
     return nodes_code, nodes_docs
+
+
+def apply_custom_guidance(base_prompt, custom_guidance, precedence_note):
+    """Prepend precedence note and custom guidance to a base prompt.
+
+    If custom_guidance is not set, returns base_prompt unchanged. The format is:
+    [precedence_note]\n\nCustom Guidance:\n{custom_guidance}\n\n{base_prompt}
+    """
+    if not custom_guidance:
+        return base_prompt
+    sections = []
+    if precedence_note:
+        sections.append(precedence_note.strip())
+    sections.append("Custom Guidance:\n" + custom_guidance.strip())
+    sections.append(base_prompt)
+    return "\n\n".join(sections)

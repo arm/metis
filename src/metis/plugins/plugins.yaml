@@ -2,6 +2,11 @@ docs:
   supported_extensions:  [".md", ".html", ".txt", ".pdf", ".rst"]
 
 general_prompts:
+  custom_guidance_precedence: |-
+    Instruction precedence: When 'Custom Guidance' conflicts with any default
+    instructions or checks below, follow 'Custom Guidance'. If guidance excludes
+    certain issue classes, omit them from analysis and do not report them unless
+    directly necessary to explain another issue.
   retrieve_context: |-
     You are a senior software engineer and your task is to explain what the following FILE does and what its purpose is.
     Include any data flows, function calls, or dependencies that could impact security.

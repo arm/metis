@@ -42,6 +42,7 @@ Type one of the following commands (with arguments):
 Options:
     --backend chroma|postgres  Vector backend to use (default: chroma).
     --output-file PATH         Save analysis results to this file.
+    --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --project-schema SCHEMA    (Optional) Project identifier if postresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
