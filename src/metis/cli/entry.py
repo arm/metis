@@ -14,6 +14,7 @@ from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
+from metis.utils import read_file_content
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -123,6 +124,11 @@ def main():
     )
     parser.add_argument("--log-file", type=str)
     parser.add_argument("--log-level", type=str, default="INFO")
+    parser.add_argument(
+        "--custom-prompt",
+        type=str,
+        help="Path to a custom prompt file (.md or .txt) used to guide analysis",
+    )
     parser.add_argument("--version", action="store_true", help="Show program version")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose output"
@@ -190,10 +196,28 @@ def main():
             args, runtime, embed_model_code, embed_model_docs
         )
 
+    # Resolve custom analysis prompt text
+    custom_prompt_text = None
+    if args.custom_prompt:
+        pf = Path(args.custom_prompt)
+        if pf.is_file() and pf.suffix.lower() in {".md", ".txt"}:
+            custom_prompt_text = read_file_content(str(pf))
+        else:
+            print_console(
+                f"[yellow]Warning:[/yellow] Ignoring --custom-prompt '{escape(str(pf))}'. It must exist and have .md or .txt extension.",
+                args.quiet,
+            )
+    if custom_prompt_text is None:
+        # Fallback to .metis.md in project root (codebase path)
+        metis_md = Path(args.codebase_path) / ".metis.md"
+        if metis_md.is_file():
+            custom_prompt_text = read_file_content(str(metis_md))
+
     engine = MetisEngine(
         codebase_path=args.codebase_path,
         llm_provider=llm_provider,
         vector_backend=vector_backend,
+        custom_prompt_text=custom_prompt_text,
         **runtime,
     )
 

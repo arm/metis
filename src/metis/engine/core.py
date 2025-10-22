@@ -34,6 +34,7 @@ from .helpers import (
     extract_content_from_diff,
     process_diff_file,
     prepare_nodes_iter,
+    apply_custom_guidance,
 )
 
 
@@ -69,7 +70,14 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
+        # Optional user-provided guidance to be appended to system prompts
+        self.custom_prompt_text = kwargs.get("custom_prompt_text")
         self.plugin_config = load_plugin_config()
+
+        # Load precedence note from general prompts
+        self.custom_guidance_precedence = self.plugin_config.get(
+            "general_prompts", {}
+        ).get("custom_guidance_precedence", "")
         self.plugins = load_plugins(self.plugin_config)
 
         # Cache splitters and extension/plugin lookups
@@ -355,6 +363,11 @@ class MetisEngine:
                     issue.get("issue", "") for issue in review_dict.get("reviews", [])
                 )
                 summary_prompt = language_prompts["snippet_security_summary"]
+                summary_prompt = apply_custom_guidance(
+                    summary_prompt,
+                    self.custom_prompt_text,
+                    self.custom_guidance_precedence,
+                )
                 changes_summary = summarize_changes(
                     self.llm_provider, file_diff.path, issues, summary_prompt
                 )
@@ -471,6 +484,9 @@ class MetisEngine:
 
         for chunk in chunks:
             system_prompt = f"{language_prompts[default_prompt_key]} \n {language_prompts['security_review_checks']} \n {report_prompt}"
+            system_prompt = apply_custom_guidance(
+                system_prompt, self.custom_prompt_text, self.custom_guidance_precedence
+            )
             review = perform_security_review(
                 self.llm_provider, file_path, chunk, combined_context, system_prompt
             )
