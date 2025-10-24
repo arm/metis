@@ -26,10 +26,15 @@ def dummy_backend():
     mock_storage_context.index_struct = mock_index_struct
 
     backend.init = Mock()
+
+    class _Doc:
+        def __init__(self, text):
+            self.page_content = text
+
     backend.get_query_engines = Mock(
         return_value=(
-            Mock(query=Mock(return_value="Code result")),
-            Mock(query=Mock(return_value="Docs result")),
+            Mock(get_relevant_documents=Mock(return_value=[_Doc("Code result")])),
+            Mock(get_relevant_documents=Mock(return_value=[_Doc("Docs result")])),
         )
     )
     backend.get_storage_contexts = Mock(

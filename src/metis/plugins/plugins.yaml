@@ -116,6 +116,20 @@ plugins:
       chunk_lines_overlap: 10
       max_chars: 4000
     prompts:
+      security_review: |-
+        1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
+        Always tie identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents or provided context.
+
+        You will be given:
+        1) FILE_CHANGES — a set of .td changes with lines marked by “+” (added) or “-” (removed).
+        2) RELEVANT_CONTEXT — notes about target, subtarget features, expected semantics, and patches.
+        3) ORIGINAL_FILE — the original TableGen file (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but taking into account how they interact with the whole file.
+        If it is empty, ignore it.
       security_review_file: |-
         1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
         Always tie identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
@@ -160,6 +174,13 @@ plugins:
           - Recommend Remediation:
             * Provide specific TableGen fixes (flags, predicates, operand constraints, pseudo-lowering adjustments).
             * Include additional feature gating, implicit defs/uses, or barrier insertion as necessary.
+      snippet_security_summary: |-
+        Summarize the security implications of these TableGen (.td) changes. Focus on:
+        - Mis-specifications that could alter program semantics or expose unsafe paths.
+        - Incorrect feature gating or privilege-related instructions becoming available.
+        - Missing side effects / memory flags impacting reordering or optimization.
+        Keep the summary concise and actionable.
+      validation_review: "Validate the following TableGen review for security concerns."
   python:
     supported_extensions: [".py"]
     splitting:

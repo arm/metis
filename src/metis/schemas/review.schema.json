@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metis.arm.com/schemas/review.schema.json",
+  "title": "MetisSecurityReview",
+  "type": "object",
+  "required": ["reviews"],
+  "properties": {
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "issue",
+          "code_snippet",
+          "reasoning",
+          "mitigation",
+          "confidence",
+          "cwe",
+          "severity"
+        ],
+        "properties": {
+          "issue": { "type": "string" },
+          "code_snippet": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "mitigation": { "type": "string" },
+          "confidence": { "type": "number" },
+          "cwe": { "type": "string" },
+          "severity": { "type": "string" },
+          "explanation": { "type": "string" },
+          "line_number": { "type": "integer" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

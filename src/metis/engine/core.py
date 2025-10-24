@@ -19,23 +19,18 @@ from metis.exceptions import (
 from metis.vector_store.base import BaseVectorStore
 from metis.plugin_loader import load_plugins, discover_supported_language_names
 from metis.utils import (
-    parse_json_output,
     read_file_content,
-    split_snippet,
-    enrich_issues,
 )
 
 from .helpers import (
-    query_engine,
-    validate_review,
     summarize_changes,
-    retrieve_context,
-    perform_security_review,
-    extract_content_from_diff,
-    process_diff_file,
     prepare_nodes_iter,
     apply_custom_guidance,
 )
+from .diff_utils import extract_content_from_diff, process_diff_file
+from .graphs.types import ReviewRequest
+from .graphs.types import AskRequest
+from metis.engine.graphs import ReviewGraph, AskGraph
 
 
 logger = logging.getLogger("metis")
@@ -91,6 +86,30 @@ class MetisEngine:
                 self.code_exts.add(e_lower)
                 self.ext_plugin_map[e_lower] = plugin
 
+        # Graphs are built lazily on first use
+        self._review_graph = None
+        self._ask_graph = None
+
+    def _get_review_graph(self):
+        if self._review_graph is None:
+            self._review_graph = ReviewGraph(
+                llm_provider=self.llm_provider,
+                plugin_config=self.plugin_config,
+                custom_prompt_text=self.custom_prompt_text,
+                custom_guidance_precedence=self.custom_guidance_precedence,
+                llama_query_model=self.llama_query_model,
+                max_token_length=self.max_token_length,
+            )
+        return self._review_graph
+
+    def _get_ask_graph(self):
+        if self._ask_graph is None:
+            self._ask_graph = AskGraph(
+                llm_provider=self.llm_provider,
+                llama_query_model=self.llama_query_model,
+            )
+        return self._ask_graph
+
     @classmethod
     def supported_languages(cls):
         """
@@ -126,22 +145,27 @@ class MetisEngine:
         self._splitter_cache[key] = splitter
         return splitter
 
+    def _get_doc_splitter(self):
+        if not hasattr(self, "_doc_splitter") or self._doc_splitter is None:
+            self._doc_splitter = SentenceSplitter()
+        return self._doc_splitter
+
+    def _rel_to_base(self, path):
+        base_path = os.path.abspath(self.codebase_path)
+        return base_path, os.path.relpath(path, base_path)
+
     def ask_question(self, question):
         """
-        Loads the indexes and queries them for an answer.
+        Loads the indexes and queries them for an answer using the AskGraph.
         """
-        query_engine_code, query_engine_docs = self._init_and_get_query_engines()
+        qe_code, qe_docs = self._init_and_get_query_engines()
         logger.info("Querying codebase for your question...")
-        result_code = query_engine(query_engine_code, question)
-        result_docs = query_engine(query_engine_docs, question)
-        combined_result = {}
-        if result_code:
-            combined_result["code"] = str(result_code)
-        if result_docs:
-            combined_result["docs"] = str(result_docs)
-        logger.info("Answer:")
-        logger.info(combined_result)
-        return combined_result
+        req: AskRequest = {
+            "question": question,
+            "retriever_code": qe_code,
+            "retriever_docs": qe_docs,
+        }
+        return self._get_ask_graph().ask(req)
 
     def index_codebase(self):
         """
@@ -175,7 +199,7 @@ class MetisEngine:
         logger.info(f"Loaded {len(documents)} documents from {self.codebase_path}")
 
         self.vector_backend.init()
-        doc_splitter = SentenceSplitter()
+        doc_splitter = self._get_doc_splitter()
         base_path = os.path.abspath(self.codebase_path)
         parent_dir = os.path.dirname(base_path)
         code_docs = []
@@ -234,14 +258,14 @@ class MetisEngine:
         # Clear pending nodes
         self._pending_nodes = None
 
-    def review_file(self, file_path, validate=False):
+    def review_file(self, file_path):
         """
         Review a single source file. Detects plugin by extension, retrieves
         relevant context from code/docs indexes, runs the security review,
-        and optionally performs validation. Returns a result dict or None
+        and returns a result dict or None
         if the file is unsupported or empty.
         """
-        query_engine_code, query_engine_docs = self._init_and_get_query_engines()
+        qe_code, qe_docs = self._init_and_get_query_engines()
         base_path = os.path.abspath(self.codebase_path)
         snippet = read_file_content(file_path)
         if not snippet:
@@ -258,21 +282,21 @@ class MetisEngine:
         )
 
         formatted_context_prompt = context_prompt_template.format(file_path=file_path)
-        combined_context = retrieve_context(
-            file_path, query_engine_code, query_engine_docs, formatted_context_prompt
-        )
         relative_path = os.path.relpath(file_path, base_path)
 
         try:
-            return self._process_file_reviews(
-                file_path,
-                snippet,
-                combined_context,
-                language_prompts,
-                validate,
-                default_prompt_key="security_review_file",
-                relative_path=relative_path,
-            )
+            req: ReviewRequest = {
+                "file_path": file_path,
+                "snippet": snippet,
+                "retriever_code": qe_code,
+                "retriever_docs": qe_docs,
+                "context_prompt": formatted_context_prompt,
+                "language_prompts": language_prompts,
+                "default_prompt_key": "security_review_file",
+                "relative_file": relative_path,
+                "mode": "file",
+            }
+            return self._get_review_graph().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
             return None
@@ -287,19 +311,17 @@ class MetisEngine:
                     file_list.append(os.path.join(root, file))
         return file_list
 
-    def review_code(self, validate=False):
+    def review_code(self):
         """
         Iterate all supported code files under `codebase_path` and yield
         per-file review results. Uses a thread pool and continues on errors.
-        Set `validate=True` to include validation results where available.
         """
         files = self.get_code_files()
         if not files:
             return
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
-                executor.submit(self.review_file, path, validate): path
-                for path in files
+                executor.submit(self.review_file, path): path for path in files
             }
             for future in as_completed(future_to_path):
                 path = future_to_path[future]
@@ -307,15 +329,18 @@ class MetisEngine:
                     result = future.result()
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
+                    yield None
                     continue
                 if result:
                     yield result
+                else:
+                    yield None
 
-    def review_patch(self, patch_file, validate=False):
+    def review_patch(self, patch_file):
         """
         Reviews a patch/diff file by processing each file change.
         """
-        query_engine_code, query_engine_docs = self._init_and_get_query_engines()
+        qe_code, qe_docs = self._init_and_get_query_engines()
         patch_text = read_file_content(patch_file)
         try:
             diff = unidiff.PatchSet.from_string(patch_text)
@@ -342,21 +367,28 @@ class MetisEngine:
                 "retrieve_context", ""
             )
             formatted_context = context_prompt.format(file_path=file_diff.path)
-            combined_context = retrieve_context(
-                file_diff.path, query_engine_code, query_engine_docs, formatted_context
-            )
 
             language_prompts = plugin.get_prompts()
             relative_path = os.path.relpath(file_diff.path, base_path)
-            review_dict = self._process_file_reviews(
-                os.path.join(base_path, file_diff.path),
-                snippet,
-                combined_context,
-                language_prompts,
-                validate,
-                default_prompt_key="security_review",
-                relative_path=relative_path,
-            )
+            try:
+                file_abs = os.path.join(base_path, file_diff.path)
+                original_content = read_file_content(file_abs)
+                req: ReviewRequest = {
+                    "file_path": file_abs,
+                    "snippet": snippet,
+                    "retriever_code": qe_code,
+                    "retriever_docs": qe_docs,
+                    "context_prompt": formatted_context,
+                    "language_prompts": language_prompts,
+                    "default_prompt_key": "security_review",
+                    "relative_file": relative_path,
+                    "mode": "patch",
+                    "original_file": original_content or "",
+                }
+                review_dict = self._get_review_graph().review(req)
+            except Exception as e:
+                logger.error(f"Error processing review for {file_diff.path}: {e}")
+                review_dict = None
             if review_dict:
                 file_reviews.append(review_dict)
                 issues = "\n".join(
@@ -401,7 +433,7 @@ class MetisEngine:
             embed_model=self.llm_provider.get_embed_model_docs(),
         )
 
-        doc_splitter = SentenceSplitter()
+        doc_splitter = self._get_doc_splitter()
 
         for diff_file in patch_set:
             if diff_file.is_binary_file:
@@ -455,75 +487,9 @@ class MetisEngine:
 
     def _init_and_get_query_engines(self):
         self.vector_backend.init()
-        query_engine_code, query_engine_docs = self.vector_backend.get_query_engines(
-            self.llm_provider,
-            self.similarity_top_k,
-            self.response_mode,
+        qe_code, qe_docs = self.vector_backend.get_query_engines(
+            self.similarity_top_k, self.response_mode
         )
-        if not query_engine_code or not query_engine_docs:
+        if not qe_code or not qe_docs:
             raise QueryEngineInitError()
-        return query_engine_code, query_engine_docs
-
-    def _process_file_reviews(
-        self,
-        file_path,
-        snippet,
-        combined_context,
-        language_prompts,
-        validate,
-        default_prompt_key="security_review_file",
-        relative_path="",
-    ):
-
-        chunks = split_snippet(snippet, self.max_token_length)
-        accumulated = {"reviews": []}
-        validations = []
-        report_prompt = self.plugin_config.get("general_prompts", {}).get(
-            "security_review_report", ""
-        )
-
-        for chunk in chunks:
-            system_prompt = f"{language_prompts[default_prompt_key]} \n {language_prompts['security_review_checks']} \n {report_prompt}"
-            system_prompt = apply_custom_guidance(
-                system_prompt, self.custom_prompt_text, self.custom_guidance_precedence
-            )
-            review = perform_security_review(
-                self.llm_provider, file_path, chunk, combined_context, system_prompt
-            )
-            if not review:
-                continue
-
-            parsed_review = parse_json_output(review)
-            if not isinstance(parsed_review, dict) or "reviews" not in parsed_review:
-                continue
-
-            enrich_issues(file_path, parsed_review["reviews"])
-
-            if validate:
-                system_prompt_validation = language_prompts["validation_review"]
-                validation_output = validate_review(
-                    self.llm_provider,
-                    self.llama_query_model,
-                    file_path,
-                    chunk,
-                    combined_context,
-                    review,
-                    system_prompt_validation,
-                )
-                if isinstance(validation_output, dict):
-                    validations.extend(validation_output.get("validations", []))
-
-            accumulated["reviews"].extend(parsed_review["reviews"])
-
-        if not accumulated["reviews"]:
-            return None
-
-        result = {
-            "file": relative_path,
-            "file_path": file_path,
-            "reviews": accumulated["reviews"],
-        }
-        if validate and validations:
-            result["validation"] = validations
-
-        return result
+        return qe_code, qe_docs

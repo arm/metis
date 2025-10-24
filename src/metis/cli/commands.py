@@ -92,11 +92,11 @@ def run_review_code(engine, args):
     if args.verbose:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
         total = len(engine.get_code_files())
-        file_reviews = iterate_with_progress(total, engine.review_code(False))
+        file_reviews = iterate_with_progress(total, engine.review_code())
         results = {"reviews": file_reviews}
     else:
         results = with_spinner(
-            "Reviewing codebase...", collect_reviews, engine, False, quiet=args.quiet
+            "Reviewing codebase...", collect_reviews, engine, quiet=args.quiet
         )
     pretty_print_reviews(results, args.quiet)
     save_output(args.output_file, results, args.quiet)

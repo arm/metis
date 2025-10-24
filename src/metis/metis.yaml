@@ -19,12 +19,12 @@ metis_engine:
 
 llm_provider:
   name: "openai"
-  model: "gpt-5"
+  model: "gpt-5-mini"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"
 
 query:
-  model: "gpt-5"
+  model: "gpt-5-mini"
   similarity_top_k: 5
   response_mode: "tree_summarize"
   max_tokens: 5000

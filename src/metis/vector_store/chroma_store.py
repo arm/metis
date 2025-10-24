@@ -5,7 +5,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
 from chromadb import PersistentClient
 from metis.exceptions import VectorStoreInitError, QueryEngineInitError
-from metis.vector_store.base import BaseVectorStore
+from metis.vector_store.base import BaseVectorStore, QueryEngineRetriever
 from chromadb.config import Settings
 
 import logging
@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChromaStore(BaseVectorStore):
-    def __init__(
-        self, persist_dir: str, embed_model_code, embed_model_docs, query_config: dict
-    ):
+    def __init__(self, persist_dir, embed_model_code, embed_model_docs, query_config):
         self.persist_dir = persist_dir
         self.embed_model_code = embed_model_code
         self.embed_model_docs = embed_model_docs
@@ -50,9 +48,7 @@ class ChromaStore(BaseVectorStore):
             logger.error(f"Error initializing ChromaStore: {e}")
             raise VectorStoreInitError()
 
-    def get_query_engines(
-        self, llm_provider, similarity_top_k=None, response_mode=None
-    ):
+    def get_query_engines(self, similarity_top_k=None, response_mode=None):
         try:
             index_code = VectorStoreIndex.from_vector_store(
                 self.vector_store_code,
@@ -65,27 +61,16 @@ class ChromaStore(BaseVectorStore):
                 embed_model=self.embed_model_docs,
             )
 
-            llm_query_class = llm_provider.get_query_engine_class()
-            query_kwargs = llm_provider.get_query_model_kwargs()
-
-            llm_code = llm_query_class(**query_kwargs)
-            llm_docs = llm_query_class(**query_kwargs)
-
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
             mode = response_mode or self.query_config.get("response_mode", "compact")
 
-            return (
-                index_code.as_query_engine(
-                    llm=llm_code,
-                    similarity_top_k=top_k,
-                    response_mode=mode,
-                ),
-                index_docs.as_query_engine(
-                    llm=llm_docs,
-                    similarity_top_k=top_k,
-                    response_mode=mode,
-                ),
+            qe_code = index_code.as_query_engine(
+                similarity_top_k=top_k, response_mode=mode
             )
+            qe_docs = index_docs.as_query_engine(
+                similarity_top_k=top_k, response_mode=mode
+            )
+            return (QueryEngineRetriever(qe_code), QueryEngineRetriever(qe_docs))
         except Exception as e:
             logger.error(f"Error creating Chroma query engines: {e}")
             raise QueryEngineInitError()

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai import OpenAI as LlamaOpenAI
-from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 from metis.providers.base import LLMProvider
 
@@ -21,45 +22,29 @@ class OpenAIProvider(LLMProvider):
         self.temperature = config.get("llama_query_temperature", 0.0)
         self.max_tokens = config.get("llama_query_max_tokens", 512)
 
-    def get_llm_client(self):
-        return OpenAI(api_key=self.api_key)
-
     def get_embed_model_code(self):
         return OpenAIEmbedding(model_name=self.code_embedding_model)
 
     def get_embed_model_docs(self):
         return OpenAIEmbedding(model_name=self.docs_embedding_model)
 
-    def get_query_engine_class(self):
-        return LlamaOpenAI
-
-    def get_query_model_kwargs(self):
-        return {
-            "model": self.query_model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-
-    def call_llm(self, system_prompt: str, prompt: str, model=None, **kwargs):
-        model = model or self.query_model
-        client = self.get_llm_client()
+    def call_llm(self, system_prompt, prompt, model=None, **kwargs):
+        model_name = model or self.query_model
         try:
-            if model == "gpt-4o":
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=self.temperature,
-                )
-            else:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": system_prompt + prompt}],
-                )
-            answer = response.choices[0].message.content
+            chat = ChatOpenAI(
+                api_key=self.api_key,
+                model=model_name,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+
+            prompt_tmpl = ChatPromptTemplate.from_messages(
+                [("system", "{system}"), ("user", "{input}")]
+            )
+            chain = prompt_tmpl | chat | StrOutputParser()
+            return chain.invoke(
+                {"system": system_prompt or "", "input": prompt or ""}
+            ).strip()
         except Exception as e:
-            logger.error(f"Error calling OpenAI API: {e}")
-            answer = ""
-        return answer
+            logger.error(f"Error calling OpenAI via LangChain: {e}")
+            return ""
