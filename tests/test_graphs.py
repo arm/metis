@@ -5,6 +5,7 @@ import pytest
 
 import metis.utils as mutils
 
+import metis.engine.graphs.ask as askmod
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
     review_node_retrieve,
@@ -29,15 +30,14 @@ class DummyRetriever:
 
 @pytest.fixture
 def patch_llm_call(monkeypatch):
-    # Patch LLM call used by AskGraph answer node
-    def _fake_llm_call(_provider, _system, _prompt, model=None):
+    # Patch LLM call used by AskGraph answer node (accept any signature)
+    def _fake_llm_call(*args, **kwargs):
         return "LLM_OUTPUT"
 
     # Patch both the metis.utils symbol and the alias imported in ask
     monkeypatch.setattr(mutils, "llm_call", _fake_llm_call)
-    import metis.engine.graphs.ask as askmod
-
-    monkeypatch.setattr(askmod, "llm_call", _fake_llm_call)
+    if hasattr(askmod, "llm_call"):
+        monkeypatch.setattr(askmod, "llm_call", _fake_llm_call)
 
 
 def test_ask_graph_returns_code_and_docs(patch_llm_call):

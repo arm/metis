@@ -10,7 +10,7 @@ def _make_patch(patch_text: str):
     return PatchSet.from_string(patch_text)
 
 
-def test_extract_content_from_diff_additions_only(tmp_path):
+def test_extract_content_from_diff_additions_only():
     patch = """--- a/foo.txt
 +++ b/foo.txt
 @@ -0,0 +1,3 @@
@@ -24,7 +24,7 @@ def test_extract_content_from_diff_additions_only(tmp_path):
     assert content == "alpha\nbeta\ngamma\n"
 
 
-def test_process_diff_includes_original_when_available(tmp_path, monkeypatch):
+def test_process_diff_includes_original_when_available(tmp_path):
     # Create a fake codebase with an original file
     codebase = tmp_path / "codebase"
     codebase.mkdir()
