@@ -17,23 +17,38 @@ def test_review_code_runs(engine):
     assert all("reviews" in r for r in results)
 
 
-def test_review_patch_parses_and_reviews(engine):
-    patch = """\
-        --- a/test.py
-        +++ b/test.py
-        @@ -0,0 +1,2 @@
-        +print('Hello')
-        +print('World')
-        """
-    engine._process_file_reviews = Mock(
-        return_value={"file": "test.py", "reviews": ["Issue"]}
-    )
-    result = engine.review_patch(patch)
-    assert "reviews" in result
+def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
+    patch = """--- a/test.py
++++ b/test.py
+@@ -0,0 +1,2 @@
++print('Hello')
++print('World')
+"""
+
+    # Write patch to a temporary file because review_patch expects a file path
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_text(patch)
+
+    # Stub the ReviewGraph used internally so we don't rely on LLMs
+    class _DummyReviewGraph:
+        def review(self, _req):
+            return {"file": "test.py", "reviews": [{"issue": "Issue"}]}
+
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    # Ensure summaries are simple strings, not Mocks
+    import metis.engine.core as coremod
+
+    monkeypatch.setattr(coremod, "summarize_changes", lambda *a, **k: "summary")
+
+    result = engine.review_patch(str(patch_file))
+    assert "reviews" in result and isinstance(result["reviews"], list)
+    assert any(r.get("file") == "test.py" for r in result["reviews"])
 
 
-def test_review_patch_handles_parse_error(engine):
-    bad_patch = "INVALID PATCH FORMAT"
-    result = engine.review_patch(bad_patch)
+def test_review_patch_handles_parse_error(engine, tmp_path):
+    bad_patch_file = tmp_path / "bad.diff"
+    bad_patch_file.write_text("INVALID PATCH FORMAT")
+    result = engine.review_patch(str(bad_patch_file))
     assert "reviews" in result
     assert result["reviews"] == []

@@ -4,8 +4,9 @@
 import logging
 
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from llama_index.llms.azure_openai import AzureOpenAI as LlamaAzureOpenAI
-from openai import AzureOpenAI
+from langchain_openai import AzureChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 from metis.providers.base import LLMProvider
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class AzureOpenAIProvider(LLMProvider):
 
-    def __init__(self, config: dict):
+    def __init__(self, config):
         self.api_key = config["llm_api_key"]
         self.azure_endpoint = config["azure_endpoint"]
         self.api_version = config["azure_api_version"]
@@ -47,19 +48,6 @@ class AzureOpenAIProvider(LLMProvider):
         )
         self.supports_temperature = config.get("supports_temperature", False)
 
-    def get_query_engine_class(self):
-        return LlamaAzureOpenAI
-
-    def get_query_model_kwargs(self):
-        return {
-            "model": self.chat_deployment_model,
-            "engine": self.engine,
-            "api_key": self.api_key,
-            "azure_endpoint": self.azure_endpoint,
-            "api_version": self.api_version,
-            "temperature": self.temperature,
-        }
-
     def get_embed_model_code(self):
         return AzureOpenAIEmbedding(
             model=self.code_embedding_model,
@@ -78,32 +66,30 @@ class AzureOpenAIProvider(LLMProvider):
             api_version=self.api_version,
         )
 
-    def get_llm_client(self):
-        return AzureOpenAI(
-            api_key=self.api_key,
-            azure_endpoint=self.azure_endpoint,
-            api_version=self.api_version,
-        )
-
     def call_llm(self, system_prompt, prompt, deployment_name=None, **kwargs):
-        client = self.get_llm_client()
         deployment = deployment_name or self.engine
-
         try:
-            api_params = {
-                "model": deployment,
-                "messages": [
-                    {"role": "system", "content": system_prompt or ""},
-                    {"role": "user", "content": prompt or ""},
-                ],
-            }
-            if self.supports_temperature:
-                api_params["temperature"] = kwargs.get("temperature", self.temperature)
-
-            token_value = kwargs.get("max_tokens", self.max_tokens)
-            api_params[self.model_token_param] = token_value
-            response = client.chat.completions.create(**api_params)
-            return (response.choices[0].message.content or "").strip()
+            chat = AzureChatOpenAI(
+                api_key=self.api_key,
+                azure_endpoint=self.azure_endpoint,
+                api_version=self.api_version,
+                azure_deployment=deployment,
+                model=self.chat_deployment_model,
+                temperature=(
+                    kwargs.get("temperature", self.temperature)
+                    if self.supports_temperature
+                    else None
+                ),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+            prompt_tmpl = ChatPromptTemplate.from_messages(
+                [("system", "{system}"), ("user", "{input}")]
+            )
+            chain = prompt_tmpl | chat | StrOutputParser()
+            return (
+                chain.invoke({"system": system_prompt or "", "input": prompt or ""})
+                or ""
+            ).strip()
         except Exception as e:
-            logger.exception("Error calling Azure OpenAI API: %s", e)
+            logger.exception("Error calling Azure OpenAI via LangChain: %s", e)
             return ""

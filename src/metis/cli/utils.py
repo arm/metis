@@ -84,7 +84,7 @@ def print_console(message, quiet=False, **kwargs):
         console.print(message, **kwargs)
 
 
-def with_spinner(task_description, fn, *args, quiet: bool = False, **kwargs):
+def with_spinner(task_description, fn, *args, quiet=False, **kwargs):
     """
     Run a function optionally displaying a spinner.
     When quiet=True (e.g., non-interactive without --verbose), suppress any spinner.
@@ -102,7 +102,7 @@ def with_spinner(task_description, fn, *args, quiet: bool = False, **kwargs):
     return result
 
 
-def with_timer(task_description, fn, *args, quiet: bool = False, **kwargs):
+def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     """
     Run a function while showing an elapsed-time timer.
     Shown only when quiet=False (e.g., verbose mode). In quiet=True, runs silently.
@@ -128,8 +128,8 @@ def with_timer(task_description, fn, *args, quiet: bool = False, **kwargs):
     return result
 
 
-def collect_reviews(engine, validate):
-    return {"reviews": [r for r in engine.review_code(validate)]}
+def collect_reviews(engine):
+    return {"reviews": [r for r in engine.review_code() if r]}
 
 
 def iterate_with_progress(total, iterable):
@@ -278,7 +278,7 @@ def pretty_print_reviews(results, quiet=False):
                 )
                 if r.get("code_snippet"):
                     print_console(
-                        f"    [cyan]Snippet:[/cyan] [dim]{(r['code_snippet'][:100] + '...') if len(r['code_snippet']) > 100 else r['code_snippet']}",
+                        f"    [cyan]Snippet:[/cyan] [dim]{r['code_snippet']}",
                         quiet,
                     )
                 if r.get("line_number"):
