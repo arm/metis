@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/arm/metis/compare/metis-v0.5.1...metis-v0.6.0) (2025-10-28)
+
+
+### Features
+
+* **graph:** introduce LangGraph ([#73](https://github.com/arm/metis/issues/73)) ([78a144f](https://github.com/arm/metis/commit/78a144f35ac1fd09b37ee632ff55bd9a7f798358))
+
 ## [0.5.1](https://github.com/arm/metis/compare/metis-v0.5.0...metis-v0.5.1) (2025-10-24)
 
 
