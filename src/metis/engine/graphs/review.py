@@ -8,6 +8,8 @@ from typing import Optional, Callable
 
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph, END
+from langgraph.cache.memory import InMemoryCache
+from langgraph.types import CachePolicy
 
 from metis.utils import parse_json_output, split_snippet
 from metis.utils import llm_call
@@ -221,7 +223,11 @@ class ReviewGraph:
         )
 
         graph.add_node("retrieve", retrieve)
-        graph.add_node("build_prompt", build_prompt)
+        graph.add_node(
+            "build_prompt",
+            build_prompt,
+            cache_policy=CachePolicy(key_func=lambda _state: b"build_prompt"),
+        )
         graph.add_node("review", review)
         graph.add_node("parse", parse)
 
@@ -231,7 +237,7 @@ class ReviewGraph:
         graph.add_edge("review", "parse")
         graph.add_edge("parse", END)
 
-        compiled = graph.compile()
+        compiled = graph.compile(cache=InMemoryCache())
         self._app_cache[cache_key] = compiled
         return compiled
 
