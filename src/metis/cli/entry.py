@@ -40,6 +40,9 @@ from .utils import (
     print_console,
 )
 
+logging.captureWarnings(True)
+logging.getLogger().setLevel(logging.ERROR)
+
 console = Console()
 logger = logging.getLogger("metis")
 
@@ -123,7 +126,7 @@ def main():
         "--backend", type=str, default="chroma", choices=["chroma", "postgres"]
     )
     parser.add_argument("--log-file", type=str)
-    parser.add_argument("--log-level", type=str, default="INFO")
+    parser.add_argument("--log-level", type=str, default="ERROR")
     parser.add_argument(
         "--custom-prompt",
         type=str,

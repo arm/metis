@@ -15,16 +15,8 @@ general_prompts:
   security_review_report: |-
     3. How to Report
         - List all identified security issues in a JSON array.
-        - Each element of the array must be a JSON object inside a list under the \"reviews\"key, with the following keys:
-          - \"issue\": A short description of the vulnerability.
-          - \"code_snippet\": The exact lines of code that exibit this vulnerability. This field should only contain code found in the file.
-          - \"reasoning\": A detailed explanation of why you identified this as a vulnerability.
-          - \"mitigation\": A recommended approach or fix to resolve the issue.
-          - \"confidence\": A float between 0 and 1 indicating your confidence in the finding.
-          - \"cwe\": The most appropriate CWE identifier in the format \"CWE-<number>\" (e.g. \"CWE-79\"). If no suitable CWE exists, respond with \"CWE-Unknown\".
-          - \"severity\": A qualitative rating of the risk level based on CVSS 4.0. Choose one of: LOW, MEDIUM, HIGH, CRITICAL.
-          - If there is any contradiction in the code comments or patch notes (e.g., something claims there is 'no new risk'
-            while concurrency checks are removed), add an 'explanation' key to detail the contradiction.
+        - Each element must strictly follow this structure:
+          [[REVIEW_SCHEMA_FIELDS]]
         - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
 
 plugins:
@@ -46,7 +38,8 @@ plugins:
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        If it is empty, ignore it.
+           - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
       security_review: |-
         You are a thorough security engineer specializing in C/C++.
         Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
@@ -60,7 +53,8 @@ plugins:
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
-        If it is empty, ignore it.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:

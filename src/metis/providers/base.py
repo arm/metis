@@ -17,6 +17,6 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def call_llm(self, system_prompt, prompt, **kwargs):
-        """Call the LLM and return a string answer."""
+    def get_chat_model(self, **kwargs):
+        """Return a LangChain chat model instance."""
         pass

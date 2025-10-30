@@ -2,28 +2,100 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import json
 from functools import partial
-from typing import Optional, Callable
 
-from langchain_core.runnables import RunnableLambda
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
+from pydantic import ValidationError
 
-from metis.utils import parse_json_output, split_snippet
-from metis.utils import llm_call
-from metis.utils import enrich_issues
-from .utils import (
-    retrieve_text,
-    synthesize_context,
-    build_review_system_prompt,
-    get_review_schema,
-    validate_json_schema,
-)
+from metis.utils import split_snippet, parse_json_output, enrich_issues
+from .schemas import ReviewResponseModel, review_schema_prompt
+from .utils import retrieve_text, synthesize_context, build_review_system_prompt
 from .types import ReviewRequest, ReviewState
 
 
 logger = logging.getLogger("metis")
+
+
+def _ensure_response_model(raw) -> ReviewResponseModel:
+    """
+    Normalize arbitrary LLM responses into a ReviewResponseModel.
+    Falls back to an empty model when parsing or validation fails.
+    """
+    if isinstance(raw, ReviewResponseModel):
+        return raw
+
+    payload = None
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, str):
+        parsed = parse_json_output(raw)
+        if isinstance(parsed, dict):
+            payload = parsed
+        elif parsed not in ("", None):
+            logger.warning("LLM fallback returned non-JSON response: %s", parsed)
+    elif raw not in (None, ""):
+        logger.warning("Unexpected review payload type %s", type(raw).__name__)
+
+    if isinstance(payload, dict):
+        try:
+            return ReviewResponseModel.model_validate(payload)
+        except ValidationError as exc:
+            logger.warning("Structured review payload failed validation: %s", exc)
+
+    return ReviewResponseModel(reviews=[])
+
+
+def _build_body_text(state: ReviewState) -> str:
+    """
+    Format the user/body portion of the review prompt based on mode.
+    """
+    snippet = state.get("snippet", "") or ""
+    context = state.get("context", "") or ""
+    mode = state.get("mode", "file")
+
+    if mode == "file":
+        file_path = state.get("file_path", "") or ""
+        sections = [
+            f"FILE: {file_path}",
+            "SNIPPET:",
+            snippet,
+            "",
+            "CONTEXT:",
+            context,
+            "",
+        ]
+    else:
+        original_file = state.get("original_file") or ""
+        sections = [
+            "ORIGINAL_FILE:",
+            original_file,
+            "",
+            "FILE_CHANGES:",
+            snippet,
+            "",
+            "CONTEXT:",
+            context,
+            "",
+        ]
+
+    return "\n".join(sections)
+
+
+def _post_process_reviews(
+    reviews: list[dict],
+    file_path: str,
+) -> list[dict]:
+    """Enrich parsed reviews with derived metadata."""
+    normalized_reviews = reviews or []
+    try:
+        enrich_issues(file_path, normalized_reviews)
+    except Exception:
+        pass
+
+    return normalized_reviews
 
 
 def review_node_retrieve(state: ReviewState) -> ReviewState:
@@ -43,6 +115,7 @@ def review_node_build_prompt(
     report_prompt: str,
     custom_prompt_text: str | None,
     custom_guidance_precedence: str,
+    schema_prompt_section: str,
 ) -> ReviewState:
     system = build_review_system_prompt(
         language_prompts,
@@ -50,81 +123,52 @@ def review_node_build_prompt(
         report_prompt,
         custom_prompt_text,
         custom_guidance_precedence,
+        schema_prompt_section,
     )
     new_state: ReviewState = dict(state)
     new_state["system_prompt"] = system
     return new_state
 
 
-def review_node_llm(state: ReviewState, review_node: RunnableLambda) -> ReviewState:
-    snippet = state.get("snippet", "")
-    context = state.get("context", "")
-    file_path = state.get("file_path", "")
-    mode = state.get("mode", "file")
-    if mode == "file":
-        body_text = "\n".join(
-            [
-                f"FILE: {file_path}",
-                "SNIPPET:",
-                snippet or "",
-                "",
-                "CONTEXT:",
-                context or "",
-                "",
-            ]
-        )
-    else:
-        original_file = state.get("original_file") or ""
-        body_text = "\n".join(
-            [
-                "ORIGINAL_FILE:",
-                original_file,
-                "",
-                "FILE_CHANGES:",
-                snippet or "",
-                "",
-                "CONTEXT:",
-                context or "",
-                "",
-            ]
-        )
+def review_node_llm(
+    state: ReviewState,
+    structured_node,
+    fallback_node=None,
+) -> ReviewState:
+    body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    raw = review_node.invoke(
-        {"system_prompt": system_prompt, "payload": {"body_text": body_text}}
+    payload = {"system_prompt": system_prompt, "body_text": body_text}
+    raw = None
+    attempts = (
+        (structured_node, logger.warning, "Structured review invocation failed: %s"),
+        (fallback_node, logger.error, "Fallback review invocation failed: %s"),
     )
+    for runnable, log_fn, message in attempts:
+        if runnable is None:
+            continue
+        if raw not in (None, ""):
+            break
+        try:
+            raw = runnable.invoke(payload)
+        except Exception as exc:
+            log_fn(message, exc)
+            raw = None
+
+    response_model = _ensure_response_model(raw)
     new_state: ReviewState = dict(state)
-    new_state["raw_review"] = raw
+    new_state["parsed_reviews"] = response_model.model_dump().get("reviews", []) or []
     return new_state
 
 
-def review_node_parse(
-    state: ReviewState,
-    validate_fn: Optional[Callable] = None,
-    repair_fn: Optional[Callable] = None,
-) -> ReviewState:
-    raw = state.get("raw_review") or ""
-    parsed = parse_json_output(raw)
-    reviews = []
-    schema_valid = False
-    if isinstance(parsed, dict) and "reviews" in parsed:
-        if validate_fn is not None:
-            if not validate_fn(parsed) and repair_fn is not None:
-                fixed = repair_fn(raw)
-                if isinstance(fixed, dict) and validate_fn(fixed):
-                    parsed = fixed
-            schema_valid = bool(validate_fn(parsed))
-        else:
-            schema_valid = True
-
-        try:
-            enrich_issues(state.get("file_path", ""), parsed.get("reviews", []))
-        except Exception:
-            pass
-        reviews = parsed.get("reviews", []) or []
+def review_node_parse(state: ReviewState) -> ReviewState:
+    reviews = state.get("parsed_reviews") or []
+    normalized = _post_process_reviews(
+        reviews,
+        state.get("file_path", "") or "",
+    )
 
     new_state: ReviewState = dict(state)
-    new_state["parsed_reviews"] = reviews
-    new_state["schema_valid"] = schema_valid
+    new_state["parsed_reviews"] = normalized
     return new_state
 
 
@@ -144,56 +188,46 @@ class ReviewGraph:
         self.custom_guidance_precedence = custom_guidance_precedence or ""
         self.llama_query_model = llama_query_model
         self.max_token_length = max_token_length
+        self._schema_prompt_section = review_schema_prompt()
 
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
             "security_review_report", ""
         )
 
-        self._review_node = RunnableLambda(self._run_llm_review)
+        self._structured_review_node = None
+        self._fallback_review_node = None
+        self._structured_review_node = self._create_structured_review_runnable()
+        if self._structured_review_node is None and self._fallback_review_node is None:
+            raise RuntimeError(
+                "Unable to create review runnable; OpenAI-based provider required."
+            )
         self._app_cache = {}
-        self._review_schema = get_review_schema()
-        self._validate_review = lambda obj: validate_json_schema(
-            obj, self._review_schema
-        )
 
-    def _repair_to_schema(self, raw_output):
-        """In case where the output is not conformant to the schema, try to repair it."""
-        system_prompt = (
-            "You convert model output into strictly valid JSON that conforms to the given schema. "
-            "Output JSON only, with no code fences or commentary."
-        )
+    def _create_structured_review_runnable(self):
+        get_chat_model = getattr(self.llm_provider, "get_chat_model", None)
+        if not callable(get_chat_model):
+            return None
         try:
-            schema_str = json.dumps(self._review_schema)
-        except Exception:
-            schema_str = '{"type":"object","properties":{"reviews":{"type":"array"}}}'
-        user_prompt = (
-            "Schema:\n" + schema_str + "\n\n"
-            "ModelOutput:\n" + (raw_output or "") + "\n\n"
-            "Return: Only a JSON object matching the schema."
+            chat_model = get_chat_model(model=self.llama_query_model)
+        except Exception as exc:
+            logger.warning(
+                "Unable to instantiate chat model for structured output: %s", exc
+            )
+            return None
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", "{system_prompt}"), ("user", "{body_text}")]
         )
-        fixed = llm_call(
-            self.llm_provider, system_prompt, user_prompt, model=self.llama_query_model
-        )
-        parsed = parse_json_output(fixed)
-        return parsed
-
-    def _run_llm_review(self, inputs):
-        system_prompt = inputs["system_prompt"]
-        payload = inputs.get("payload", {})
-
-        if isinstance(payload, dict) and "body_text" in payload:
-            prompt_text = str(payload.get("body_text") or "")
-        else:
-            lines = []
-            for k, v in payload.items():
-                lines.append(f"{k}:\n{v}")
-            prompt_text = "\n\n".join(lines) + "\n"
-        answer = llm_call(
-            self.llm_provider, system_prompt, prompt_text, model=self.llama_query_model
-        )
-        if not answer:
-            return '{"reviews": []}'
-        return answer
+        self._fallback_review_node = prompt | chat_model | StrOutputParser()
+        try:
+            structured_model = chat_model.with_structured_output(
+                ReviewResponseModel, method="function_calling"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to bind structured output schema for review graph: %s", exc
+            )
+            return None
+        return prompt | structured_model
 
     def _build_app(self, language_prompts, default_prompt_key):
         cache_key = (id(language_prompts), default_prompt_key)
@@ -202,7 +236,7 @@ class ReviewGraph:
             return cached
 
         graph = StateGraph(ReviewState)
-        retrieve = partial(review_node_retrieve)
+        retrieve = review_node_retrieve
         build_prompt = partial(
             review_node_build_prompt,
             language_prompts=language_prompts,
@@ -210,16 +244,14 @@ class ReviewGraph:
             report_prompt=self.report_prompt,
             custom_prompt_text=self.custom_prompt_text,
             custom_guidance_precedence=self.custom_guidance_precedence,
+            schema_prompt_section=self._schema_prompt_section,
         )
         review = partial(
             review_node_llm,
-            review_node=self._review_node,
+            structured_node=self._structured_review_node,
+            fallback_node=self._fallback_review_node,
         )
-        parse = partial(
-            review_node_parse,
-            validate_fn=self._validate_review,
-            repair_fn=self._repair_to_schema,
-        )
+        parse = review_node_parse
 
         graph.add_node("retrieve", retrieve)
         graph.add_node("build_prompt", build_prompt)
