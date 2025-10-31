@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import os
-import logging
 import importlib.metadata
+import json
+import logging
+import os
 import re
+import warnings
 from pathlib import Path
 from importlib.resources import files
 
@@ -47,25 +48,36 @@ def configure_logger(logger, args):
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    logger.setLevel(logging.DEBUG)  # Capture everything; handlers will filter
+    default_level = logging.ERROR
+    requested_level = getattr(args, "log_level", None)
+    if isinstance(requested_level, str):
+        level = logging._nameToLevel.get(requested_level.upper(), default_level)
+    else:
+        level = default_level
 
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.ERROR)
+    console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
     if getattr(args, "log_file", None):
         file_handler = logging.FileHandler(args.log_file)
-        file_handler.setLevel(logging.INFO)
+        file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-    if getattr(args, "log_level", None):
-        level = getattr(logging, args.log_level.upper(), None)
-        if level:
-            logger.setLevel(level)
+    logger.setLevel(level)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    logging.captureWarnings(True)
+    warnings.resetwarnings()
+    if level <= logging.WARNING:
+        warnings.filterwarnings("default")
+    else:
+        warnings.filterwarnings("ignore")
+
     for name in (
         "httpx",
         "httpcore",
@@ -75,8 +87,11 @@ def configure_logger(logger, args):
         "urllib3",
     ):
         noisy = logging.getLogger(name)
-        noisy.setLevel(logging.WARNING)
+        noisy.setLevel(level)
         noisy.propagate = False
+    warnings_logger = logging.getLogger("py.warnings")
+    warnings_logger.setLevel(level)
+    warnings_logger.propagate = True
 
 
 def print_console(message, quiet=False, **kwargs):

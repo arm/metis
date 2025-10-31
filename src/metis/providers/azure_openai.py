@@ -5,8 +5,6 @@ import logging
 
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from langchain_openai import AzureChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from metis.providers.base import LLMProvider
 
@@ -66,30 +64,26 @@ class AzureOpenAIProvider(LLMProvider):
             api_version=self.api_version,
         )
 
-    def call_llm(self, system_prompt, prompt, deployment_name=None, **kwargs):
+    def get_chat_model(self, deployment_name=None, **kwargs):
         deployment = deployment_name or self.engine
-        try:
-            chat = AzureChatOpenAI(
-                api_key=self.api_key,
-                azure_endpoint=self.azure_endpoint,
-                api_version=self.api_version,
-                azure_deployment=deployment,
-                model=self.chat_deployment_model,
-                temperature=(
-                    kwargs.get("temperature", self.temperature)
-                    if self.supports_temperature
-                    else None
-                ),
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-            )
-            prompt_tmpl = ChatPromptTemplate.from_messages(
-                [("system", "{system}"), ("user", "{input}")]
-            )
-            chain = prompt_tmpl | chat | StrOutputParser()
-            return (
-                chain.invoke({"system": system_prompt or "", "input": prompt or ""})
-                or ""
-            ).strip()
-        except Exception as e:
-            logger.exception("Error calling Azure OpenAI via LangChain: %s", e)
-            return ""
+        params = {
+            "api_key": self.api_key,
+            "azure_endpoint": self.azure_endpoint,
+            "api_version": self.api_version,
+            "azure_deployment": deployment,
+            "model": self.chat_deployment_model,
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+        }
+        if self.supports_temperature:
+            params["temperature"] = kwargs.get("temperature", self.temperature)
+        for optional_key in (
+            "timeout",
+            "max_retries",
+            "seed",
+            "frequency_penalty",
+            "presence_penalty",
+            "response_format",
+        ):
+            if optional_key in kwargs:
+                params[optional_key] = kwargs[optional_key]
+        return AzureChatOpenAI(**params)

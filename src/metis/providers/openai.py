@@ -3,8 +3,6 @@
 
 from llama_index.embeddings.openai import OpenAIEmbedding
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from metis.providers.base import LLMProvider
 
@@ -28,23 +26,22 @@ class OpenAIProvider(LLMProvider):
     def get_embed_model_docs(self):
         return OpenAIEmbedding(model_name=self.docs_embedding_model)
 
-    def call_llm(self, system_prompt, prompt, model=None, **kwargs):
+    def get_chat_model(self, model=None, **kwargs):
         model_name = model or self.query_model
-        try:
-            chat = ChatOpenAI(
-                api_key=self.api_key,
-                model=model_name,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-
-            prompt_tmpl = ChatPromptTemplate.from_messages(
-                [("system", "{system}"), ("user", "{input}")]
-            )
-            chain = prompt_tmpl | chat | StrOutputParser()
-            return chain.invoke(
-                {"system": system_prompt or "", "input": prompt or ""}
-            ).strip()
-        except Exception as e:
-            logger.error(f"Error calling OpenAI via LangChain: {e}")
-            return ""
+        params = {
+            "api_key": self.api_key,
+            "model": model_name,
+            "temperature": kwargs.get("temperature", self.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+        }
+        for optional_key in (
+            "timeout",
+            "max_retries",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "logit_bias",
+        ):
+            if optional_key in kwargs:
+                params[optional_key] = kwargs[optional_key]
+        return ChatOpenAI(**params)

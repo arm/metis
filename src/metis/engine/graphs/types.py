@@ -37,13 +37,12 @@ class ReviewState(TypedDict, total=False):
     retriever_docs: Any
     context_prompt: str
     relative_file: Optional[str]
+    mode: str
+    original_file: Optional[str]
     # Derived
     context: str
     system_prompt: str
-    raw_review: str
     parsed_reviews: list[dict]
-    # Schema validation flag
-    schema_valid: bool
 
 
 class AskState(TypedDict, total=False):

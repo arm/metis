@@ -19,7 +19,7 @@ dependencies = [
     "tree-sitter>=0.25.2",
     "tree-sitter-language-pack>=0.9.0",
     "chromadb>=1.1.1",
-    "jsonschema>=4.25.1"
+    "pydantic>=2.12.3"
 ]
 
 [build-system]

@@ -45,10 +45,6 @@ def split_snippet(snippet, max_tokens, model="gpt-4"):
     return chunks
 
 
-def llm_call(provider, system_prompt, prompt, **kwargs):
-    return provider.call_llm(system_prompt, prompt, **kwargs)
-
-
 def parse_json_output(model_output):
     """
     Clean up and parse model output as JSON.
