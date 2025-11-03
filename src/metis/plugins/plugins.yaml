@@ -280,3 +280,57 @@ plugins:
         1. Security Review Scope
            - Review the security implications of the FILE.
         If it is empty, ignore it.
+  terraform:
+    supported_extensions: [".tf"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Terraform (HCL) and cloud security.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce security conclusions that are not supported by the
+        specific changes or context provided. Where possible, cite exact line numbers and resource
+        addresses from FILE_CHANGES.
+
+        You will be given:
+        1) FILE_CHANGES  – A unified diff of Terraform files (HCL) with lines marked by “+” for
+           additions and “-” for removals. This may include modules, variables, providers,
+           backend configuration, and environment files. Treat “+” and “-” as the primary scope.
+        2) RELEVANT_CONTEXT – Short notes explaining intent, environment (e.g., prod/stage),
+           cloud(s) targeted, and any linked modules or policies that inform how changes behave.
+        3) ORIGINAL_FILE  – The original configuration before modification. Use this to understand
+           how changes alter behavior. (If empty, ignore.)
+
+        Your tasks are:
+
+        1. Security Review Scope
+           - Review the security implications of FILE_CHANGES, focusing on “+” (added) and “-”
+             (removed) lines, but reason about how these interact with the whole module/stack.
+           - Only draw conclusions that are directly evidenced by FILE_CHANGES and/or
+             RELEVANT_CONTEXT/ORIGINAL_FILE.
+      security_review_checks: |-
+        2. What to check
+        - Look for potential security issues such as:
+          - Hardcoded credentials or secrets.
+          - Missing encryption of data in transit or storage.
+          - Short log retention periods.
+          - Data buckets being made public.
+          - Overly wide ranges of IPs or ports defined for permitting access.
+          - Disabling security features such as scan-on-push in container storage.
+      validation_review: "Validate the follow terraform review for security concerns"
+      snippet_security_summary: "Summarize the security implications of the terraform code changes"
+      attempt_fix: "Based on the issues detected in the terraform code changes, propose a fix/patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough DecSecOps engineer specializing in Terraform.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
+        If it is empty, ignore it.
