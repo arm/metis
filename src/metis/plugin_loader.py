@@ -65,6 +65,13 @@ def _load_builtin_plugins(plugin_config):
         plugins.append(PythonPlugin(plugin_config))
     except Exception as e:
         logger.warning(f"Failed to load built-in Python plugin: {e}")
+        
+    try:
+        from metis.plugins.typescript_plugin import TypeScriptPlugin
+
+        plugins.append(TypeScriptPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in TypeScript plugin: {e}")
 
     try:
         from metis.plugins.rust_plugin import RustPlugin
