@@ -74,6 +74,13 @@ def _load_builtin_plugins(plugin_config):
         logger.warning(f"Failed to load built-in Rust plugin: {e}")
 
     try:
+        from metis.plugins.terraform_plugin import TerraformPlugin
+
+        plugins.append(TerraformPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Terraform plugin: {e}")
+
+    try:
         from metis.plugins.tb_plugin import TableGenPlugin
 
         plugins.append(TableGenPlugin(plugin_config))
