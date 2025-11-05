@@ -4,15 +4,22 @@
 import logging
 import os
 
-from metis.utils import llm_call
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
 logger = logging.getLogger("metis")
 
 
 def summarize_changes(llm_provider, file_path, issues, summary_prompt):
     try:
-        answer = llm_call(llm_provider, summary_prompt, issues)
-        return answer
+        chat = llm_provider.get_chat_model()
+        prompt_tmpl = ChatPromptTemplate.from_messages(
+            [("system", "{system}"), ("user", "{input}")]
+        )
+        chain = prompt_tmpl | chat | StrOutputParser()
+        return chain.invoke(
+            {"system": summary_prompt or "", "input": issues or ""}
+        ).strip()
     except Exception as e:
         logger.error(f"Error summarizing changes for {file_path}: {e}")
         return ""

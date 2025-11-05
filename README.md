@@ -132,6 +132,13 @@ my_lang = "my_pkg.my_module:MyLanguagePlugin"
 
 Metis provides an interactive CLI with several built-in commands. After launching, you can run the following:
 
+### Global CLI Flags
+
+- `--custom-prompt PATH` – optional `.md` or `.txt` file that contains additional guidance. When provided, Metis loads it once and weaves the text into every security-review prompt. If the flag is omitted, Metis looks for `.metis.md` in your project root and uses it when present. Use this to inject organization-specific policy or security requirements without editing `plugins.yaml`.
+- `--backend chroma|postgres` – choose vector-store backend (default `chroma`).
+- `--project-schema` / `--chroma-dir` – backend-specific knobs.
+- `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
+
 ### `index`
 Indexes your codebase into a vector database. Must be run before any analysis.
 

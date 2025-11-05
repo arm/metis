@@ -1,11 +1,6 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates
+# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-import metis.utils as mutils
-
-import metis.engine.graphs.ask as askmod
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
     review_node_retrieve,
@@ -28,19 +23,7 @@ class DummyRetriever:
         return [_Doc(f"{self._label} context for: {q}")]
 
 
-@pytest.fixture
-def patch_llm_call(monkeypatch):
-    # Patch LLM call used by AskGraph answer node (accept any signature)
-    def _fake_llm_call(*args, **kwargs):
-        return "LLM_OUTPUT"
-
-    # Patch both the metis.utils symbol and the alias imported in ask
-    monkeypatch.setattr(mutils, "llm_call", _fake_llm_call)
-    if hasattr(askmod, "llm_call"):
-        monkeypatch.setattr(askmod, "llm_call", _fake_llm_call)
-
-
-def test_ask_graph_returns_code_and_docs(patch_llm_call):
+def test_ask_graph_returns_code_and_docs():
     g = AskGraph(llm_provider=object(), llama_query_model="test-model")
     req = {
         "question": "What is here?",
@@ -54,7 +37,7 @@ def test_ask_graph_returns_code_and_docs(patch_llm_call):
     assert "docs" in out["docs"].lower()
 
 
-def test_review_nodes_pipeline_parses(patch_llm_call):
+def test_review_nodes_pipeline_parses():
     # Initial minimal state
     state = {
         "file_path": "a/file.c",
@@ -70,7 +53,7 @@ def test_review_nodes_pipeline_parses(patch_llm_call):
 
     # Step 2: build prompt
     language_prompts = {
-        "security_review_file": "Do a security review",
+        "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
         "security_review_checks": "Checks...",
         "validation_review": "Validate...",
     }
@@ -81,16 +64,39 @@ def test_review_nodes_pipeline_parses(patch_llm_call):
         report_prompt="",
         custom_prompt_text=None,
         custom_guidance_precedence="",
+        schema_prompt_section='- "issue": desc',
     )
     assert "system_prompt" in s2
 
     # Step 3: run LLM review (stub)
     class _DummyNode:
-        def invoke(self, _):
-            return '{"reviews": [{"issue": "A", "line_number": 1}]}'
+        def __init__(self, payload):
+            self._payload = payload
 
-    s3 = review_node_llm(s2, review_node=_DummyNode())
-    assert "raw_review" in s3
+        def invoke(self, _):
+            return self._payload
+
+    review_payload = {
+        "reviews": [
+            {
+                "issue": "Issue A",
+                "code_snippet": "int main(){}",
+                "reasoning": "Because.",
+                "mitigation": "Fix it.",
+                "confidence": 0.5,
+                "cwe": "CWE-79",
+                "severity": "Medium",
+            }
+        ]
+    }
+
+    s3 = review_node_llm(
+        s2,
+        structured_node=_DummyNode(review_payload),
+        fallback_node=None,
+    )
+    assert "parsed_reviews" in s3
+    assert s3["parsed_reviews"]
 
     # Step 4: parse
     s4 = review_node_parse(s3)
