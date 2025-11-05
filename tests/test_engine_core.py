@@ -12,6 +12,7 @@ def test_supported_languages():
     assert "c" in langs
     assert "python" in langs
     assert "rust" in langs
+    assert "typescript" in langs
 
 
 def test_get_existing_plugin(engine):

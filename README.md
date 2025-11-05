@@ -25,7 +25,7 @@ The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and
 - **Plugin-Friendly and Extensible**
   Designed with extensibility in mind: support for additional languages, models, and new prompts is straightforward.
 
-Metis currently supports C and C++, python, and rust via a plugin-based language system, making it easy to extend to additional languages.
+Metis currently supports C, C++, Python, Rust, and TypeScript via a plugin-based language system, making it easy to extend to additional languages.
 
 It also supports multiple vector store backends, including PostgreSQL with pgvector and ChromaDB. It currently integrates a single language model provider (OpenAI), but is designed to support additional providers in the future.
 
