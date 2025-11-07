@@ -63,15 +63,8 @@ class ChromaStore(BaseVectorStore):
                 embed_model=self.embed_model_docs,
             )
 
-            llm_class = llm_provider.get_query_engine_class()
-            llm_kwargs = llm_provider.get_query_model_kwargs()
-            if llm_kwargs is None:
-                llm_kwargs = {}
-
-            llm_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
-
-            llm_code = llm_class(**llm_kwargs)
-            llm_docs = llm_class(**llm_kwargs)
+            llm_code = self._build_llm(llm_provider)
+            llm_docs = self._build_llm(llm_provider)
 
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
             mode = response_mode or self.query_config.get("response_mode", "compact")

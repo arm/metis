@@ -20,6 +20,13 @@ class BaseVectorStore(ABC):
         """Return tuple of storage contexts (code, docs) for indexing."""
         pass
 
+    def _build_llm(self, llm_provider):
+        """Construct a provider-specific LlamaIndex LLM instance."""
+        llm_class = llm_provider.get_query_engine_class()
+        llm_kwargs = llm_provider.get_query_model_kwargs() or {}
+        filtered_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
+        return llm_class(**filtered_kwargs)
+
 
 class _Doc:
     def __init__(self, text: str):

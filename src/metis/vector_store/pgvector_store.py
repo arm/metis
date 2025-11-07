@@ -85,15 +85,8 @@ class PGVectorStoreImpl(BaseVectorStore):
                 self.vector_store_docs, storage_context=self.storage_context_docs
             )
 
-            llm_class = llm_provider.get_query_engine_class()
-            llm_kwargs = llm_provider.get_query_model_kwargs()
-            if llm_kwargs is None:
-                llm_kwargs = {}
-
-            llm_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
-
-            llm_code = llm_class(**llm_kwargs)
-            llm_docs = llm_class(**llm_kwargs)
+            llm_code = self._build_llm(llm_provider)
+            llm_docs = self._build_llm(llm_provider)
 
             qe_code = index_code.as_query_engine(
                 llm=llm_code,
