@@ -488,7 +488,9 @@ class MetisEngine:
     def _init_and_get_query_engines(self):
         self.vector_backend.init()
         qe_code, qe_docs = self.vector_backend.get_query_engines(
-            self.similarity_top_k, self.response_mode
+            self.llm_provider,
+            self.similarity_top_k,
+            self.response_mode,
         )
         if not qe_code or not qe_docs:
             raise QueryEngineInitError()

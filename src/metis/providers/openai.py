@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from langchain_openai import ChatOpenAI
 
 from metis.providers.base import LLMProvider
@@ -25,6 +26,19 @@ class OpenAIProvider(LLMProvider):
 
     def get_embed_model_docs(self):
         return OpenAIEmbedding(model_name=self.docs_embedding_model)
+
+    def get_query_engine_class(self):
+        return LlamaOpenAI
+
+    def get_query_model_kwargs(self):
+        model_name = self.query_model
+        params = {
+            "model": model_name,
+            "api_key": self.api_key,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        return params
 
     def get_chat_model(self, model=None, **kwargs):
         model_name = model or self.query_model

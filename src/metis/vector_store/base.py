@@ -11,7 +11,7 @@ class BaseVectorStore(ABC):
         pass
 
     @abstractmethod
-    def get_query_engines(self, similarity_top_k, response_mode):
+    def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
         """Return tuple of LangChain-style retrievers (code, docs)."""
         pass
 

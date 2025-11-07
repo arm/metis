@@ -4,6 +4,7 @@
 import logging
 
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_openai import AzureOpenAI as LlamaAzureOpenAI
 from langchain_openai import AzureChatOpenAI
 
 from metis.providers.base import LLMProvider
@@ -63,6 +64,23 @@ class AzureOpenAIProvider(LLMProvider):
             azure_endpoint=self.azure_endpoint,
             api_version=self.api_version,
         )
+
+    def get_query_engine_class(self):
+        return LlamaAzureOpenAI
+
+    def get_query_model_kwargs(self):
+        deployment = self.engine
+        chat_model = self.chat_deployment_model
+        params = {
+            "model": chat_model,
+            "engine": deployment,
+            "api_key": self.api_key,
+            "azure_endpoint": self.azure_endpoint,
+            "api_version": self.api_version,
+        }
+        if self.supports_temperature:
+            params["temperature"] = self.temperature
+        return params
 
     def get_chat_model(self, deployment_name=None, **kwargs):
         deployment = deployment_name or self.engine
