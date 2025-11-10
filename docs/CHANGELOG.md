@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/arm/metis/compare/metis-v0.6.0...metis-v0.7.0) (2025-11-05)
+
+
+### Features
+
+* **graph:** Use structured output ([3c4d06a](https://github.com/arm/metis/commit/3c4d06a3e463118ed61651c5e6e2061e5af1c760))
+* **graph:** Use sturctured output ([e9fa60b](https://github.com/arm/metis/commit/e9fa60bb9c46ec834ec5dacc74a8395623154166))
+
 ## [0.6.0](https://github.com/arm/metis/compare/metis-v0.5.1...metis-v0.6.0) (2025-10-28)
 
 
