@@ -20,3 +20,13 @@ class LLMProvider(ABC):
     def get_chat_model(self, **kwargs):
         """Return a LangChain chat model instance."""
         pass
+
+    @abstractmethod
+    def get_query_engine_class(self):
+        """Return the LlamaIndex LLM class used for query engines."""
+        pass
+
+    @abstractmethod
+    def get_query_model_kwargs(self):
+        """Return kwargs for constructing the query engine LLM."""
+        pass

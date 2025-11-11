@@ -48,7 +48,9 @@ class ChromaStore(BaseVectorStore):
             logger.error(f"Error initializing ChromaStore: {e}")
             raise VectorStoreInitError()
 
-    def get_query_engines(self, similarity_top_k=None, response_mode=None):
+    def get_query_engines(
+        self, llm_provider, similarity_top_k=None, response_mode=None
+    ):
         try:
             index_code = VectorStoreIndex.from_vector_store(
                 self.vector_store_code,
@@ -61,14 +63,17 @@ class ChromaStore(BaseVectorStore):
                 embed_model=self.embed_model_docs,
             )
 
+            llm_code = self._build_llm(llm_provider)
+            llm_docs = self._build_llm(llm_provider)
+
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
             mode = response_mode or self.query_config.get("response_mode", "compact")
 
             qe_code = index_code.as_query_engine(
-                similarity_top_k=top_k, response_mode=mode
+                llm=llm_code, similarity_top_k=top_k, response_mode=mode
             )
             qe_docs = index_docs.as_query_engine(
-                similarity_top_k=top_k, response_mode=mode
+                llm=llm_docs, similarity_top_k=top_k, response_mode=mode
             )
             return (QueryEngineRetriever(qe_code), QueryEngineRetriever(qe_docs))
         except Exception as e:

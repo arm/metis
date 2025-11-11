@@ -76,7 +76,7 @@ class PGVectorStoreImpl(BaseVectorStore):
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
 
-    def get_query_engines(self, similarity_top_k, response_mode):
+    def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
         try:
             index_code = VectorStoreIndex.from_vector_store(
                 self.vector_store_code, storage_context=self.storage_context_code
@@ -85,11 +85,18 @@ class PGVectorStoreImpl(BaseVectorStore):
                 self.vector_store_docs, storage_context=self.storage_context_docs
             )
 
+            llm_code = self._build_llm(llm_provider)
+            llm_docs = self._build_llm(llm_provider)
+
             qe_code = index_code.as_query_engine(
-                similarity_top_k=similarity_top_k, response_mode=response_mode
+                llm=llm_code,
+                similarity_top_k=similarity_top_k,
+                response_mode=response_mode,
             )
             qe_docs = index_docs.as_query_engine(
-                similarity_top_k=similarity_top_k, response_mode=response_mode
+                llm=llm_docs,
+                similarity_top_k=similarity_top_k,
+                response_mode=response_mode,
             )
             return (QueryEngineRetriever(qe_code), QueryEngineRetriever(qe_docs))
         except Exception as e:

@@ -8,24 +8,28 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
-from pydantic import ValidationError
 
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
-from .utils import retrieve_text, synthesize_context, build_review_system_prompt
+from .utils import (
+    retrieve_text,
+    synthesize_context,
+    build_review_system_prompt,
+    sanitize_review_payload,
+)
 from .types import ReviewRequest, ReviewState
 
 
 logger = logging.getLogger("metis")
 
 
-def _ensure_response_model(raw) -> ReviewResponseModel:
+def _normalize_reviews(raw) -> list[dict]:
     """
-    Normalize arbitrary LLM responses into a ReviewResponseModel.
-    Falls back to an empty model when parsing or validation fails.
+    Normalize arbitrary LLM responses into review dicts, preserving partially
+    structured entries with empty fields when necessary.
     """
     if isinstance(raw, ReviewResponseModel):
-        return raw
+        return raw.model_dump().get("reviews", []) or []
 
     payload = None
     if isinstance(raw, dict):
@@ -40,12 +44,9 @@ def _ensure_response_model(raw) -> ReviewResponseModel:
         logger.warning("Unexpected review payload type %s", type(raw).__name__)
 
     if isinstance(payload, dict):
-        try:
-            return ReviewResponseModel.model_validate(payload)
-        except ValidationError as exc:
-            logger.warning("Structured review payload failed validation: %s", exc)
+        return sanitize_review_payload(payload)
 
-    return ReviewResponseModel(reviews=[])
+    return []
 
 
 def _build_body_text(state: ReviewState) -> str:
@@ -154,9 +155,9 @@ def review_node_llm(
             log_fn(message, exc)
             raw = None
 
-    response_model = _ensure_response_model(raw)
+    reviews = _normalize_reviews(raw)
     new_state: ReviewState = dict(state)
-    new_state["parsed_reviews"] = response_model.model_dump().get("reviews", []) or []
+    new_state["parsed_reviews"] = reviews
     return new_state
 
 

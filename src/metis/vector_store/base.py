@@ -11,7 +11,7 @@ class BaseVectorStore(ABC):
         pass
 
     @abstractmethod
-    def get_query_engines(self, similarity_top_k, response_mode):
+    def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
         """Return tuple of LangChain-style retrievers (code, docs)."""
         pass
 
@@ -19,6 +19,13 @@ class BaseVectorStore(ABC):
     def get_storage_contexts(self):
         """Return tuple of storage contexts (code, docs) for indexing."""
         pass
+
+    def _build_llm(self, llm_provider):
+        """Construct a provider-specific LlamaIndex LLM instance."""
+        llm_class = llm_provider.get_query_engine_class()
+        llm_kwargs = llm_provider.get_query_model_kwargs() or {}
+        filtered_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
+        return llm_class(**filtered_kwargs)
 
 
 class _Doc:
