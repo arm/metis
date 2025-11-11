@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from typing import Literal, get_args, get_origin
+from typing import Annotated, Literal, get_args, get_origin
 
 from metis.engine.helpers import apply_custom_guidance
 from .schemas import ReviewIssueModel
@@ -36,6 +36,8 @@ def synthesize_context(code_text, doc_text):
 def _is_string_field(annotation):
     if annotation is str:
         return True
+    if isinstance(annotation, type) and issubclass(annotation, str):
+        return True
     origin = get_origin(annotation)
     if origin is None:
         return False
@@ -43,6 +45,9 @@ def _is_string_field(annotation):
         return True
     if origin is Literal:
         return all(isinstance(arg, str) for arg in get_args(annotation))
+    if origin is Annotated:
+        base, *_ = get_args(annotation)
+        return _is_string_field(base)
     return False
 
 
