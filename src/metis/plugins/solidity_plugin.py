@@ -44,4 +44,3 @@ class SolidityPlugin(BaseLanguagePlugin):
             .get(self.get_name(), {})
             .get("prompts", {})
         )
-
