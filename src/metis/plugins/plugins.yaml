@@ -267,6 +267,65 @@ plugins:
         1. Security Review Scope
            - Review the security implications of the FILE.
         If it is empty, ignore it.
+  solidity:
+    supported_extensions: [".sol"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Solidity smart contracts and the EVM.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by the specific
+        changes or context provided.
+
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” while considering interactions with the whole file.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+           - Look for potential security issues such as:
+             - Reentrancy vulnerabilities (including external calls before state updates; missing reentrancy guards; pull vs. push payments).
+             - Access control flaws (missing/incorrect modifiers; ownership transfer pitfalls; role misconfiguration; private vs public visibility confusion).
+             - Use of `tx.origin` for authentication.
+             - Unsafe `delegatecall`, `call`, `staticcall`, or `send/transfer` usage; unchecked return values of low-level calls.
+             - Integer overflows/underflows or precision loss (especially in arithmetic on token amounts, fees, and interest calculations).
+             - Denial-of-service vectors (gas griefing, unbounded loops over dynamic arrays/mappings; state that can be permanently blocked).
+             - Front-running / MEV risks and missing commit-reveal or slippage bounds for price-sensitive actions.
+             - Insecure randomness (use of `block.timestamp`, `blockhash`, or predictable on-chain data for entropy).
+             - Oracle manipulation risks and stale price assumptions.
+             - Uninitialized storage pointers or incorrect storage/memory data location causing unintended storage writes.
+             - Incorrect visibility or mutability (`public` when `external`/`internal` intended; missing `view`/`pure`; unnecessary `payable`).
+             - Missing input validation and invariant checks; unsafe casting; unchecked array indices or length assumptions.
+             - Upgradeable/proxy hazards (storage layout collisions, missing `initializer`/`reinitializer`, delegatecall to implementation from constructor).
+             - Dangerous `selfdestruct`/`suicide` or ownership renouncement patterns; lost upgrade or recovery paths.
+             - ERC20/721/1155 pitfalls (approve/transferFrom front-running, incorrect allowance updates, missing return value checks, missing events).
+             - Hardcoded secrets or privileged addresses; reliance on `msg.sender` without proper trust boundaries.
+           - Prioritize user-controlled inputs, value transfers, and external call sites.
+           - Do not report on issues that do not affect security.
+      validation_review: "Validate the following Solidity review for security concerns."
+      snippet_security_summary: "Summarize the security implications of these Solidity code changes."
+      attempt_fix: "Based on the issues detected in the Solidity code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough security engineer specializing in Solidity smart contracts and the EVM.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
+        If it is empty, ignore it.
   rust:
     supported_extensions: [".rs"]
     splitting:
