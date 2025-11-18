@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from typing import Annotated, Literal, get_args, get_origin
+
 from metis.engine.helpers import apply_custom_guidance
+from .schemas import ReviewIssueModel
 
 logger = logging.getLogger("metis")
 
@@ -28,6 +31,86 @@ def synthesize_context(code_text, doc_text):
     if doc_text:
         parts.append(doc_text)
     return "\n\n".join(p for p in parts if p)
+
+
+def _is_string_field(annotation):
+    if annotation is str:
+        return True
+    if isinstance(annotation, type) and issubclass(annotation, str):
+        return True
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    if origin is str:
+        return True
+    if origin is Literal:
+        return all(isinstance(arg, str) for arg in get_args(annotation))
+    if origin is Annotated:
+        base, *_ = get_args(annotation)
+        return _is_string_field(base)
+    return False
+
+
+_REQUIRED_REVIEW_STR_FIELDS = tuple(
+    name
+    for name, field in ReviewIssueModel.model_fields.items()
+    if _is_string_field(field.annotation)
+)
+
+
+def sanitize_review_payload(payload):
+    """
+    Normalize review entries so that required keys always exist.
+    Missing string fields become empty strings and confidence defaults to 0.0.
+    """
+    reviews = payload.get("reviews")
+    if not isinstance(reviews, list):
+        return []
+
+    sanitized: list[dict] = []
+    for idx, review in enumerate(reviews):
+        if not isinstance(review, dict):
+            logger.debug(
+                "Structured review entry %s is not a dict; normalizing to empty fields",
+                idx,
+            )
+            empty_entry = {field: "" for field in _REQUIRED_REVIEW_STR_FIELDS}
+            empty_entry["confidence"] = 0.0
+            empty_entry["issue"] = str(review)
+            sanitized.append(empty_entry)
+            continue
+
+        normalized = dict(review)
+        for field in _REQUIRED_REVIEW_STR_FIELDS:
+            value = normalized.get(field)
+            if isinstance(value, str):
+                normalized[field] = value.strip()
+            elif value is None:
+                normalized[field] = ""
+            else:
+                normalized[field] = str(value).strip()
+
+        confidence_raw = normalized.get("confidence")
+        confidence_value = None
+        if isinstance(confidence_raw, (int, float)):
+            confidence_value = float(confidence_raw)
+        elif isinstance(confidence_raw, str):
+            try:
+                confidence_value = float(confidence_raw.strip())
+            except ValueError:
+                confidence_value = None
+        normalized["confidence"] = (
+            confidence_value if confidence_value is not None else 0.0
+        )
+
+        # Ensure required keys exist even if review provided none of them
+        for field in _REQUIRED_REVIEW_STR_FIELDS:
+            if field not in normalized or normalized[field] is None:
+                normalized[field] = ""
+
+        sanitized.append(normalized)
+
+    return sanitized
 
 
 def build_review_system_prompt(

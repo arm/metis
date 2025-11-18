@@ -49,6 +49,7 @@ def dummy_backend():
 @pytest.fixture
 def dummy_llm():
     llm = Mock()
+    llm.get_chat_model.return_value = MagicMock()
     llm.get_query_engine_class.return_value = MagicMock
     llm.get_query_model_kwargs.return_value = {}
     llm.get_embed_model_code.return_value = Mock()
