@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/arm/metis/compare/metis-v0.7.0...metis-v0.8.0) (2025-11-18)
+
+
+### Features
+
+* **plugins:** add Solidity support (.sol) ([#82](https://github.com/arm/metis/issues/82)) ([b649919](https://github.com/arm/metis/commit/b649919ca347b2fc9b32f2d555412c61c7d16b51))
+
 ## [0.7.0](https://github.com/arm/metis/compare/metis-v0.6.0...metis-v0.7.0) (2025-11-05)
 
 
