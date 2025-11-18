@@ -74,6 +74,13 @@ def _load_builtin_plugins(plugin_config):
         logger.warning(f"Failed to load built-in TypeScript plugin: {e}")
 
     try:
+        from metis.plugins.solidity_plugin import SolidityPlugin
+
+        plugins.append(SolidityPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Solidity plugin: {e}")
+
+    try:
         from metis.plugins.rust_plugin import RustPlugin
 
         plugins.append(RustPlugin(plugin_config))
