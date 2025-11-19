@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/arm/metis/compare/metis-v0.8.0...metis-v0.8.1) (2025-11-18)
+
+
+### Bug Fixes
+
+* **vector:** Fix vector backend not properly propagating llm provider ([#81](https://github.com/arm/metis/issues/81)) ([91852d3](https://github.com/arm/metis/commit/91852d3d7a092a18f992b01794bdedebe6c5944b))
+
 ## [0.8.0](https://github.com/arm/metis/compare/metis-v0.7.0...metis-v0.8.0) (2025-11-18)
 
 
