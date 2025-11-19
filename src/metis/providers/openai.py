@@ -8,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class OpenAIProvider(OpenAICompatibleProvider):
     def __init__(self, config):
         super().__init__(config)
@@ -15,5 +16,6 @@ class OpenAIProvider(OpenAICompatibleProvider):
             raise ValueError(
                 "OPENAI_API_KEY environment variable is required for OpenAI provider but not set."
             )
+
 
 register_provider("openai", OpenAIProvider)
