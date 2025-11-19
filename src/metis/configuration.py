@@ -48,6 +48,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
     llm_cfg = cfg.get("llm_provider", {})
     runtime["code_embedding_model"] = llm_cfg.get("code_embedding_model", "")
     runtime["docs_embedding_model"] = llm_cfg.get("docs_embedding_model", "")
+    runtime["code_embedding_extra_kwargs"] = llm_cfg.get(
+        "code_embedding_extra_kwargs", {}
+    )
+    runtime["docs_embedding_extra_kwargs"] = llm_cfg.get(
+        "docs_embedding_extra_kwargs", {}
+    )
 
     llm_provider_name = cfg.get("llm_provider", {}).get("name", "").lower()
     runtime["llm_provider_name"] = llm_provider_name
@@ -80,6 +86,16 @@ def load_runtime_config(config_path=None, enable_psql=False):
             "model_token_param", "max_completion_tokens"
         )
         runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
+    elif llm_provider_name == "vllm":
+        runtime["llm_api_key"] = llm_cfg.get("api_key")
+        api_key_env = llm_cfg.get("api_key_env")
+        if not runtime["llm_api_key"] and api_key_env:
+            runtime["llm_api_key"] = os.environ.get(api_key_env)
+        if not runtime["llm_api_key"]:
+            runtime["llm_api_key"] = os.environ.get("VLLM_API_KEY")
+        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
+        runtime["model"] = llm_cfg.get("model", "")
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
@@ -88,6 +104,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["max_token_length"] = engine_cfg.get("max_token_length", 100000)
     runtime["max_workers"] = engine_cfg.get("max_workers", 8)
     runtime["embed_dim"] = engine_cfg.get("embed_dim", 1536)
+    runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
+    runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
     runtime["hnsw_kwargs"] = engine_cfg.get(
         "hnsw_kwargs",
         {
@@ -100,7 +118,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
 
     # Query config
     query_cfg = cfg.get("query", {})
-    runtime["llama_query_model"] = query_cfg.get("model", "")
+    runtime["llama_query_model"] = query_cfg.get("model") or runtime.get("model", "")
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)

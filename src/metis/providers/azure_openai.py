@@ -8,6 +8,7 @@ from llama_index.llms.azure_openai import AzureOpenAI as LlamaAzureOpenAI
 from langchain_openai import AzureChatOpenAI
 
 from metis.providers.base import LLMProvider
+from metis.providers.registry import register_provider
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +110,6 @@ class AzureOpenAIProvider(LLMProvider):
             if optional_key in kwargs and optional_key != "response_format":
                 params[optional_key] = kwargs[optional_key]
         return AzureChatOpenAI(**params)
+
+
+register_provider("azure_openai", AzureOpenAIProvider)

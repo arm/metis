@@ -9,3 +9,4 @@ dist/
 .ruff_cache/
 .python-version
 uv.lock
+results/
