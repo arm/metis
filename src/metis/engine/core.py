@@ -65,6 +65,8 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
+        self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
+        self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
         # Optional user-provided guidance to be appended to system prompts
         self.custom_prompt_text = kwargs.get("custom_prompt_text")
         self.plugin_config = load_plugin_config()
@@ -147,7 +149,10 @@ class MetisEngine:
 
     def _get_doc_splitter(self):
         if not hasattr(self, "_doc_splitter") or self._doc_splitter is None:
-            self._doc_splitter = SentenceSplitter()
+            self._doc_splitter = SentenceSplitter(
+                chunk_size=self.doc_chunk_size,
+                chunk_overlap=self.doc_chunk_overlap,
+            )
         return self._doc_splitter
 
     def _rel_to_base(self, path):

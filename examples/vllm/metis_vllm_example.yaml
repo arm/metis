@@ -8,9 +8,11 @@ psql_database:
     database_name: "metis_db"
 
 metis_engine:
-  max_token_length: 250000
-  max_workers: 10
-  embed_dim: 3072
+  max_token_length: 120000
+  max_workers: 8
+  embed_dim: 384
+  doc_chunk_size: 320
+  doc_chunk_overlap: 64
   hnsw_kwargs:
     hnsw_m: 16
     hnsw_ef_construction: 64
@@ -18,13 +20,14 @@ metis_engine:
     hnsw_dist_method: "vector_cosine_ops"
 
 llm_provider:
-  name: "openai"
-  model: "gpt-5-mini"
-  code_embedding_model: "text-embedding-3-large"
-  docs_embedding_model: "text-embedding-3-large"
+  name: "vllm"
+  base_url: "http://YOUR-OLLAMA-HOST:8888/v1"
+  model: "YOUR-CHAT-MODEL"
+  code_embedding_model: "YOUR-EMBEDDING-MODEL"
+  docs_embedding_model: "YOUR-EMBEDDING-MODEL"
 
 query:
   similarity_top_k: 5
-  response_mode: "tree_summarize"
-  max_tokens: 5000
+  response_mode: "compact"
+  max_tokens: 3072
   temperature: 0.0
