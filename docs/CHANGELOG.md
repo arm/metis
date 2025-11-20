@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/arm/metis/compare/metis-v0.8.1...metis-v1.0.0) (2025-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* local models with vLLM and Ollama support ([#89](https://github.com/arm/metis/issues/89))
+
+### Features
+
+* local models with vLLM and Ollama support ([#89](https://github.com/arm/metis/issues/89)) ([aaea0c8](https://github.com/arm/metis/commit/aaea0c87e45fb4b9d32229eeded4c1c19b43df74))
+
 ## [0.8.1](https://github.com/arm/metis/compare/metis-v0.8.0...metis-v0.8.1) (2025-11-18)
 
 
