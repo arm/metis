@@ -10,7 +10,7 @@ psql_database:
 metis_engine:
   max_token_length: 120000
   max_workers: 8
-  embed_dim: 384
+  embed_dim: 4096
   doc_chunk_size: 320
   doc_chunk_overlap: 64
   hnsw_kwargs:
@@ -20,8 +20,8 @@ metis_engine:
     hnsw_dist_method: "vector_cosine_ops"
 
 llm_provider:
-  name: "vllm"
-  base_url: "http://YOUR-OLLAMA-HOST:8888/v1"
+  name: "ollama"
+  base_url: "http://YOUR-OLLAMA-HOST:11434/v1"
   model: "YOUR-CHAT-MODEL"
   code_embedding_model: "YOUR-EMBEDDING-MODEL"
   docs_embedding_model: "YOUR-EMBEDDING-MODEL"
@@ -29,5 +29,5 @@ llm_provider:
 query:
   similarity_top_k: 5
   response_mode: "compact"
-  max_tokens: 3072
+  max_tokens: 2048
   temperature: 0.0

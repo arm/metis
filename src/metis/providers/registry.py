@@ -70,3 +70,4 @@ register_provider_loader(
     "azure_openai", "metis.providers.azure_openai:AzureOpenAIProvider"
 )
 register_provider_loader("vllm", "metis.providers.vllm:VLLMProvider")
+register_provider_loader("ollama", "metis.providers.ollama:OllamaProvider")

@@ -24,7 +24,7 @@ Set common variables:
 ```bash
 export HF_TOKEN="hf_xxx"            # optional for public repos
 export VLLM_API_KEY="token-abc123"  # shared secret for Metis client
-export ROUTER_HOST_IP="<router-host-ip>"  # address reachable by Metis
+export LLM_HOST_IP="<router-host-ip>"  # address reachable by Metis
 ```
 
 ## 1. Launch the chat model
@@ -75,14 +75,14 @@ model_list:
   - model_name: <chat-model-id>
     litellm_params:
       model: openai/<chat-model-id>
-      api_base: "http://${ROUTER_HOST_IP}:8000/v1"
+      api_base: "http://${LLM_HOST_IP}:8000/v1"
       api_key: "${VLLM_API_KEY}"
 
   - model_name: <embedding-model-id>
     litellm_params:
       model: openai/<embedding-model-id>
       task: embed
-      api_base: "http://${ROUTER_HOST_IP}:8001/v1"
+      api_base: "http://${LLM_HOST_IP}:8001/v1"
       api_key: "${VLLM_API_KEY}"
 ```
 
@@ -92,13 +92,13 @@ Launch LiteLLM:
 sudo docker run --rm \
   -p 8888:8888 \
   -e VLLM_API_KEY=$VLLM_API_KEY \
-  -e ROUTER_HOST_IP=$ROUTER_HOST_IP \
+  -e LLM_HOST_IP=$LLM_HOST_IP \
   -v $(pwd)/litellm-config.yaml:/app/config.yaml \
   ghcr.io/berriai/litellm:main \
   litellm --config /app/config.yaml
 ```
 
-Clients now send chat and embedding calls to `http://$ROUTER_HOST_IP:8888/v1`
+Clients now send chat and embedding calls to `http://$LLM_HOST_IP:8888/v1`
 with `Authorization: Bearer $VLLM_API_KEY`.
 
 ## 4. Configure Metis
@@ -108,7 +108,7 @@ Point Metis at the LiteLLM proxy by updating `metis.yaml`:
 ```yaml
 llm_provider:
   name: "vllm"
-  base_url: "http://${ROUTER_HOST_IP}:8888/v1"
+  base_url: "http://${LLM_HOST_IP}:8888/v1"
   model: "<chat-model-id>"
   code_embedding_model: "<embedding-model-id>"
   docs_embedding_model: "<embedding-model-id>"

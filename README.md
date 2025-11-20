@@ -26,7 +26,7 @@ The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and
   Designed with extensibility in mind: support for additional languages, models, and new prompts is straightforward.
 
 - **Provider Flexibility**
-  Works with hosted APIs and self-managed deployments via LiteLLM + vLLM. See the [vLLM guide](docs/providers/vllm.md) for local setup.
+  Works with OpenAI and other OpenAI-compatible endpoints (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
 
 Metis currently supports C, C++, Python, Rust, and TypeScript via a plugin-based language system, making it easy to extend to additional languages.
 

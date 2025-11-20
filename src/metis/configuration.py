@@ -96,6 +96,17 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["openai_api_base"] = llm_cfg.get("base_url", "")
         runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
+    elif llm_provider_name == "ollama":
+        runtime["llm_api_key"] = llm_cfg.get("api_key") or ""
+        api_key_env = llm_cfg.get("api_key_env")
+        if not runtime["llm_api_key"] and api_key_env:
+            runtime["llm_api_key"] = os.environ.get(api_key_env, "")
+        runtime["openai_api_base"] = llm_cfg.get(
+            "base_url", "http://localhost:11434/v1"
+        )
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
+        runtime["model"] = llm_cfg.get("model", "")
+        runtime["force_openai_like"] = True
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
