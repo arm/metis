@@ -218,6 +218,55 @@ plugins:
         1. Security Review Scope
            - Review the security implications of the FILE.
         If it is empty, ignore it.
+  go:
+    supported_extensions: [".go"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Go services, CLIs, and libraries.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of Go code changes with lines marked by “+” for additions and “-” for removals.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” while reasoning about how they interact with the entire package.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+           - Look for potential security issues such as:
+             - Hardcoded secrets, credentials, or tokens.
+             - Untrusted data reaching sinks like `os/exec`, file-system paths, SQL drivers, templates, or shell commands without validation/escaping.
+             - Insecure HTTP/TLS defaults (missing authentication, allowing `InsecureSkipVerify`, lack of request/body size limits, or clients/servers without timeouts).
+             - Use of `math/rand` for nonces, CSRF tokens, or password reset links instead of `crypto/rand`.
+             - Goroutines manipulating shared maps/slices without synchronization, channel misuse that can block forever, or missing `context.Context` cancellation leading to DoS.
+             - Resources that are not closed (`resp.Body`, files, sockets) or missing `defer` statements causing leaks.
+             - Blind deserialization (`json.Unmarshal`/`yaml.Unmarshal`) into permissive structures without validating untrusted input, or use of `unsafe`/cgo without necessary guards.
+           - Prioritize boundaries where external input enters the system and any privilege transitions.
+           - Do not report on issues that do not affect security.
+      validation_review: "Validate the following Go review for security concerns."
+      snippet_security_summary: "Summarize the security implications of these Go code changes."
+      attempt_fix: "Based on the issues detected in the Go code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough security engineer specializing in Go.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
+        If it is empty, ignore it.
   typescript:
     supported_extensions: [".ts", ".tsx"]
     splitting:
