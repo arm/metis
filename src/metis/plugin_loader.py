@@ -67,6 +67,13 @@ def _load_builtin_plugins(plugin_config):
         logger.warning(f"Failed to load built-in Python plugin: {e}")
 
     try:
+        from metis.plugins.go_plugin import GoPlugin
+
+        plugins.append(GoPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Go plugin: {e}")
+
+    try:
         from metis.plugins.typescript_plugin import TypeScriptPlugin
 
         plugins.append(TypeScriptPlugin(plugin_config))

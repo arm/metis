@@ -63,6 +63,7 @@ metis = ["metis.yaml"]
 python = "metis.plugins.python_plugin:PythonPlugin"
 c = "metis.plugins.c_plugin:CPlugin"
 cpp = "metis.plugins.cpp_plugin:CppPlugin"
+go = "metis.plugins.go_plugin:GoPlugin"
 rust = "metis.plugins.rust_plugin:RustPlugin"
 terraform = "metis.plugins.terraform_plugin:TerraformPlugin"
 tablegen = "metis.plugins.tb_plugin:TableGenPlugin"
