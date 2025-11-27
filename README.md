@@ -28,11 +28,28 @@ The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and
 - **Provider Flexibility**
   Works with OpenAI and other OpenAI-compatible endpoints (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
 
-Metis currently supports C, C++, Python, Rust, and TypeScript via a plugin-based language system, making it easy to extend to additional languages.
+![Demo](.github/demo.gif)
+
+
+### Supported Languages
+
+Metis includes support for the following languages:
+
+| Language   | Status | Notes            |
+|------------|--------|------------------|
+| C          | Stable | Built-in plugin  |
+| C++        | Stable | Built-in plugin  |
+| Python     | Stable | Built-in plugin  |
+| Rust       | Stable | Built-in plugin  |
+| TypeScript | Stable | Built-in plugin  |
+| Terraform  | Stable | Built-in plugin  |
+| Go         | Stable | Built-in plugin  |
+| Solidity   | Stable | Built-in plugin  |
+| TableGen   | Stable | Built-in plugin  |
+
+Metis uses a plugin-based language system, making it easy to extend support to additional languages.
 
 It also supports multiple vector store backends, including PostgreSQL with pgvector and ChromaDB.
-
-![Demo](.github/demo.gif)
 
 ## Getting Started
 
