@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/arm/metis/compare/metis-v1.0.0...metis-v1.1.0) (2025-11-27)
+
+
+### Features
+
+* **main:** add go plugin ([#96](https://github.com/arm/metis/issues/96)) ([6f037db](https://github.com/arm/metis/commit/6f037db42c93740edb4112eb77d1f141a6650d8e))
+
 ## [1.0.0](https://github.com/arm/metis/compare/metis-v0.8.1...metis-v1.0.0) (2025-11-20)
 
 
