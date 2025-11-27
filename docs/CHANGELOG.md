@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.1.1) (2025-11-27)
+
+
+### Documentation
+
+* **README:** Adds a table of supported languages ([#98](https://github.com/arm/metis/issues/98)) ([3c13bae](https://github.com/arm/metis/commit/3c13bae414895e38aa494045673b22ccee6cfaaf))
+
 ## [1.1.0](https://github.com/arm/metis/compare/metis-v1.0.0...metis-v1.1.0) (2025-11-27)
 
 
