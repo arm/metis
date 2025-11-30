@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.1](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.1.1) (2025-11-30)
+
+
+### Bug Fixes
+
+* **ollama:** add default api_key for ollama langchain ([#100](https://github.com/arm/metis/issues/100)) ([c16ecc2](https://github.com/arm/metis/commit/c16ecc20daf26aa22700ccec6b013c89655cf84f))
+
+
+### Documentation
+
+* **README:** Adds a table of supported languages ([#98](https://github.com/arm/metis/issues/98)) ([3c13bae](https://github.com/arm/metis/commit/3c13bae414895e38aa494045673b22ccee6cfaaf))
+
 ## [1.1.0](https://github.com/arm/metis/compare/metis-v1.0.0...metis-v1.1.0) (2025-11-27)
 
 
