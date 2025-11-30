@@ -26,7 +26,10 @@ class OllamaProvider(OpenAICompatibleProvider):
             logger.debug("Force-enabling OpenAI-like mode for Ollama provider")
             self.config["force_openai_like"] = True
         if not config.get("llm_api_key"):
-            logger.warning("Langchain Ollama integration requires an non-empty api_key, using a default.")
+            logger.warning(
+                "Langchain Ollama integration requires an non-empty api_key, using a default."
+            )
             self.api_key = "default-key"
+
 
 register_provider("ollama", OllamaProvider)
