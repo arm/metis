@@ -126,6 +126,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
             "hnsw_dist_method": "vector_cosine_ops",
         },
     )
+    runtime["metisignore_file"] = engine_cfg.get("metisignore_file", None)
 
     # Query config
     query_cfg = cfg.get("query", {})
