@@ -42,6 +42,7 @@ def test_init_and_get_query_engines_raises_on_missing_backend():
     with pytest.raises(QueryEngineInitError):
         engine._init_and_get_query_engines()
 
+
 def test_init_and_get_default_unavailable_metisignore():
     bad_backend = Mock()
     bad_backend.init = Mock()
@@ -54,7 +55,7 @@ def test_init_and_get_default_unavailable_metisignore():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
-        metisignore_file=".metisignore_file"
+        metisignore_file=".metisignore_file",
     )
     assert engine.metisignore_file == ".metisignore_file"
     assert engine.load_metisignore() is None
@@ -65,7 +66,9 @@ def test_init_and_get_default_available_metisignore():
     bad_backend.init = Mock()
     bad_backend.get_query_engines = Mock(return_value=(None, None))
     engine = None
-    with tempfile.NamedTemporaryFile(mode='w+t', encoding='utf-8', suffix=".yaml") as temp_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w+t", encoding="utf-8", suffix=".yaml"
+    ) as temp_file:
         engine = MetisEngine(
             vector_backend=bad_backend,
             llm_provider=Mock(),
@@ -74,7 +77,7 @@ def test_init_and_get_default_available_metisignore():
             llama_query_model="gpt-test",
             similarity_top_k=3,
             response_mode="compact",
-            metisignore_file=temp_file.name
+            metisignore_file=temp_file.name,
         )
         assert engine.load_metisignore() is not None
         assert engine.metisignore_file == temp_file.name
