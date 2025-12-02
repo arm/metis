@@ -262,6 +262,27 @@ Confidence: 1.0
 metis --non-interactive --command "review_code" --output-file results/full_review.json
 ```
 
+
+#### Example 5: Use of metis.yml
+
+```yaml
+# metis.yaml
+metis_engine:
+  metisignore_file: .metisignore # you can also use .gitignore
+
+llm_provider:
+  name: "ollama"
+  model: "phi3"
+  base_url: "http://localhost:11434/v1"
+  code_embedding_model: "all-minilm"
+  docs_embedding_model: "all-minilm"
+```
+
+```bash
+uv run metis --codebase-path src -v  --log-level DEBUG
+```
+
+
 ## License
 
 Metis is distributed under Apache v2.0 License.

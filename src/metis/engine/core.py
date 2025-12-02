@@ -4,6 +4,7 @@
 import logging
 import os
 import unidiff
+import pathspec
 
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
@@ -91,6 +92,29 @@ class MetisEngine:
         # Graphs are built lazily on first use
         self._review_graph = None
         self._ask_graph = None
+        self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
+
+    def load_metisignore(self):
+        """
+        Load metisignore file and return a PathSpec matcher.
+
+        Args:
+            metisignore: Path to a file that have the ignore regex ( use the .gitignore syntax )
+
+        Returns:
+            pathspec.PathSpec object or None if file doesn't exist
+        """
+        try:
+            if not self.metisignore_file:
+                logger.info("No MetisIgnore file provided")
+                return None
+            with open(self.metisignore_file, "r") as f:
+                spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
+                logger.info(f"MetisIgnore file loaded: {self.metisignore_file}")
+            return spec
+        except FileNotFoundError:
+            logger.info(f"MetisIgnore file not loaded {self.metisignore_file}")
+            return None
 
     def _get_review_graph(self):
         if self._review_graph is None:
@@ -307,12 +331,20 @@ class MetisEngine:
             return None
 
     def get_code_files(self):
+        """
+        Return a list of file names in the self.codebase_path folder.
+        Evaulate the path with metisignore file if requested
+        """
         base_path = os.path.abspath(self.codebase_path)
+        metisignore_spec = self.load_metisignore()
         file_list = []
         for root, _, files in os.walk(base_path):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
-                if ext in self.code_exts:
+                if ext in self.code_exts and (
+                    not metisignore_spec
+                    or not metisignore_spec.match_file(os.path.join(root, file))
+                ):
                     file_list.append(os.path.join(root, file))
         return file_list
 

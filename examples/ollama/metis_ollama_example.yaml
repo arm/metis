@@ -13,6 +13,7 @@ metis_engine:
   embed_dim: 4096
   doc_chunk_size: 320
   doc_chunk_overlap: 64
+  metisignore_file: .metisignore # you can also use .gitignore
   hnsw_kwargs:
     hnsw_m: 16
     hnsw_ef_construction: 64
