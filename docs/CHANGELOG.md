@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.2.0) (2025-12-02)
+
+
+### Features
+
+* **main:** add metisignore option ([#105](https://github.com/arm/metis/issues/105)) ([2465b2a](https://github.com/arm/metis/commit/2465b2a072d1e63b86b164724a838719c16a6e9e))
+
+
+### Bug Fixes
+
+* **ollama:** add default api_key for ollama langchain ([#100](https://github.com/arm/metis/issues/100)) ([c16ecc2](https://github.com/arm/metis/commit/c16ecc20daf26aa22700ccec6b013c89655cf84f))
+
+
+### Documentation
+
+* **README:** Adds a table of supported languages ([#98](https://github.com/arm/metis/issues/98)) ([3c13bae](https://github.com/arm/metis/commit/3c13bae414895e38aa494045673b22ccee6cfaaf))
+
 ## [1.1.0](https://github.com/arm/metis/compare/metis-v1.0.0...metis-v1.1.0) (2025-11-27)
 
 
