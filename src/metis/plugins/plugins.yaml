@@ -14,10 +14,12 @@ general_prompts:
     FILE: {file_path}
   security_review_report: |-
     3. How to Report
-        - List all identified security issues in a JSON array.
+        - Return a JSON object with a single key "reviews" mapping to a list of identified security issues.
         - Each element must strictly follow this structure:
           [[REVIEW_SCHEMA_FIELDS]]
-        - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
+        - If no identified security issues are found, return: {\"reviews\": []}
+        - If no CWE identified, does not guess a number.
+        - Ensure the json is valid, without any additional commentary or text outside the json structure.
 
 plugins:
   c:
