@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.2.1) (2025-12-09)
+
+
+### Bug Fixes
+
+* **plugin:** add validations to llm security prompt ([#110](https://github.com/arm/metis/issues/110)) ([6fde583](https://github.com/arm/metis/commit/6fde583e09d1242efae6dc790969f63e689afb99))
+
 ## [1.2.0](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.2.0) (2025-12-02)
 
 
