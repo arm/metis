@@ -272,7 +272,7 @@ metis_engine:
 
 llm_provider:
   name: "ollama"
-  model: "phi3"
+  model: "llama3.1"
   base_url: "http://localhost:11434/v1"
   code_embedding_model: "all-minilm"
   docs_embedding_model: "all-minilm"
