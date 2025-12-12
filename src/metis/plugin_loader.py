@@ -102,6 +102,20 @@ def _load_builtin_plugins(plugin_config):
         logger.warning(f"Failed to load built-in Terraform plugin: {e}")
 
     try:
+        from metis.plugins.dart_plugin import DartPlugin
+
+        plugins.append(DartPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Dart plugin: {e}")
+
+    try:
+        from metis.plugins.angular_plugin import AngularPlugin
+
+        plugins.append(AngularPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Angular plugin: {e}")
+
+    try:
         from metis.plugins.tb_plugin import TableGenPlugin
 
         plugins.append(TableGenPlugin(plugin_config))
