@@ -240,11 +240,13 @@ class MetisEngine:
             doc.doc_id = new_id
             doc.id_ = new_id
 
-            if not metisignore_spec or not metisignore_spec.match_file(os.path.join(parent_dir, new_id)):
-                if ext in docs_supported_exts:
-                    doc_docs.append(doc)
-                elif ext in code_supported_exts:
-                    code_docs.append(doc)
+            if metisignore_spec and metisignore_spec.match_file(os.path.join(parent_dir, new_id)):
+                continue
+
+            if ext in docs_supported_exts:
+                doc_docs.append(doc)
+            elif ext in code_supported_exts:
+                code_docs.append(doc)
 
         nodes_code, nodes_docs = yield from prepare_nodes_iter(
             code_docs,
