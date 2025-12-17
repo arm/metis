@@ -240,7 +240,9 @@ class MetisEngine:
             doc.doc_id = new_id
             doc.id_ = new_id
 
-            if metisignore_spec and metisignore_spec.match_file(os.path.join(parent_dir, new_id)):
+            if metisignore_spec and metisignore_spec.match_file(
+                os.path.join(parent_dir, new_id)
+            ):
                 continue
 
             if ext in docs_supported_exts:
