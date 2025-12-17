@@ -45,6 +45,9 @@ Metis includes support for the following languages:
 | Terraform  | Stable | Built-in plugin  |
 | Go         | Stable | Built-in plugin  |
 | Solidity   | Stable | Built-in plugin  |
+| Dart       | Stable | Built-in plugin  |
+| Flutter    | Stable | Built-in plugin  |
+| Angular    | Stable | Built-in plugin  |
 | TableGen   | Stable | Built-in plugin  |
 
 Metis uses a plugin-based language system, making it easy to extend support to additional languages.

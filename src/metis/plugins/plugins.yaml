@@ -528,3 +528,179 @@ plugins:
         1. Security Review Scope
            - Review the security implications of the FILE.
         If it is empty, ignore it.
+  dart:
+    supported_extensions: [".dart"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Dart and Flutter mobile application development.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by "+" indicating what has been added or "-" for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+." or "-" but take into account how they interact with the whole file.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+           - Look for potential security issues such as:
+             - Insecure data storage
+               + Use of SharedPreferences for sensitive data without encryption
+               + Storing credentials, tokens, or API keys in plain text
+               + Insufficient protection of local databases (SQLite, Hive, etc.)
+             - Input validation and injection vulnerabilities
+               + Unsanitized user input in SQL queries, file paths, or web requests
+               + Missing validation in TextFormField or TextField widgets
+               + Code injection through dynamic evaluation or dart:mirrors misuse
+             - Network security issues
+               + Insecure HTTP connections for sensitive data
+               + Missing certificate pinning for critical API endpoints
+               + Improper TLS/SSL configuration
+               + Exposed API keys or secrets in code or configuration files
+             - Platform channel vulnerabilities
+               + Unsafe method channel invocations to native code
+               + Missing input validation on platform channel data
+               + Privilege escalation through native platform interactions
+             - Authentication and authorization flaws
+               + Weak or missing authentication mechanisms
+               + Insecure session management
+               + JWT or OAuth token mishandling
+               + Missing authorization checks before accessing sensitive features
+             - WebView security issues
+               + JavaScript enabled without proper security controls
+               + Missing domain whitelisting for WebView content
+               + Unsafe navigation to user-controlled URLs
+               + File access enabled in WebView without restrictions
+             - Sensitive data exposure
+               + Logging sensitive information (passwords, tokens, PII)
+               + Exposing sensitive data in error messages or stack traces
+               + Screenshot/screen recording vulnerabilities for sensitive screens
+             - Cryptography issues
+               + Use of weak or deprecated cryptographic algorithms
+               + Hardcoded encryption keys or initialization vectors
+               + Improper random number generation (using Random instead of Random.secure())
+             - Dependency vulnerabilities
+               + Use of packages with known security vulnerabilities
+               + Outdated or unmaintained dependencies
+             - File and permission issues
+               + Insecure file permissions allowing unauthorized access
+               + Path traversal vulnerabilities in file operations
+               + Missing checks for external storage availability and permissions
+           - Prioritize user-controlled inputs, data storage operations, network communications, and platform boundaries.
+           - Do not report on issues that do not affect security.
+      validation_review: "Validate the following Dart/Flutter review for security concerns."
+      snippet_security_summary: "Summarize the security implications of these Dart/Flutter code changes."
+      attempt_fix: "Based on the issues detected in the Dart/Flutter code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough security engineer specializing in Dart and Flutter mobile application development.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
+           - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+        If it is empty, ignore it.
+  angular:
+    supported_extensions: [".ts"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Angular framework applications.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by "+" indicating what has been added or "-" for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+." or "-" but take into account how they interact with the whole file.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+           - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+           - Look for potential security issues such as:
+             - Template injection and XSS vulnerabilities
+               + Use of innerHTML, outerHTML without sanitization
+               + Unsafe use of bypassSecurityTrustHtml, bypassSecurityTrustScript, bypassSecurityTrustUrl, bypassSecurityTrustResourceUrl
+               + Dynamic template compilation with user input
+               + Missing DomSanitizer usage for user-controlled content
+             - Authentication and authorization issues
+               + Route guard bypasses or missing guards on protected routes
+               + Improper canActivate, canLoad, canDeactivate implementations
+               + Missing authentication checks in services
+               + Token storage in localStorage without proper protection
+               + Session management vulnerabilities
+             - HTTP security vulnerabilities
+               + Missing HTTP interceptors for authentication
+               + Insecure HTTP connections for sensitive data
+               + Missing CSRF protection tokens
+               + Improper error handling exposing sensitive information
+               + Missing or misconfigured CORS policies
+             - Dependency injection vulnerabilities
+               + Singleton services exposing sensitive state across components
+               + Providedln: 'root' services with security-sensitive data
+               + Missing access control in shared services
+             - Observable and RxJS security issues
+               + Memory leaks from unsubscribed observables
+               + Race conditions in async operations
+               + Unsafe shareReplay configurations exposing cached sensitive data
+             - Component security issues
+               + Missing input validation in @Input() properties
+               + Unsafe use of @HostBinding or @HostListener
+               + Event emitter exposing sensitive data
+               + Component state manipulation vulnerabilities
+             - Form validation and input security
+               + Missing or insufficient form validators
+               + Client-side only validation without server-side checks
+               + Unsafe regular expressions leading to ReDoS
+               + Missing sanitization of form input data
+             - Environment and configuration security
+               + Hardcoded API keys, secrets, or credentials
+               + Sensitive data in environment files committed to repository
+               + Production configuration using development settings
+               + Exposed internal URLs or endpoints
+             - Third-party library vulnerabilities
+               + Use of outdated or vulnerable Angular versions
+               + Insecure third-party package dependencies
+               + Missing security updates for npm packages
+             - Router security issues
+               + Open redirects through unsanitized router navigation
+               + Missing route parameter validation
+               + Insecure wildcard routes
+           - Prioritize user-controlled inputs, template bindings, HTTP operations, and authentication/authorization flows.
+           - Do not report on issues that do not affect security.
+      validation_review: "Validate the following Angular review for security concerns."
+      snippet_security_summary: "Summarize the security implications of these Angular code changes."
+      attempt_fix: "Based on the issues detected in the Angular code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough security engineer specializing in Angular framework applications.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
+           - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+        If it is empty, ignore it.
