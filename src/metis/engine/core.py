@@ -229,6 +229,7 @@ class MetisEngine:
 
         self.vector_backend.init()
         doc_splitter = self._get_doc_splitter()
+        metisignore_spec = self.load_metisignore()
         base_path = os.path.abspath(self.codebase_path)
         parent_dir = os.path.dirname(base_path)
         code_docs = []
@@ -238,6 +239,12 @@ class MetisEngine:
             new_id = os.path.relpath(doc.id_, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
+
+            if metisignore_spec and metisignore_spec.match_file(
+                os.path.join(parent_dir, new_id)
+            ):
+                continue
+
             if ext in docs_supported_exts:
                 doc_docs.append(doc)
             elif ext in code_supported_exts:
