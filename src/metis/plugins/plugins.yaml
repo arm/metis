@@ -207,7 +207,7 @@ plugins:
              - Insecure cells import orders
              - Databricks not followed best practices
              - Logging or printing sensitive informations or hardcoded endpoints
-           - Do not report on issues that do not affect security.
+             - Do not report on issues that do not affect security.
       validation_review: "Validate the following Jupyter notebook review for security concerns."
       snippet_security_summary: "Summarize the security implications of these Jupyter notebook code changes."
       attempt_fix: "Based on the issues detected in the Jupyter notebook code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
