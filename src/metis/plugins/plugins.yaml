@@ -195,14 +195,18 @@ plugins:
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+." or "-" but take into account how they interact with the whole file.
-        If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
              - OWASP Top 10 vulnerabilities
-             - Hardcoded secrets
+             - Hardcoded secrets, urls or endpoints
              - Insecure use of libraries
              - Data exposure in notebook outputs
+             - Insecure notebook execution
+             - Unnecessary or insecure notebook imports
+             - Insecure cells import orders
+             - Databricks not followed best practices
+             - Logging or printing sensitive informations or hardcoded endpoints
            - Do not report on issues that do not affect security.
       validation_review: "Validate the following Jupyter notebook review for security concerns."
       snippet_security_summary: "Summarize the security implications of these Jupyter notebook code changes."
@@ -213,12 +217,11 @@ plugins:
         Do not introduce new security conclusions that are not supported by the specific changes or context provided.
         You will be given:
         1. FILE - A source code file
-        2. RELEVANT_CONTEXT - information about what these changes do.
+        2. CONTEXT - information about what these changes do.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        If it is empty, ignore it.
   python:
     supported_extensions: [".py"]
     splitting:
