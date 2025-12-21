@@ -109,6 +109,22 @@ def _load_builtin_plugins(plugin_config):
         logger.error(f"Failed to load required TableGen plugin: {e}")
         raise
 
+    try:
+        from metis.plugins.php_plugin import PHPPlugin
+
+        plugins.append(PHPPlugin(plugin_config))
+    except Exception as e:
+        logger.error(f"Failed to load required PHPPlugin plugin: {e}")
+        raise
+
+    try:
+        from metis.plugins.javascript_plugin import JavaScriptPlugin
+
+        plugins.append(JavaScriptPlugin(plugin_config))
+    except Exception as e:
+        logger.error(f"Failed to load required JavaScriptPlugin plugin: {e}")
+        raise
+
     return plugins
 
 
