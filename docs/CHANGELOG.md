@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2025-12-22)
+
+
+### Features
+
+* php, javascript plugins ([#126](https://github.com/arm/metis/issues/126)) ([fba160d](https://github.com/arm/metis/commit/fba160dde31732a408cf47f6b46d98b1629a61b1))
+
+
+### Bug Fixes
+
+* **docs:** recommend llama3.1 ([#117](https://github.com/arm/metis/issues/117)) ([2bf263d](https://github.com/arm/metis/commit/2bf263d75c2d931c0ae1e18912d034ee9b4d1862))
+* **plugin:** add validations to llm security prompt ([#110](https://github.com/arm/metis/issues/110)) ([6fde583](https://github.com/arm/metis/commit/6fde583e09d1242efae6dc790969f63e689afb99))
+
 ## [1.2.0](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.2.0) (2025-12-02)
 
 
