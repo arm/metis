@@ -52,7 +52,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
            - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
            - If it is empty, ignore it.
       security_review_checks: |-
@@ -194,7 +194,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
         If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
@@ -237,7 +237,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
         If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
@@ -329,7 +329,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
         If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
@@ -379,7 +379,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” while considering interactions with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” while considering interactions with the whole file.
            - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
            - If it is empty, ignore it.
       security_review_checks: |-
@@ -437,7 +437,7 @@ plugins:
 
         Your tasks are:
         1. Security Review Scope
-           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+.” or “-” but take into account how they interact with the whole file.
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
         If it is empty, ignore it.
       security_review_checks: |-
         2. What to Check
@@ -528,3 +528,143 @@ plugins:
         1. Security Review Scope
            - Review the security implications of the FILE.
         If it is empty, ignore it.
+  php:
+    supported_extensions: [".php", ".phps", ".phtm", ".phtml", ".phpt", ".pht", ".php2", ".php3", ".php4", ".php5", ".php6", ".php7", ".php8"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in PHP.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+          - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
+          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+          - If it is empty, ignore it.
+      security_review_file: |-
+        You are a thorough security engineer specializing in PHP.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+          - Review the security implications of the FILE.
+          - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+          - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+          - Look for potential security issues such as:
+            - OWASP Top 10 vulnerabilities (e.g., SQL injection, XSS, CSRF)
+            - Hardcoded secrets or credentials
+            - Insecure file uploads or handling
+            - Unsafe use of eval(), exec(), or dynamic code execution
+            - Weak session management or cookie handling
+            - Insecure deserialization
+            - Improper input validation or sanitization
+          - Pay extra attention to variables that are externally controlled (e.g., $_GET, $_POST).
+          - Do not report on issues that do not affect security.
+      validation_review: |-
+        You will be given:
+        SNIPPET: The relevant PHP code snippet.
+        RELEVANT CONTEXT: Additional details or commentary on the snippet.
+        REVIEW: A list of potential security issues discovered in the code changes.
+
+        Your task is to:
+        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and RELEVANT CONTEXT.
+        2. Remove any issues that are false positives or are already mitigated in the code (e.g., prepared statements for SQL, escaping for output).
+        3. Keep only the issues that definitely represent real security risks.
+        4. If an issue is missing details, add the necessary clarifications or background.
+        5. If no real issues remain after validation, respond with an empty array: [].
+      snippet_security_summary: |-
+        You are a thorough security engineer specializing in PHP.
+        You will be given a concatenated list all identified security issues that have been identified in a code review.
+        Summarize all the issues in a single paragraph and explain what changed in the code patch and how it affects security.
+      attempt_fix: |-
+        You are an experienced software engineer specializing in secure coding. Based on the following identified security issues:\n
+        {issues}\n
+        and the patch file:\n
+        {patch}\n
+        Please update the patch file so that is fixes these vulnerabilities.
+        Do not include any commentary—only output the patch diff.
+  javascript:
+    supported_extensions: [".js", ".jsx"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in JavaScript (including Node.js and browser contexts).
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+          - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
+          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+          - If it is empty, ignore it.
+      security_review_file: |-
+        You are a thorough security engineer specializing in JavaScript (including Node.js and browser contexts).
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. RELEVANT_CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+          - Review the security implications of the FILE.
+          - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT. If no real issues exist, return an empty reviews list.
+          - If it is empty, ignore it.
+      security_review_checks: |-
+        2. What to Check
+          - Look for potential security issues such as:
+            - OWASP Top 10 vulnerabilities (e.g., XSS, injection in queries, CSRF)
+            - Hardcoded secrets or API keys
+            - Prototype pollution
+            - Insecure use of eval() or Function() constructors
+            - Weak dependency management or vulnerable libraries
+            - Improper handling of user input in DOM manipulations
+            - Race conditions in asynchronous code
+          - Pay extra attention to variables that are externally controlled (e.g., from req.body, URL params).
+          - Do not report on issues that do not affect security.
+      validation_review: |-
+        You will be given:
+        SNIPPET: The relevant JavaScript code snippet.
+        RELEVANT CONTEXT: Additional details or commentary on the snippet.
+        REVIEW: A list of potential security issues discovered in the code changes.
+
+        Your task is to:
+        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and RELEVANT CONTEXT.
+        2. Remove any issues that are false positives or are already mitigated in the code (e.g., sanitization libraries like DOMPurify).
+        3. Keep only the issues that definitely represent real security risks.
+        4. If an issue is missing details, add the necessary clarifications or background.
+        5. If no real issues remain after validation, respond with an empty array: [].
+      snippet_security_summary: |-
+        You are a thorough security engineer specializing in JavaScript.
+        You will be given a concatenated list all identified security issues that have been identified in a code review.
+        Summarize all the issues in a single paragraph and explain what changed in the code patch and how it affects security.
+      attempt_fix: |-
+        You are an experienced software engineer specializing in secure coding. Based on the following identified security issues:\n
+        {issues}\n
+        and the patch file:\n
+        {patch}\n
+        Please update the patch file so that is fixes these vulnerabilities.
+        Do not include any commentary—only output the patch diff.
