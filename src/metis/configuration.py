@@ -127,6 +127,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
         },
     )
     runtime["metisignore_file"] = engine_cfg.get("metisignore_file", None)
+    runtime["review_code_include_paths"] = engine_cfg.get(
+        "review_code_include_paths", []
+    )
+    runtime["review_code_exclude_paths"] = engine_cfg.get(
+        "review_code_exclude_paths", []
+    )
 
     # Query config
     query_cfg = cfg.get("query", {})
