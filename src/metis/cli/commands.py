@@ -126,7 +126,7 @@ def run_update(engine, patch_file, args):
     print_console("[green]Index update completed.[/green]", args.quiet)
 
 
-def run_ask(engine, question):
+def run_ask(engine, question, args):
     answer = with_spinner("Thinking...", engine.ask_question, question)
     print_console("[bold magenta]Metis Answer:[/bold magenta]\n")
     if isinstance(answer, dict):
@@ -140,3 +140,4 @@ def run_ask(engine, question):
             )
     else:
         print_console(escape(str(answer)))
+    save_output(args.output_file, answer, args.quiet)
