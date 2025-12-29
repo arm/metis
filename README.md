@@ -263,7 +263,7 @@ metis --non-interactive --command "review_code" --output-file results/full_revie
 ```
 
 
-#### Example 5: Use of metis.yml
+#### Example 5: Use of metis.yaml
 
 ```yaml
 # metis.yaml
