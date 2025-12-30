@@ -108,7 +108,7 @@ def execute_command(engine, cmd, cmd_args, args):
     if cmd in ("review_patch", "review_file", "update"):
         func(engine, cmd_args[0], args)
     elif cmd == "ask":
-        func(engine, " ".join(cmd_args))
+        func(engine, " ".join(cmd_args), args)
     elif cmd == "index":
         func(engine, args.verbose, args.quiet)
     elif cmd == "review_code":
