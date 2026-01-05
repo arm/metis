@@ -77,9 +77,9 @@ def test_generate_sarif_single_issue(tmp_path):
     loc = issue_entry["locations"][0]["physicalLocation"]
     assert loc["artifactLocation"]["uri"] == "code.py"
 
-    # Region snippet corresponds to line 2 with one line of context above
+    # Region snippet corresponds exactly to requested line
     region = loc["region"]
-    assert region["startLine"] == 1
+    assert region["startLine"] == 2
     assert region["snippet"]["text"] == lines[1].strip()
 
     # ContextRegion covers lines 1-3
@@ -93,3 +93,92 @@ def test_generate_sarif_single_issue(tmp_path):
     # Fingerprint matches utility
     fp_expected = create_fingerprint(str(temp_file), 2, "AI001")
     assert issue_entry["partialFingerprints"]["primaryLocationLineHash"] == fp_expected
+
+
+def test_generate_sarif_uses_issue_metadata_when_source_missing():
+    """Ensure SARIF output preserves line numbers/snippets and metadata even without source file."""
+    results = {
+        "reviews": [
+            {
+                "file": "missing/file.c",
+                "reviews": [
+                    {
+                        "issue": "Example",
+                        "line_number": 42,
+                        "code_snippet": "foo();\nbar();",
+                        "severity": "High",
+                        "reasoning": "Because pointer may be null",
+                        "mitigation": "Add null checks",
+                        "confidence": 0.9,
+                        "cwe": "CWE-476",
+                    }
+                ],
+            }
+        ]
+    }
+
+    sarif = generate_sarif(results, context_lines=2)
+    issue_entry = sarif["runs"][0]["results"][0]
+    loc = issue_entry["locations"][0]["physicalLocation"]
+
+    region = loc["region"]
+    assert region["startLine"] == 42
+    assert region["endLine"] == 43  # two-line snippet
+    assert region["snippet"]["text"] == "foo();\nbar();"
+
+    context_region = loc["contextRegion"]
+    assert context_region["startLine"] == 42
+    assert context_region["endLine"] == 43
+    assert "foo();" in context_region["snippet"]["text"]
+
+    assert issue_entry["level"] == "error"  # High maps to SARIF error
+
+    props = issue_entry["properties"]
+    assert props["severity"] == "High"
+    assert props["cwe"] == "CWE-476"
+    assert props["reasoning"].startswith("Because")
+    assert props["mitigation"].startswith("Add")
+    assert props["confidence"] == 0.9
+
+
+def test_generate_sarif_clamps_line_numbers_when_file_shorter(tmp_path):
+    """Keep reported line inside file bounds while preserving original line number metadata."""
+    lines = ["one\n", "two\n", "three\n"]
+    temp_file = tmp_path / "short.py"
+    temp_file.write_text("".join(lines))
+
+    results = {
+        "reviews": [
+            {
+                "file_path": str(temp_file),
+                "file": "short.py",
+                "reviews": [
+                    {
+                        "issue": "Off-by-one",
+                        "line_number": 10,  # beyond end of file
+                    }
+                ],
+            }
+        ]
+    }
+
+    sarif = generate_sarif(results)
+    issue_entry = sarif["runs"][0]["results"][0]
+    loc = issue_entry["locations"][0]["physicalLocation"]
+
+    # Region is clamped to last available line
+    region = loc["region"]
+    assert region["startLine"] == 3
+    assert region["endLine"] == 3
+    assert region["snippet"]["text"] == "three"
+
+    # Context covers available lines
+    context_region = loc["contextRegion"]
+    assert context_region["startLine"] == 1
+    assert context_region["endLine"] == 3
+    assert "one" in context_region["snippet"]["text"]
+    assert "two" in context_region["snippet"]["text"]
+
+    # Original requested line is preserved in properties
+    props = issue_entry["properties"]
+    assert props["reportedLineNumber"] == 10

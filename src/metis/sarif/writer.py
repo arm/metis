@@ -43,6 +43,29 @@ RULES = [
 ]
 
 
+def _normalise_line_number(raw_line):
+    try:
+        value = int(raw_line)
+        return value if value > 0 else 1
+    except Exception:
+        return 1
+
+
+def _severity_to_level(severity: str | None) -> str:
+    if not severity or not isinstance(severity, str):
+        return RULES[0]["defaultConfiguration"]["level"]
+
+    lowered = severity.strip().lower()
+    if lowered in {"critical", "high"}:
+        return "error"
+    if lowered == "medium":
+        return "warning"
+    if lowered == "low":
+        return "note"
+
+    return RULES[0]["defaultConfiguration"]["level"]
+
+
 def generate_sarif(
     results,
     tool_name="Metis",
@@ -87,32 +110,52 @@ def generate_sarif(
 
     for review in results.get("reviews", []):
         file_path = review.get("file_path")
-        artifact_uri = review.get("file", "<unknown>")
+        artifact_uri = review.get("file") or file_path or "<unknown>"
         lines = read_file_lines(file_path) if file_path else []
-        total_lines = len(lines)
+        source_available = bool(lines) and lines != ["<source unavailable>"]
+        total_lines = len(lines) if source_available else 0
 
         for issue in review.get("reviews", []):
             text = issue.get("issue", "unspecified")
-            raw_line = issue.get("line_number", 1)
-            line_num = max(1, min(raw_line, total_lines or 1))
+            reported_line_num = _normalise_line_number(issue.get("line_number", 1))
+            snippet_override = issue.get("code_snippet")
+
+            # Keep location inside the file if source is available, but remember what was reported
+            if source_available and total_lines:
+                line_num = min(reported_line_num, total_lines)
+            else:
+                line_num = reported_line_num
 
             fingerprint = create_fingerprint(
                 file_path or artifact_uri, line_num, RULES[0]["id"]
             )
 
-            # Calculate context window
-            start = max(1, line_num - context_lines)
-            end = min(line_num + context_lines, total_lines)
-            block = lines[start - 1 : end]
+            # Prefer model-provided snippet; fall back to file content if available
+            if snippet_override:
+                snippet_text = str(snippet_override).strip("\n")
+            elif source_available and 1 <= line_num <= total_lines:
+                snippet_text = lines[line_num - 1].rstrip("\n")
+            else:
+                snippet_text = "<source unavailable>"
 
-            # Extract snippet and full context
-            idx = line_num - start
-            snippet = (
-                block[idx].strip() if 0 <= idx < len(block) else "<source unavailable>"
+            snippet_line_count = (
+                snippet_text.count("\n") + 1
+                if snippet_text != "<source unavailable>"
+                else 1
             )
-            context = "".join(block).strip() or "<context unavailable>"
 
-            # Append result entry
+            if source_available and 1 <= line_num <= total_lines:
+                start = max(1, line_num - context_lines)
+                end = min(total_lines, line_num + context_lines)
+                context = (
+                    "".join(lines[start - 1 : end]).rstrip("\n")
+                    or "<context unavailable>"
+                )
+            else:
+                start = line_num
+                end = line_num + snippet_line_count - 1
+                context = snippet_text or "<context unavailable>"
+
             properties = {}
             cwe_id = issue.get("cwe")
             if isinstance(cwe_id, str) and cwe_id.strip():
@@ -122,34 +165,53 @@ def generate_sarif(
             if isinstance(severity, str) and severity.strip():
                 properties["severity"] = severity.strip()
 
-            run["results"].append(
-                {
-                    "ruleId": RULES[0]["id"],
-                    "level": RULES[0]["defaultConfiguration"]["level"],
-                    "message": {
-                        "id": RULES[0]["id"],
-                        "arguments": [text],
-                        "text": text,
-                    },
-                    "locations": [
-                        {
-                            "physicalLocation": {
-                                "artifactLocation": {"uri": artifact_uri},
-                                "region": {
-                                    "startLine": start,
-                                    "snippet": {"text": snippet},
-                                },
-                                "contextRegion": {
-                                    "startLine": start,
-                                    "endLine": end,
-                                    "snippet": {"text": context},
-                                },
-                            }
+            reasoning = issue.get("reasoning")
+            if reasoning:
+                properties["reasoning"] = str(reasoning)
+                properties["why"] = str(reasoning)
+
+            mitigation = issue.get("mitigation")
+            if mitigation:
+                properties["mitigation"] = str(mitigation)
+
+            confidence = issue.get("confidence")
+            if confidence is not None:
+                properties["confidence"] = confidence
+
+            if reported_line_num != line_num:
+                properties["reportedLineNumber"] = reported_line_num
+
+            result_entry = {
+                "ruleId": RULES[0]["id"],
+                "level": _severity_to_level(severity),
+                "message": {
+                    "id": RULES[0]["id"],
+                    "arguments": [text],
+                    "text": text,
+                },
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": artifact_uri},
+                            "region": {
+                                "startLine": line_num,
+                                "endLine": line_num + snippet_line_count - 1,
+                                "snippet": {"text": snippet_text},
+                            },
+                            "contextRegion": {
+                                "startLine": start,
+                                "endLine": end,
+                                "snippet": {"text": context},
+                            },
                         }
-                    ],
-                    "partialFingerprints": {"primaryLocationLineHash": fingerprint},
-                    "properties": properties if properties else None,
-                }
-            )
+                    }
+                ],
+                "partialFingerprints": {"primaryLocationLineHash": fingerprint},
+            }
+
+            if properties:
+                result_entry["properties"] = properties
+
+            run["results"].append(result_entry)
 
     return sarif
