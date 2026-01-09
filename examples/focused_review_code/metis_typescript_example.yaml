@@ -1,0 +1,29 @@
+metis_engine:
+
+  # Only review code inside the "backend" folder
+  review_code_include_paths:
+    - 'backend/'
+  
+  # Don't review dtos, schemas, tests...
+  review_code_exclude_paths:
+    - 'dto/'
+    - '*.d.ts'
+    - '*.spec.ts'
+    - '*.fixture.ts'
+    - '*.dto.ts'
+    - '*.const.ts'
+    - '*.interface.ts'
+    - '*.model.ts'
+    - '*.type.ts'
+    - '*.request.ts'
+    - '*.response.ts'
+    - '*.response.api.ts'
+    - '*.params.ts'
+    - '*.schema.ts'
+    - '*.mapper.ts'
+    - '*.store.ts'
+    - 'e2e_ssr/'
+    - 'e2e/'
+    - '*.e2e-spec.ts'
+    - 'backend/test'
+    - 'schema.ts'
