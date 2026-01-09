@@ -3,7 +3,7 @@ metis_engine:
   # Only review code inside the "backend" folder
   review_code_include_paths:
     - 'backend/'
-  
+
   # Don't review dtos, schemas, tests...
   review_code_exclude_paths:
     - 'dto/'
