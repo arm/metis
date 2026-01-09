@@ -93,23 +93,25 @@ class MetisEngine:
         self._review_graph = None
         self._ask_graph = None
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
+        self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
+        self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
 
-    def load_metisignore(self):
+    def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
         """
-        Load metisignore file and return a PathSpec matcher.
+        Load metisignore file and return a GitIgnoreSpec matcher.
 
         Args:
             metisignore: Path to a file that have the ignore regex ( use the .gitignore syntax )
 
         Returns:
-            pathspec.PathSpec object or None if file doesn't exist
+            pathspec.GitIgnoreSpec object or None if file doesn't exist
         """
         try:
             if not self.metisignore_file:
                 logger.info("No MetisIgnore file provided")
                 return None
             with open(self.metisignore_file, "r") as f:
-                spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
+                spec = pathspec.GitIgnoreSpec.from_lines(f)
                 logger.info(f"MetisIgnore file loaded: {self.metisignore_file}")
             return spec
         except FileNotFoundError:
@@ -340,19 +342,35 @@ class MetisEngine:
     def get_code_files(self):
         """
         Return a list of file names in the self.codebase_path folder.
-        Evaulate the path with metisignore file if requested
+        Evaluate the path with metisignore file, include/exclude paths if requested
         """
         base_path = os.path.abspath(self.codebase_path)
         metisignore_spec = self.load_metisignore()
+        include_spec = None
+        if self.review_code_include_paths:
+            include_spec = pathspec.GitIgnoreSpec.from_lines(
+                self.review_code_include_paths
+            )
+        exclude_spec = None
+        if self.review_code_exclude_paths:
+            exclude_spec = pathspec.GitIgnoreSpec.from_lines(
+                self.review_code_exclude_paths
+            )
         file_list = []
         for root, _, files in os.walk(base_path):
             for file in files:
+                full_path = os.path.join(root, file)
                 ext = os.path.splitext(file)[1].lower()
-                if ext in self.code_exts and (
-                    not metisignore_spec
-                    or not metisignore_spec.match_file(os.path.join(root, file))
-                ):
-                    file_list.append(os.path.join(root, file))
+                if ext not in self.code_exts:
+                    continue
+                rel_path = os.path.relpath(full_path, base_path)
+                if metisignore_spec and metisignore_spec.match_file(rel_path):
+                    continue
+                if include_spec and not include_spec.match_file(rel_path):
+                    continue
+                if exclude_spec and exclude_spec.match_file(rel_path):
+                    continue
+                file_list.append(full_path)
         return file_list
 
     def review_code(self):
