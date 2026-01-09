@@ -78,6 +78,16 @@ To install with **PostgreSQL (pgvector)** backend support:
 uv pip install '.[postgres]'
 ```
 
+### 1.1 **Docker**
+
+```bash
+git clone https://github.com/arm/metis.git
+
+cd metis
+
+docker build -t metis .
+```
+
 ### 2. **Set up LLM Provider**
 
 **OpenAI**
@@ -104,6 +114,24 @@ Finally, run the security analysis across the entire codebase with:
 ```
 review_code
 ```
+
+### 3.1 Docker
+
+Go to your codebase path and run:
+```bash
+docker run --rm -it -v `pwd`:/metis metis
+```
+
+To pass environment variables use `-e`:
+```bash
+docker run --rm -it -v `pwd`:/metis -e "OPENAI_API_KEY=${OPENAI_API_KEY}" metis
+```
+
+You can pass arguments to metis:
+```bash
+docker run --rm -it -v `pwd`:/metis metis --non-interactive --command 'review_code' --output-file results/review_code_results.json
+```
+
 ## Configuration
 
 **Metis Configuration (`metis.yaml`)**
