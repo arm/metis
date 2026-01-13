@@ -168,7 +168,10 @@ def generate_sarif(
             reasoning = issue.get("reasoning")
             if reasoning:
                 properties["reasoning"] = str(reasoning)
-                properties["why"] = str(reasoning)
+
+            why = issue.get("why")
+            if why:
+                properties["why"] = str(why)
 
             mitigation = issue.get("mitigation")
             if mitigation:

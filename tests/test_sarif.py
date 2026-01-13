@@ -108,6 +108,7 @@ def test_generate_sarif_uses_issue_metadata_when_source_missing():
                         "code_snippet": "foo();\nbar();",
                         "severity": "High",
                         "reasoning": "Because pointer may be null",
+                        "why": "Explains the null pointer risk",
                         "mitigation": "Add null checks",
                         "confidence": 0.9,
                         "cwe": "CWE-476",
@@ -137,6 +138,7 @@ def test_generate_sarif_uses_issue_metadata_when_source_missing():
     assert props["severity"] == "High"
     assert props["cwe"] == "CWE-476"
     assert props["reasoning"].startswith("Because")
+    assert props["why"].startswith("Explains")
     assert props["mitigation"].startswith("Add")
     assert props["confidence"] == 0.9
 
