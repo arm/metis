@@ -58,15 +58,64 @@ def parse_json_output(model_output):
 
 
 def extract_json_content(model_output):
+    """
+    Extract JSON content from LLM output that may contain explanatory text.
+    Handles cases like:
+    - Pure JSON
+    - JSON wrapped in ```json ... ```
+    - JSON embedded in explanatory text
+    """
     cleaned = model_output.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[len("```json") :].strip()
+
+    # Remove markdown code blocks first
+    if "```json" in cleaned:
+        # Extract content between ```json and ```
+        start_idx = cleaned.find("```json") + len("```json")
+        end_idx = cleaned.find("```", start_idx)
+        if end_idx != -1:
+            cleaned = cleaned[start_idx:end_idx].strip()
     elif cleaned.startswith("```"):
-        cleaned = cleaned[len("```") :].strip()
-    if cleaned.endswith("```"):
-        cleaned = cleaned[: -len("```")].strip()
-    elif cleaned.endswith("'''"):
-        cleaned = cleaned[: -len("'''")].strip()
+        cleaned = cleaned[len("```"):].strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-len("```")].strip()
+
+    # If still not valid JSON, try to extract JSON object/array from text
+    if not cleaned.startswith("{") and not cleaned.startswith("["):
+        json_start = -1
+
+        # Find first JSON structure (object or array)
+        for i, char in enumerate(cleaned):
+            if char == "{" or char == "[":
+                json_start = i
+                break
+
+        if json_start == -1:
+            return cleaned
+
+        # Find matching closing brace/bracket using stack
+        stack = []
+        json_end = -1
+
+        for i in range(json_start, len(cleaned)):
+            char = cleaned[i]
+            if char == "{" or char == "[":
+                stack.append(char)
+            elif char == "}" or char == "]":
+                if stack:
+                    stack.pop()
+                    if not stack:
+                        json_end = i + 1
+                        break
+
+        if json_end != -1:
+            extracted = cleaned[json_start:json_end]
+            # Verify it's valid JSON
+            try:
+                json.loads(extracted)
+                return extracted
+            except json.JSONDecodeError:
+                pass
+
     return cleaned
 
 
