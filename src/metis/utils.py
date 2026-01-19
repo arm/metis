@@ -75,9 +75,9 @@ def extract_json_content(model_output):
         if end_idx != -1:
             cleaned = cleaned[start_idx:end_idx].strip()
     elif cleaned.startswith("```"):
-        cleaned = cleaned[len("```"):].strip()
+        cleaned = cleaned[len("```") :].strip()
         if cleaned.endswith("```"):
-            cleaned = cleaned[:-len("```")].strip()
+            cleaned = cleaned[: -len("```")].strip()
 
     # If still not valid JSON, try to extract JSON object/array from text
     if not cleaned.startswith("{") and not cleaned.startswith("["):
