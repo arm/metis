@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2026-01-29)
+
+
+### Features
+
+* Add Dockerfile ([#135](https://github.com/arm/metis/issues/135)) ([844c272](https://github.com/arm/metis/commit/844c272f29141b3e7fbd94f2ef8a34e072a284be))
+* php, javascript plugins ([#126](https://github.com/arm/metis/issues/126)) ([fba160d](https://github.com/arm/metis/commit/fba160dde31732a408cf47f6b46d98b1629a61b1))
+* **sarif:** update SARIF to store resoning ([#133](https://github.com/arm/metis/issues/133)) ([71c25da](https://github.com/arm/metis/commit/71c25da9bce3ad41c8ab041b7cc0faf5cabb7290))
+* Set review_code include/exclude paths in config file ([#130](https://github.com/arm/metis/issues/130)) ([4f2e701](https://github.com/arm/metis/commit/4f2e70178d00bd2b9358e5efd2c98e7bbfc243a5))
+
+
+### Bug Fixes
+
+* **docs:** recommend llama3.1 ([#117](https://github.com/arm/metis/issues/117)) ([2bf263d](https://github.com/arm/metis/commit/2bf263d75c2d931c0ae1e18912d034ee9b4d1862))
+* **docs:** Typo in metis yaml extension ([#132](https://github.com/arm/metis/issues/132)) ([58a5400](https://github.com/arm/metis/commit/58a5400cfdc146f0617f4335da493413eaa21df6))
+* extract JSON object/array from mixed LLM responses ([#138](https://github.com/arm/metis/issues/138)) ([#139](https://github.com/arm/metis/issues/139)) ([ef68de6](https://github.com/arm/metis/commit/ef68de6f637e4081079183144a49f306a0b2d848))
+* **plugin:** add validations to llm security prompt ([#110](https://github.com/arm/metis/issues/110)) ([6fde583](https://github.com/arm/metis/commit/6fde583e09d1242efae6dc790969f63e689afb99))
+* save output to file in ask ([#131](https://github.com/arm/metis/issues/131)) ([5c4a713](https://github.com/arm/metis/commit/5c4a713ca816f48380e58b4d9fc3999a52f4bedd))
+
 ## [1.2.0](https://github.com/arm/metis/compare/metis-v1.1.0...metis-v1.2.0) (2025-12-02)
 
 
