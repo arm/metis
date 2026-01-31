@@ -39,6 +39,7 @@ Metis includes support for the following languages:
 |------------|--------|------------------|
 | C          | Stable | Built-in plugin  |
 | C++        | Stable | Built-in plugin  |
+| Jupyter NB | Stable | Built-in plugin  |
 | Python     | Stable | Built-in plugin  |
 | Rust       | Stable | Built-in plugin  |
 | TypeScript | Stable | Built-in plugin  |
