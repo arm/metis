@@ -117,6 +117,7 @@ def review_node_build_prompt(
     custom_prompt_text: str | None,
     custom_guidance_precedence: str,
     schema_prompt_section: str,
+    hardware_cwe_guidance: str = "",
 ) -> ReviewState:
     system = build_review_system_prompt(
         language_prompts,
@@ -125,6 +126,7 @@ def review_node_build_prompt(
         custom_prompt_text,
         custom_guidance_precedence,
         schema_prompt_section,
+        hardware_cwe_guidance,
     )
     new_state: ReviewState = dict(state)
     new_state["system_prompt"] = system
@@ -194,6 +196,9 @@ class ReviewGraph:
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
             "security_review_report", ""
         )
+        self.hardware_cwe_guidance = self.plugin_config.get("general_prompts", {}).get(
+            "hardware_cwe_guidance", ""
+        )
 
         self._structured_review_node = None
         self._fallback_review_node = None
@@ -246,6 +251,7 @@ class ReviewGraph:
             custom_prompt_text=self.custom_prompt_text,
             custom_guidance_precedence=self.custom_guidance_precedence,
             schema_prompt_section=self._schema_prompt_section,
+            hardware_cwe_guidance=self.hardware_cwe_guidance,
         )
         review = partial(
             review_node_llm,

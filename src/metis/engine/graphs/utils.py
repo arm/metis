@@ -120,21 +120,31 @@ def build_review_system_prompt(
     custom_prompt_text,
     custom_guidance_precedence,
     schema_prompt_section,
+    hardware_cwe_guidance="",
 ):
     """Compose the system prompt for a review in a single place."""
     base = (
         f"{language_prompts[default_prompt_key]} \n "
         f"{language_prompts['security_review_checks']} \n {report_prompt}"
     )
-    placeholder = "[[REVIEW_SCHEMA_FIELDS]]"
+    schema_placeholder = "[[REVIEW_SCHEMA_FIELDS]]"
+    hardware_placeholder = "[[HARDWARE_CWE_GUIDANCE]]"
 
     # Fail early here since REVIEW_SCHEMA_FIELDS are required for having a structured output
-    if placeholder not in base:
+    if schema_placeholder not in base:
         raise ValueError(
             "Schema prompt placeholder missing from review prompt template"
         )
 
-    base = base.replace(placeholder, schema_prompt_section)
+    base = base.replace(schema_placeholder, schema_prompt_section)
+
+    if hardware_placeholder in base:
+        if not hardware_cwe_guidance:
+            raise ValueError(
+                "Hardware CWE guidance placeholder found but guidance text is empty"
+            )
+        base = base.replace(hardware_placeholder, hardware_cwe_guidance)
+
     return apply_custom_guidance(
         base, custom_prompt_text, custom_guidance_precedence or ""
     )

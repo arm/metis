@@ -51,6 +51,77 @@ general_prompts:
 
     Tool Outputs:
     {tool_outputs}
+  hardware_cwe_guidance: |-
+    2. What to Check (CWE-based, hardware-focused)
+       - Treat ALL control/inputs as potentially adversarial unless explicitly proven internal-only in RELEVANT_CONTEXT.
+         Externally-controlled candidates commonly include: reset, clock enables, test/debug enables,
+         strap pins, fuse/OTP reads, JTAG/scan signals, memory-mapped register writes, bus transactions,
+         interrupt lines, and power/debug state transitions.
+
+       - Prioritize CWEs from the Hardware Design corpus and the 2025 MIHW slice, mapping RTL patterns to root causes:
+       - Use CWE IDs explicitly when you report findings.
+
+       A) Reset/Initialization & Secure Defaults
+          - CWE-1271: Uninitialized value on reset for security-critical registers.
+            Look for flops controlling lock/debug enable/auth/privilege state without deterministic reset.
+            Also watch for reset removal/weakening.
+            (Example language includes Verilog/SystemVerilog in CWE content.)
+
+       B) Access Control, Locking, and Debug/Test Control
+          - CWE-1191: On-chip debug/test interface with improper access control.
+            Look for JTAG/scan/test modes, debug unlock FSMs, lifecycle state checks missing/incorrect,
+            or "backdoor" enables that bypass policy.
+          - CWE-1234: Debug/internal modes allow override of locks.
+            Look for debug/test conditional paths that can bypass lock bits or privilege checks.
+          - CWE-1231 / CWE-1233: Lock bit modification or missing lock bit protection.
+            Look for lock bits that can be rewritten, cleared, or are not sticky across modes/resets as intended.
+          - CWE-1244: Internal asset exposed to unsafe debug access level or state.
+            Look for debug access level/state that incorrectly exposes secrets or internal assets across boot stages or modes.
+          - CWE-1262: Improper access control for register interface.
+            Look for CSR/MMIO decode missing privilege checks, missing address range checks,
+            or "write-1-to-clear"/side-effect regs exposed to untrusted masters.
+          - CWE-1256: Improper restriction of software interfaces to hardware features.
+            Look for privileged hardware features exposed to software without proper gating, policy, or lifecycle checks.
+
+       C) Resource Reuse / Data Lifetime / State Transitions
+          - CWE-226: Sensitive info not removed before reuse.
+            Look for key material/state registers reused across sessions/contexts without zeroization.
+          - CWE-1272: Sensitive info uncleared before debug/power state transition.
+            Look for low-power entry/exit, debug entry/exit, reset-like transitions that do not clear secrets.
+
+       D) Logic Races, Glitches, and Security FSM Robustness
+          - CWE-1298: Hardware logic contains race conditions.
+            Look for combinational/glitch-prone access control, async enables, multi-path gating,
+            or timing-dependent conditions in security FSMs (especially around unlock/auth/privilege).
+          - CWE-1247: Improper protection against voltage/clock glitches.
+            Where relevant, look for single-point checks without redundancy/temporal hardening in critical flows
+            (e.g., debug unlock, secure boot gating, privilege transitions).
+
+       E) SoC Isolation / Overlap & Boundaries (when module participates in fabric/ACLs)
+          - CWE-1189: Improper isolation of shared resources on SoC.
+            Look for missing separation between trusted/untrusted masters, shared memory/register banks, or interconnect policy hooks.
+          - CWE-1260: Improper handling of overlap between protected memory ranges.
+            Look for decode/region logic that allows overlap/bypass of protection windows.
+
+       F) Cryptography & Side-Channel Relevant RTL Exposures (when applicable)
+          - CWE-1431: Driving intermediate cryptographic state/results to module outputs.
+            Look for intermediate round/state registers reaching outputs, debug ports, status regs, or scan-visible flops.
+          - CWE-1300: Improper protection of physical side channels.
+            Look for obvious data-dependent switching/control that exposes secrets when mitigations are expected by context.
+
+       G) Microarchitectural Shared State / Transient Execution (when applicable)
+          - CWE-1421: Exposure of sensitive information in shared microarchitectural structures during transient execution.
+            Look for shared caches/TLBs/queues or other structures that are not partitioned or flushed across trust boundaries.
+          - CWE-1423: Exposure of sensitive information caused by shared microarchitectural predictor state that influences transient execution.
+            Look for predictor/pre-fetch state that can be trained across domains without isolation, reset, or partitioning.
+
+       - For every issue:
+         * Identify the exact signal/always block/assign/ifdef that causes it.
+         * State what is externally controllable and how it can influence the failure mode.
+         * Classify severity (CRITICAL/HIGH/MEDIUM/LOW) and preconditions (mode, lifecycle, debug strap, etc.).
+         * Recommend RTL-level remediation (reset defaults, sticky locks, privilege checks, zeroization sequencing,
+           glitch-hardening, redundancy/temporal checks, CDC-safe enables, etc.).
+       - Do not report issues that do not affect security.
 
 plugins:
   c:
@@ -132,6 +203,178 @@ plugins:
         {patch}\n
         Please update the patch file so that is fixes these vulnerabilities.
         Do not include any commentary—only output the patch diff.
+  systemverilog:
+    supported_extensions: [".sv", ".svh"]
+    splitting:
+      chunk_lines: 60
+      chunk_lines_overlap: 20
+      max_chars: 2500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in RTL security for SystemVerilog designs.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by
+        the specific changes or context provided.
+
+        You will be given:
+        1. FILE_CHANGES - a set of SystemVerilog code changes with lines marked by "+" (added) or "-" (removed).
+        2. RELEVANT_CONTEXT - information about what these changes do (e.g., interface intent, security assumptions).
+        3. ORIGINAL_FILE - the original file before being modified (may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of FILE_CHANGES, focusing on "+" and "-" lines but reasoning about full-module behavior.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT.
+           - If no real issues exist, return an empty reviews list.
+           - If ORIGINAL_FILE is empty, ignore it.
+           - If RELEVANT_CONTEXT is empty, ignore it.
+
+        Output requirements:
+        - Output ONLY a JSON object: {\"reviews\": [...]}
+        - Each review must use ONLY the schema fields in [[REVIEW_SCHEMA_FIELDS]] (no extra keys).
+        - The reasoning must explicitly identify externally controlled inputs and the trust boundary.
+        - If no issues, return {\"reviews\": []}.
+
+      security_review_file: |-
+        You are a thorough security engineer specializing in RTL security for SystemVerilog designs.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific code and context provided.
+
+        You will be given:
+        1. FILE - a SystemVerilog source file
+        2. RELEVANT_CONTEXT - information about what this module/package/interface does and how it is used
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of FILE.
+           - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT.
+           - If no real issues exist, return an empty reviews list.
+           - If RELEVANT_CONTEXT is empty, ignore it.
+
+        Output requirements:
+        - Output ONLY a JSON object: {\"reviews\": [...]}
+        - Each review must use ONLY the schema fields in [[REVIEW_SCHEMA_FIELDS]] (no extra keys).
+        - The reasoning must explicitly identify externally controlled inputs and the trust boundary.
+        - If no issues, return {\"reviews\": []}.
+
+      security_review_checks: |-
+        [[HARDWARE_CWE_GUIDANCE]]
+
+        SystemVerilog-specific security footguns to explicitly evaluate (and tie back to the CWEs above):
+        - `interface` / `modport` directionality errors that unintentionally expose privileged control (often CWE-1262 / CWE-1189).
+        - Parameterization/`localparam` misuse where security gates can be disabled via overrides (often CWE-1234 / CWE-1191).
+        - `bind` inserted logic or assertions changing behavior in synthesizable builds (often CWE-1191 / CWE-1234).
+        - Use of DPI/PLI/VPI in synthesizable contexts or mixed RTL/TB packages leaking secrets or enabling backdoors (CWE-1191 / CWE-1431).
+        - `unique/priority case` and incomplete case coverage leading to unintended privilege paths or latch inference (often CWE-1262 / CWE-1298).
+        - Assertions: ensure security properties are not "simulation-only" crutches when RELEVANT_CONTEXT expects enforcement in RTL.
+          (If properties imply missing enforcement logic, map to the relevant CWE, commonly CWE-1262 / CWE-1191.)
+
+      validation_review: |-
+        You will be given:
+        SNIPPET: The relevant SystemVerilog code snippet.
+        RELEVANT_CONTEXT: Additional details or commentary on the snippet.
+        REVIEW: A list of potential security issues discovered.
+
+        Your task is to:
+        1. Validate each item against SNIPPET and RELEVANT_CONTEXT.
+        2. Remove false positives or issues already mitigated (e.g., deterministic reset, sticky locks, explicit privilege checks).
+        3. Keep only issues that definitely represent real security risks.
+        4. If no real issues remain, respond with an empty array: [].
+
+      snippet_security_summary: |-
+        Summarize the security implications of these SystemVerilog changes in one paragraph.
+        Focus on CWE-root-cause patterns (secure defaults/reset, access control/debug, data lifetime/zeroization,
+        races/glitches/CDC, isolation/overlap).
+        Be concise and actionable.
+
+      attempt_fix: |-
+        Based on the identified RTL security issues:\n
+        {issues}\n
+        and the patch:\n
+        {patch}\n
+        Please update the patch so it fixes these issues.
+        Output ONLY the patch diff, with minimal changes.
+  verilog:
+    supported_extensions: [".v", ".vh"]
+    splitting:
+      chunk_lines: 60
+      chunk_lines_overlap: 20
+      max_chars: 2500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in RTL security for Verilog designs.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by
+        the specific changes or context provided.
+
+        You will be given:
+        1. FILE_CHANGES - a set of RTL code changes with lines marked by "+" (added) or "-" (removed).
+        2. RELEVANT_CONTEXT - information about what these changes do (e.g., interface intent, security assumptions).
+        3. ORIGINAL_FILE - the original file before being modified (may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of FILE_CHANGES, focusing on "+" and "-" lines but reasoning about full-module behavior.
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and RELEVANT_CONTEXT.
+           - If no real issues exist, return an empty reviews list.
+           - If ORIGINAL_FILE is empty, ignore it.
+           - If RELEVANT_CONTEXT is empty, ignore it.
+
+        Output requirements:
+        - Output ONLY a JSON object: {\"reviews\": [...]}
+        - Each review must use ONLY the schema fields in [[REVIEW_SCHEMA_FIELDS]] (no extra keys).
+        - The reasoning must explicitly identify externally controlled inputs and the trust boundary.
+        - If no issues, return {\"reviews\": []}.
+
+      security_review_file: |-
+        You are a thorough security engineer specializing in RTL security for Verilog designs.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific code and context provided.
+
+        You will be given:
+        1. FILE - a Verilog RTL file
+        2. RELEVANT_CONTEXT - information about what this module does and how it is used
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of FILE.
+           - Only produce findings that are fully justified by FILE and RELEVANT_CONTEXT.
+           - If no real issues exist, return an empty reviews list.
+           - If RELEVANT_CONTEXT is empty, ignore it.
+
+        Output requirements:
+        - Output ONLY a JSON object: {\"reviews\": [...]}
+        - Each review must use ONLY the schema fields in [[REVIEW_SCHEMA_FIELDS]] (no extra keys).
+        - The reasoning must explicitly identify externally controlled inputs and the trust boundary.
+        - If no issues, return {\"reviews\": []}.
+
+      security_review_checks: |-
+        [[HARDWARE_CWE_GUIDANCE]]
+
+      validation_review: |-
+        You will be given:
+        SNIPPET: The relevant Verilog code snippet.
+        RELEVANT_CONTEXT: Additional details or commentary on the snippet.
+        REVIEW: A list of potential security issues discovered.
+
+        Your task is to:
+        1. Validate each item against SNIPPET and RELEVANT_CONTEXT.
+        2. Remove false positives or issues already mitigated (e.g., deterministic reset, sticky locks, explicit privilege checks).
+        3. Keep only issues that definitely represent real security risks.
+        4. If no real issues remain, respond with an empty array: [].
+
+      snippet_security_summary: |-
+        Summarize the security implications of these Verilog RTL changes in one paragraph.
+        Focus on CWE-root-cause patterns (reset defaults, access control/debug, data lifetime, races/glitches, isolation).
+        Be concise and actionable.
+
+      attempt_fix: |-
+        Based on the identified RTL security issues:\n
+        {issues}\n
+        and the patch:\n
+        {patch}\n
+        Please update the patch so it fixes these issues.
+        Output ONLY the patch diff, with minimal changes.
   cpp:
     supported_extensions: [".cpp", ".hpp"]
     splitting: *c_cpp_splitting

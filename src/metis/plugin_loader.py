@@ -125,6 +125,20 @@ def _load_builtin_plugins(plugin_config):
         logger.error(f"Failed to load required JavaScriptPlugin plugin: {e}")
         raise
 
+    try:
+        from metis.plugins.systemverilog_plugin import SystemVerilogPlugin
+
+        plugins.append(SystemVerilogPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in SystemVerilog plugin: {e}")
+
+    try:
+        from metis.plugins.verilog_plugin import VerilogPlugin
+
+        plugins.append(VerilogPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in Verilog plugin: {e}")
+
     return plugins
 
 
