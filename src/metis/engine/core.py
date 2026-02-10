@@ -441,10 +441,9 @@ class MetisEngine:
 
             language_prompts = plugin.get_prompts()
             try:
-                file_abs = abs_path
-                original_content = read_file_content(file_abs)
+                original_content = read_file_content(abs_path)
                 req: ReviewRequest = {
-                    "file_path": file_abs,
+                    "file_path": abs_path,
                     "snippet": snippet,
                     "retriever_code": qe_code,
                     "retriever_docs": qe_docs,
