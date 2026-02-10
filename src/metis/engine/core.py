@@ -413,8 +413,17 @@ class MetisEngine:
         file_reviews = []
         overall_summaries = []
         base_path = os.path.abspath(self.codebase_path)
+        metisignore_spec = self.load_metisignore()
         for file_diff in diff:
             if file_diff.is_removed_file or file_diff.is_binary_file:
+                continue
+            abs_path = (
+                file_diff.path
+                if os.path.isabs(file_diff.path)
+                else os.path.join(base_path, file_diff.path)
+            )
+            relative_path = os.path.relpath(abs_path, base_path)
+            if metisignore_spec and metisignore_spec.match_file(relative_path):
                 continue
             ext = os.path.splitext(file_diff.path)[1].lower()
             plugin = self._get_plugin_for_extension(ext)
@@ -431,9 +440,8 @@ class MetisEngine:
             formatted_context = context_prompt.format(file_path=file_diff.path)
 
             language_prompts = plugin.get_prompts()
-            relative_path = os.path.relpath(file_diff.path, base_path)
             try:
-                file_abs = os.path.join(base_path, file_diff.path)
+                file_abs = abs_path
                 original_content = read_file_content(file_abs)
                 req: ReviewRequest = {
                     "file_path": file_abs,
