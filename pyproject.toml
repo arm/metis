@@ -62,6 +62,7 @@ metis = ["metis.yaml"]
 
 [project.entry-points."metis.plugins"]
 python = "metis.plugins.python_plugin:PythonPlugin"
+ipynb = "metis.plugins.ipynb_plugin:IpynbPlugin"
 c = "metis.plugins.c_plugin:CPlugin"
 cpp = "metis.plugins.cpp_plugin:CppPlugin"
 go = "metis.plugins.go_plugin:GoPlugin"

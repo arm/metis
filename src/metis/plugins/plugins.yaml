@@ -175,6 +175,53 @@ plugins:
         - Missing side effects / memory flags impacting reordering or optimization.
         Keep the summary concise and actionable.
       validation_review: "Validate the following TableGen review for security concerns."
+  ipynb:
+    supported_extensions: [".ipynb"]
+    splitting:
+      chunk_lines: 40
+      chunk_lines_overlap: 15
+      max_chars: 1500
+    prompts:
+      security_review: |-
+        You are a thorough security engineer specializing in Python/Jupyter notebooks.
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, RELEVANT_CONTEXT,
+        and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+        by the specific changes or context provided.
+        You will be given:
+        1. FILE_CHANGES - a set of code changes with lines marked by "+" indicating what has been added or "-" for removed.
+        2. RELEVANT_CONTEXT - information about what these changes do.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+." or "-" but take into account how they interact with the whole file.
+      security_review_checks: |-
+        2. What to Check
+           - Look for potential security issues such as:
+             - OWASP Top 10 vulnerabilities
+             - Hardcoded secrets, urls or endpoints
+             - Insecure use of libraries
+             - Data exposure in notebook outputs
+             - Insecure notebook execution
+             - Unnecessary or insecure notebook imports
+             - Insecure cells import orders
+             - Databricks not followed best practices
+             - Logging or printing sensitive informations or hardcoded endpoints
+             - Do not report on issues that do not affect security.
+      validation_review: "Validate the following Jupyter notebook review for security concerns."
+      snippet_security_summary: "Summarize the security implications of these Jupyter notebook code changes."
+      attempt_fix: "Based on the issues detected in the Jupyter notebook code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
+      security_review_file: |-
+        You are a thorough security engineer specializing in Python/Jupyter notebooks.
+        Always tie your identified issues directly to the evidence in FILE and RELEVANT_CONTEXT.
+        Do not introduce new security conclusions that are not supported by the specific changes or context provided.
+        You will be given:
+        1. FILE - A source code file
+        2. CONTEXT - information about what these changes do.
+
+        Your tasks are:
+        1. Security Review Scope
+           - Review the security implications of the FILE.
   python:
     supported_extensions: [".py"]
     splitting:
