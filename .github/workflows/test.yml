@@ -31,10 +31,10 @@ jobs:
         run: uv venv
 
       - name: Install test dependencies
-        run: uv pip install '.[test]'
+        run: uv sync --dev
 
-      - name: Run tests
-        run: uv run pytest
+      - name: Run tests + coverage
+        run: uv run pytest --cov=src --cov-report=term --cov-fail-under=35
 
       - name: Run pre-commit checks
         run: |
