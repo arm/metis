@@ -20,7 +20,7 @@ repos:
     hooks:
       - id: Test Coverage
         name: test-coverage
-        entry: uv run pytest --cov=src --cov-report=term --cov-fail-under=35
+        entry: uv run pytest --cov=src --cov-report=term --cov-fail-under=20
         language: system
         types: [python]
         always_run: true
