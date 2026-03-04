@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -32,6 +32,7 @@ from .diff_utils import extract_content_from_diff, process_diff_file
 from .graphs.types import ReviewRequest
 from .graphs.types import AskRequest
 from metis.engine.graphs import ReviewGraph, AskGraph
+from .triage_service import TriageService
 
 
 logger = logging.getLogger("metis")
@@ -68,6 +69,11 @@ class MetisEngine:
         self.llm_provider = llm_provider
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
+        self.triage_similarity_top_k = kwargs.get("triage_similarity_top_k", 3)
+        self.triage_checkpoint_every = kwargs.get("triage_checkpoint_every", 50)
+        self.triage_tool_timeout_seconds = int(
+            kwargs.get("triage_tool_timeout_seconds", 12)
+        )
         # Optional user-provided guidance to be appended to system prompts
         self.custom_prompt_text = kwargs.get("custom_prompt_text")
         self.plugin_config = load_plugin_config()
@@ -97,6 +103,19 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
+        self._triage_service = TriageService(
+            codebase_path=self.codebase_path,
+            llm_provider=self.llm_provider,
+            llama_query_model=self.llama_query_model,
+            plugin_config=self.plugin_config,
+            max_workers=self.max_workers,
+            triage_similarity_top_k=self.triage_similarity_top_k,
+            triage_checkpoint_every=self.triage_checkpoint_every,
+            triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
+            normalize_top_k=self._normalize_top_k,
+            create_query_engines=self._create_query_engines,
+            get_plugin_for_extension=self._get_plugin_for_extension,
+        )
 
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
         """
@@ -556,24 +575,73 @@ class MetisEngine:
                 target_index.docstore.set_document_hash(doc.id_, doc.hash)
         logger.info("Index update complete based on the provided patch diff.")
 
-    def _init_and_get_query_engines(self):
-        if self._qe_code is not None and self._qe_docs is not None:
-            return self._qe_code, self._qe_docs
+    def _normalize_top_k(self, value, default: int) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = default
+        if parsed <= 0:
+            return default
+        return parsed
+
+    def _create_query_engines(self, top_k: int):
         self.vector_backend.init()
         qe_code, qe_docs = self.vector_backend.get_query_engines(
             self.llm_provider,
-            self.similarity_top_k,
+            top_k,
             self.response_mode,
         )
         if not qe_code or not qe_docs:
             raise QueryEngineInitError()
+        return qe_code, qe_docs
+
+    def _init_and_get_query_engines(self):
+        if self._qe_code is not None and self._qe_docs is not None:
+            return self._qe_code, self._qe_docs
+        top_k = self._normalize_top_k(self.similarity_top_k, 5)
+        qe_code, qe_docs = self._create_query_engines(top_k)
         self._qe_code = qe_code
         self._qe_docs = qe_docs
         return qe_code, qe_docs
 
+    def triage_sarif_payload(
+        self,
+        payload: dict,
+        progress_callback=None,
+        debug_callback=None,
+        checkpoint_callback=None,
+        include_triaged: bool = False,
+    ) -> dict:
+        return self._triage_service.triage_sarif_payload(
+            payload,
+            progress_callback=progress_callback,
+            debug_callback=debug_callback,
+            checkpoint_callback=checkpoint_callback,
+            include_triaged=include_triaged,
+        )
+
+    def triage_sarif_file(
+        self,
+        input_path: str,
+        output_path: str | None = None,
+        progress_callback=None,
+        debug_callback=None,
+        checkpoint_every: int | None = None,
+        include_triaged: bool = False,
+    ) -> str:
+        return self._triage_service.triage_sarif_file(
+            input_path=input_path,
+            output_path=output_path,
+            progress_callback=progress_callback,
+            debug_callback=debug_callback,
+            checkpoint_every=checkpoint_every,
+            include_triaged=include_triaged,
+        )
+
     def close(self):
         self._qe_code = None
         self._qe_docs = None
+        self._triage_service.close()
         close_fn = getattr(self.vector_backend, "close", None)
         if callable(close_fn):
             close_fn()
