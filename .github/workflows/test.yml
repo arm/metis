@@ -31,7 +31,7 @@ jobs:
         run: uv venv
 
       - name: Install test dependencies
-        run: uv sync --dev
+        run: uv pip install '.[test]'
 
       - name: Run tests + coverage
         run: uv run pytest --cov=src --cov-report=term --cov-fail-under=20
