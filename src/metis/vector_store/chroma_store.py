@@ -19,8 +19,12 @@ class ChromaStore(BaseVectorStore):
         self.embed_model_code = embed_model_code
         self.embed_model_docs = embed_model_docs
         self.query_config = query_config
+        self._client = None
+        self._initialized = False
 
     def init(self):
+        if self._initialized:
+            return
         try:
             client = PersistentClient(
                 path=self.persist_dir, settings=Settings(anonymized_telemetry=False)
@@ -42,6 +46,8 @@ class ChromaStore(BaseVectorStore):
             self.storage_context_docs = StorageContext.from_defaults(
                 vector_store=self.vector_store_docs
             )
+            self._client = client
+            self._initialized = True
             logger.info("Chroma vector components initialized.")
 
         except Exception as e:
@@ -82,3 +88,21 @@ class ChromaStore(BaseVectorStore):
 
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs
+
+    def close(self):
+        client = self._client
+        if client is not None:
+            try:
+                client._system.stop()
+            except Exception as e:
+                logger.warning(f"Error closing ChromaStore: {e}")
+        self._client = None
+        self._initialized = False
+        for attr in (
+            "vector_store_code",
+            "vector_store_docs",
+            "storage_context_code",
+            "storage_context_docs",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)

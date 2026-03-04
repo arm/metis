@@ -20,6 +20,10 @@ class BaseVectorStore(ABC):
         """Return tuple of storage contexts (code, docs) for indexing."""
         pass
 
+    def close(self):
+        """Best-effort resource cleanup hook for vector backends."""
+        return None
+
     def _build_llm(self, llm_provider):
         """Construct a provider-specific LlamaIndex LLM instance."""
         llm_class = llm_provider.get_query_engine_class()
