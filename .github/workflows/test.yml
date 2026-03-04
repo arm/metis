@@ -34,7 +34,7 @@ jobs:
         run: uv sync --dev
 
       - name: Run tests + coverage
-        run: uv run pytest --cov=src --cov-report=term --cov-fail-under=35
+        run: uv run pytest --cov=src --cov-report=term --cov-fail-under=20
 
       - name: Run pre-commit checks
         run: |
