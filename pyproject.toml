@@ -22,6 +22,7 @@ dependencies = [
     "chromadb>=1.1.1",
     "pydantic>=2.12.3",
     "pathspec>=0.12.1",
+    "pre-commit>=4.5.0",
 ]
 
 [build-system]
@@ -59,6 +60,12 @@ metis = ["metis.yaml"]
 "metis.plugins" = ["plugins.yaml"]
 "metis.cli" = ["report_template.html"]
 "metis.schemas" = ["*.json"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "pytest-cov>=7.0.0",
+]
 
 [project.entry-points."metis.plugins"]
 python = "metis.plugins.python_plugin:PythonPlugin"
