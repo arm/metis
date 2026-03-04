@@ -15,3 +15,13 @@ repos:
       - id: check-yaml
       - id: end-of-file-fixer
       - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: Test Coverage
+        name: test+coverage
+        entry: uv run pytest --cov=src --cov-report=term --cov-fail-under=20
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true

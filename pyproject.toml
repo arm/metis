@@ -33,7 +33,7 @@ metis = "metis.cli.entry:main"
 
 [project.optional-dependencies]
 postgres = ["llama-index-vector-stores-postgres>=0.5.4"]
-test = ["pytest>=8.4.0"]
+test = ["pytest>=8.4.0","pytest-cov>=7.0.0"]
 
 lint = [
   "ruff>=0.12.1",
