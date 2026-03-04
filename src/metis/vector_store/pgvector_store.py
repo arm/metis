@@ -34,8 +34,11 @@ class PGVectorStoreImpl(BaseVectorStore):
         self.embed_model_docs = embed_model_docs
         self.embed_dim = embed_dim
         self.hnsw_kwargs = hnsw_kwargs or {}
+        self._initialized = False
 
     def init(self):
+        if self._initialized:
+            return
         try:
             url = make_url(self.connection_string)
             db_name = url.database
@@ -70,6 +73,7 @@ class PGVectorStoreImpl(BaseVectorStore):
                 vector_store=self.vector_store_docs
             )
 
+            self._initialized = True
             logger.info("Postgres vector components initialized.")
 
         except Exception as e:
@@ -107,6 +111,7 @@ class PGVectorStoreImpl(BaseVectorStore):
         return self.storage_context_code, self.storage_context_docs
 
     def check_project_schema_exists(self):
+        engine = None
         try:
             engine = create_engine(self.connection_string)
             with engine.connect() as conn:
@@ -129,3 +134,34 @@ class PGVectorStoreImpl(BaseVectorStore):
         except Exception:
             logger.error(f"Error checking for project schema '{self.project_schema}'")
             raise VectorSchemaError()
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+    def close(self):
+        self._initialized = False
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(self, attr, None)
+            if store is None:
+                continue
+            close_fn = getattr(store, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception as e:
+                    logger.warning(f"Error closing PG vector store '{attr}': {e}")
+            for engine_attr in ("_engine", "engine"):
+                candidate_engine = getattr(store, engine_attr, None)
+                dispose_fn = getattr(candidate_engine, "dispose", None)
+                if callable(dispose_fn):
+                    try:
+                        dispose_fn()
+                    except Exception as e:
+                        logger.warning(
+                            f"Error disposing engine for PG vector store '{attr}': {e}"
+                        )
+            if hasattr(self, attr):
+                delattr(self, attr)
+        for attr in ("storage_context_code", "storage_context_docs"):
+            if hasattr(self, attr):
+                delattr(self, attr)

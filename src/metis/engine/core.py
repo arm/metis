@@ -92,6 +92,8 @@ class MetisEngine:
         # Graphs are built lazily on first use
         self._review_graph = None
         self._ask_graph = None
+        self._qe_code = None
+        self._qe_docs = None
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
@@ -555,6 +557,8 @@ class MetisEngine:
         logger.info("Index update complete based on the provided patch diff.")
 
     def _init_and_get_query_engines(self):
+        if self._qe_code is not None and self._qe_docs is not None:
+            return self._qe_code, self._qe_docs
         self.vector_backend.init()
         qe_code, qe_docs = self.vector_backend.get_query_engines(
             self.llm_provider,
@@ -563,4 +567,13 @@ class MetisEngine:
         )
         if not qe_code or not qe_docs:
             raise QueryEngineInitError()
+        self._qe_code = qe_code
+        self._qe_docs = qe_docs
         return qe_code, qe_docs
+
+    def close(self):
+        self._qe_code = None
+        self._qe_docs = None
+        close_fn = getattr(self.vector_backend, "close", None)
+        if callable(close_fn):
+            close_fn()
