@@ -11,6 +11,7 @@ from metis.exceptions import (
 from metis.vector_store.base import BaseVectorStore, QueryEngineRetriever
 from llama_index.vector_stores.postgres import PGVectorStore
 from sqlalchemy.engine.url import make_url
+from threading import Lock
 
 
 import logging
@@ -35,50 +36,81 @@ class PGVectorStoreImpl(BaseVectorStore):
         self.embed_dim = embed_dim
         self.hnsw_kwargs = hnsw_kwargs or {}
         self._initialized = False
+        self._init_lock = Lock()
+
+    def _cleanup_vector_components(self):
+        self._initialized = False
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(self, attr, None)
+            if store is None:
+                continue
+            close_fn = getattr(store, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception as e:
+                    logger.warning(f"Error closing PG vector store '{attr}': {e}")
+            for engine_attr in ("_engine", "engine"):
+                candidate_engine = getattr(store, engine_attr, None)
+                dispose_fn = getattr(candidate_engine, "dispose", None)
+                if callable(dispose_fn):
+                    try:
+                        dispose_fn()
+                    except Exception as e:
+                        logger.warning(
+                            f"Error disposing engine for PG vector store '{attr}': {e}"
+                        )
+            if hasattr(self, attr):
+                delattr(self, attr)
+        for attr in ("storage_context_code", "storage_context_docs"):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def init(self):
-        if self._initialized:
-            return
-        try:
-            url = make_url(self.connection_string)
-            db_name = url.database
+        with self._init_lock:
+            if self._initialized:
+                return
+            try:
+                url = make_url(self.connection_string)
+                db_name = url.database
 
-            self.vector_store_code = PGVectorStore.from_params(
-                database=db_name,
-                host=url.host,
-                password=url.password,
-                port=url.port,
-                user=url.username,
-                table_name="code",
-                schema_name=self.project_schema,
-                embed_dim=self.embed_dim,
-                hnsw_kwargs=self.hnsw_kwargs.copy(),
-            )
-            self.vector_store_docs = PGVectorStore.from_params(
-                database=db_name,
-                host=url.host,
-                password=url.password,
-                port=url.port,
-                user=url.username,
-                table_name="docs",
-                schema_name=self.project_schema,
-                embed_dim=self.embed_dim,
-                hnsw_kwargs=self.hnsw_kwargs.copy(),
-            )
+                self.vector_store_code = PGVectorStore.from_params(
+                    database=db_name,
+                    host=url.host,
+                    password=url.password,
+                    port=url.port,
+                    user=url.username,
+                    table_name="code",
+                    schema_name=self.project_schema,
+                    embed_dim=self.embed_dim,
+                    hnsw_kwargs=self.hnsw_kwargs.copy(),
+                )
+                self.vector_store_docs = PGVectorStore.from_params(
+                    database=db_name,
+                    host=url.host,
+                    password=url.password,
+                    port=url.port,
+                    user=url.username,
+                    table_name="docs",
+                    schema_name=self.project_schema,
+                    embed_dim=self.embed_dim,
+                    hnsw_kwargs=self.hnsw_kwargs.copy(),
+                )
 
-            self.storage_context_code = StorageContext.from_defaults(
-                vector_store=self.vector_store_code
-            )
-            self.storage_context_docs = StorageContext.from_defaults(
-                vector_store=self.vector_store_docs
-            )
+                self.storage_context_code = StorageContext.from_defaults(
+                    vector_store=self.vector_store_code
+                )
+                self.storage_context_docs = StorageContext.from_defaults(
+                    vector_store=self.vector_store_docs
+                )
 
-            self._initialized = True
-            logger.info("Postgres vector components initialized.")
+                self._initialized = True
+                logger.info("Postgres vector components initialized.")
 
-        except Exception as e:
-            logger.error(f"Error initializing PGVectorStore: {e}")
-            raise VectorStoreInitError()
+            except Exception as e:
+                logger.error(f"Error initializing PGVectorStore: {e}")
+                self._cleanup_vector_components()
+                raise VectorStoreInitError() from e
 
     def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
         try:
@@ -139,29 +171,5 @@ class PGVectorStoreImpl(BaseVectorStore):
                 engine.dispose()
 
     def close(self):
-        self._initialized = False
-        for attr in ("vector_store_code", "vector_store_docs"):
-            store = getattr(self, attr, None)
-            if store is None:
-                continue
-            close_fn = getattr(store, "close", None)
-            if callable(close_fn):
-                try:
-                    close_fn()
-                except Exception as e:
-                    logger.warning(f"Error closing PG vector store '{attr}': {e}")
-            for engine_attr in ("_engine", "engine"):
-                candidate_engine = getattr(store, engine_attr, None)
-                dispose_fn = getattr(candidate_engine, "dispose", None)
-                if callable(dispose_fn):
-                    try:
-                        dispose_fn()
-                    except Exception as e:
-                        logger.warning(
-                            f"Error disposing engine for PG vector store '{attr}': {e}"
-                        )
-            if hasattr(self, attr):
-                delattr(self, attr)
-        for attr in ("storage_context_code", "storage_context_docs"):
-            if hasattr(self, attr):
-                delattr(self, attr)
+        with self._init_lock:
+            self._cleanup_vector_components()
