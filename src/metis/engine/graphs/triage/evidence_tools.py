@@ -84,8 +84,8 @@ def _collect_file_context(
         tool_args={"path": file_path, "start_line": start, "end_line": end},
         section_label=f"FILE_WINDOW {file_path}:{start}-{end}",
         error_label="FILE_WINDOW_ERROR",
-        max_lines=C.FILE_WINDOW_MAX_LINES,
-        max_chars=C.FILE_WINDOW_MAX_CHARS,
+        max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
+        max_chars=C.DEFAULT_CAPTURE_MAX_CHARS,
         append_error_section=True,
         invoke=lambda: tool_runner.sed(file_path, start, end),
     )
@@ -119,12 +119,12 @@ def _collect_file_context(
         invoke=lambda: tool_runner.cat(file_path),
     )
     if file_text:
-        head = "\n".join(file_text.splitlines()[: C.FILE_WINDOW_MAX_LINES])
+        head = "\n".join(file_text.splitlines()[: C.DEFAULT_CAPTURE_MAX_LINES])
         file_head_context = head
         clipped = _limit_output(
             head,
-            max_lines=C.FILE_WINDOW_MAX_LINES,
-            max_chars=C.FILE_WINDOW_MAX_CHARS,
+            max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
+            max_chars=C.DEFAULT_CAPTURE_MAX_CHARS,
         )
         sections.append(f"[FILE_HEAD {file_path}]\n{clipped}")
         _emit_debug(
@@ -155,29 +155,31 @@ def _build_fallback_paths(file_path: str, global_scope: str = ".") -> list[str]:
 def _expand_related_paths(tool_runner, related_paths: list[str]) -> list[str]:
     expanded_related: list[str] = []
     seen_related: set[str] = set()
-    for rel_path in related_paths[:8]:
+    for rel_path in related_paths[: C.RELATED_PATH_INPUT_LIMIT]:
         if "/" not in rel_path:
             found_any = False
             try:
-                for found in tool_runner.find_name(rel_path, max_results=6):
+                for found in tool_runner.find_name(
+                    rel_path, max_results=C.FIND_NAME_MAX_RESULTS
+                ):
                     found_any = True
                     if found in seen_related:
                         continue
                     seen_related.add(found)
                     expanded_related.append(found)
-                    if len(expanded_related) >= 12:
+                    if len(expanded_related) >= C.EXPANDED_RELATED_MAX:
                         break
             except Exception:
                 found_any = False
             if found_any:
-                if len(expanded_related) >= 12:
+                if len(expanded_related) >= C.EXPANDED_RELATED_MAX:
                     break
                 continue
         if rel_path in seen_related:
             continue
         seen_related.add(rel_path)
         expanded_related.append(rel_path)
-        if len(expanded_related) >= 12:
+        if len(expanded_related) >= C.EXPANDED_RELATED_MAX:
             break
     return expanded_related
 
@@ -190,15 +192,17 @@ def _collect_readable_related_paths(
     expanded_related: list[str],
 ) -> list[str]:
     readable_related: list[str] = []
-    for rel_path in sorted(expanded_related[:10], key=lambda p: p.lower()):
+    for rel_path in sorted(
+        expanded_related[: C.READABLE_RELATED_MAX], key=lambda p: p.lower()
+    ):
         related_text = _safe_tool_capture(
             state,
             sections,
             tool_name="cat",
             tool_args={"path": rel_path},
             section_label=f"RELATED_FILE {rel_path}",
-            max_lines=C.RELATED_FILE_MAX_LINES,
-            max_chars=C.RELATED_FILE_MAX_CHARS,
+            max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
+            max_chars=C.DEFAULT_CAPTURE_MAX_CHARS,
             append_error_section=False,
             invoke=lambda rp=rel_path: tool_runner.cat(rp),
         )
@@ -221,7 +225,7 @@ def _collect_term_hits(
     max_followup_hits: int,
     max_sections: int,
 ) -> None:
-    for rel_path in readable_related[:10]:
+    for rel_path in readable_related[: C.READABLE_RELATED_MAX]:
         if len(followup_hits) >= max_followup_hits or len(sections) >= max_sections:
             break
         output = _safe_tool_capture(
@@ -267,7 +271,7 @@ def _collect_term_hits(
     ):
         if len(followup_hits) >= max_followup_hits or len(sections) >= max_sections:
             break
-        for probe_path in fallback_paths[:2]:
+        for probe_path in fallback_paths[: C.PROBE_FALLBACK_PATHS]:
             output = _safe_tool_capture(
                 state,
                 sections,
@@ -284,7 +288,7 @@ def _collect_term_hits(
             parsed = _parse_grep_hits(output)
             _extend_hits(followup_hits, parsed, max_total=max_followup_hits)
             if parsed:
-                for hit_path, hit_line in parsed[:4]:
+                for hit_path, hit_line in parsed[: C.PROBE_HINT_HITS]:
                     definition_hints.add(f"{term} @ {hit_path}:{hit_line}")
                 break
 

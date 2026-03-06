@@ -13,6 +13,14 @@ from .evidence_text import _parse_grep_hits, _token_pattern
 from .evidence_tools import _safe_tool_capture, _build_fallback_paths
 
 
+def _append_labeled_lines(
+    sections: list[str], label: str, lines: list[str], *, limit: int = C.MAX_CITATIONS
+) -> None:
+    if not lines:
+        return
+    sections.append(f"[{label}]\n" + "\n".join(lines[:limit]))
+
+
 def _collect_analyzer_sections(
     state: TriageState,
     sections: list[str],
@@ -71,10 +79,7 @@ def _collect_analyzer_sections(
         unresolved = list(getattr(evidence, "unresolved_hops", []) or [])
         if summary:
             sections.append(f"[ANALYZER_FALLBACK]\n{summary}")
-        if unresolved:
-            sections.append(
-                "[ANALYZER_UNRESOLVED]\n" + "\n".join(unresolved[: C.MAX_CITATIONS])
-            )
+        _append_labeled_lines(sections, "ANALYZER_UNRESOLVED", unresolved)
         return False, False, [], unresolved[: C.MAX_CITATIONS]
 
     summary = str(getattr(evidence, "summary", "") or "").strip()
@@ -87,32 +92,16 @@ def _collect_analyzer_sections(
 
     if summary:
         sections.append(f"[ANALYZER_SUMMARY]\n{summary}")
-    if citations:
-        sections.append(
-            "[ANALYZER_CITATIONS]\n" + "\n".join(citations[: C.MAX_CITATIONS])
-        )
-    if resolution_chain:
-        sections.append(
-            "[ANALYZER_RESOLUTION_CHAIN]\n"
-            + "\n".join(resolution_chain[: C.MAX_CITATIONS])
-        )
-    if flow_chain:
-        sections.append(
-            "[ANALYZER_FLOW_CHAIN]\n" + "\n".join(flow_chain[: C.MAX_CITATIONS])
-        )
-    if unresolved:
-        sections.append(
-            "[ANALYZER_UNRESOLVED]\n" + "\n".join(unresolved[: C.MAX_CITATIONS])
-        )
-    if fallback_targets:
-        sections.append(
-            "[ANALYZER_FALLBACK_TARGETS]\n"
-            + "\n".join(fallback_targets[: C.MAX_CITATIONS])
-        )
-    if extra_sections:
-        sections.append(
-            "[ANALYZER_SECTIONS]\n" + "\n".join(extra_sections[: C.MAX_CITATIONS])
-        )
+    labeled_lists = [
+        ("ANALYZER_CITATIONS", citations),
+        ("ANALYZER_RESOLUTION_CHAIN", resolution_chain),
+        ("ANALYZER_FLOW_CHAIN", flow_chain),
+        ("ANALYZER_UNRESOLVED", unresolved),
+        ("ANALYZER_FALLBACK_TARGETS", fallback_targets),
+        ("ANALYZER_SECTIONS", extra_sections),
+    ]
+    for label, lines in labeled_lists:
+        _append_labeled_lines(sections, label, lines)
 
     has_citations = bool(citations)
     return (
@@ -238,31 +227,22 @@ def _emit_hybrid_fallback_policy(
 ) -> None:
     if not analyzer_supported:
         return
-    if analyzer_fallback_targets:
-        _emit_debug(
-            state,
-            "tool_call",
-            tool_name="triage_fallback_policy",
-            tool_args={
-                "policy": "hybrid_baseline_plus_targeted",
-                "reason": "analyzer_supported_with_unresolved_or_explicit_targets",
-            },
-            tool_output={
-                "analyzer_supported": analyzer_supported,
-                "analyzer_has_citations": analyzer_has_citations,
-                "fallback_targets": analyzer_fallback_targets,
-            },
-        )
-        return
+    has_targets = bool(analyzer_fallback_targets)
+    policy = "hybrid_baseline_plus_targeted" if has_targets else "hybrid_baseline"
+    reason = (
+        "analyzer_supported_with_unresolved_or_explicit_targets"
+        if has_targets
+        else "analyzer_supported"
+    )
     _emit_debug(
         state,
         "tool_call",
         tool_name="triage_fallback_policy",
-        tool_args={"policy": "hybrid_baseline", "reason": "analyzer_supported"},
+        tool_args={"policy": policy, "reason": reason},
         tool_output={
             "analyzer_supported": analyzer_supported,
             "analyzer_has_citations": analyzer_has_citations,
-            "fallback_targets": [],
+            "fallback_targets": analyzer_fallback_targets if has_targets else [],
         },
     )
 

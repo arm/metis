@@ -33,7 +33,7 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.llm_provider = llm_provider
         self.llama_query_model = llama_query_model
         self.plugin_config = plugin_config
-        self.max_workers = max_workers
+        self.max_workers = max(1, max_workers)
         self.triage_similarity_top_k = triage_similarity_top_k
         self.triage_checkpoint_every = triage_checkpoint_every
         self.triage_tool_timeout_seconds = int(triage_tool_timeout_seconds)

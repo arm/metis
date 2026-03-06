@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
-from typing import Callable
 
 from metis.engine.graphs.types import TriageRequest
 from metis.sarif.triage import (
@@ -137,36 +136,6 @@ class TriageServiceExecutionMixin:
         )
         return processed
 
-    def _process_finding_execution(
-        self,
-        *,
-        triaged_payload: dict,
-        finding,
-        total: int,
-        idx: int,
-        execute: Callable[[], dict],
-        progress_callback,
-        checkpoint_callback,
-        processed: int,
-    ) -> int:
-        try:
-            decision = execute()
-            error = None
-        except Exception as exc:
-            decision = None
-            error = exc
-        return self._handle_finding_result(
-            triaged_payload=triaged_payload,
-            finding=finding,
-            total=total,
-            idx=idx,
-            decision=decision,
-            error=error,
-            progress_callback=progress_callback,
-            checkpoint_callback=checkpoint_callback,
-            processed=processed,
-        )
-
     def _triage_findings_parallel(
         self,
         *,
@@ -176,9 +145,9 @@ class TriageServiceExecutionMixin:
         progress_callback,
         debug_callback,
         checkpoint_callback,
-        processed: int,
-    ) -> int:
-        with ThreadPoolExecutor(max_workers=max(1, self.max_workers)) as executor:
+    ) -> None:
+        processed = 0
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_map = {}
             for idx, finding in enumerate(findings, start=1):
                 self._emit_triage_progress(
@@ -197,17 +166,23 @@ class TriageServiceExecutionMixin:
 
             for future in as_completed(future_map):
                 idx, finding = future_map[future]
-                processed = self._process_finding_execution(
+                try:
+                    decision = future.result()
+                    error = None
+                except Exception as exc:
+                    decision = None
+                    error = exc
+                processed = self._handle_finding_result(
                     triaged_payload=triaged_payload,
                     finding=finding,
                     total=total,
                     idx=idx,
-                    execute=lambda fut=future: fut.result(),
+                    decision=decision,
+                    error=error,
                     progress_callback=progress_callback,
                     checkpoint_callback=checkpoint_callback,
                     processed=processed,
                 )
-        return processed
 
     def triage_sarif_payload(
         self,
@@ -223,7 +198,6 @@ class TriageServiceExecutionMixin:
             return triaged
 
         total = len(findings)
-        processed = 0
 
         try:
             self._get_thread_triage_query_engines()
@@ -241,7 +215,6 @@ class TriageServiceExecutionMixin:
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_callback=checkpoint_callback,
-            processed=processed,
         )
 
         return triaged
