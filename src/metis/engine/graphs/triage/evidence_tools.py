@@ -278,8 +278,8 @@ def _collect_term_hits(
                 tool_name="grep",
                 tool_args={"pattern": probe, "path": probe_path},
                 section_label=f"GREP_PROBE {term} / {probe} IN {probe_path}",
-                max_lines=C.PROBE_GREP_MAX_LINES,
-                max_chars=C.PROBE_GREP_MAX_CHARS,
+                max_lines=C.RELATED_GREP_MAX_LINES,
+                max_chars=C.RELATED_GREP_MAX_CHARS,
                 append_error_section=False,
                 invoke=lambda pp=probe_path: tool_runner.grep(probe, pp),
             )

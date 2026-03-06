@@ -140,12 +140,12 @@ def _collect_targeted_recovery_sections(
             grep_max_lines = (
                 C.TARGETED_ROOT_GREP_MAX_LINES
                 if path == "."
-                else C.TARGETED_GREP_MAX_LINES
+                else C.RELATED_GREP_MAX_LINES
             )
             grep_max_chars = (
                 C.TARGETED_ROOT_GREP_MAX_CHARS
                 if path == "."
-                else C.TARGETED_GREP_MAX_CHARS
+                else C.RELATED_GREP_MAX_CHARS
             )
             output = _safe_tool_capture(
                 state,
