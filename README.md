@@ -57,16 +57,42 @@ By default, Metis uses **ChromaDB** for local, no-setup usage. You can also use 
 
 ### 1. **Installation**
 
-After cloning the repository, you can either create a virtual environment or install dependencies system-wide.
+Clone the repository by either:
+
+Forking it to your own GitHub account, then run:
+```bash
+git clone https://github.com/YOUR_USERNAME/metis.git
+cd metis
+```
+Or simply cloning directly from the repository:
+```bash
+git clone https://github.com/arm/metis.git
+cd metis
+```
+You can either create a virtual environment or install dependencies system-wide.
 
 To use a virtual environment (recommended):
 
+Create the virtual environment.
 ```bash
 uv venv
+```
+Activate the virtual environment.
+
+Linux/MacOS
+```bash
+source .venv/bin/activate
+```
+Windows
+```bash
+.venv\Scripts\activate
+```
+Then run:
+```bash
 uv pip install .
 ```
 
-or install system wide using --system:
+Or install system wide using --system:
 
 ```bash
 uv pip install . --system
@@ -79,12 +105,8 @@ uv pip install '.[postgres]'
 ```
 
 ### 1.1 **Docker**
-
+Ensure docker is installed which can be completed [here](https://docs.docker.com/get-started/get-docker/).
 ```bash
-git clone https://github.com/arm/metis.git
-
-cd metis
-
 docker build -t metis .
 ```
 
