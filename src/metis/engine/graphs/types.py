@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Dict, Optional, TypedDict, Required, NotRequired
@@ -55,3 +55,39 @@ class AskState(TypedDict, total=False):
     code: str
     docs: str
     answer: str
+
+
+class TriageRequest(TypedDict):
+    finding_message: Required[str]
+    finding_file_path: Required[str]
+    finding_line: Required[int]
+    finding_rule_id: Required[str]
+    finding_snippet: Required[str]
+    retriever_code: Required[Any]
+    retriever_docs: Required[Any]
+    debug_callback: NotRequired[Any]
+    triage_analyzer: NotRequired[Any]
+    triage_codebase_path: NotRequired[str]
+
+
+class TriageState(TypedDict, total=False):
+    finding_message: str
+    finding_file_path: str
+    finding_line: int
+    finding_rule_id: str
+    finding_snippet: str
+    retriever_code: Any
+    retriever_docs: Any
+    debug_callback: Any
+    triage_analyzer: Any
+    triage_codebase_path: str
+    triage_system_prompt: str
+    triage_decision_prompt: str
+    context: str
+    evidence_pack: str
+    tool_transcript: str
+    decision_status: str
+    decision_reason: str
+    decision_evidence: list[str]
+    decision_resolution_chain: list[str]
+    decision_unresolved_hops: list[str]
