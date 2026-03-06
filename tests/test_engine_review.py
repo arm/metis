@@ -137,11 +137,17 @@ def test_index_then_non_interactive_review_code_avoids_chroma_init_race(
     )
 
     args = SimpleNamespace(verbose=False, quiet=True, output_file=[])
-    release_timer = threading.Timer(0.05, release_init.set)
-    release_timer.start()
+
+    def _release_after_init_starts():
+        init_started.wait(timeout=2)
+        release_init.set()
+
+    release_thread = threading.Thread(target=_release_after_init_starts)
+    release_thread.start()
     run_review_code(review_engine, args)
-    release_timer.cancel()
+    release_thread.join(timeout=2)
 
     assert init_started.is_set()
+    assert not release_thread.is_alive()
     assert init_call_count == 1
     assert len(captured_results["value"]["reviews"]) == max_workers

@@ -218,6 +218,47 @@ def test_close_clears_cached_query_engines_after_concurrent_init(dummy_llm):
     assert engine._qe_docs is None
 
 
+def test_init_releases_query_engine_lock_while_backend_init_runs(dummy_llm):
+    init_started = threading.Event()
+    release_init = threading.Event()
+
+    class _Backend:
+        def init(self):
+            init_started.set()
+            release_init.wait(timeout=2)
+
+        def get_query_engines(self, *_args, **_kwargs):
+            return (object(), object())
+
+        def close(self):
+            return None
+
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=_Backend(),
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    init_thread = threading.Thread(target=engine._init_and_get_query_engines)
+    init_thread.start()
+    assert init_started.wait(timeout=2)
+
+    lock_was_released = engine._qe_init_lock.acquire(blocking=False)
+    if lock_was_released:
+        engine._qe_init_lock.release()
+
+    release_init.set()
+    init_thread.join(timeout=2)
+
+    assert not init_thread.is_alive()
+    assert lock_was_released is True
+
+
 def test_close_clears_cached_query_engines_when_backend_close_fails(dummy_llm):
     qe_code = object()
     qe_docs = object()
@@ -252,3 +293,213 @@ def test_close_clears_cached_query_engines_when_backend_close_fails(dummy_llm):
 
     assert engine._qe_code is None
     assert engine._qe_docs is None
+
+
+def test_close_invalidates_cached_query_engines_and_reinits_on_next_access(dummy_llm):
+    first_qe_code = object()
+    first_qe_docs = object()
+    second_qe_code = object()
+    second_qe_docs = object()
+
+    class _Backend:
+        def __init__(self):
+            self.init_call_count = 0
+            self.close_call_count = 0
+            self._next_engines = [
+                (first_qe_code, first_qe_docs),
+                (second_qe_code, second_qe_docs),
+            ]
+
+        def init(self):
+            self.init_call_count += 1
+
+        def get_query_engines(self, *_args, **_kwargs):
+            return self._next_engines.pop(0)
+
+        def close(self):
+            self.close_call_count += 1
+
+    backend = _Backend()
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    assert engine._init_and_get_query_engines() == (first_qe_code, first_qe_docs)
+    assert engine._init_and_get_query_engines() == (first_qe_code, first_qe_docs)
+    assert backend.init_call_count == 1
+
+    engine.close()
+    assert backend.close_call_count == 1
+    assert engine._qe_code is None
+    assert engine._qe_docs is None
+
+    assert engine._init_and_get_query_engines() == (second_qe_code, second_qe_docs)
+    assert backend.init_call_count == 2
+
+
+def test_close_blocks_reinit_until_backend_close_completes(dummy_llm):
+    close_started = threading.Event()
+    release_close = threading.Event()
+    init_completed = threading.Event()
+
+    class _Backend:
+        def __init__(self):
+            self.init_call_count = 0
+
+        def init(self):
+            self.init_call_count += 1
+
+        def get_query_engines(self, *_args, **_kwargs):
+            return (object(), object())
+
+        def close(self):
+            close_started.set()
+            release_close.wait(timeout=2)
+
+    backend = _Backend()
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    engine._init_and_get_query_engines()
+    assert backend.init_call_count == 1
+
+    close_errors = []
+    init_errors = []
+
+    def _call_close():
+        try:
+            engine.close()
+        except Exception as exc:
+            close_errors.append(exc)
+
+    def _call_init():
+        try:
+            engine._init_and_get_query_engines()
+        except Exception as exc:
+            init_errors.append(exc)
+        finally:
+            init_completed.set()
+
+    close_thread = threading.Thread(target=_call_close)
+    close_thread.start()
+    assert close_started.wait(timeout=2)
+
+    init_thread = threading.Thread(target=_call_init)
+    init_thread.start()
+    assert not init_completed.wait(timeout=0.2)
+
+    release_close.set()
+    assert init_completed.wait(timeout=2)
+
+    assert not close_errors
+    assert not init_errors
+    assert backend.init_call_count == 2
+
+    close_thread.join(timeout=2)
+    init_thread.join(timeout=2)
+    assert not close_thread.is_alive()
+    assert not init_thread.is_alive()
+
+
+def test_init_clears_in_progress_flag_on_base_exception(dummy_llm):
+    first_qe_code = object()
+    first_qe_docs = object()
+
+    class _FatalInitError(BaseException):
+        pass
+
+    class _Backend:
+        def __init__(self):
+            self.init_call_count = 0
+
+        def init(self):
+            self.init_call_count += 1
+            if self.init_call_count == 1:
+                raise _FatalInitError("fatal init interruption")
+
+        def get_query_engines(self, *_args, **_kwargs):
+            return (first_qe_code, first_qe_docs)
+
+    backend = _Backend()
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    with pytest.raises(_FatalInitError, match="fatal init interruption"):
+        engine._init_and_get_query_engines()
+
+    assert engine._qe_init_in_progress is False
+    assert engine._init_and_get_query_engines() == (first_qe_code, first_qe_docs)
+    assert backend.init_call_count == 2
+
+
+def test_close_resets_close_state_when_close_lookup_fails(dummy_llm):
+    first_qe_code = object()
+    first_qe_docs = object()
+    second_qe_code = object()
+    second_qe_docs = object()
+
+    class _Backend:
+        def __init__(self):
+            self.init_call_count = 0
+            self._engines = [
+                (first_qe_code, first_qe_docs),
+                (second_qe_code, second_qe_docs),
+            ]
+
+        def __getattribute__(self, name):
+            if name == "close":
+                raise RuntimeError("close lookup failed")
+            return object.__getattribute__(self, name)
+
+        def init(self):
+            self.init_call_count += 1
+
+        def get_query_engines(self, *_args, **_kwargs):
+            return self._engines.pop(0)
+
+    backend = _Backend()
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    assert engine._init_and_get_query_engines() == (first_qe_code, first_qe_docs)
+
+    with pytest.raises(RuntimeError, match="close lookup failed"):
+        engine.close()
+
+    assert engine._qe_close_in_progress is False
+    assert engine._qe_code is None
+    assert engine._qe_docs is None
+
+    assert engine._init_and_get_query_engines() == (second_qe_code, second_qe_docs)
+    assert backend.init_call_count == 2

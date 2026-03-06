@@ -24,7 +24,9 @@ class ChromaStore(BaseVectorStore):
         self._initialized = False
         self._init_lock = Lock()
 
-    def _clear_state(self):
+    def _detach_state(self, client=None):
+        # Drop shared state under _init_lock so other threads can re-init immediately.
+        detached_client = self._client if client is None else client
         self._client = None
         self._initialized = False
         for attr in (
@@ -35,16 +37,35 @@ class ChromaStore(BaseVectorStore):
         ):
             if hasattr(self, attr):
                 delattr(self, attr)
+        return detached_client
 
     def _stop_client(self, client):
+        # Chroma shutdown can block; callers decide whether lock must be held.
         if client is None:
             return
         try:
-            client._system.stop()
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                # close() is refcount-aware for shared PersistentClient systems.
+                close_fn()
+                return
+            stop_fn = getattr(getattr(client, "_system", None), "stop", None)
+            if callable(stop_fn):
+                stop_fn()
         except Exception as e:
             logger.warning(f"Error closing ChromaStore: {e}")
 
+    def _stop_client_legacy_path_under_lock(self, client):
+        # client._system.stop() is not refcount-aware on older chromadb clients.
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            return client
+        self._stop_client(client)
+        return None
+
     def init(self):
+        client_to_stop = None
+        init_error = None
         with self._init_lock:
             if self._initialized:
                 return
@@ -76,9 +97,16 @@ class ChromaStore(BaseVectorStore):
 
             except Exception as e:
                 logger.error(f"Error initializing ChromaStore: {e}")
-                self._stop_client(client)
-                self._clear_state()
-                raise VectorStoreInitError() from e
+                client_to_stop = self._detach_state(client)
+                if client_to_stop is not None:
+                    client_to_stop = self._stop_client_legacy_path_under_lock(
+                        client_to_stop
+                    )
+                init_error = e
+
+        self._stop_client(client_to_stop)
+        if init_error is not None:
+            raise VectorStoreInitError() from init_error
 
     def get_query_engines(
         self, llm_provider, similarity_top_k=None, response_mode=None
@@ -117,6 +145,8 @@ class ChromaStore(BaseVectorStore):
 
     def close(self):
         with self._init_lock:
-            client = self._client
-            self._clear_state()
-            self._stop_client(client)
+            client = self._detach_state()
+            if client is not None:
+                client = self._stop_client_legacy_path_under_lock(client)
+
+        self._stop_client(client)

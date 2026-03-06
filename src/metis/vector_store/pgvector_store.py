@@ -38,10 +38,25 @@ class PGVectorStoreImpl(BaseVectorStore):
         self._initialized = False
         self._init_lock = Lock()
 
-    def _cleanup_vector_components(self):
+    def _detach_vector_components(self):
+        # Detach shared store/context refs while holding _init_lock.
         self._initialized = False
+        detached_stores = []
         for attr in ("vector_store_code", "vector_store_docs"):
             store = getattr(self, attr, None)
+            if store is not None:
+                detached_stores.append((attr, store))
+            if hasattr(self, attr):
+                delattr(self, attr)
+        for attr in ("storage_context_code", "storage_context_docs"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+        return detached_stores
+
+    def _dispose_vector_components(self, detached_stores):
+        # Disposal may block on I/O, so it runs after lock-protected detachment.
+        disposed_engines = set()
+        for attr, store in detached_stores:
             if store is None:
                 continue
             close_fn = getattr(store, "close", None)
@@ -52,6 +67,12 @@ class PGVectorStoreImpl(BaseVectorStore):
                     logger.warning(f"Error closing PG vector store '{attr}': {e}")
             for engine_attr in ("_engine", "engine"):
                 candidate_engine = getattr(store, engine_attr, None)
+                if candidate_engine is None:
+                    continue
+                engine_id = id(candidate_engine)
+                if engine_id in disposed_engines:
+                    continue
+                disposed_engines.add(engine_id)
                 dispose_fn = getattr(candidate_engine, "dispose", None)
                 if callable(dispose_fn):
                     try:
@@ -60,13 +81,10 @@ class PGVectorStoreImpl(BaseVectorStore):
                         logger.warning(
                             f"Error disposing engine for PG vector store '{attr}': {e}"
                         )
-            if hasattr(self, attr):
-                delattr(self, attr)
-        for attr in ("storage_context_code", "storage_context_docs"):
-            if hasattr(self, attr):
-                delattr(self, attr)
 
     def init(self):
+        detached_stores = []
+        init_error = None
         with self._init_lock:
             if self._initialized:
                 return
@@ -109,8 +127,12 @@ class PGVectorStoreImpl(BaseVectorStore):
 
             except Exception as e:
                 logger.error(f"Error initializing PGVectorStore: {e}")
-                self._cleanup_vector_components()
-                raise VectorStoreInitError() from e
+                detached_stores = self._detach_vector_components()
+                init_error = e
+
+        self._dispose_vector_components(detached_stores)
+        if init_error is not None:
+            raise VectorStoreInitError() from init_error
 
     def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
         try:
@@ -172,4 +194,6 @@ class PGVectorStoreImpl(BaseVectorStore):
 
     def close(self):
         with self._init_lock:
-            self._cleanup_vector_components()
+            detached_stores = self._detach_vector_components()
+
+        self._dispose_vector_components(detached_stores)
