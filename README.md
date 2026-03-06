@@ -57,9 +57,16 @@ By default, Metis uses **ChromaDB** for local, no-setup usage. You can also use 
 
 ### 1. **Installation**
 
-Clone the repository by forking it to your own GitHub account, then run:
+Clone the repository by either:
+
+Forking it to your own GitHub account, then run:
 ```bash
 git clone https://github.com/YOUR_USERNAME/metis.git
+cd metis
+```
+Or simply cloning directly from the repository:
+```bash
+git clone https://github.com/arm/metis.git
 cd metis
 ```
 You can either create a virtual environment or install dependencies system-wide.
