@@ -128,12 +128,25 @@ def _collect_targeted_recovery_sections(
         file_path=file_path,
         analyzer_unresolved_hops=analyzer_unresolved_hops,
     )
+    root_scope_symbols = _extract_cross_boundary_symbols(analyzer_unresolved_hops)
     targets = [t for t in fallback_targets if t][: C.MAX_TARGETS]
     for target in targets:
         if len(sections) >= max_sections:
             break
         pattern = _token_pattern(target)
         for path in fallback_paths:
+            if path == "." and root_scope_symbols and target not in root_scope_symbols:
+                continue
+            grep_max_lines = (
+                C.TARGETED_ROOT_GREP_MAX_LINES
+                if path == "."
+                else C.TARGETED_GREP_MAX_LINES
+            )
+            grep_max_chars = (
+                C.TARGETED_ROOT_GREP_MAX_CHARS
+                if path == "."
+                else C.TARGETED_GREP_MAX_CHARS
+            )
             output = _safe_tool_capture(
                 state,
                 sections,
@@ -141,8 +154,8 @@ def _collect_targeted_recovery_sections(
                 tool_args={"pattern": pattern, "path": path, "mode": "targeted"},
                 section_label=f"TARGETED_GREP {target} IN {path}",
                 error_label=f"TARGETED_GREP_ERROR {target}",
-                max_lines=C.TARGETED_GREP_MAX_LINES,
-                max_chars=C.TARGETED_GREP_MAX_CHARS,
+                max_lines=grep_max_lines,
+                max_chars=grep_max_chars,
                 append_error_section=False,
                 invoke=lambda gp=path: tool_runner.grep(pattern, gp),
             )
@@ -174,15 +187,6 @@ def _collect_targeted_recovery_sections(
                 break
 
 
-def _has_cross_boundary_unresolved_hops(unresolved_hops: list[str]) -> bool:
-    if not unresolved_hops:
-        return False
-    for hop in unresolved_hops:
-        if is_cross_boundary_unresolved_hop(hop):
-            return True
-    return False
-
-
 def _build_targeted_recovery_paths(
     *,
     file_path: str,
@@ -194,6 +198,33 @@ def _build_targeted_recovery_paths(
             paths = [p for p in paths if p != "."]
         paths = ["."] + paths
     return paths
+
+
+def _has_cross_boundary_unresolved_hops(unresolved_hops: list[str]) -> bool:
+    if not unresolved_hops:
+        return False
+    for hop in unresolved_hops:
+        if is_cross_boundary_unresolved_hop(hop):
+            return True
+    return False
+
+
+def _extract_cross_boundary_symbols(unresolved_hops: list[str]) -> set[str]:
+    symbols: set[str] = set()
+    for hop in unresolved_hops:
+        text = str(hop or "").strip()
+        if not is_cross_boundary_unresolved_hop(text):
+            continue
+        if ":" not in text:
+            continue
+        candidate = text.split(":", 1)[1].strip()
+        if not candidate:
+            continue
+        if ":" in candidate:
+            candidate = candidate.split(":", 1)[0].strip()
+        if candidate:
+            symbols.add(candidate)
+    return symbols
 
 
 def _merge_terms_with_fallback_targets(

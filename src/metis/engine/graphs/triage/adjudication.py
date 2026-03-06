@@ -6,7 +6,6 @@ from __future__ import annotations
 
 _CONTRADICTION_SIGNALS = (
     "contradict",
-    "not present",
     "cannot reproduce",
     "false positive",
     "guarded against",
