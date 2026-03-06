@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -29,8 +30,38 @@ def extract_c_family_seed_symbols(
     *,
     limit: int = 20,
 ) -> list[str]:
-    # Prefer symbols from code snippet, then rule id / path fragments.
     path_tokens = re.split(r"[^A-Za-z0-9_]+", file_path or "")
     return extract_code_like_symbols(
         snippet or "", rule_id or "", " ".join(path_tokens), limit=limit
     )
+
+
+def parse_includes_from_text(text: str) -> list[str]:
+    out: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("#include"):
+            continue
+        quoted = re.findall(r'#include\s*"([^"]+)"', line)
+        if quoted:
+            out.extend(quoted)
+            continue
+        angled = re.findall(r"#include\s*<([^>]+)>", line)
+        if angled:
+            out.extend(angled)
+    return out
+
+
+def resolve_include_path(
+    *, include: str, current_path: Path, root: Path
+) -> Path | None:
+    candidate = include.strip()
+    if not candidate:
+        return None
+    local = (current_path.parent / candidate).resolve()
+    if local.is_file():
+        return local
+    rooted = (root / candidate).resolve()
+    if rooted.is_file():
+        return rooted
+    return None
