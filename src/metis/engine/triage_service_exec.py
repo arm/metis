@@ -167,39 +167,6 @@ class TriageServiceExecutionMixin:
             processed=processed,
         )
 
-    def _triage_findings_sequential(
-        self,
-        *,
-        findings,
-        triaged_payload: dict,
-        total: int,
-        progress_callback,
-        debug_callback,
-        checkpoint_callback,
-        processed: int,
-    ) -> int:
-        for idx, finding in enumerate(findings, start=1):
-            self._emit_triage_progress(
-                progress_callback,
-                total,
-                "start",
-                index=idx,
-                finding=finding,
-            )
-            processed = self._process_finding_execution(
-                triaged_payload=triaged_payload,
-                finding=finding,
-                total=total,
-                idx=idx,
-                execute=lambda f=finding: self._triage_one_finding(
-                    f, debug_callback=debug_callback
-                ),
-                progress_callback=progress_callback,
-                checkpoint_callback=checkpoint_callback,
-                processed=processed,
-            )
-        return processed
-
     def _triage_findings_parallel(
         self,
         *,
@@ -211,7 +178,7 @@ class TriageServiceExecutionMixin:
         checkpoint_callback,
         processed: int,
     ) -> int:
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=max(1, self.max_workers)) as executor:
             future_map = {}
             for idx, finding in enumerate(findings, start=1):
                 self._emit_triage_progress(
@@ -258,23 +225,12 @@ class TriageServiceExecutionMixin:
         total = len(findings)
         processed = 0
 
-        if total <= 1 or self.max_workers <= 1:
-            try:
-                self._get_thread_triage_query_engines()
-            except Exception as exc:
-                logger.warning(
-                    "Skipping triage annotations due to initialization failure: %s",
-                    exc,
-                )
-                return triaged
-            self._triage_findings_sequential(
-                findings=findings,
-                triaged_payload=triaged,
-                total=total,
-                progress_callback=progress_callback,
-                debug_callback=debug_callback,
-                checkpoint_callback=checkpoint_callback,
-                processed=processed,
+        try:
+            self._get_thread_triage_query_engines()
+        except Exception as exc:
+            logger.warning(
+                "Skipping triage annotations due to initialization failure: %s",
+                exc,
             )
             return triaged
 
