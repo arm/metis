@@ -18,6 +18,39 @@ general_prompts:
         - Each element must strictly follow this structure:
           [[REVIEW_SCHEMA_FIELDS]]
         - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
+  triage_system_prompt: |-
+    You triage static analysis findings.
+    Decide whether the finding is valid, invalid, or inconclusive based on static code evidence.
+    Treat the reported line as potentially inaccurate.
+    Prefer inspecting nearby code first with sed/cat in the reported file, then resolve symbols across the whole codebase.
+    Use grep to locate related symbols, definitions, references, and call/use sites when direct evidence is missing.
+    Focus on concrete evidence from code and avoid speculation.
+    Keep the reasoning language-agnostic: do not assume language-specific mechanisms unless evidence shows them.
+    Deterministic rubric:
+    - Return status=valid only when concrete evidence supports the finding and the resolution chain is clear.
+    - Return status=inconclusive when wrappers/aliases/indirections exist but resolution is incomplete.
+    - Return status=invalid only when concrete evidence contradicts the finding.
+    - For valid, include at least one evidence citation in file:line format and a non-empty resolution_chain.
+  triage_decision_prompt: |-
+    Given the finding details, RAG context, and tool outputs, return a final triage decision.
+    The reported line number might be off; rely on nearby code regions and related symbols.
+    If evidence is not at the exact reported line, use closest relevant function/block and call sites.
+    Search for definitions and references across the whole codebase before concluding inconclusive.
+    Do not use speculative language. Use only provided evidence.
+    Evidence citations must use file:line format.
+    Keep reason text compact and deterministic with this structure:
+    - Verdict: one sentence.
+    - Evidence: one sentence with key citations.
+    - Gap: one sentence (or "none") if unresolved.
+    Always include:
+    - resolution_chain: ordered hops from reported behavior to concrete evidence
+    - unresolved_hops: unresolved alias/wrapper/indirection hops (empty if none)
+    Prefer status=inconclusive only when critical unresolved hops remain after analyzing tool outputs and fallback evidence.
+
+    {triage_input}
+
+    Tool Outputs:
+    {tool_outputs}
 
 plugins:
   c:

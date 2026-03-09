@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
@@ -29,6 +29,7 @@ from .commands import (
     run_review,
     run_file_review,
     run_review_code,
+    run_triage,
     run_update,
     show_help,
     show_version,
@@ -54,6 +55,7 @@ COMMANDS = {
     "update": run_update,
     "review_file": run_file_review,
     "ask": run_ask,
+    "triage": run_triage,
     "help": show_help,
     "version": show_version,
     "exit": None,
@@ -74,6 +76,10 @@ def determine_output_file(cmd, args, cmd_args):
 
     if overrides:
         args.output_file = overrides
+        return
+
+    if cmd == "triage":
+        args.output_file = existing_outputs
         return
 
     if existing_outputs:
@@ -105,7 +111,13 @@ def execute_command(engine, cmd, cmd_args, args):
     determine_output_file(cmd, args, cmd_args)
     func = COMMANDS[cmd]
 
-    if cmd in ("review_patch", "review_file", "update"):
+    if cmd in ("review_patch", "review_file", "update", "triage"):
+        if not cmd_args:
+            print_console(
+                f"[red]Error:[/red] Command '{escape(cmd)}' requires a file path argument.",
+                args.quiet,
+            )
+            return
         func(engine, cmd_args[0], args)
     elif cmd == "ask":
         func(engine, " ".join(cmd_args), args)
@@ -157,6 +169,16 @@ def main():
         "--command",
         type=str,
         help="Command to run in non-interactive mode (e.g., 'review_patch file.patch')",
+    )
+    parser.add_argument(
+        "--triage",
+        action="store_true",
+        help="After review commands, triage findings and annotate SARIF output.",
+    )
+    parser.add_argument(
+        "--include-triaged",
+        action="store_true",
+        help="Include findings already triaged by Metis when running triage.",
     )
 
     args = parser.parse_args()

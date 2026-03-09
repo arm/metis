@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -117,6 +117,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["embed_dim"] = engine_cfg.get("embed_dim", 1536)
     runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
     runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
+    runtime["triage_checkpoint_every"] = engine_cfg.get("triage_checkpoint_every", 50)
+    runtime["triage_tool_timeout_seconds"] = engine_cfg.get(
+        "triage_tool_timeout_seconds", 12
+    )
     runtime["hnsw_kwargs"] = engine_cfg.get(
         "hnsw_kwargs",
         {
@@ -140,6 +144,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
+    runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
     runtime["response_mode"] = query_cfg.get("response_mode", "compact")
 
     return runtime

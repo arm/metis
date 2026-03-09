@@ -1,12 +1,15 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 
 import importlib
+from pathlib import Path
 from rich.console import Console
 from rich.markup import escape
 
 from metis.utils import read_file_content, safe_decode_unicode
+from metis.sarif.writer import generate_sarif
+from .triage_cli import run_triage_action
 from .utils import (
     check_file_exists,
     with_spinner,
@@ -34,6 +37,7 @@ Type one of the following commands (with arguments):
 - [cyan]review_patch mypatch.diff[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
 - [cyan]review_code[/cyan]
+- [cyan]triage findings.sarif[/cyan]
 - [cyan]update patch.diff[/cyan]
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
@@ -43,7 +47,9 @@ Options:
     --backend chroma|postgres  Vector backend to use (default: chroma).
     --output-file PATH         Save analysis results to this file.
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
-    --project-schema SCHEMA    (Optional) Project identifier if postresql is used.
+    --triage                   Triage findings and annotate SARIF output for review commands.
+    --include-triaged          Include findings already triaged by Metis.
+    --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
@@ -65,8 +71,7 @@ def run_review(engine, patch_file, args):
         patch_file=patch_file,
         quiet=args.quiet,
     )
-    pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet)
+    _finalize_review_output(engine, results, args)
 
 
 def run_file_review(engine, file_path, args):
@@ -84,8 +89,7 @@ def run_file_review(engine, file_path, args):
     else:
         results = {"reviews": []}
 
-    pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet)
+    _finalize_review_output(engine, results, args)
 
 
 def run_review_code(engine, args):
@@ -98,8 +102,7 @@ def run_review_code(engine, args):
         results = with_spinner(
             "Reviewing codebase...", collect_reviews, engine, quiet=args.quiet
         )
-    pretty_print_reviews(results, args.quiet)
-    save_output(args.output_file, results, args.quiet)
+    _finalize_review_output(engine, results, args)
 
 
 def run_index(engine, verbose=False, quiet=False):
@@ -141,3 +144,61 @@ def run_ask(engine, question, args):
     else:
         print_console(escape(str(answer)))
     save_output(args.output_file, answer, args.quiet)
+
+
+def run_triage(engine, sarif_path, args):
+    if not check_file_exists(sarif_path, quiet=args.quiet):
+        return
+    if Path(sarif_path).suffix.lower() != ".sarif":
+        print_console("[red]Only .sarif input files are supported.[/red]", args.quiet)
+        return
+    print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
+
+    output_target = None
+    if args.output_file:
+        sarif_targets = [
+            p for p in args.output_file if str(p).lower().endswith(".sarif")
+        ]
+        if sarif_targets:
+            output_target = sarif_targets[0]
+
+    def _invoke(kwargs):
+        return engine.triage_sarif_file(sarif_path, output_target, **kwargs)
+
+    saved_path = run_triage_action(
+        args,
+        action=_invoke,
+        spinner_text="Triaging SARIF findings...",
+    )
+    print_console(
+        f"[green]Triage complete. SARIF saved to {escape(str(saved_path))}[/green]",
+        args.quiet,
+    )
+
+
+def _build_triaged_sarif_payload(engine, results, args):
+    if not getattr(args, "triage", False):
+        return None
+    try:
+        sarif_payload = generate_sarif(results)
+
+        def _invoke(kwargs):
+            return engine.triage_sarif_payload(sarif_payload, **kwargs)
+
+        return run_triage_action(
+            args,
+            action=_invoke,
+            spinner_text="Triaging findings...",
+        )
+    except Exception as exc:
+        print_console(
+            f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",
+            args.quiet,
+        )
+        return None
+
+
+def _finalize_review_output(engine, results, args):
+    pretty_print_reviews(results, args.quiet)
+    sarif_payload = _build_triaged_sarif_payload(engine, results, args)
+    save_output(args.output_file, results, args.quiet, sarif_payload=sarif_payload)

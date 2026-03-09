@@ -205,6 +205,11 @@ def _flatten_issues(report_data) -> list[dict]:
                     "mitigation": _coerce_to_string(issue.get("mitigation")),
                     "confidence": _coerce_to_string(issue.get("confidence")),
                     "snippet": _coerce_to_string(issue.get("code_snippet")),
+                    "triageStatus": _coerce_to_string(issue.get("metisTriageStatus")),
+                    "triageReason": _coerce_to_string(issue.get("metisTriageReason")),
+                    "triageTimestamp": _coerce_to_string(
+                        issue.get("metisTriageTimestamp")
+                    ),
                     "folder": folder,
                 }
             )
