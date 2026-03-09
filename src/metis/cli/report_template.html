@@ -67,6 +67,12 @@
         .summary-pill { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.65rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
         .summary-pill a { color: inherit; text-decoration: none; }
         .summary-pill a:hover { text-decoration: underline; }
+        .triage-valid { background: rgba(34, 197, 94, 0.2); color: #86efac; border: 1px solid rgba(34, 197, 94, 0.35); }
+        .triage-invalid { background: rgba(239, 68, 68, 0.22); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.32); }
+        .triage-inconclusive { background: rgba(250, 204, 21, 0.2); color: #fde68a; border: 1px solid rgba(250, 204, 21, 0.3); }
+        body.light-theme .triage-valid { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+        body.light-theme .triage-invalid { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+        body.light-theme .triage-inconclusive { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; }
         .severity-Critical { background: rgba(185, 28, 28, 0.25); color: #fda4af; border: 1px solid rgba(185, 28, 28, 0.35); }
         .severity-High { background: rgba(239, 68, 68, 0.22); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.32); }
         .severity-Medium { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
@@ -489,6 +495,12 @@
                 summary.appendChild(cweSpan);
                 summary.appendChild(issueTitle);
                 summary.appendChild(fileSpan);
+                if (row.triageStatus) {
+                    const triageSpan = document.createElement('span');
+                    triageSpan.className = 'summary-pill triage-' + String(row.triageStatus).toLowerCase();
+                    triageSpan.textContent = 'triage: ' + row.triageStatus;
+                    summary.appendChild(triageSpan);
+                }
                 if (confidenceSpan.textContent) {
                     summary.appendChild(confidenceSpan);
                 }
@@ -498,6 +510,8 @@
 
                 appendSection(body, 'Reasoning', row.reasoning);
                 appendSection(body, 'Mitigation', row.mitigation);
+                appendSection(body, 'Triage Reason', row.triageReason);
+                appendSection(body, 'Triage Timestamp', row.triageTimestamp);
                 appendSnippet(body, row.snippet);
                 if (row.line) {
                     appendSection(body, 'Location', row.file + ' • line ' + row.line);
