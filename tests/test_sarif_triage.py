@@ -40,6 +40,39 @@ def test_extract_findings_reads_result_fields():
     assert finding.file_path == "src/main.c"
     assert finding.line == 42
     assert finding.snippet == "danger();"
+    assert finding.source_tool == ""
+    assert finding.is_metis_source is False
+    assert finding.explanation == ""
+
+
+def test_extract_findings_marks_metis_source_and_explanation():
+    payload = {
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {"driver": {"name": "Metis", "fullName": "Metis v1.2.0"}},
+                "results": [
+                    {
+                        "ruleId": "X001",
+                        "message": {"text": "Potential issue"},
+                        "properties": {
+                            "reasoning": "Flow can reach sink",
+                            "why": "Input is not checked",
+                            "mitigation": "Add bounds check",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    findings = extract_findings(payload)
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.source_tool == "Metis"
+    assert finding.is_metis_source is True
+    assert "reasoning: Flow can reach sink" in finding.explanation
+    assert "mitigation: Add bounds check" in finding.explanation
 
 
 def test_extract_findings_skips_metis_triaged_by_default():
@@ -174,3 +207,106 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
 
     assert out_path == str(input_path)
     assert writes == [2, 4, 5]
+
+
+def test_triage_request_propagates_source_metadata(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [
+            {
+                "results": [
+                    {
+                        "message": {"text": "A"},
+                        "ruleId": "R1",
+                        "locations": [
+                            {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": "src/a.c"},
+                                    "region": {"startLine": 12},
+                                }
+                            }
+                        ],
+                    }
+                ]
+            }
+        ],
+    }
+
+    captured = {}
+
+    class _DummyGraph:
+        def triage(self, request):
+            captured["is_metis"] = request.get("finding_is_metis")
+            captured["source_tool"] = request.get("finding_source_tool")
+            return {"status": "valid", "reason": "ok"}
+
+    monkeypatch.setattr(
+        engine._triage_service,
+        "_init_and_get_triage_query_engines",
+        lambda: (SimpleNamespace(), SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+    )
+    engine.max_workers = 1
+    engine._triage_service.max_workers = 1
+
+    out = engine.triage_sarif_payload(payload)
+    assert out["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
+    assert captured["is_metis"] is False
+    assert captured["source_tool"] == ""
+
+
+def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {"driver": {"name": "Metis", "fullName": "Metis v1.2.0"}},
+                "results": [
+                    {
+                        "message": {"text": "A"},
+                        "ruleId": "R1",
+                        "locations": [
+                            {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": "src/a.c"},
+                                    "region": {"startLine": 12},
+                                }
+                            }
+                        ],
+                        "properties": {
+                            "reasoning": "Dangerous flow",
+                            "mitigation": "Add check",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    captured = {}
+
+    class _DummyGraph:
+        def triage(self, request):
+            captured["is_metis"] = request.get("finding_is_metis")
+            captured["source_tool"] = request.get("finding_source_tool")
+            captured["explanation"] = request.get("finding_explanation")
+            return {"status": "valid", "reason": "ok"}
+
+    monkeypatch.setattr(
+        engine._triage_service,
+        "_init_and_get_triage_query_engines",
+        lambda: (SimpleNamespace(), SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+    )
+    engine.max_workers = 1
+    engine._triage_service.max_workers = 1
+
+    out = engine.triage_sarif_payload(payload)
+    assert out["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
+    assert captured["is_metis"] is True
+    assert captured["source_tool"] == "Metis"
+    assert "reasoning: Dangerous flow" in str(captured["explanation"])

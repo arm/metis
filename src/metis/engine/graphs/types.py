@@ -63,6 +63,9 @@ class TriageRequest(TypedDict):
     finding_line: Required[int]
     finding_rule_id: Required[str]
     finding_snippet: Required[str]
+    finding_source_tool: NotRequired[str]
+    finding_is_metis: NotRequired[bool]
+    finding_explanation: NotRequired[str]
     retriever_code: Required[Any]
     retriever_docs: Required[Any]
     debug_callback: NotRequired[Any]
@@ -76,6 +79,9 @@ class TriageState(TypedDict, total=False):
     finding_line: int
     finding_rule_id: str
     finding_snippet: str
+    finding_source_tool: str
+    finding_is_metis: bool
+    finding_explanation: str
     retriever_code: Any
     retriever_docs: Any
     debug_callback: Any
@@ -91,3 +97,6 @@ class TriageState(TypedDict, total=False):
     decision_evidence: list[str]
     decision_resolution_chain: list[str]
     decision_unresolved_hops: list[str]
+    evidence_gate_missing: list[str]
+    evidence_obligations: list[str]
+    obligation_coverage: dict[str, int]

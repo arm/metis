@@ -10,9 +10,6 @@ from ..schemas import TriageDecisionModel
 from .adjudication import (
     adjudicate_status_deterministic,
     compose_final_reason,
-    contains_contradiction_signal,
-    contains_uncertainty_signal,
-    has_critical_unresolved_hops,
 )
 from .nodes import (
     triage_node_collect_evidence,
@@ -90,6 +87,9 @@ class TriageGraph:
                 "finding_line": request["finding_line"],
                 "finding_rule_id": request["finding_rule_id"],
                 "finding_snippet": request["finding_snippet"],
+                "finding_source_tool": request.get("finding_source_tool", ""),
+                "finding_is_metis": bool(request.get("finding_is_metis", False)),
+                "finding_explanation": request.get("finding_explanation", ""),
                 "retriever_code": request["retriever_code"],
                 "retriever_docs": request["retriever_docs"],
                 "triage_analyzer": request.get("triage_analyzer"),
@@ -115,40 +115,30 @@ class TriageGraph:
         evidence = list(validated.evidence)
         resolution_chain = list(validated.resolution_chain)
         unresolved_hops = list(validated.unresolved_hops)
-        status = adjudicate_status_deterministic(
+        evidence_gate_missing = list(out.get("evidence_gate_missing") or [])
+        obligations = list(out.get("evidence_obligations") or [])
+        obligation_coverage = dict(out.get("obligation_coverage") or {})
+        status, reason_codes = adjudicate_status_deterministic(
             model_status=model_status,
             evidence=evidence,
             resolution_chain=resolution_chain,
             unresolved_hops=unresolved_hops,
             reason=reason,
+            obligations=obligations,
+            obligation_coverage=obligation_coverage,
         )
-        cb = request.get("debug_callback")
-        if callable(cb):
-            try:
-                has_critical_unresolved = has_critical_unresolved_hops(
-                    unresolved_hops,
-                    resolution_chain,
-                )
-                cb(
-                    {
-                        "event": "status_adjudication",
-                        "model_status": model_status,
-                        "final_status": status,
-                        "has_evidence": bool(evidence),
-                        "has_resolution_chain": bool(resolution_chain),
-                        "has_unresolved_hops": bool(unresolved_hops),
-                        "has_critical_unresolved_hops": has_critical_unresolved,
-                        "uncertainty_signal": contains_uncertainty_signal(reason),
-                        "contradiction_signal": contains_contradiction_signal(reason),
-                    }
-                )
-            except Exception:
-                pass
+        if evidence_gate_missing and status != "inconclusive":
+            status = "inconclusive"
+            reason_codes.append("OVERRIDE_EVIDENCE_GATE_INCOMPLETE")
+        for tag in evidence_gate_missing:
+            code = f"EVIDENCE_GATE_MISSING:{tag}"
+            if code not in reason_codes:
+                reason_codes.append(code)
         if status == "inconclusive" and not unresolved_hops:
             unresolved_hops = [
                 "deterministic adjudicator marked evidence as insufficiently stable"
             ]
-        reason = compose_final_reason(status, model_status, reason)
+        reason = compose_final_reason(status, model_status, reason, reason_codes)
         return {
             "status": status,
             "reason": reason,
