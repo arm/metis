@@ -78,22 +78,32 @@ def _extract_symbol_candidates(
 
 
 def _build_retrieval_query(state: TriageState) -> str:
+    is_metis_source = bool(state.get("finding_is_metis", False))
+    source_tool = str(state.get("finding_source_tool", "") or "")
+    explanation = str(state.get("finding_explanation", "") or "").strip()
     symbols = _extract_symbol_candidates(
         state.get("finding_rule_id", "") or "",
         state.get("finding_file_path", "") or "",
         state.get("finding_snippet", "") or "",
+        explanation,
         limit=10,
     )
     term_line = ", ".join(symbols) if symbols else "<none>"
+    mode_text = (
+        "Metis source: include explanation/mitigation clues for symbol and flow resolution."
+        if is_metis_source
+        else "External source: prioritize local line and nearby context before any broader lookup."
+    )
     return (
         "Triage using deterministic evidence extraction and symbol resolution.\n"
-        "Reported line may be inaccurate. Retrieve likely definition files, aliases, and call sites "
-        "related to the finding from the repository root.\n\n"
+        f"{mode_text}\n\n"
+        f"SARIF source tool: {source_tool}\n"
         f"Rule: {state.get('finding_rule_id', '')}\n"
         f"File: {state.get('finding_file_path', '')}\n"
         f"Reported line: {state.get('finding_line', 1)}\n"
         f"Finding: {state.get('finding_message', '')}\n"
         f"Snippet: {state.get('finding_snippet', '')}\n"
+        f"Explanation: {explanation}\n"
         f"Candidate symbols: {term_line}\n"
         "Question: What concrete evidence supports or contradicts this finding, and which definition chain resolves the reported behavior?"
     )

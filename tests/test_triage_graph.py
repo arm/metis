@@ -29,8 +29,8 @@ def test_triage_schema_allows_inconclusive_with_unresolved_hops():
         status="inconclusive",
         reason="wrapper chain unresolved",
         evidence=[],
-        resolution_chain=["reported finding -> ALLOCA(...)"],
-        unresolved_hops=["ALLOCA macro expansion unknown"],
+        resolution_chain=["reported finding -> PROJECT_STACK_ALLOC(...)"],
+        unresolved_hops=["PROJECT_STACK_ALLOC macro expansion unknown"],
     )
     assert decision.status == "inconclusive"
 
@@ -192,6 +192,44 @@ def test_triage_graph_keeps_inconclusive_with_critical_unresolved_hops(monkeypat
     assert out["status"] == "inconclusive"
 
 
+def test_triage_graph_allows_valid_when_macro_unresolved_hop_is_resolved(monkeypatch):
+    g = _build_graph()
+    monkeypatch.setattr(
+        g,
+        "_get_app",
+        lambda: _App(
+            {
+                "decision_status": "valid",
+                "decision_reason": "evidence chain is present with direct citations.",
+                "decision_evidence": [
+                    "a.c:10",
+                    "a.c:30",
+                    "MACRO_RESOLUTION PROJECT_STACK_ALLOC -> alloca",
+                ],
+                "decision_resolution_chain": [
+                    "source -> guard -> sink",
+                    "MACRO_RESOLUTION PROJECT_STACK_ALLOC -> alloca",
+                ],
+                "decision_unresolved_hops": [
+                    "MACRO_DEFINITION_UNRESOLVED:PROJECT_STACK_ALLOC"
+                ],
+            }
+        ),
+    )
+    out = g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 1,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": object(),
+            "retriever_docs": object(),
+        }
+    )
+    assert out["status"] == "valid"
+
+
 def test_triage_graph_does_not_force_inconclusive_for_assumption_findings(monkeypatch):
     g = _build_graph()
     monkeypatch.setattr(
@@ -221,3 +259,149 @@ def test_triage_graph_does_not_force_inconclusive_for_assumption_findings(monkey
         }
     )
     assert out["status"] == "valid"
+
+
+def test_triage_graph_does_not_upgrade_invalid_to_valid(monkeypatch):
+    g = _build_graph()
+    monkeypatch.setattr(
+        g,
+        "_get_app",
+        lambda: _App(
+            {
+                "decision_status": "invalid",
+                "decision_reason": "false positive due to dominating assignment",
+                "decision_evidence": ["a.c:10", "a.c:20"],
+                "decision_resolution_chain": ["source -> assignment -> sink"],
+                "decision_unresolved_hops": [],
+            }
+        ),
+    )
+    out = g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 10,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": object(),
+            "retriever_docs": object(),
+        }
+    )
+    assert out["status"] == "invalid"
+
+
+def test_triage_graph_applies_evidence_gate_override(monkeypatch):
+    g = _build_graph()
+    monkeypatch.setattr(
+        g,
+        "_get_app",
+        lambda: _App(
+            {
+                "decision_status": "valid",
+                "decision_reason": "looks valid",
+                "decision_evidence": ["a.c:10"],
+                "decision_resolution_chain": ["source -> sink"],
+                "decision_unresolved_hops": [],
+                "evidence_gate_missing": ["FILE_CONTEXT_MISSING"],
+            }
+        ),
+    )
+    out = g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 10,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": object(),
+            "retriever_docs": object(),
+        }
+    )
+    assert out["status"] == "inconclusive"
+    assert "OVERRIDE_EVIDENCE_GATE_INCOMPLETE" in out["reason"]
+
+
+def test_triage_graph_applies_status_specific_obligation_gate(monkeypatch):
+    g = _build_graph()
+    monkeypatch.setattr(
+        g,
+        "_get_app",
+        lambda: _App(
+            {
+                "decision_status": "invalid",
+                "decision_reason": "strong contradiction in observed flow",
+                "decision_evidence": ["a.c:10", "a.c:20"],
+                "decision_resolution_chain": ["source -> guard -> sink"],
+                "decision_unresolved_hops": [],
+                "evidence_obligations": [
+                    "local_context",
+                    "symbol_definition",
+                    "constraint_or_guard",
+                ],
+                "obligation_coverage": {
+                    "local_context": 1,
+                    "symbol_definition": 1,
+                    "constraint_or_guard": 0,
+                },
+                "obligation_missing": ["constraint_or_guard"],
+            }
+        ),
+    )
+    out = g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 10,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": object(),
+            "retriever_docs": object(),
+        }
+    )
+    assert out["status"] == "inconclusive"
+    assert "OVERRIDE_OBLIGATION_COVERAGE" in out["reason"]
+
+
+def test_triage_graph_relaxes_invalid_constraint_gate_when_core_evidence_present(
+    monkeypatch,
+):
+    g = _build_graph()
+    monkeypatch.setattr(
+        g,
+        "_get_app",
+        lambda: _App(
+            {
+                "decision_status": "invalid",
+                "decision_reason": "concrete local contradiction in observed flow",
+                "decision_evidence": ["a.c:10", "a.c:20"],
+                "decision_resolution_chain": ["source -> check -> sink"],
+                "decision_unresolved_hops": [],
+                "evidence_obligations": [
+                    "local_context",
+                    "symbol_definition",
+                    "use_site",
+                    "constraint_or_guard",
+                ],
+                "obligation_coverage": {
+                    "local_context": 1,
+                    "symbol_definition": 2,
+                    "use_site": 1,
+                    "constraint_or_guard": 0,
+                },
+                "obligation_missing": ["constraint_or_guard"],
+            }
+        ),
+    )
+    out = g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 10,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": object(),
+            "retriever_docs": object(),
+        }
+    )
+    assert out["status"] == "invalid"
+    assert "OVERRIDE_OBLIGATION_COVERAGE" not in out["reason"]
