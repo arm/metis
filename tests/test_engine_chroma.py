@@ -3,6 +3,7 @@
 
 import pytest
 import os
+from unittest.mock import patch
 from metis.engine import MetisEngine
 from metis.vector_store.chroma_store import ChromaStore
 from llama_index.core.settings import Settings
@@ -52,3 +53,30 @@ def test_chroma_backend_indexing(tmp_path):
     )
 
     engine.index_codebase()
+
+
+def test_chroma_store_forces_rust_bindings(tmp_path):
+    embed = MockEmbedding(embed_dim=8)
+    backend = ChromaStore(
+        persist_dir=str(tmp_path / "chroma_test"),
+        embed_model_code=embed,
+        embed_model_docs=embed,
+        query_config={},
+    )
+
+    with patch("metis.vector_store.chroma_store.PersistentClient") as client_ctor:
+        client = client_ctor.return_value
+        client.get_or_create_collection.side_effect = [object(), object()]
+
+        with (
+            patch(
+                "metis.vector_store.chroma_store.ChromaVectorStore"
+            ) as chroma_vector_store,
+            patch("metis.vector_store.chroma_store.StorageContext") as storage_context,
+        ):
+            chroma_vector_store.side_effect = [object(), object()]
+            storage_context.from_defaults.side_effect = [object(), object()]
+            backend.init()
+
+    settings = client_ctor.call_args.kwargs["settings"]
+    assert settings.chroma_api_impl == "chromadb.api.rust.RustBindingsAPI"
