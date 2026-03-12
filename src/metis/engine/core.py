@@ -5,6 +5,7 @@ import logging
 import os
 import unidiff
 import pathspec
+from threading import Lock
 
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
@@ -103,6 +104,7 @@ class MetisEngine:
         self._ask_graph = None
         self._qe_code = None
         self._qe_docs = None
+        self._query_engine_lock = Lock()
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
@@ -601,11 +603,14 @@ class MetisEngine:
     def _init_and_get_query_engines(self):
         if self._qe_code is not None and self._qe_docs is not None:
             return self._qe_code, self._qe_docs
-        top_k = self._normalize_top_k(self.similarity_top_k, 5)
-        qe_code, qe_docs = self._create_query_engines(top_k)
-        self._qe_code = qe_code
-        self._qe_docs = qe_docs
-        return qe_code, qe_docs
+        with self._query_engine_lock:
+            if self._qe_code is not None and self._qe_docs is not None:
+                return self._qe_code, self._qe_docs
+            top_k = self._normalize_top_k(self.similarity_top_k, 5)
+            qe_code, qe_docs = self._create_query_engines(top_k)
+            self._qe_code = qe_code
+            self._qe_docs = qe_docs
+            return qe_code, qe_docs
 
     def triage_sarif_payload(
         self,

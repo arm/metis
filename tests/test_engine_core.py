@@ -3,6 +3,7 @@
 
 import pytest
 import tempfile
+import threading
 from unittest.mock import Mock
 from metis.engine import MetisEngine
 from metis.exceptions import PluginNotFoundError, QueryEngineInitError
@@ -82,3 +83,33 @@ def test_init_and_get_default_available_metisignore():
         assert engine.load_metisignore() is not None
         assert engine.metisignore_file == temp_file.name
     assert engine is not None
+
+
+def test_init_and_get_query_engines_is_thread_safe():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=Mock(),
+        max_workers=4,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    results = []
+
+    def _worker():
+        results.append(engine._init_and_get_query_engines())
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == [("code-qe", "docs-qe")] * 8
+    backend.init.assert_called_once()
+    backend.get_query_engines.assert_called_once()

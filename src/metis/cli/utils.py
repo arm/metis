@@ -11,6 +11,7 @@ from pathlib import Path
 from importlib.resources import files
 
 from rich.console import Console
+from rich.errors import MarkupError
 from rich.markup import escape
 from rich.progress import (
     Progress,
@@ -97,7 +98,12 @@ def configure_logger(logger, args):
 
 def print_console(message, quiet=False, **kwargs):
     if not quiet:
-        console.print(message, **kwargs)
+        try:
+            console.print(message, **kwargs)
+        except MarkupError:
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs["markup"] = False
+            console.print(str(message), **fallback_kwargs)
 
 
 def with_spinner(task_description, fn, *args, quiet=False, **kwargs):
