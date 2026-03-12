@@ -9,7 +9,7 @@ psql_database:
 
 metis_engine:
   max_token_length: 250000
-  max_workers: 5
+  max_workers: 55
   triage_checkpoint_every: 50
   triage_tool_timeout_seconds: 12
   embed_dim: 3072

@@ -26,6 +26,9 @@ class SarifFinding:
     file_path: str
     line: int
     snippet: str
+    source_tool: str
+    is_metis_source: bool
+    explanation: str
 
 
 def load_sarif_file(path: str | Path) -> dict[str, Any]:
@@ -67,6 +70,7 @@ def extract_findings(
     for run_index, run in enumerate(runs):
         if not isinstance(run, dict):
             continue
+        source_tool, is_metis_source = _run_source_metadata(run)
         results = run.get("results")
         if not isinstance(results, list):
             continue
@@ -75,7 +79,15 @@ def extract_findings(
                 continue
             if not include_triaged and _is_already_triaged(result):
                 continue
-            findings.append(_to_finding(run_index, result_index, result))
+            findings.append(
+                _to_finding(
+                    run_index,
+                    result_index,
+                    result,
+                    source_tool=source_tool,
+                    is_metis_source=is_metis_source,
+                )
+            )
     return findings
 
 
@@ -87,7 +99,12 @@ def _is_already_triaged(result: dict[str, Any]) -> bool:
 
 
 def _to_finding(
-    run_index: int, result_index: int, result: dict[str, Any]
+    run_index: int,
+    result_index: int,
+    result: dict[str, Any],
+    *,
+    source_tool: str,
+    is_metis_source: bool,
 ) -> SarifFinding:
     message_obj = result.get("message")
     message = ""
@@ -123,6 +140,8 @@ def _to_finding(
                     if isinstance(snippet_obj, dict):
                         snippet = str(snippet_obj.get("text") or "")
 
+    explanation = _extract_explanation_text(result, is_metis_source=is_metis_source)
+
     return SarifFinding(
         run_index=run_index,
         result_index=result_index,
@@ -131,7 +150,38 @@ def _to_finding(
         file_path=file_path,
         line=line,
         snippet=snippet,
+        source_tool=source_tool,
+        is_metis_source=is_metis_source,
+        explanation=explanation,
     )
+
+
+def _run_source_metadata(run: dict[str, Any]) -> tuple[str, bool]:
+    tool = run.get("tool")
+    if not isinstance(tool, dict):
+        return "", False
+    driver = tool.get("driver")
+    if not isinstance(driver, dict):
+        return "", False
+    name = str(driver.get("name") or "").strip()
+    full_name = str(driver.get("fullName") or "").strip()
+    signature = f"{name} {full_name}".lower()
+    is_metis = "metis" in signature
+    return name or full_name, is_metis
+
+
+def _extract_explanation_text(result: dict[str, Any], *, is_metis_source: bool) -> str:
+    if not is_metis_source:
+        return ""
+    properties = result.get("properties")
+    if not isinstance(properties, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("reasoning", "why", "mitigation"):
+        value = str(properties.get(key) or "").strip()
+        if value:
+            parts.append(f"{key}: {value}")
+    return "\n".join(parts)
 
 
 def apply_triage_result(

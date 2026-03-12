@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 
 
@@ -60,64 +59,6 @@ def _extract_call_like_identifiers(text: str, *, limit: int = 10) -> list[str]:
         if len(out) >= limit:
             break
     return out
-
-
-def _extract_referenced_paths(text: str, *, limit: int = 24) -> list[str]:
-    refs: list[str] = []
-    seen: set[str] = set()
-    for line in (text or "").splitlines():
-        quoted = re.findall(r'["\']([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_+-]+)["\']', line)
-        for match in quoted:
-            candidate = str(match).strip().replace("\\", "/")
-            looks_reference = "/" in candidate or "." in candidate
-            has_alpha = bool(re.search(r"[A-Za-z]", candidate))
-            parts = candidate.split(".")
-            looks_ipv4 = (
-                len(parts) == 4
-                and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts if p)
-                and all(p for p in parts)
-            )
-            if (
-                not candidate
-                or not looks_reference
-                or not has_alpha
-                or looks_ipv4
-                or candidate in seen
-                or candidate.startswith("/")
-                or candidate.startswith("../")
-            ):
-                continue
-            seen.add(candidate)
-            refs.append(candidate)
-            if len(refs) >= limit:
-                return refs
-    return refs
-
-
-def _build_related_paths(
-    file_path: str, refs: list[str], *, limit: int = 12
-) -> list[str]:
-    related: list[str] = []
-    seen: set[str] = set()
-    base_dir = os.path.dirname(file_path or "")
-    for ref in refs:
-        candidates = [ref]
-        if base_dir and ref.startswith("./"):
-            candidates.append(os.path.join(base_dir, ref))
-        for candidate in candidates:
-            normalized = os.path.normpath(candidate).replace("\\", "/")
-            if (
-                not normalized
-                or normalized in seen
-                or normalized.startswith("../")
-                or normalized.startswith("/")
-            ):
-                continue
-            seen.add(normalized)
-            related.append(normalized)
-            if len(related) >= limit:
-                return related
-    return related
 
 
 def _token_pattern(term: str) -> str:
