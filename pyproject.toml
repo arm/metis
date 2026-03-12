@@ -32,8 +32,9 @@ build-backend = "setuptools.build_meta"
 metis = "metis.cli.entry:main"
 
 [project.optional-dependencies]
+
 postgres = ["llama-index-vector-stores-postgres>=0.7.3"]
-test = ["pytest>=9.0.2"]
+test = ["pytest>=9.0.2","pytest-cov>=7.0.0"]
 
 lint = [
   "ruff>=0.15.1",
