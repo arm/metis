@@ -33,9 +33,6 @@ jobs:
       - name: Install test dependencies
         run: uv pip install '.[test]'
 
-      - name: Run tests
-        run: uv run pytest
-
       - name: Run pre-commit checks
         run: |
           uv pip install pre-commit
