@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-03-17)
+
+
+### Features
+
+* **verilog:** Add Verilog support ([#168](https://github.com/arm/metis/issues/168)) ([a457783](https://github.com/arm/metis/commit/a45778318a6b8870b87ee5efb229116a5549a53d))
+
+
+### Bug Fixes
+
+* **chroma:** serialize local store and query engine initialization ([#171](https://github.com/arm/metis/issues/171)) ([a74d5cf](https://github.com/arm/metis/commit/a74d5cf68ffb8dba48a60ee9e394cf41e0e25e2e))
+
 ## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2026-03-09)
 
 
