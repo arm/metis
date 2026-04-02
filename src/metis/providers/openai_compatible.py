@@ -46,18 +46,20 @@ class OpenAICompatibleProvider(LLMProvider):
         self.code_embedding_extra_kwargs = config.get("code_embedding_extra_kwargs", {})
         self.docs_embedding_extra_kwargs = config.get("docs_embedding_extra_kwargs", {})
 
-    def get_embed_model_code(self):
+    def get_embed_model_code(self, **kwargs):
         return self._build_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
             "code_embedding_model",
+            callback_manager=kwargs.get("callback_manager"),
         )
 
-    def get_embed_model_docs(self):
+    def get_embed_model_docs(self, **kwargs):
         return self._build_embedding_model(
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
             "docs_embedding_model",
+            callback_manager=kwargs.get("callback_manager"),
         )
 
     def _build_embedding_model(
@@ -65,6 +67,7 @@ class OpenAICompatibleProvider(LLMProvider):
         model_name: str | None,
         extra_kwargs: Dict[str, Any],
         config_key: str,
+        callback_manager=None,
     ):
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
@@ -81,6 +84,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if callback_manager is not None:
+            params["callback_manager"] = callback_manager
         if extra_kwargs:
             params.update(extra_kwargs)
 
@@ -108,8 +113,12 @@ class OpenAICompatibleProvider(LLMProvider):
             params["openai_api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        callbacks = kwargs.get("callbacks")
+        if callbacks is not None:
+            params["callbacks"] = callbacks
 
         for optional_key in (
+            "callbacks",
             "timeout",
             "request_timeout",
             "max_retries",
@@ -133,7 +142,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return LlamaOpenAILike
         return LlamaOpenAI
 
-    def get_query_model_kwargs(self):
+    def get_query_model_kwargs(self, **kwargs):
         if not self.query_model:
             raise ValueError("Missing chat model configuration for query engine")
 
@@ -148,6 +157,9 @@ class OpenAICompatibleProvider(LLMProvider):
             params["api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        callback_manager = kwargs.get("callback_manager")
+        if callback_manager is not None:
+            params["callback_manager"] = callback_manager
         if self._should_use_openai_like():
             params["context_window"] = self._resolve_context_window()
             params.setdefault("is_chat_model", True)

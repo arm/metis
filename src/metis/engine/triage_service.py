@@ -28,6 +28,7 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         normalize_top_k: Callable[[Any, int], int],
         create_query_engines: Callable[[int], tuple[Any, Any]],
         get_plugin_for_extension: Callable[[str], Any],
+        langchain_callbacks: list[Any] | None = None,
     ):
         self.codebase_path = codebase_path
         self.llm_provider = llm_provider
@@ -40,6 +41,7 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self._normalize_top_k = normalize_top_k
         self._create_query_engines = create_query_engines
         self._get_plugin_for_extension = get_plugin_for_extension
+        self._langchain_callbacks = list(langchain_callbacks or [])
 
         self._triage_graph_local = threading.local()
         self._triage_query_engines_local = threading.local()

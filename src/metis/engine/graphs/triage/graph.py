@@ -26,6 +26,7 @@ class TriageGraph:
         llama_query_model,
         tool_runner,
         plugin_config=None,
+        chat_model_kwargs=None,
     ):
         self.llm_provider = llm_provider
         self.llama_query_model = llama_query_model
@@ -46,11 +47,14 @@ class TriageGraph:
         )
         self._app = None
         self._decision_model = None
+        self.chat_model_kwargs = chat_model_kwargs or {}
 
     def _ensure_models(self):
         if self._decision_model is not None:
             return
-        chat_model = self.llm_provider.get_chat_model(model=self.llama_query_model)
+        chat_model = self.llm_provider.get_chat_model(
+            model=self.llama_query_model, **self.chat_model_kwargs
+        )
         self._decision_model = chat_model.with_structured_output(
             TriageDecisionModel, method="function_calling"
         )
