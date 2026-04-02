@@ -7,12 +7,12 @@ from abc import ABC, abstractmethod
 class LLMProvider(ABC):
 
     @abstractmethod
-    def get_embed_model_code(self):
+    def get_embed_model_code(self, **kwargs):
         """Return a code embedding model for vector store."""
         pass
 
     @abstractmethod
-    def get_embed_model_docs(self):
+    def get_embed_model_docs(self, **kwargs):
         """Return a docs embedding model for vector store."""
         pass
 
@@ -27,6 +27,6 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def get_query_model_kwargs(self):
+    def get_query_model_kwargs(self, **kwargs):
         """Return kwargs for constructing the query engine LLM."""
         pass

@@ -13,6 +13,7 @@ from metis.sarif.triage import (
     load_sarif_file,
     save_sarif_file,
 )
+from metis.usage import submit_with_current_context
 
 logger = logging.getLogger("metis")
 
@@ -160,7 +161,8 @@ class TriageServiceExecutionMixin:
                     index=idx,
                     finding=finding,
                 )
-                future = executor.submit(
+                future = submit_with_current_context(
+                    executor,
                     self._triage_one_finding,
                     finding,
                     debug_callback=debug_callback,

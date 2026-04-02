@@ -10,9 +10,12 @@ from langchain_core.prompts import ChatPromptTemplate
 logger = logging.getLogger("metis")
 
 
-def summarize_changes(llm_provider, file_path, issues, summary_prompt):
+def summarize_changes(llm_provider, file_path, issues, summary_prompt, callbacks=None):
     try:
-        chat = llm_provider.get_chat_model()
+        kwargs = {}
+        if callbacks is not None:
+            kwargs["callbacks"] = callbacks
+        chat = llm_provider.get_chat_model(**kwargs)
         prompt_tmpl = ChatPromptTemplate.from_messages(
             [("system", "{system}"), ("user", "{input}")]
         )

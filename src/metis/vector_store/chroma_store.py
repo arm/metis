@@ -65,22 +65,37 @@ class ChromaStore(BaseVectorStore):
                 raise VectorStoreInitError()
 
     def get_query_engines(
-        self, llm_provider, similarity_top_k=None, response_mode=None
+        self,
+        llm_provider,
+        similarity_top_k=None,
+        response_mode=None,
+        callback_manager=None,
+        callbacks=None,
     ):
         try:
             index_code = VectorStoreIndex.from_vector_store(
                 self.vector_store_code,
                 storage_context=self.storage_context_code,
                 embed_model=self.embed_model_code,
+                callback_manager=callback_manager,
             )
             index_docs = VectorStoreIndex.from_vector_store(
                 self.vector_store_docs,
                 storage_context=self.storage_context_docs,
                 embed_model=self.embed_model_docs,
+                callback_manager=callback_manager,
             )
 
-            llm_code = self._build_llm(llm_provider)
-            llm_docs = self._build_llm(llm_provider)
+            llm_code = self._build_llm(
+                llm_provider,
+                callback_manager=callback_manager,
+                callbacks=callbacks,
+            )
+            llm_docs = self._build_llm(
+                llm_provider,
+                callback_manager=callback_manager,
+                callbacks=callbacks,
+            )
 
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
             mode = response_mode or self.query_config.get("response_mode", "compact")

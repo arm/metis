@@ -96,14 +96,56 @@ def configure_logger(logger, args):
     warnings_logger.propagate = True
 
 
-def print_console(message, quiet=False, **kwargs):
-    if not quiet:
+def print_console(message, quiet=False, force=False, **kwargs):
+    if not quiet or force:
         try:
             console.print(message, **kwargs)
         except MarkupError:
             fallback_kwargs = dict(kwargs)
             fallback_kwargs["markup"] = False
             console.print(str(message), **fallback_kwargs)
+
+
+def _usage_triplet(summary):
+    if not isinstance(summary, dict):
+        return 0, 0, 0
+    input_tokens = int(summary.get("input_tokens") or 0)
+    output_tokens = int(summary.get("output_tokens") or 0)
+    total_tokens = int(summary.get("total_tokens") or (input_tokens + output_tokens))
+    return input_tokens, output_tokens, total_tokens
+
+
+def _format_usage_triplet(summary):
+    input_tokens, output_tokens, total_tokens = _usage_triplet(summary)
+    return (
+        f"(input: {input_tokens:,} · "
+        f"output: {output_tokens:,} · "
+        f"total: {total_tokens:,})"
+    )
+
+
+def print_usage_summary(command_label, current_summary, total_summary):
+    print_console(
+        f"[bold cyan]Token usage ({escape(str(command_label))})[/bold cyan]",
+        force=True,
+    )
+    print_console(
+        f"Current {_format_usage_triplet(current_summary)}",
+        force=True,
+    )
+
+
+def print_final_usage_summary(total_summary, saved_path=None):
+    print_console("[bold cyan]Session token usage[/bold cyan]", force=True)
+    print_console(
+        f"Run total {_format_usage_triplet(total_summary)}",
+        force=True,
+    )
+    if saved_path:
+        print_console(
+            f"[blue]Usage saved to {escape(str(saved_path))}[/blue]",
+            force=True,
+        )
 
 
 def with_spinner(task_description, fn, *args, quiet=False, **kwargs):
