@@ -125,8 +125,24 @@ def finalize_cli_session(engine, args):
     if engine is None or not hasattr(engine, "has_usage") or not engine.has_usage():
         return None
     saved_path = engine.save_usage_summary()
+    completed_commands = None
+    usage_runtime = getattr(engine, "usage_runtime", None)
+    completed_commands_fn = getattr(usage_runtime, "completed_commands", None)
+    if callable(completed_commands_fn):
+        try:
+            completed_commands = completed_commands_fn()
+        except Exception:
+            completed_commands = None
+    include_totals = not (
+        bool(getattr(args, "non_interactive", False))
+        and isinstance(completed_commands, list)
+        and len(completed_commands) == 1
+    )
     print_final_usage_summary(
-        engine.usage_totals(), saved_path=saved_path, quiet=args.quiet
+        engine.usage_totals(),
+        saved_path=saved_path,
+        quiet=args.quiet,
+        include_totals=include_totals,
     )
     return saved_path
 

@@ -125,6 +125,35 @@ def _format_usage_triplet(summary):
     )
 
 
+def _iter_operation_summaries(summary):
+    if not isinstance(summary, dict):
+        return []
+    by_operation = summary.get("by_operation")
+    if not isinstance(by_operation, dict):
+        return []
+    items = [
+        (str(name), op_summary)
+        for name, op_summary in by_operation.items()
+        if isinstance(op_summary, dict) and _usage_triplet(op_summary)[2] > 0
+    ]
+    return sorted(
+        items,
+        key=lambda item: (-_usage_triplet(item[1])[2], item[0]),
+    )
+
+
+def _print_operation_breakdown(summary, quiet=False):
+    items = _iter_operation_summaries(summary)
+    if len(items) <= 1:
+        return
+    print_console("[bold]Breakdown by operation[/bold]", quiet=quiet)
+    for operation_name, operation_summary in items:
+        print_console(
+            f"- {escape(operation_name)} {_format_usage_triplet(operation_summary)}",
+            quiet=quiet,
+        )
+
+
 def print_usage_summary(command_label, current_summary, total_summary, quiet=False):
     print_console(
         f"[bold cyan]Token usage ({escape(str(command_label))})[/bold cyan]",
@@ -134,14 +163,23 @@ def print_usage_summary(command_label, current_summary, total_summary, quiet=Fal
         f"Current {_format_usage_triplet(current_summary)}",
         quiet=quiet,
     )
+    _print_operation_breakdown(current_summary, quiet=quiet)
 
 
-def print_final_usage_summary(total_summary, saved_path=None, quiet=False):
-    print_console("[bold cyan]Session token usage[/bold cyan]", quiet=quiet)
-    print_console(
-        f"Run total {_format_usage_triplet(total_summary)}",
-        quiet=quiet,
-    )
+def print_final_usage_summary(
+    total_summary,
+    saved_path=None,
+    quiet=False,
+    *,
+    include_totals=True,
+):
+    if include_totals:
+        print_console("[bold cyan]Session token usage[/bold cyan]", quiet=quiet)
+        print_console(
+            f"Run total {_format_usage_triplet(total_summary)}",
+            quiet=quiet,
+        )
+        _print_operation_breakdown(total_summary, quiet=quiet)
     if saved_path:
         print_console(
             f"[blue]Usage saved to {escape(str(saved_path))}[/blue]",

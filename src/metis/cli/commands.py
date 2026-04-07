@@ -8,6 +8,7 @@ from rich.markup import escape
 
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
+from metis.usage import usage_operation
 from .triage_cli import run_triage_action
 from .utils import (
     check_file_exists,
@@ -183,11 +184,12 @@ def _build_triaged_sarif_payload(engine, results, args):
         def _invoke(kwargs):
             return engine.triage_sarif_payload(sarif_payload, **kwargs)
 
-        return run_triage_action(
-            args,
-            action=_invoke,
-            spinner_text="Triaging findings...",
-        )
+        with usage_operation("triage"):
+            return run_triage_action(
+                args,
+                action=_invoke,
+                spinner_text="Triaging findings...",
+            )
     except Exception as exc:
         print_console(
             f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",

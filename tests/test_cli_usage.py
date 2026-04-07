@@ -57,6 +57,42 @@ class _DummyEngine:
         )
         return {"code": "ctx", "docs": "docs"}
 
+    def get_code_files(self):
+        return ["src/example.py"]
+
+    def review_code(self):
+        self.usage_runtime.collector.record(
+            scope_id=current_scope(),
+            operation=current_operation(),
+            model="gpt-4o-mini",
+            input_tokens=12,
+            output_tokens=6,
+            total_tokens=18,
+        )
+        yield {
+            "file": "src/example.py",
+            "reviews": [
+                {
+                    "issue": "Example issue",
+                    "severity": "medium",
+                    "line_number": 10,
+                    "suggestion": "Fix it",
+                }
+            ],
+        }
+
+    def triage_sarif_payload(self, payload, **_kwargs):
+        self.usage_runtime.collector.record(
+            scope_id=current_scope(),
+            operation=current_operation(),
+            model="gpt-4o-mini",
+            input_tokens=5,
+            output_tokens=3,
+            total_tokens=8,
+        )
+        payload.setdefault("runs", [])
+        return payload
+
     def close(self):
         self.closed = True
 
@@ -107,7 +143,8 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
     entry.main()
 
     assert any("Token usage (ask)" in line for line in captured)
-    assert any("Session token usage" in line for line in captured)
+    assert not any("Session token usage" in line for line in captured)
+    assert any("Usage saved to" in line for line in captured)
     usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
     assert usage_files
     payload = json.loads(usage_files[-1].read_text(encoding="utf-8"))
@@ -192,3 +229,28 @@ def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
     assert any("Token usage (ask)" in line for line in captured)
     assert any("Session token usage" in line for line in captured)
     assert any("Bye!" in line for line in captured)
+
+
+def test_review_code_with_triage_prints_operation_breakdown(monkeypatch, tmp_path):
+    captured = _setup_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "metis",
+            "--non-interactive",
+            "--verbose",
+            "--triage",
+            "--command",
+            "review_code",
+            "--codebase-path",
+            str(tmp_path),
+        ],
+    )
+
+    entry.main()
+
+    assert any("Token usage (review_code)" in line for line in captured)
+    assert any("Breakdown by operation" in line for line in captured)
+    assert any("review_code (input: 12" in line for line in captured)
+    assert any("triage (input: 5" in line for line in captured)
+    assert not any("Session token usage" in line for line in captured)
