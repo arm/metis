@@ -49,14 +49,13 @@ Options:
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
-""",
-        getattr(args, "quiet", False),
+"""
     )
 
 
 def show_version(args=None):
     version = importlib.metadata.version("metis")
-    print_console("Metis [green]" + version + "[/green]", getattr(args, "quiet", False))
+    print_console("Metis [green]" + version + "[/green]")
 
 
 def run_review(engine, patch_file, args):
@@ -130,20 +129,18 @@ def run_ask(engine, question, args):
     answer = with_spinner(
         "Thinking...", engine.ask_question, question, quiet=args.quiet
     )
-    print_console("[bold magenta]Metis Answer:[/bold magenta]\n", args.quiet)
+    print_console("[bold magenta]Metis Answer:[/bold magenta]\n")
     if isinstance(answer, dict):
         if "code" in answer:
             print_console(
                 f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n",
-                args.quiet,
             )
         if "docs" in answer:
             print_console(
                 f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}",
-                args.quiet,
             )
     else:
-        print_console(escape(str(answer)), args.quiet)
+        print_console(escape(str(answer)))
     save_output(args.output_file, answer, args.quiet)
 
 

@@ -115,7 +115,7 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
     assert payload["commands"][0]["command_name"] == "ask"
 
 
-def test_noninteractive_default_quiet_persists_usage_without_output(
+def test_noninteractive_default_quiet_prints_answer_but_not_usage(
     monkeypatch, tmp_path
 ):
     captured = _setup_cli(monkeypatch, tmp_path)
@@ -135,7 +135,9 @@ def test_noninteractive_default_quiet_persists_usage_without_output(
 
     assert not any("Token usage (ask)" in line for line in captured)
     assert not any("Session token usage" in line for line in captured)
-    assert not any("Metis Answer:" in line for line in captured)
+    assert any("Metis Answer:" in line for line in captured)
+    assert any("Code Context:" in line for line in captured)
+    assert any("Documentation Context:" in line for line in captured)
     usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
     assert usage_files
     payload = json.loads(usage_files[-1].read_text(encoding="utf-8"))
