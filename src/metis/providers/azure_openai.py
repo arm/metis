@@ -76,40 +76,39 @@ class AzureOpenAIProvider(LLMProvider):
         )
         self.supports_temperature = config.get("supports_temperature", False)
 
-    def get_embed_model_code(self, **kwargs):
+    def get_embed_model_code(self, *, callback_manager=None):
         return AzureOpenAIEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.code_embedding_model,
                 deployment=self.code_embedding_deployment,
             ),
-            callback_manager=kwargs.get("callback_manager"),
+            callback_manager=callback_manager,
         )
 
-    def get_embed_model_docs(self, **kwargs):
+    def get_embed_model_docs(self, *, callback_manager=None):
         return AzureOpenAIEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.docs_embedding_model,
                 deployment=self.docs_embedding_deployment,
             ),
-            callback_manager=kwargs.get("callback_manager"),
+            callback_manager=callback_manager,
         )
 
     def get_query_engine_class(self):
         return LangChainLLM
 
-    def get_query_model_kwargs(self, **kwargs):
+    def get_query_model_kwargs(self, *, callback_manager=None, callbacks=None):
         params = {
             "llm": self.get_chat_model(
                 response_format=None,
-                callbacks=kwargs.get("callbacks"),
+                callbacks=callbacks,
             )
         }
-        callback_manager = kwargs.get("callback_manager")
         if callback_manager is not None:
             params["callback_manager"] = callback_manager
         return params
 
-    def get_chat_model(self, deployment_name=None, **kwargs):
+    def get_chat_model(self, deployment_name=None, *, callbacks=None, **kwargs):
         deployment = deployment_name or self.engine
         params = {
             "api_key": self.api_key,
@@ -119,7 +118,6 @@ class AzureOpenAIProvider(LLMProvider):
             "model": self.chat_deployment_model,
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
-        callbacks = kwargs.get("callbacks")
         if callbacks is not None:
             params["callbacks"] = callbacks
         if "response_format" in kwargs:
@@ -130,7 +128,6 @@ class AzureOpenAIProvider(LLMProvider):
         if self.supports_temperature:
             params["temperature"] = kwargs.get("temperature", self.temperature)
         for optional_key in (
-            "callbacks",
             "timeout",
             "max_retries",
             "seed",

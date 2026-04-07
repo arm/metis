@@ -112,6 +112,32 @@ def test_noninteractive_command_prints_usage_and_persists_run(monkeypatch, tmp_p
     assert payload["commands"][0]["command_name"] == "ask"
 
 
+def test_noninteractive_help_does_not_persist_usage(monkeypatch, tmp_path):
+    captured = _setup_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "metis",
+            "--non-interactive",
+            "--command",
+            "help",
+            "--codebase-path",
+            str(tmp_path),
+        ],
+    )
+
+    entry.main()
+
+    assert not any("Token usage (help)" in line for line in captured)
+    assert not any("Session token usage" in line for line in captured)
+    results_dir = tmp_path / "results"
+    usage_files = (
+        sorted(results_dir.glob("metis_usage_*.json")) if results_dir.exists() else []
+    )
+    assert not results_dir.exists()
+    assert not usage_files
+
+
 def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
     captured = _setup_cli(monkeypatch, tmp_path)
     prompts = iter(["ask explain"])

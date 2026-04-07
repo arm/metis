@@ -5,7 +5,7 @@ import logging
 import os
 import pathspec
 from threading import Lock
-import unidiff
+import unidiff  # type: ignore[import-untyped]
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
@@ -36,6 +36,11 @@ logger = logging.getLogger("metis")
 class MetisEngine:
 
     _SUPPORTED_LANGUAGES = None
+    max_workers: int
+    max_token_length: int
+    llama_query_model: str
+    similarity_top_k: int
+    response_mode: str
 
     def __init__(
         self,
@@ -133,12 +138,7 @@ class MetisEngine:
             "get_embed_model_code" if kind == "code" else "get_embed_model_docs"
         )
         method = getattr(self.llm_provider, method_name)
-        try:
-            return method(
-                callback_manager=self.usage_runtime.llamaindex_callback_manager
-            )
-        except TypeError:
-            return method()
+        return method(**self.usage_runtime.hooks.embed_model_kwargs())
 
     def _resolve_embed_model(
         self,
@@ -194,17 +194,8 @@ class MetisEngine:
             normalize_top_k=self._normalize_top_k,
             create_query_engines=self._create_query_engines,
             get_plugin_for_extension=self._get_plugin_for_extension,
-            langchain_callbacks=self.usage_runtime.langchain_callbacks,
+            usage_hooks=self.usage_runtime.hooks,
         )
-
-    def _review_graph_kwargs(self) -> dict[str, list]:
-        return {"callbacks": self.usage_runtime.langchain_callbacks}
-
-    def _query_engine_callback_kwargs(self) -> dict:
-        return {
-            "callback_manager": self.usage_runtime.llamaindex_callback_manager,
-            "callbacks": self.usage_runtime.langchain_callbacks,
-        }
 
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
         """
@@ -237,7 +228,7 @@ class MetisEngine:
                 custom_guidance_precedence=self.custom_guidance_precedence,
                 llama_query_model=self.llama_query_model,
                 max_token_length=self.max_token_length,
-                chat_model_kwargs=self._review_graph_kwargs(),
+                chat_model_kwargs=self.usage_runtime.hooks.chat_model_kwargs(),
             )
         return self._review_graph
 
@@ -397,14 +388,14 @@ class MetisEngine:
             nodes_code,
             storage_context=storage_context_code,
             embed_model=self.get_embed_model_code(),
-            callback_manager=self.usage_runtime.llamaindex_callback_manager,
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
 
         VectorStoreIndex(
             nodes_docs,
             storage_context=storage_context_docs,
             embed_model=self.get_embed_model_docs(),
-            callback_manager=self.usage_runtime.llamaindex_callback_manager,
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
         # Clear pending nodes
         self._pending_nodes = None
@@ -588,7 +579,7 @@ class MetisEngine:
                     file_diff.path,
                     issues,
                     summary_prompt,
-                    callbacks=self.usage_runtime.langchain_callbacks,
+                    callbacks=self.usage_runtime.hooks.callbacks,
                 )
                 if changes_summary:
                     overall_summaries.append(changes_summary)
@@ -613,13 +604,13 @@ class MetisEngine:
             self.vector_backend.vector_store_code,
             storage_context=storage_context_code,
             embed_model=self.get_embed_model_code(),
-            callback_manager=self.usage_runtime.llamaindex_callback_manager,
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
         index_docs = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_docs,
             storage_context=storage_context_docs,
             embed_model=self.get_embed_model_docs(),
-            callback_manager=self.usage_runtime.llamaindex_callback_manager,
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
 
         doc_splitter = self._get_doc_splitter()
@@ -685,19 +676,12 @@ class MetisEngine:
 
     def _create_query_engines(self, top_k: int):
         self.vector_backend.init()
-        try:
-            qe_code, qe_docs = self.vector_backend.get_query_engines(
-                self.llm_provider,
-                top_k,
-                self.response_mode,
-                **self._query_engine_callback_kwargs(),
-            )
-        except TypeError:
-            qe_code, qe_docs = self.vector_backend.get_query_engines(
-                self.llm_provider,
-                top_k,
-                self.response_mode,
-            )
+        qe_code, qe_docs = self.vector_backend.get_query_engines(
+            self.llm_provider,
+            top_k,
+            self.response_mode,
+            **self.usage_runtime.hooks.query_engine_kwargs(),
+        )
         if not qe_code or not qe_docs:
             raise QueryEngineInitError()
         return qe_code, qe_docs

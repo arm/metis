@@ -165,11 +165,11 @@ def test_index_codebase_records_embedding_usage(tmp_path):
     backend = _DummyIndexBackend(
         _DummyEmbedding(
             model_name="dummy",
-            callback_manager=runtime.llamaindex_callback_manager,
+            callback_manager=runtime.hooks.callback_manager,
         ),
         _DummyEmbedding(
             model_name="dummy",
-            callback_manager=runtime.llamaindex_callback_manager,
+            callback_manager=runtime.hooks.callback_manager,
         ),
     )
 

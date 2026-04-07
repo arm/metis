@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from typing import Any, Callable
 
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
@@ -39,6 +40,9 @@ class _FallbackTriageAnalyzer:
 
 
 class TriageServiceRuntimeMixin:
+    codebase_path: str
+    _get_plugin_for_extension: Callable[[str], Any]
+
     def _build_triage_graph(self):
         tool_runner = StaticToolRunner(
             codebase_path=self.codebase_path,
@@ -49,7 +53,9 @@ class TriageServiceRuntimeMixin:
             llama_query_model=self.llama_query_model,
             tool_runner=tool_runner,
             plugin_config=self.plugin_config,
-            chat_model_kwargs={"callbacks": self._langchain_callbacks},
+            chat_model_kwargs=(
+                self._usage_hooks.chat_model_kwargs() if self._usage_hooks else {}
+            ),
         )
 
     def _get_thread_triage_graph(self):

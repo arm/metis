@@ -33,19 +33,45 @@ class UsageCommand:
     target: str | None = None
 
 
+@dataclass(frozen=True)
+class UsageHooks:
+    callback_manager: CallbackManager
+    callbacks: list[Any]
+
+    def embed_model_kwargs(self) -> dict[str, Any]:
+        return {"callback_manager": self.callback_manager}
+
+    def chat_model_kwargs(self) -> dict[str, Any]:
+        return {"callbacks": self.callbacks}
+
+    def query_engine_kwargs(self) -> dict[str, Any]:
+        return {
+            "callback_manager": self.callback_manager,
+            "callbacks": self.callbacks,
+        }
+
+
 class UsageRuntime:
     def __init__(self, codebase_path: str | Path):
         self.codebase_path = str(codebase_path)
         self.started_at = _utc_now()
         self.collector = UsageCollector()
         self.langchain_handler = UsageCallbackHandler(self.collector)
-        self.langchain_callbacks = [self.langchain_handler]
-        self.llamaindex_callback_manager = CallbackManager(
-            [UsageLlamaIndexHandler(self.collector)]
+        self.hooks = UsageHooks(
+            callback_manager=CallbackManager([UsageLlamaIndexHandler(self.collector)]),
+            callbacks=[self.langchain_handler],
         )
         self._lock = Lock()
         self._command_sequence = 0
         self._completed_commands: list[dict[str, Any]] = []
+
+    @property
+    def langchain_callbacks(self) -> list[Any]:
+        return self.hooks.callbacks
+
+    @property
+    def llamaindex_callback_manager(self) -> CallbackManager:
+        return self.hooks.callback_manager
 
     def snapshot_total(self) -> dict[str, Any]:
         return self.collector.snapshot()

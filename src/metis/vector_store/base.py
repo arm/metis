@@ -34,18 +34,13 @@ class BaseVectorStore(ABC):
     def _build_llm(self, llm_provider, callback_manager=None, callbacks=None):
         """Construct a provider-specific LlamaIndex LLM instance."""
         llm_class = llm_provider.get_query_engine_class()
-        try:
-            llm_kwargs = (
-                llm_provider.get_query_model_kwargs(
-                    callback_manager=callback_manager,
-                    callbacks=callbacks,
-                )
-                or {}
+        llm_kwargs = (
+            llm_provider.get_query_model_kwargs(
+                callback_manager=callback_manager,
+                callbacks=callbacks,
             )
-        except TypeError:
-            llm_kwargs = llm_provider.get_query_model_kwargs() or {}
-            if callback_manager is not None:
-                llm_kwargs.setdefault("callback_manager", callback_manager)
+            or {}
+        )
         filtered_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
         return llm_class(**filtered_kwargs)
 

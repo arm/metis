@@ -8,7 +8,6 @@ from pathlib import Path
 
 from rich.markup import escape
 from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
@@ -23,17 +22,7 @@ except ImportError:
     pass
 
 
-from .commands import (
-    run_index,
-    run_ask,
-    run_review,
-    run_file_review,
-    run_review_code,
-    run_triage,
-    run_update,
-    show_help,
-    show_version,
-)
+from .command_registry import COMMANDS, completer
 from .utils import (
     configure_logger,
     PG_SUPPORTED,
@@ -47,28 +36,6 @@ from .utils import (
 logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
-
-COMMANDS = {
-    "index": run_index,
-    "review_patch": run_review,
-    "review_code": run_review_code,
-    "update": run_update,
-    "review_file": run_file_review,
-    "ask": run_ask,
-    "triage": run_triage,
-    "help": show_help,
-    "version": show_version,
-    "exit": None,
-}
-completer = WordCompleter(list(COMMANDS), ignore_case=True)
-TRACKED_COMMANDS = {
-    "index",
-    "review_patch",
-    "review_code",
-    "review_file",
-    "ask",
-    "triage",
-}
 EXIT_REQUESTED = object()
 
 
@@ -125,10 +92,10 @@ def build_engine(args, runtime):
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(
-        callback_manager=usage_runtime.llamaindex_callback_manager
+        **usage_runtime.hooks.embed_model_kwargs()
     )
     embed_model_docs = llm_provider.get_embed_model_docs(
-        callback_manager=usage_runtime.llamaindex_callback_manager
+        **usage_runtime.hooks.embed_model_kwargs()
     )
 
     if args.backend == "postgres":
@@ -149,30 +116,6 @@ def build_engine(args, runtime):
         **runtime,
     )
     return engine, vector_backend
-
-
-def _usage_target(cmd, cmd_args):
-    if cmd in {"review_patch", "review_file", "triage"} and cmd_args:
-        return cmd_args[0]
-    return None
-
-
-def _usage_display_name(cmd, cmd_args):
-    target = _usage_target(cmd, cmd_args)
-    if not target:
-        return cmd
-    return f"{cmd} {Path(target).name}"
-
-
-def _invoke_command(func, engine, cmd, cmd_args, args):
-    if cmd in ("review_patch", "review_file", "update", "triage"):
-        func(engine, cmd_args[0], args)
-    elif cmd == "ask":
-        func(engine, " ".join(cmd_args), args)
-    elif cmd == "index":
-        func(engine, args.verbose, args.quiet)
-    elif cmd == "review_code":
-        func(engine, args)
 
 
 def finalize_cli_session(engine, args):
@@ -202,41 +145,30 @@ def execute_command(engine, cmd, cmd_args, args):
         print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
         return
 
+    spec = COMMANDS[cmd]
     if cmd == "exit":
         return EXIT_REQUESTED
 
-    if cmd == "version":
-        show_version()
+    if spec.prepares_output_file:
+        determine_output_file(cmd, args, cmd_args)
+
+    if not spec.validate(cmd, cmd_args, args):
         return
 
-    if cmd == "help":
-        show_help()
-        return
-
-    determine_output_file(cmd, args, cmd_args)
-    func = COMMANDS[cmd]
-    tracked = cmd in TRACKED_COMMANDS
     usage_command = None
-    if tracked:
+    if spec.tracked:
         usage_command = engine.usage_command(
             cmd,
-            target=_usage_target(cmd, cmd_args),
-            display_name=_usage_display_name(cmd, cmd_args),
+            target=spec.usage_target(cmd_args),
+            display_name=spec.usage_display_name(cmd, cmd_args),
         )
-
-    if cmd in ("review_patch", "review_file", "update", "triage") and not cmd_args:
-        print_console(
-            f"[red]Error:[/red] Command '{escape(cmd)}' requires a file path argument.",
-            args.quiet,
-        )
-        return
 
     if usage_command is None:
-        _invoke_command(func, engine, cmd, cmd_args, args)
+        spec.invoke(engine, cmd_args, args)
         return
 
     with usage_command as command:
-        _invoke_command(func, engine, cmd, cmd_args, args)
+        spec.invoke(engine, cmd_args, args)
 
     record = engine.finalize_usage_command(command)
     print_usage_summary(
@@ -376,7 +308,7 @@ def main():
         )
         exit(1)
     if args.version:
-        show_version()
+        COMMANDS["version"].invoke(None, [], args)
         return
 
     configure_logger(logger, args)

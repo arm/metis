@@ -116,6 +116,32 @@ def test_init_and_get_query_engines_is_thread_safe():
     backend.get_query_engines.assert_called_once()
 
 
+def test_engine_passes_usage_callback_manager_to_embed_models():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    assert llm_provider.get_embed_model_code.call_args.kwargs == {
+        "callback_manager": engine.usage_runtime.hooks.callback_manager
+    }
+    assert llm_provider.get_embed_model_docs.call_args.kwargs == {
+        "callback_manager": engine.usage_runtime.hooks.callback_manager
+    }
+
+
 def test_create_query_engines_passes_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
@@ -138,11 +164,11 @@ def test_create_query_engines_passes_usage_callback_manager():
 
     assert (
         backend.get_query_engines.call_args.kwargs["callback_manager"]
-        is engine.usage_runtime.llamaindex_callback_manager
+        is engine.usage_runtime.hooks.callback_manager
     )
     assert (
         backend.get_query_engines.call_args.kwargs["callbacks"]
-        == engine.usage_runtime.langchain_callbacks
+        == engine.usage_runtime.hooks.callbacks
     )
 
 
@@ -169,7 +195,7 @@ def test_review_graph_uses_usage_callbacks():
 
     assert (
         llm_provider.get_chat_model.call_args.kwargs["callbacks"]
-        == engine.usage_runtime.langchain_callbacks
+        == engine.usage_runtime.hooks.callbacks
     )
 
 
