@@ -6,7 +6,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Callable
 
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
@@ -40,9 +39,6 @@ class _FallbackTriageAnalyzer:
 
 
 class TriageServiceRuntimeMixin:
-    codebase_path: str
-    _get_plugin_for_extension: Callable[[str], Any]
-
     def _build_triage_graph(self):
         tool_runner = StaticToolRunner(
             codebase_path=self.codebase_path,

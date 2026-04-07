@@ -5,7 +5,7 @@ import logging
 import os
 import pathspec
 from threading import Lock
-import unidiff  # type: ignore[import-untyped]
+import unidiff
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
@@ -36,11 +36,6 @@ logger = logging.getLogger("metis")
 class MetisEngine:
 
     _SUPPORTED_LANGUAGES = None
-    max_workers: int
-    max_token_length: int
-    llama_query_model: str
-    similarity_top_k: int
-    response_mode: str
 
     def __init__(
         self,
