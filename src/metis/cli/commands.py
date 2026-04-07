@@ -4,7 +4,6 @@
 
 import importlib
 from pathlib import Path
-from rich.console import Console
 from rich.markup import escape
 
 from metis.utils import read_file_content, safe_decode_unicode
@@ -23,11 +22,8 @@ from .utils import (
 )
 
 
-console = Console()
-
-
-def show_help():
-    console.print(
+def show_help(args=None):
+    print_console(
         """
 [bold blue]Metis CLI[/bold blue]
 
@@ -53,13 +49,14 @@ Options:
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
-"""
+""",
+        getattr(args, "quiet", False),
     )
 
 
-def show_version():
+def show_version(args=None):
     version = importlib.metadata.version("metis")
-    console.print("Metis [green]" + version + "[/green]")
+    print_console("Metis [green]" + version + "[/green]", getattr(args, "quiet", False))
 
 
 def run_review(engine, patch_file, args):
@@ -130,19 +127,23 @@ def run_update(engine, patch_file, args):
 
 
 def run_ask(engine, question, args):
-    answer = with_spinner("Thinking...", engine.ask_question, question)
-    print_console("[bold magenta]Metis Answer:[/bold magenta]\n")
+    answer = with_spinner(
+        "Thinking...", engine.ask_question, question, quiet=args.quiet
+    )
+    print_console("[bold magenta]Metis Answer:[/bold magenta]\n", args.quiet)
     if isinstance(answer, dict):
         if "code" in answer:
             print_console(
-                f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n"
+                f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n",
+                args.quiet,
             )
         if "docs" in answer:
             print_console(
-                f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}"
+                f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}",
+                args.quiet,
             )
     else:
-        print_console(escape(str(answer)))
+        print_console(escape(str(answer)), args.quiet)
     save_output(args.output_file, answer, args.quiet)
 
 

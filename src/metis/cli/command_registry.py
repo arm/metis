@@ -22,7 +22,7 @@ from .commands import (
 from .utils import print_console
 
 
-InvocationMode = Literal["none", "path", "question", "index", "args"]
+InvocationMode = Literal["none", "path", "question", "index", "args", "meta"]
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,9 @@ class CommandSpec:
             return
         if self.invocation_mode == "args":
             self.handler(engine, args)
+            return
+        if self.invocation_mode == "meta":
+            self.handler(args)
             return
         self.handler()
 
@@ -116,8 +119,8 @@ COMMANDS = {
         include_target_in_display_name=True,
         prepares_output_file=True,
     ),
-    "help": CommandSpec(show_help),
-    "version": CommandSpec(show_version),
+    "help": CommandSpec(show_help, invocation_mode="meta"),
+    "version": CommandSpec(show_version, invocation_mode="meta"),
     "exit": CommandSpec(None),
 }
 

@@ -87,7 +87,37 @@ def _setup_cli(monkeypatch, tmp_path):
     return captured
 
 
-def test_noninteractive_command_prints_usage_and_persists_run(monkeypatch, tmp_path):
+def test_noninteractive_verbose_command_prints_usage_and_persists_run(
+    monkeypatch, tmp_path
+):
+    captured = _setup_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "metis",
+            "--non-interactive",
+            "--verbose",
+            "--command",
+            "ask explain",
+            "--codebase-path",
+            str(tmp_path),
+        ],
+    )
+
+    entry.main()
+
+    assert any("Token usage (ask)" in line for line in captured)
+    assert any("Session token usage" in line for line in captured)
+    usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
+    assert usage_files
+    payload = json.loads(usage_files[-1].read_text(encoding="utf-8"))
+    assert payload["totals"]["total_tokens"] == 14
+    assert payload["commands"][0]["command_name"] == "ask"
+
+
+def test_noninteractive_default_quiet_persists_usage_without_output(
+    monkeypatch, tmp_path
+):
     captured = _setup_cli(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "sys.argv",
@@ -103,8 +133,9 @@ def test_noninteractive_command_prints_usage_and_persists_run(monkeypatch, tmp_p
 
     entry.main()
 
-    assert any("Token usage (ask)" in line for line in captured)
-    assert any("Session token usage" in line for line in captured)
+    assert not any("Token usage (ask)" in line for line in captured)
+    assert not any("Session token usage" in line for line in captured)
+    assert not any("Metis Answer:" in line for line in captured)
     usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
     assert usage_files
     payload = json.loads(usage_files[-1].read_text(encoding="utf-8"))

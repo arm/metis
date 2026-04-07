@@ -96,14 +96,15 @@ def configure_logger(logger, args):
     warnings_logger.propagate = True
 
 
-def print_console(message, quiet=False, force=False, **kwargs):
-    if not quiet or force:
-        try:
-            console.print(message, **kwargs)
-        except MarkupError:
-            fallback_kwargs = dict(kwargs)
-            fallback_kwargs["markup"] = False
-            console.print(str(message), **fallback_kwargs)
+def print_console(message, quiet=False, **kwargs):
+    if quiet:
+        return
+    try:
+        console.print(message, **kwargs)
+    except MarkupError:
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["markup"] = False
+        console.print(str(message), **fallback_kwargs)
 
 
 def _usage_triplet(summary):
@@ -124,27 +125,27 @@ def _format_usage_triplet(summary):
     )
 
 
-def print_usage_summary(command_label, current_summary, total_summary):
+def print_usage_summary(command_label, current_summary, total_summary, quiet=False):
     print_console(
         f"[bold cyan]Token usage ({escape(str(command_label))})[/bold cyan]",
-        force=True,
+        quiet=quiet,
     )
     print_console(
         f"Current {_format_usage_triplet(current_summary)}",
-        force=True,
+        quiet=quiet,
     )
 
 
-def print_final_usage_summary(total_summary, saved_path=None):
-    print_console("[bold cyan]Session token usage[/bold cyan]", force=True)
+def print_final_usage_summary(total_summary, saved_path=None, quiet=False):
+    print_console("[bold cyan]Session token usage[/bold cyan]", quiet=quiet)
     print_console(
         f"Run total {_format_usage_triplet(total_summary)}",
-        force=True,
+        quiet=quiet,
     )
     if saved_path:
         print_console(
             f"[blue]Usage saved to {escape(str(saved_path))}[/blue]",
-            force=True,
+            quiet=quiet,
         )
 
 

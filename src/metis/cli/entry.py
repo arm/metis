@@ -125,7 +125,9 @@ def finalize_cli_session(engine, args):
     if engine is None or not hasattr(engine, "has_usage") or not engine.has_usage():
         return None
     saved_path = engine.save_usage_summary()
-    print_final_usage_summary(engine.usage_totals(), saved_path=saved_path)
+    print_final_usage_summary(
+        engine.usage_totals(), saved_path=saved_path, quiet=args.quiet
+    )
     return saved_path
 
 
@@ -134,7 +136,7 @@ def finalize_cli_session_and_close(engine, args, farewell):
         finalize_cli_session(engine, args)
     finally:
         if farewell:
-            print_console(farewell, args.quiet, force=True)
+            print_console(farewell, args.quiet)
         close_fn = getattr(engine, "close", None)
         if callable(close_fn):
             close_fn()
@@ -175,6 +177,7 @@ def execute_command(engine, cmd, cmd_args, args):
         record["display_name"],
         record["summary"],
         record["cumulative"],
+        quiet=args.quiet,
     )
 
 
