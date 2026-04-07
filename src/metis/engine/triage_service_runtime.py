@@ -49,6 +49,9 @@ class TriageServiceRuntimeMixin:
             llama_query_model=self.llama_query_model,
             tool_runner=tool_runner,
             plugin_config=self.plugin_config,
+            chat_model_kwargs=(
+                self._usage_hooks.chat_model_kwargs() if self._usage_hooks else {}
+            ),
         )
 
     def _get_thread_triage_graph(self):

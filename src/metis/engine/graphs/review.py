@@ -3,6 +3,7 @@
 
 import logging
 from functools import partial
+from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -18,7 +19,6 @@ from .utils import (
     sanitize_review_payload,
 )
 from .types import ReviewRequest, ReviewState
-
 
 logger = logging.getLogger("metis")
 
@@ -184,6 +184,7 @@ class ReviewGraph:
         custom_guidance_precedence,
         llama_query_model,
         max_token_length,
+        chat_model_kwargs: dict[str, Any] | None = None,
     ):
         self.llm_provider = llm_provider
         self.plugin_config = plugin_config
@@ -191,6 +192,7 @@ class ReviewGraph:
         self.custom_guidance_precedence = custom_guidance_precedence or ""
         self.llama_query_model = llama_query_model
         self.max_token_length = max_token_length
+        self.chat_model_kwargs = chat_model_kwargs or {}
         self._schema_prompt_section = review_schema_prompt()
 
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
@@ -214,7 +216,9 @@ class ReviewGraph:
         if not callable(get_chat_model):
             return None
         try:
-            chat_model = get_chat_model(model=self.llama_query_model)
+            chat_model = get_chat_model(
+                model=self.llama_query_model, **self.chat_model_kwargs
+            )
         except Exception as exc:
             logger.warning(
                 "Unable to instantiate chat model for structured output: %s", exc

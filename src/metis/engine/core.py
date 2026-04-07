@@ -3,39 +3,32 @@
 
 import logging
 import os
-import unidiff
 import pathspec
 from threading import Lock
+import unidiff
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from metis.configuration import load_plugin_config
 from metis.exceptions import (
+    ParsingError,
     PluginNotFoundError,
     QueryEngineInitError,
-    ParsingError,
 )
-from metis.vector_store.base import BaseVectorStore
 from metis.plugin_loader import load_plugins, discover_supported_language_names
-from metis.utils import (
-    read_file_content,
-)
+from metis.usage import UsageRuntime, submit_with_current_context
+from metis.utils import read_file_content
+from metis.vector_store.base import BaseVectorStore
 
-from .helpers import (
-    summarize_changes,
-    prepare_nodes_iter,
-    apply_custom_guidance,
-)
 from .diff_utils import extract_content_from_diff, process_diff_file
-from .graphs.types import ReviewRequest
-from .graphs.types import AskRequest
-from metis.engine.graphs import ReviewGraph, AskGraph
-from .triage_service import TriageService
+from .graphs.types import AskRequest, ReviewRequest
+from .helpers import apply_custom_guidance, prepare_nodes_iter, summarize_changes
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
-
+from .triage_service import TriageService
+from metis.engine.graphs import AskGraph, ReviewGraph
 
 logger = logging.getLogger("metis")
 
@@ -69,6 +62,8 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
+        injected_usage_runtime = kwargs.get("usage_runtime")
+        self.usage_runtime = self._init_usage_runtime(kwargs)
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
         self.triage_similarity_top_k = kwargs.get(
@@ -108,7 +103,81 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
-        self._triage_service = TriageService(
+        self._init_embed_models(injected_usage_runtime)
+        self._triage_service = self._build_triage_service()
+
+    def _init_usage_runtime(self, kwargs) -> UsageRuntime:
+        return kwargs.get("usage_runtime") or UsageRuntime(self.codebase_path)
+
+    def _attach_embed_models_to_backend(self) -> None:
+        if hasattr(self.vector_backend, "embed_model_code"):
+            self.vector_backend.embed_model_code = self._embed_model_code
+        if hasattr(self.vector_backend, "embed_model_docs"):
+            self.vector_backend.embed_model_docs = self._embed_model_docs
+
+    def _init_embed_models(self, injected_usage_runtime) -> None:
+        self._embed_model_code = self._resolve_embed_model(
+            "code",
+            existing_model=getattr(self.vector_backend, "embed_model_code", None),
+            reuse_existing=injected_usage_runtime is not None,
+        )
+        self._embed_model_docs = self._resolve_embed_model(
+            "docs",
+            existing_model=getattr(self.vector_backend, "embed_model_docs", None),
+            reuse_existing=injected_usage_runtime is not None,
+        )
+        self._attach_embed_models_to_backend()
+
+    def _build_embed_model(self, kind: str):
+        method_name = (
+            "get_embed_model_code" if kind == "code" else "get_embed_model_docs"
+        )
+        method = getattr(self.llm_provider, method_name)
+        return method(**self.usage_runtime.hooks.embed_model_kwargs())
+
+    def _resolve_embed_model(
+        self,
+        kind: str,
+        *,
+        existing_model=None,
+        reuse_existing: bool = False,
+    ):
+        if reuse_existing and existing_model is not None:
+            return existing_model
+        return self._build_embed_model(kind)
+
+    def get_embed_model_code(self):
+        return self._embed_model_code
+
+    def get_embed_model_docs(self):
+        return self._embed_model_docs
+
+    def usage_command(
+        self,
+        command_name: str,
+        target: str | None = None,
+        display_name: str | None = None,
+    ):
+        return self.usage_runtime.command(
+            command_name,
+            target=target,
+            display_name=display_name,
+        )
+
+    def finalize_usage_command(self, command) -> dict:
+        return self.usage_runtime.finalize_command(command)
+
+    def usage_totals(self) -> dict:
+        return self.usage_runtime.snapshot_total()
+
+    def has_usage(self) -> bool:
+        return self.usage_runtime.has_usage()
+
+    def save_usage_summary(self, output_path: str | None = None) -> str:
+        return self.usage_runtime.save_run_summary(output_path)
+
+    def _build_triage_service(self) -> TriageService:
+        return TriageService(
             codebase_path=self.codebase_path,
             llm_provider=self.llm_provider,
             llama_query_model=self.llama_query_model,
@@ -120,6 +189,7 @@ class MetisEngine:
             normalize_top_k=self._normalize_top_k,
             create_query_engines=self._create_query_engines,
             get_plugin_for_extension=self._get_plugin_for_extension,
+            usage_hooks=self.usage_runtime.hooks,
         )
 
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
@@ -153,6 +223,7 @@ class MetisEngine:
                 custom_guidance_precedence=self.custom_guidance_precedence,
                 llama_query_model=self.llama_query_model,
                 max_token_length=self.max_token_length,
+                chat_model_kwargs=self.usage_runtime.hooks.chat_model_kwargs(),
             )
         return self._review_graph
 
@@ -311,13 +382,15 @@ class MetisEngine:
         VectorStoreIndex(
             nodes_code,
             storage_context=storage_context_code,
-            embed_model=self.llm_provider.get_embed_model_code(),
+            embed_model=self.get_embed_model_code(),
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
 
         VectorStoreIndex(
             nodes_docs,
             storage_context=storage_context_docs,
-            embed_model=self.llm_provider.get_embed_model_docs(),
+            embed_model=self.get_embed_model_docs(),
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
         # Clear pending nodes
         self._pending_nodes = None
@@ -409,7 +482,8 @@ class MetisEngine:
             return
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
-                executor.submit(self.review_file, path): path for path in files
+                submit_with_current_context(executor, self.review_file, path): path
+                for path in files
             }
             for future in as_completed(future_to_path):
                 path = future_to_path[future]
@@ -496,7 +570,11 @@ class MetisEngine:
                     self.custom_guidance_precedence,
                 )
                 changes_summary = summarize_changes(
-                    self.llm_provider, file_diff.path, issues, summary_prompt
+                    self.llm_provider,
+                    file_diff.path,
+                    issues,
+                    summary_prompt,
+                    callbacks=self.usage_runtime.hooks.callbacks,
                 )
                 if changes_summary:
                     overall_summaries.append(changes_summary)
@@ -520,12 +598,14 @@ class MetisEngine:
         index_code = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_code,
             storage_context=storage_context_code,
-            embed_model=self.llm_provider.get_embed_model_code(),
+            embed_model=self.get_embed_model_code(),
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
         index_docs = VectorStoreIndex.from_vector_store(
             self.vector_backend.vector_store_docs,
             storage_context=storage_context_docs,
-            embed_model=self.llm_provider.get_embed_model_docs(),
+            embed_model=self.get_embed_model_docs(),
+            **self.usage_runtime.hooks.embed_model_kwargs(),
         )
 
         doc_splitter = self._get_doc_splitter()
@@ -595,6 +675,7 @@ class MetisEngine:
             self.llm_provider,
             top_k,
             self.response_mode,
+            **self.usage_runtime.hooks.query_engine_kwargs(),
         )
         if not qe_code or not qe_docs:
             raise QueryEngineInitError()

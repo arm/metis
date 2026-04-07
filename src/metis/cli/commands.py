@@ -4,11 +4,11 @@
 
 import importlib
 from pathlib import Path
-from rich.console import Console
 from rich.markup import escape
 
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
+from metis.usage import usage_operation
 from .triage_cli import run_triage_action
 from .utils import (
     check_file_exists,
@@ -23,11 +23,8 @@ from .utils import (
 )
 
 
-console = Console()
-
-
-def show_help():
-    console.print(
+def show_help(args=None):
+    print_console(
         """
 [bold blue]Metis CLI[/bold blue]
 
@@ -57,9 +54,9 @@ Options:
     )
 
 
-def show_version():
+def show_version(args=None):
     version = importlib.metadata.version("metis")
-    console.print("Metis [green]" + version + "[/green]")
+    print_console("Metis [green]" + version + "[/green]")
 
 
 def run_review(engine, patch_file, args):
@@ -130,16 +127,18 @@ def run_update(engine, patch_file, args):
 
 
 def run_ask(engine, question, args):
-    answer = with_spinner("Thinking...", engine.ask_question, question)
+    answer = with_spinner(
+        "Thinking...", engine.ask_question, question, quiet=args.quiet
+    )
     print_console("[bold magenta]Metis Answer:[/bold magenta]\n")
     if isinstance(answer, dict):
         if "code" in answer:
             print_console(
-                f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n"
+                f"[bold yellow]Code Context:[/bold yellow] {escape(safe_decode_unicode(answer['code']))} \n",
             )
         if "docs" in answer:
             print_console(
-                f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}"
+                f"[bold blue]Documentation Context:[/bold blue] {escape(safe_decode_unicode(answer['docs']))}",
             )
     else:
         print_console(escape(str(answer)))
@@ -185,11 +184,12 @@ def _build_triaged_sarif_payload(engine, results, args):
         def _invoke(kwargs):
             return engine.triage_sarif_payload(sarif_payload, **kwargs)
 
-        return run_triage_action(
-            args,
-            action=_invoke,
-            spinner_text="Triaging findings...",
-        )
+        with usage_operation("triage"):
+            return run_triage_action(
+                args,
+                action=_invoke,
+                spinner_text="Triaging findings...",
+            )
     except Exception as exc:
         print_console(
             f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",

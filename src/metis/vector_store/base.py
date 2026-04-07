@@ -11,7 +11,14 @@ class BaseVectorStore(ABC):
         pass
 
     @abstractmethod
-    def get_query_engines(self, llm_provider, similarity_top_k, response_mode):
+    def get_query_engines(
+        self,
+        llm_provider,
+        similarity_top_k,
+        response_mode,
+        callback_manager=None,
+        callbacks=None,
+    ):
         """Return tuple of LangChain-style retrievers (code, docs)."""
         pass
 
@@ -24,10 +31,16 @@ class BaseVectorStore(ABC):
         """Best-effort resource cleanup hook for vector backends."""
         return None
 
-    def _build_llm(self, llm_provider):
+    def _build_llm(self, llm_provider, callback_manager=None, callbacks=None):
         """Construct a provider-specific LlamaIndex LLM instance."""
         llm_class = llm_provider.get_query_engine_class()
-        llm_kwargs = llm_provider.get_query_model_kwargs() or {}
+        llm_kwargs = (
+            llm_provider.get_query_model_kwargs(
+                callback_manager=callback_manager,
+                callbacks=callbacks,
+            )
+            or {}
+        )
         filtered_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
         return llm_class(**filtered_kwargs)
 

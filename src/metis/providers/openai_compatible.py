@@ -12,11 +12,6 @@ from llama_index.embeddings.openai import (
 )
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 
-try:
-    from llama_index.llms.openai_like import OpenAILike as LlamaOpenAILike
-except (ImportError, ModuleNotFoundError):
-    LlamaOpenAILike = None
-
 from metis.providers.base import LLMProvider
 
 _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
@@ -46,18 +41,20 @@ class OpenAICompatibleProvider(LLMProvider):
         self.code_embedding_extra_kwargs = config.get("code_embedding_extra_kwargs", {})
         self.docs_embedding_extra_kwargs = config.get("docs_embedding_extra_kwargs", {})
 
-    def get_embed_model_code(self):
+    def get_embed_model_code(self, *, callback_manager=None):
         return self._build_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
             "code_embedding_model",
+            callback_manager=callback_manager,
         )
 
-    def get_embed_model_docs(self):
+    def get_embed_model_docs(self, *, callback_manager=None):
         return self._build_embedding_model(
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
             "docs_embedding_model",
+            callback_manager=callback_manager,
         )
 
     def _build_embedding_model(
@@ -65,6 +62,7 @@ class OpenAICompatibleProvider(LLMProvider):
         model_name: str | None,
         extra_kwargs: Dict[str, Any],
         config_key: str,
+        callback_manager=None,
     ):
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
@@ -81,6 +79,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if callback_manager is not None:
+            params["callback_manager"] = callback_manager
         if extra_kwargs:
             params.update(extra_kwargs)
 
@@ -91,8 +91,15 @@ class OpenAICompatibleProvider(LLMProvider):
             embed.model_name = model_name
         return embed
 
-    def get_chat_model(self, model: str | None = None, **kwargs):
-        model_name = model or self.query_model
+    def get_chat_model(
+        self,
+        *args: Any,
+        callbacks=None,
+        **kwargs,
+    ):
+        requested_model = kwargs.pop("model", None)
+        positional_model = args[0] if args else None
+        model_name = requested_model or positional_model or self.query_model
         if not model_name:
             raise ValueError("Missing chat model configuration")
 
@@ -108,6 +115,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["openai_api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if callbacks is not None:
+            params["callbacks"] = callbacks
 
         for optional_key in (
             "timeout",
@@ -125,15 +134,17 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def get_query_engine_class(self):
         if self._should_use_openai_like():
-            if LlamaOpenAILike is None:
+            try:
+                from llama_index.llms.openai_like import OpenAILike
+            except (ImportError, ModuleNotFoundError) as exc:
                 raise ModuleNotFoundError(
                     "llama-index-llms-openai-like is required for OpenAI-compatible "
                     "providers targeting custom endpoints."
-                )
-            return LlamaOpenAILike
+                ) from exc
+            return OpenAILike
         return LlamaOpenAI
 
-    def get_query_model_kwargs(self):
+    def get_query_model_kwargs(self, *, callback_manager=None, callbacks=None):
         if not self.query_model:
             raise ValueError("Missing chat model configuration for query engine")
 
@@ -148,6 +159,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if callback_manager is not None:
+            params["callback_manager"] = callback_manager
         if self._should_use_openai_like():
             params["context_window"] = self._resolve_context_window()
             params.setdefault("is_chat_model", True)

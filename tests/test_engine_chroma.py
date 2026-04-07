@@ -38,10 +38,10 @@ def test_chroma_backend_indexing(tmp_path):
     )
 
     class _Provider:
-        def get_embed_model_code(self):
+        def get_embed_model_code(self, *, callback_manager=None):
             return embed
 
-        def get_embed_model_docs(self):
+        def get_embed_model_docs(self, *, callback_manager=None):
             return embed
 
     engine = MetisEngine(
