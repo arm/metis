@@ -4,7 +4,6 @@
 import importlib.metadata
 import json
 import logging
-import os
 import re
 import warnings
 from pathlib import Path
@@ -232,7 +231,7 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
 
 
 def collect_reviews(engine):
-    return {"reviews": [r for r in engine.review_code() if r]}
+    return {"reviews": [r for r in engine.review.review_code() if r]}
 
 
 def iterate_with_progress(total, iterable):
@@ -269,22 +268,8 @@ def build_standard_progress(*, transient: bool):
 
 
 def count_index_items(engine):
-    """
-    Count total items to index (code + docs files).
-    Used to size the progress bar for verbose indexing.
-    """
-
-    docs_exts = engine.plugin_config.get("docs", {})
-    code_count = len(engine.get_code_files())
-
-    doc_count = 0
-    base_path = os.path.abspath(engine.codebase_path)
-    for _, _, _files in os.walk(base_path):
-        for f in _files:
-            if os.path.splitext(f)[1].lower() in docs_exts:
-                doc_count += 1
-
-    return code_count + doc_count
+    """Count total items to index via the indexing domain surface."""
+    return engine.indexing.count_index_items()
 
 
 def save_output(output_files, data, quiet=False, sarif_payload=None):

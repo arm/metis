@@ -64,7 +64,7 @@ def run_review(engine, patch_file, args):
         return
     results = with_spinner(
         "Reviewing patch...",
-        engine.review_patch,
+        engine.review.review_patch,
         patch_file=patch_file,
         quiet=args.quiet,
     )
@@ -76,7 +76,7 @@ def run_file_review(engine, file_path, args):
         return
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
-        engine.review_file,
+        engine.review.review_file,
         file_path=file_path,
         quiet=args.quiet,
     )
@@ -92,8 +92,8 @@ def run_file_review(engine, file_path, args):
 def run_review_code(engine, args):
     if args.verbose:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-        total = len(engine.get_code_files())
-        file_reviews = iterate_with_progress(total, engine.review_code())
+        total = len(engine.review.get_code_files())
+        file_reviews = iterate_with_progress(total, engine.review.review_code())
         results = {"reviews": file_reviews}
     else:
         results = with_spinner(
@@ -107,14 +107,16 @@ def run_index(engine, verbose=False, quiet=False):
         print_console("[cyan]Indexing codebase...[/cyan]", quiet)
         total = count_index_items(engine)
         if total > 0:
-            iterate_with_progress(total, engine.index_prepare_nodes_iter())
+            iterate_with_progress(total, engine.indexing.index_prepare_nodes_iter())
             with_timer(
-                "Embedding indexes...", engine.index_finalize_embeddings, quiet=quiet
+                "Embedding indexes...",
+                engine.indexing.index_finalize_embeddings,
+                quiet=quiet,
             )
             print_console("[green]Indexing completed successfully.[/green]", quiet)
             return
 
-    with_spinner("Indexing codebase...", engine.index_codebase, quiet=quiet)
+    with_spinner("Indexing codebase...", engine.indexing.index_codebase, quiet=quiet)
     print_console("[green]Indexing completed successfully.[/green]", quiet)
 
 
@@ -122,7 +124,12 @@ def run_update(engine, patch_file, args):
     if not check_file_exists(patch_file):
         return
     file_diff = read_file_content(patch_file)
-    with_spinner("Updating index...", engine.update_index, file_diff, quiet=args.quiet)
+    with_spinner(
+        "Updating index...",
+        engine.indexing.update_index,
+        file_diff,
+        quiet=args.quiet,
+    )
     print_console("[green]Index update completed.[/green]", args.quiet)
 
 

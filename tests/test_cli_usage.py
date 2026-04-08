@@ -26,6 +26,8 @@ class _DummyEngine:
         self.codebase_path = codebase_path
         self.usage_runtime = UsageRuntime(codebase_path)
         self.closed = False
+        self.review = self
+        self.indexing = self
 
     def usage_command(self, command_name, target=None, display_name=None):
         return self.usage_runtime.command(

@@ -119,7 +119,7 @@ def _filter_resolved_macro_unresolved_hops(
     return kept
 
 
-def triage_node_collect_evidence(state: TriageState, *, tool_runner) -> TriageState:
+def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     file_path = state.get("finding_file_path", "") or ""
     line = int(state.get("finding_line", 1) or 1)
     is_metis_source = bool(state.get("finding_is_metis", False))
@@ -162,7 +162,7 @@ def triage_node_collect_evidence(state: TriageState, *, tool_runner) -> TriageSt
     exact_line_context = _collect_file_context(
         state,
         sections,
-        tool_runner=tool_runner,
+        toolbox=toolbox,
         file_path=file_path,
         line=line,
         window_radius=window_radius,
@@ -204,7 +204,7 @@ def triage_node_collect_evidence(state: TriageState, *, tool_runner) -> TriageSt
     unresolved_macros, resolved_macros = _collect_macro_definition_sections(
         state,
         sections,
-        tool_runner=tool_runner,
+        toolbox=toolbox,
         file_path=file_path,
         macro_names=macro_candidates,
         max_sections=max_sections,
@@ -217,7 +217,7 @@ def triage_node_collect_evidence(state: TriageState, *, tool_runner) -> TriageSt
     ) = _gather_symbol_definition_hits(
         state,
         sections,
-        tool_runner=tool_runner,
+        toolbox=toolbox,
         symbols=symbols,
         file_path=file_path,
         max_followup_hits=C.DEFAULT_MAX_FOLLOWUP_HITS,
@@ -234,7 +234,7 @@ def triage_node_collect_evidence(state: TriageState, *, tool_runner) -> TriageSt
     _collect_hit_context_sections(
         state,
         sections,
-        tool_runner=tool_runner,
+        toolbox=toolbox,
         followup_hits=followup_hits,
         max_followup_hits=C.DEFAULT_MAX_FOLLOWUP_HITS,
         max_sections=max_sections,

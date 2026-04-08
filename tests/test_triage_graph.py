@@ -19,7 +19,7 @@ def _build_graph():
     return TriageGraph(
         llm_provider=object(),
         llama_query_model="dummy",
-        tool_runner=object(),
+        toolbox=object(),
         plugin_config={},
     )
 

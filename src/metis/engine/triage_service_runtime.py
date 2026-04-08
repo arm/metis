@@ -9,7 +9,7 @@ import threading
 
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
-from metis.engine.tools.static_tools import StaticToolRunner
+from metis.engine.tools.registry import build_toolbox
 from metis.exceptions import QueryEngineInitError
 
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
@@ -40,14 +40,15 @@ class _FallbackTriageAnalyzer:
 
 class TriageServiceRuntimeMixin:
     def _build_triage_graph(self):
-        tool_runner = StaticToolRunner(
+        toolbox = build_toolbox(
+            policy="triage_evidence",
             codebase_path=self.codebase_path,
             timeout_seconds=self.triage_tool_timeout_seconds,
         )
         return TriageGraph(
             llm_provider=self.llm_provider,
             llama_query_model=self.llama_query_model,
-            tool_runner=tool_runner,
+            toolbox=toolbox,
             plugin_config=self.plugin_config,
             chat_model_kwargs=(
                 self._usage_hooks.chat_model_kwargs() if self._usage_hooks else {}

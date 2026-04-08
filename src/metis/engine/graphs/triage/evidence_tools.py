@@ -71,7 +71,7 @@ def _collect_file_context(
     state: TriageState,
     sections: list[str],
     *,
-    tool_runner,
+    toolbox,
     file_path: str,
     line: int,
     window_radius: int,
@@ -94,7 +94,7 @@ def _collect_file_context(
         max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
         max_chars=C.DEFAULT_CAPTURE_MAX_CHARS,
         append_error_section=True,
-        invoke=lambda: tool_runner.sed(file_path, start, end),
+        invoke=lambda: toolbox.sed(file_path, start, end),
     )
     exact = _safe_tool_capture(
         state,
@@ -106,7 +106,7 @@ def _collect_file_context(
         max_lines=C.REPORTED_LINE_MAX_LINES,
         max_chars=C.REPORTED_LINE_MAX_CHARS,
         append_error_section=True,
-        invoke=lambda: tool_runner.sed(file_path, line, line),
+        invoke=lambda: toolbox.sed(file_path, line, line),
     )
     if exact:
         exact_line_context = exact
@@ -321,7 +321,7 @@ def _collect_macro_definition_sections(
     state: TriageState,
     sections: list[str],
     *,
-    tool_runner,
+    toolbox,
     file_path: str,
     macro_names: list[str],
     max_sections: int,
@@ -336,10 +336,10 @@ def _collect_macro_definition_sections(
         kind = op[0]
         if kind == "grep" and len(op) == 3:
             _, path, pattern = op
-            return tool_runner.grep(pattern, path)
+            return toolbox.grep(pattern, path)
         if kind == "sed" and len(op) == 4:
             _, path, start, end = op
-            return tool_runner.sed(path, start, end)
+            return toolbox.sed(path, start, end)
         return None
 
     def _safe_capture(
@@ -379,7 +379,7 @@ def _collect_macro_definition_sections(
         targeted_hit_context_max_chars=C.TARGETED_HIT_CONTEXT_MAX_CHARS,
         safe_tool_capture=_safe_capture,
         parse_grep_hits=_parse_grep_hits,
-        find_name_paths=lambda name: tool_runner.find_name(
+        find_name_paths=lambda name: toolbox.find_name(
             name,
             max_results=C.FIND_NAME_MAX_RESULTS,
         ),
@@ -405,7 +405,7 @@ def _gather_symbol_definition_hits(
     state: TriageState,
     sections: list[str],
     *,
-    tool_runner,
+    toolbox,
     symbols: list[str],
     file_path: str,
     max_followup_hits: int,
@@ -448,7 +448,7 @@ def _gather_symbol_definition_hits(
                 max_lines=C.RELATED_GREP_MAX_LINES,
                 max_chars=C.RELATED_GREP_MAX_CHARS,
                 append_error_section=False,
-                invoke=lambda p=path, q=probe: tool_runner.grep(q, p),
+                invoke=lambda p=path, q=probe: toolbox.grep(q, p),
             )
             if output is None:
                 continue
@@ -492,7 +492,7 @@ def _collect_hit_context_sections(
     state: TriageState,
     sections: list[str],
     *,
-    tool_runner,
+    toolbox,
     followup_hits: list[tuple[str, int]],
     max_followup_hits: int,
     max_sections: int,
@@ -518,5 +518,5 @@ def _collect_hit_context_sections(
             max_lines=C.HIT_CONTEXT_MAX_LINES,
             max_chars=C.HIT_CONTEXT_MAX_CHARS,
             append_error_section=True,
-            invoke=lambda p=path, s=start, e=end: tool_runner.sed(p, s, e),
+            invoke=lambda p=path, s=start, e=end: toolbox.sed(p, s, e),
         )

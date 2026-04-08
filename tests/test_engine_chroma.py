@@ -52,7 +52,7 @@ def test_chroma_backend_indexing(tmp_path):
         **runtime,
     )
 
-    engine.index_codebase()
+    engine.indexing.index_codebase()
 
 
 def test_chroma_store_forces_rust_bindings(tmp_path):

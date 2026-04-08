@@ -1,41 +1,35 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-import os
-import pathspec
-from threading import Lock
-import unidiff
+from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import Document
+import logging
 
 from metis.configuration import load_plugin_config
-from metis.exceptions import (
-    ParsingError,
-    PluginNotFoundError,
-    QueryEngineInitError,
-)
-from metis.plugin_loader import load_plugins, discover_supported_language_names
-from metis.usage import UsageRuntime, submit_with_current_context
-from metis.utils import read_file_content
+from metis.exceptions import PluginNotFoundError, QueryEngineInitError
+from metis.plugin_loader import discover_supported_language_names, load_plugins
+from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
-from .diff_utils import extract_content_from_diff, process_diff_file
-from .graphs.types import AskRequest, ReviewRequest
-from .helpers import apply_custom_guidance, prepare_nodes_iter, summarize_changes
+from .graphs import AskGraph, ReviewGraph
+from .indexing_service import IndexingService
+from .repository import EngineRepository
+from .review_service import ReviewService
+from .runtime import EngineConfig, EngineState
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
-from metis.engine.graphs import AskGraph, ReviewGraph
 
 logger = logging.getLogger("metis")
 
 
 class MetisEngine:
-
     _SUPPORTED_LANGUAGES = None
+
+    max_workers: int
+    max_token_length: int
+    llama_query_model: str
+    similarity_top_k: int
+    response_mode: str
 
     def __init__(
         self,
@@ -73,37 +67,63 @@ class MetisEngine:
         self.triage_tool_timeout_seconds = int(
             kwargs.get("triage_tool_timeout_seconds", 12)
         )
-        # Optional user-provided guidance to be appended to system prompts
         self.custom_prompt_text = kwargs.get("custom_prompt_text")
-        self.plugin_config = load_plugin_config()
+        self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
+        self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
+        self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
 
-        # Load precedence note from general prompts
+        self.plugin_config = load_plugin_config()
         self.custom_guidance_precedence = self.plugin_config.get(
             "general_prompts", {}
         ).get("custom_guidance_precedence", "")
         self.plugins = load_plugins(self.plugin_config)
 
-        # Cache splitters and extension/plugin lookups
-        self._splitter_cache = {}
         self.code_exts = set()
         self.ext_plugin_map = {}
-
         for plugin in self.plugins:
-            for e in plugin.get_supported_extensions():
-                e_lower = e.lower()
-                self.code_exts.add(e_lower)
-                self.ext_plugin_map[e_lower] = plugin
+            for extension in plugin.get_supported_extensions():
+                lowered = extension.lower()
+                self.code_exts.add(lowered)
+                self.ext_plugin_map[lowered] = plugin
 
-        # Graphs are built lazily on first use
-        self._review_graph = None
-        self._ask_graph = None
-        self._qe_code = None
-        self._qe_docs = None
-        self._query_engine_lock = Lock()
-        self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
-        self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
-        self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
         self._init_embed_models(injected_usage_runtime)
+
+        self._config = EngineConfig(
+            codebase_path=self.codebase_path,
+            vector_backend=self.vector_backend,
+            llm_provider=self.llm_provider,
+            usage_runtime=self.usage_runtime,
+            plugin_config=self.plugin_config,
+            custom_prompt_text=self.custom_prompt_text,
+            custom_guidance_precedence=self.custom_guidance_precedence,
+            embed_model_code=self.get_embed_model_code(),
+            embed_model_docs=self.get_embed_model_docs(),
+            max_workers=self.max_workers,
+            max_token_length=self.max_token_length,
+            llama_query_model=self.llama_query_model,
+            similarity_top_k=self.similarity_top_k,
+            response_mode=self.response_mode,
+            doc_chunk_size=self.doc_chunk_size,
+            doc_chunk_overlap=self.doc_chunk_overlap,
+            metisignore_file=self.metisignore_file,
+            review_code_include_paths=list(self.review_code_include_paths),
+            review_code_exclude_paths=list(self.review_code_exclude_paths),
+            code_exts=self.code_exts,
+            ext_plugin_map=self.ext_plugin_map,
+        )
+        self._state = EngineState()
+        self.repository = EngineRepository(self._config, self._state)
+        self.indexing = IndexingService(
+            self._config,
+            self._state,
+            self.repository,
+        )
+        self.review = ReviewService(
+            self._config,
+            self.repository,
+            get_query_engines=lambda: self._init_and_get_query_engines(),
+            review_graph_factory=lambda: self._get_review_graph(),
+        )
         self._triage_service = self._build_triage_service()
 
     def _init_usage_runtime(self, kwargs) -> UsageRuntime:
@@ -192,31 +212,9 @@ class MetisEngine:
             usage_hooks=self.usage_runtime.hooks,
         )
 
-    def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
-        """
-        Load metisignore file and return a GitIgnoreSpec matcher.
-
-        Args:
-            metisignore: Path to a file that have the ignore regex ( use the .gitignore syntax )
-
-        Returns:
-            pathspec.GitIgnoreSpec object or None if file doesn't exist
-        """
-        try:
-            if not self.metisignore_file:
-                logger.info("No MetisIgnore file provided")
-                return None
-            with open(self.metisignore_file, "r") as f:
-                spec = pathspec.GitIgnoreSpec.from_lines(f)
-                logger.info(f"MetisIgnore file loaded: {self.metisignore_file}")
-            return spec
-        except FileNotFoundError:
-            logger.info(f"MetisIgnore file not loaded {self.metisignore_file}")
-            return None
-
     def _get_review_graph(self):
-        if self._review_graph is None:
-            self._review_graph = ReviewGraph(
+        if self._state.review_graph is None:
+            self._state.review_graph = ReviewGraph(
                 llm_provider=self.llm_provider,
                 plugin_config=self.plugin_config,
                 custom_prompt_text=self.custom_prompt_text,
@@ -225,22 +223,18 @@ class MetisEngine:
                 max_token_length=self.max_token_length,
                 chat_model_kwargs=self.usage_runtime.hooks.chat_model_kwargs(),
             )
-        return self._review_graph
+        return self._state.review_graph
 
     def _get_ask_graph(self):
-        if self._ask_graph is None:
-            self._ask_graph = AskGraph(
+        if self._state.ask_graph is None:
+            self._state.ask_graph = AskGraph(
                 llm_provider=self.llm_provider,
                 llama_query_model=self.llama_query_model,
             )
-        return self._ask_graph
+        return self._state.ask_graph
 
     @classmethod
     def supported_languages(cls):
-        """
-        Returns the list of supported languages by the Metis engine.
-        """
-        # Cache to avoid repeated plugin instantiation in repeated calls
         if cls._SUPPORTED_LANGUAGES is None:
             plugin_config = load_plugin_config()
             cls._SUPPORTED_LANGUAGES = discover_supported_language_names(plugin_config)
@@ -257,408 +251,29 @@ class MetisEngine:
         raise PluginNotFoundError(name)
 
     def _get_plugin_for_extension(self, extension):
-        return self.ext_plugin_map.get(extension.lower())
+        return self.repository.get_plugin_for_extension(extension)
 
     def _get_all_supported_code_extensions(self):
-        return sorted(self.code_exts)
+        return self.repository.get_all_supported_code_extensions()
 
     def _get_splitter_cached(self, plugin):
-        key = plugin.get_name()
-        if key in self._splitter_cache:
-            return self._splitter_cache[key]
-        splitter = plugin.get_splitter()
-        self._splitter_cache[key] = splitter
-        return splitter
+        return self.repository.get_splitter_cached(plugin)
 
     def _get_doc_splitter(self):
-        if not hasattr(self, "_doc_splitter") or self._doc_splitter is None:
-            self._doc_splitter = SentenceSplitter(
-                chunk_size=self.doc_chunk_size,
-                chunk_overlap=self.doc_chunk_overlap,
-            )
-        return self._doc_splitter
+        return self.repository.get_doc_splitter()
 
     def _rel_to_base(self, path):
-        base_path = os.path.abspath(self.codebase_path)
-        return base_path, os.path.relpath(path, base_path)
+        return self.repository.rel_to_base(path)
 
     def ask_question(self, question):
-        """
-        Loads the indexes and queries them for an answer using the AskGraph.
-        """
         qe_code, qe_docs = self._init_and_get_query_engines()
         logger.info("Querying codebase for your question...")
-        req: AskRequest = {
+        req = {
             "question": question,
             "retriever_code": qe_code,
             "retriever_docs": qe_docs,
         }
         return self._get_ask_graph().ask(req)
-
-    def index_codebase(self):
-        """
-        Reads files from the codebase, splits documents using language-specific
-        splitters, builds vector indexes for code and documentation, and persists them.
-        """
-
-        self.index_prepare_nodes()
-        self.index_finalize_embeddings()
-
-    def index_prepare_nodes_iter(self):
-        """
-        Parse documents and prepare nodes for indexing, yielding one step per file.
-        Stores prepared nodes internally for a subsequent call to
-        `index_finalize_embeddings`.
-        """
-        # Read docs and code supported extensions from config
-        docs_supported_exts = self.plugin_config.get("docs", {}).get(
-            "supported_extensions", [".md"]
-        )
-        code_supported_exts = self._get_all_supported_code_extensions()
-
-        logger.info(f"Indexing codebase at: {self.codebase_path}")
-        reader = SimpleDirectoryReader(
-            input_dir=self.codebase_path,
-            recursive=True,
-            required_exts=code_supported_exts + docs_supported_exts,
-            filename_as_id=True,
-        )
-        documents = reader.load_data()
-        logger.info(f"Loaded {len(documents)} documents from {self.codebase_path}")
-
-        self.vector_backend.init()
-        doc_splitter = self._get_doc_splitter()
-        metisignore_spec = self.load_metisignore()
-        base_path = os.path.abspath(self.codebase_path)
-        parent_dir = os.path.dirname(base_path)
-        code_docs = []
-        doc_docs = []
-        for doc in documents:
-            ext = os.path.splitext(doc.id_)[1].lower()
-            new_id = os.path.relpath(doc.id_, parent_dir)
-            doc.doc_id = new_id
-            doc.id_ = new_id
-
-            if metisignore_spec and metisignore_spec.match_file(
-                os.path.join(parent_dir, new_id)
-            ):
-                continue
-
-            if ext in docs_supported_exts:
-                doc_docs.append(doc)
-            elif ext in code_supported_exts:
-                code_docs.append(doc)
-
-        nodes_code, nodes_docs = yield from prepare_nodes_iter(
-            code_docs,
-            doc_docs,
-            self._get_plugin_for_extension,
-            self._get_splitter_cached,
-            doc_splitter,
-        )
-
-        # Store nodes for embedding phase
-        self._pending_nodes = (nodes_code, nodes_docs)
-        return
-
-    def index_prepare_nodes(self):
-        """
-        Prepare nodes without exposing an iterator.
-        Consumes the iterator so non-verbose callers avoid a no-op loop.
-        """
-        for _ in self.index_prepare_nodes_iter():
-            pass
-
-    def index_finalize_embeddings(self):
-        """Build vector indexes from previously prepared nodes."""
-        pending = getattr(self, "_pending_nodes", None)
-        if not pending:
-            # Nothing to do
-            return
-        nodes_code, nodes_docs = pending
-        storage_context_code, storage_context_docs = (
-            self.vector_backend.get_storage_contexts()
-        )
-        VectorStoreIndex(
-            nodes_code,
-            storage_context=storage_context_code,
-            embed_model=self.get_embed_model_code(),
-            **self.usage_runtime.hooks.embed_model_kwargs(),
-        )
-
-        VectorStoreIndex(
-            nodes_docs,
-            storage_context=storage_context_docs,
-            embed_model=self.get_embed_model_docs(),
-            **self.usage_runtime.hooks.embed_model_kwargs(),
-        )
-        # Clear pending nodes
-        self._pending_nodes = None
-
-    def review_file(self, file_path):
-        """
-        Review a single source file. Detects plugin by extension, retrieves
-        relevant context from code/docs indexes, runs the security review,
-        and returns a result dict or None
-        if the file is unsupported or empty.
-        """
-        qe_code, qe_docs = self._init_and_get_query_engines()
-        base_path = os.path.abspath(self.codebase_path)
-        snippet = read_file_content(file_path)
-        if not snippet:
-            return None
-
-        ext = os.path.splitext(file_path)[1].lower()
-        plugin = self._get_plugin_for_extension(ext)
-        if not plugin:
-            return None
-
-        language_prompts = plugin.get_prompts()
-        context_prompt_template = self.plugin_config.get("general_prompts", {}).get(
-            "retrieve_context", ""
-        )
-
-        formatted_context_prompt = context_prompt_template.format(file_path=file_path)
-        relative_path = os.path.relpath(file_path, base_path)
-
-        try:
-            req: ReviewRequest = {
-                "file_path": file_path,
-                "snippet": snippet,
-                "retriever_code": qe_code,
-                "retriever_docs": qe_docs,
-                "context_prompt": formatted_context_prompt,
-                "language_prompts": language_prompts,
-                "default_prompt_key": "security_review_file",
-                "relative_file": relative_path,
-                "mode": "file",
-            }
-            return self._get_review_graph().review(req)
-        except Exception as e:
-            logger.error(f"Error processing file {file_path}: {e}")
-            return None
-
-    def get_code_files(self):
-        """
-        Return a list of file names in the self.codebase_path folder.
-        Evaluate the path with metisignore file, include/exclude paths if requested
-        """
-        base_path = os.path.abspath(self.codebase_path)
-        metisignore_spec = self.load_metisignore()
-        include_spec = None
-        if self.review_code_include_paths:
-            include_spec = pathspec.GitIgnoreSpec.from_lines(
-                self.review_code_include_paths
-            )
-        exclude_spec = None
-        if self.review_code_exclude_paths:
-            exclude_spec = pathspec.GitIgnoreSpec.from_lines(
-                self.review_code_exclude_paths
-            )
-        file_list = []
-        for root, _, files in os.walk(base_path):
-            for file in files:
-                full_path = os.path.join(root, file)
-                ext = os.path.splitext(file)[1].lower()
-                if ext not in self.code_exts:
-                    continue
-                rel_path = os.path.relpath(full_path, base_path)
-                if metisignore_spec and metisignore_spec.match_file(rel_path):
-                    continue
-                if include_spec and not include_spec.match_file(rel_path):
-                    continue
-                if exclude_spec and exclude_spec.match_file(rel_path):
-                    continue
-                file_list.append(full_path)
-        return file_list
-
-    def review_code(self):
-        """
-        Iterate all supported code files under `codebase_path` and yield
-        per-file review results. Uses a thread pool and continues on errors.
-        """
-        files = self.get_code_files()
-        if not files:
-            return
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_path = {
-                submit_with_current_context(executor, self.review_file, path): path
-                for path in files
-            }
-            for future in as_completed(future_to_path):
-                path = future_to_path[future]
-                try:
-                    result = future.result()
-                except Exception as e:
-                    logger.error(f"Error reviewing file {path}: {e}")
-                    yield None
-                    continue
-                if result:
-                    yield result
-                else:
-                    yield None
-
-    def review_patch(self, patch_file):
-        """
-        Reviews a patch/diff file by processing each file change.
-        """
-        qe_code, qe_docs = self._init_and_get_query_engines()
-        patch_text = read_file_content(patch_file)
-        try:
-            diff = unidiff.PatchSet.from_string(patch_text)
-            logger.info("Parsed the patch file successfully.")
-        except Exception as e:
-            logger.error(f"Error parsing patch file: {e}")
-            return {"reviews": [], "overall_changes": ""}
-        file_reviews = []
-        overall_summaries = []
-        base_path = os.path.abspath(self.codebase_path)
-        metisignore_spec = self.load_metisignore()
-        for file_diff in diff:
-            if file_diff.is_removed_file or file_diff.is_binary_file:
-                continue
-            abs_path = (
-                file_diff.path
-                if os.path.isabs(file_diff.path)
-                else os.path.join(base_path, file_diff.path)
-            )
-            relative_path = os.path.relpath(abs_path, base_path)
-            if metisignore_spec and metisignore_spec.match_file(relative_path):
-                continue
-            ext = os.path.splitext(file_diff.path)[1].lower()
-            plugin = self._get_plugin_for_extension(ext)
-            if not plugin:
-                continue
-            snippet = process_diff_file(
-                self.codebase_path, file_diff, self.max_token_length
-            )
-            if not snippet:
-                continue
-            context_prompt = self.plugin_config.get("general_prompts", {}).get(
-                "retrieve_context", ""
-            )
-            formatted_context = context_prompt.format(file_path=file_diff.path)
-
-            language_prompts = plugin.get_prompts()
-            try:
-                original_content = read_file_content(abs_path)
-                req: ReviewRequest = {
-                    "file_path": abs_path,
-                    "snippet": snippet,
-                    "retriever_code": qe_code,
-                    "retriever_docs": qe_docs,
-                    "context_prompt": formatted_context,
-                    "language_prompts": language_prompts,
-                    "default_prompt_key": "security_review",
-                    "relative_file": relative_path,
-                    "mode": "patch",
-                    "original_file": original_content or "",
-                }
-                review_dict = self._get_review_graph().review(req)
-            except Exception as e:
-                logger.error(f"Error processing review for {file_diff.path}: {e}")
-                review_dict = None
-            if review_dict:
-                file_reviews.append(review_dict)
-                issues = "\n".join(
-                    issue.get("issue", "") for issue in review_dict.get("reviews", [])
-                )
-                summary_prompt = language_prompts["snippet_security_summary"]
-                summary_prompt = apply_custom_guidance(
-                    summary_prompt,
-                    self.custom_prompt_text,
-                    self.custom_guidance_precedence,
-                )
-                changes_summary = summarize_changes(
-                    self.llm_provider,
-                    file_diff.path,
-                    issues,
-                    summary_prompt,
-                    callbacks=self.usage_runtime.hooks.callbacks,
-                )
-                if changes_summary:
-                    overall_summaries.append(changes_summary)
-        overall_changes = "\n\n".join(overall_summaries)
-        return {"reviews": file_reviews, "overall_changes": overall_changes}
-
-    def update_index(self, patch_text):
-        """
-        Updates the existing index by comparing two git commits.
-        """
-        try:
-            patch_set = unidiff.PatchSet.from_string(patch_text)
-            logger.info("Parsed the provided patch string successfully.")
-        except Exception as e:
-            raise ParsingError(f"Error parsing patch string: {e}")
-        self.vector_backend.init()
-        storage_context_code, storage_context_docs = (
-            self.vector_backend.get_storage_contexts()
-        )
-
-        index_code = VectorStoreIndex.from_vector_store(
-            self.vector_backend.vector_store_code,
-            storage_context=storage_context_code,
-            embed_model=self.get_embed_model_code(),
-            **self.usage_runtime.hooks.embed_model_kwargs(),
-        )
-        index_docs = VectorStoreIndex.from_vector_store(
-            self.vector_backend.vector_store_docs,
-            storage_context=storage_context_docs,
-            embed_model=self.get_embed_model_docs(),
-            **self.usage_runtime.hooks.embed_model_kwargs(),
-        )
-
-        doc_splitter = self._get_doc_splitter()
-
-        for diff_file in patch_set:
-            if diff_file.is_binary_file:
-                continue
-            doc_id = os.path.join(
-                os.path.basename(os.path.abspath(self.codebase_path)), diff_file.path
-            )
-            ext = os.path.splitext(doc_id)[1].lower()
-            target_index = (
-                index_code
-                if ext in self._get_all_supported_code_extensions()
-                else index_docs
-            )
-
-            if diff_file.is_removed_file:
-                target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
-            else:
-                file_path = os.path.join(self.codebase_path, diff_file.path)
-                file_content = read_file_content(file_path)
-                if not file_content and diff_file.is_added_file:
-                    file_content = extract_content_from_diff(diff_file)
-                if not file_content:
-                    logger.warning("No content available for %s", diff_file.path)
-                    continue
-                doc = Document(
-                    text=file_content,
-                    metadata={"file_name": diff_file.path},
-                    id_=doc_id,
-                )
-
-                if diff_file.is_added_file:
-                    if ext in self._get_all_supported_code_extensions():
-                        plugin = self._get_plugin_for_extension(ext)
-                        if not plugin:
-                            continue
-                        splitter = self._get_splitter_cached(plugin)
-                        try:
-                            nodes = splitter.get_nodes_from_documents([doc])
-                        except Exception as e:
-                            logger.warning(
-                                f"Could not parse code with language {plugin.get_name()} for file {doc.id_} (ext {ext}): {e}"
-                            )
-                            continue
-                    else:
-                        nodes = doc_splitter.get_nodes_from_documents([doc])
-                    target_index.insert_nodes(nodes)
-                else:
-                    target_index.refresh_ref_docs([doc])
-                target_index.docstore.set_document_hash(doc.id_, doc.hash)
-        logger.info("Index update complete based on the provided patch diff.")
 
     def _normalize_top_k(self, value, default: int) -> int:
         try:
@@ -682,15 +297,15 @@ class MetisEngine:
         return qe_code, qe_docs
 
     def _init_and_get_query_engines(self):
-        if self._qe_code is not None and self._qe_docs is not None:
-            return self._qe_code, self._qe_docs
-        with self._query_engine_lock:
-            if self._qe_code is not None and self._qe_docs is not None:
-                return self._qe_code, self._qe_docs
+        if self._state.qe_code is not None and self._state.qe_docs is not None:
+            return self._state.qe_code, self._state.qe_docs
+        with self._state.query_engine_lock:
+            if self._state.qe_code is not None and self._state.qe_docs is not None:
+                return self._state.qe_code, self._state.qe_docs
             top_k = self._normalize_top_k(self.similarity_top_k, 5)
             qe_code, qe_docs = self._create_query_engines(top_k)
-            self._qe_code = qe_code
-            self._qe_docs = qe_docs
+            self._state.qe_code = qe_code
+            self._state.qe_docs = qe_docs
             return qe_code, qe_docs
 
     def triage_sarif_payload(
@@ -728,8 +343,8 @@ class MetisEngine:
         )
 
     def close(self):
-        self._qe_code = None
-        self._qe_docs = None
+        self._state.qe_code = None
+        self._state.qe_docs = None
         self._triage_service.close()
         close_fn = getattr(self.vector_backend, "close", None)
         if callable(close_fn):
