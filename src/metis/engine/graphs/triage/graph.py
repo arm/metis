@@ -24,13 +24,13 @@ class TriageGraph:
         self,
         llm_provider,
         llama_query_model,
-        tool_runner,
+        toolbox,
         plugin_config=None,
         chat_model_kwargs=None,
     ):
         self.llm_provider = llm_provider
         self.llama_query_model = llama_query_model
-        self.tool_runner = tool_runner
+        self.toolbox = toolbox
         general_prompts = (plugin_config or {}).get("general_prompts", {})
         self.triage_system_prompt = (
             general_prompts.get("triage_system_prompt")
@@ -67,7 +67,7 @@ class TriageGraph:
         graph.add_node("retrieve", triage_node_retrieve)
         graph.add_node(
             "collect_evidence",
-            partial(triage_node_collect_evidence, tool_runner=self.tool_runner),
+            partial(triage_node_collect_evidence, toolbox=self.toolbox),
         )
         graph.add_node(
             "triage",

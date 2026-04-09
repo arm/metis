@@ -92,7 +92,7 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         response_mode="compact",
     )
 
-    engine.get_code_files = lambda: ["a.py", "b.py"]
+    engine.review.get_code_files = lambda: ["a.py", "b.py"]
 
     def _review_file(path):
         engine.usage_runtime.collector.record(
@@ -105,10 +105,10 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         )
         return {"file": path}
 
-    engine.review_file = _review_file
+    engine.review.review_file = _review_file
 
     with engine.usage_command("review_code") as command:
-        results = list(engine.review_code())
+        results = list(engine.review.review_code())
 
     record = engine.finalize_usage_command(command)
 
@@ -186,7 +186,7 @@ def test_index_codebase_records_embedding_usage(tmp_path):
     )
 
     with engine.usage_command("index") as command:
-        engine.index_codebase()
+        engine.indexing.index_codebase()
 
     record = engine.finalize_usage_command(command)
 

@@ -131,7 +131,7 @@ def test_triage_collect_evidence_includes_analyzer_sections_and_scope_section():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
 
     evidence_pack = out.get("evidence_pack", "")
     assert "[ANALYZER_SUMMARY]" in evidence_pack
@@ -158,7 +158,7 @@ def test_triage_collect_evidence_runs_definition_grep_when_analyzer_weak():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
     evidence_pack = out.get("evidence_pack", "")
     assert "[ANALYZER_FALLBACK]" in evidence_pack
     assert "[ANALYZER_UNRESOLVED]" in evidence_pack
@@ -179,7 +179,7 @@ def test_triage_collect_evidence_enforces_max_sections(monkeypatch):
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
 
     evidence_pack = out.get("evidence_pack", "")
     sections = [s for s in evidence_pack.split("\n\n") if s.strip()]
@@ -199,7 +199,7 @@ def test_triage_collect_evidence_external_source_uses_line_local_profile():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
     evidence_pack = out.get("evidence_pack", "")
     assert "[FILE_HEAD src/main.c]" not in evidence_pack
     assert all(path == "src/main.c" for path in runner.grep_paths)
@@ -219,7 +219,7 @@ def test_triage_collect_evidence_metis_appends_explanation_section():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
     evidence_pack = out.get("evidence_pack", "")
     assert "[METIS_EXPLANATION]" in evidence_pack
     assert "reasoning: foo reaches sink" in evidence_pack
@@ -237,7 +237,7 @@ def test_triage_collect_evidence_resolves_macro_definition_with_tools():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
     evidence_pack = out.get("evidence_pack", "")
     assert "MACRO_DEFINE_GREP PROJECT_STACK_ALLOC IN project_support.h" in evidence_pack
     assert "MACRO_DEFINE_CONTEXT PROJECT_STACK_ALLOC project_support.h" in evidence_pack
@@ -256,7 +256,7 @@ def test_triage_collect_evidence_resolves_macro_definition_via_find_name():
         "triage_codebase_path": ".",
     }
 
-    out = triage_node_collect_evidence(state, tool_runner=runner)
+    out = triage_node_collect_evidence(state, toolbox=runner)
     evidence_pack = out.get("evidence_pack", "")
     assert (
         "MACRO_DEFINE_GREP PROJECT_STACK_ALLOC IN include/project_support.h"

@@ -60,7 +60,7 @@ def test_init_and_get_default_unavailable_metisignore():
         metisignore_file=".metisignore_file",
     )
     assert engine.metisignore_file == ".metisignore_file"
-    assert engine.load_metisignore() is None
+    assert engine.repository.load_metisignore() is None
 
 
 def test_init_and_get_default_available_metisignore():
@@ -81,7 +81,7 @@ def test_init_and_get_default_available_metisignore():
             response_mode="compact",
             metisignore_file=temp_file.name,
         )
-        assert engine.load_metisignore() is not None
+        assert engine.repository.load_metisignore() is not None
         assert engine.metisignore_file == temp_file.name
     assert engine is not None
 
@@ -225,3 +225,68 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
     assert engine.get_embed_model_docs() is backend.embed_model_docs
     llm_provider.get_embed_model_code.assert_not_called()
     llm_provider.get_embed_model_docs.assert_not_called()
+
+
+def test_engine_exposes_focused_services_without_compat_aliases():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    engine.review.review_code = Mock(return_value=iter([{"file": "a.py"}]))
+    engine.indexing.update_index = Mock()
+
+    results = list(engine.review.review_code())
+
+    assert engine.repository is not None
+    assert engine.review is not None
+    assert engine.indexing is not None
+    assert not hasattr(engine, "review_service")
+    assert not hasattr(engine, "indexing_service")
+    assert results == [{"file": "a.py"}]
+    engine.indexing.update_index("diff --git")
+    engine.indexing.update_index.assert_called_once_with("diff --git")
+
+
+def test_close_clears_query_cache_and_closes_backend():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.close = Mock()
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+    )
+
+    assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
+    assert backend.get_query_engines.call_count == 1
+
+    engine.close()
+
+    assert engine._state.qe_code is None
+    assert engine._state.qe_docs is None
+    backend.close.assert_called_once()
+
+    assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
+    assert backend.get_query_engines.call_count == 2
