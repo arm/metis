@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-04-10)
+
+
+### Features
+
+* **refactor:** decouple engine workflows and centralize tool policies ([#180](https://github.com/arm/metis/issues/180)) ([3c7a3bf](https://github.com/arm/metis/commit/3c7a3bf9c0c1c69ade73716c22f26de519f0233f))
+* **usage:** Add token usage tracking ([#179](https://github.com/arm/metis/issues/179)) ([11eea95](https://github.com/arm/metis/commit/11eea95d1db96d76d19dc8b391cfdeac65954a1d))
+* **verilog:** Add Verilog support ([#168](https://github.com/arm/metis/issues/168)) ([a457783](https://github.com/arm/metis/commit/a45778318a6b8870b87ee5efb229116a5549a53d))
+
+
+### Bug Fixes
+
+* **chroma:** serialize local store and query engine initialization ([#171](https://github.com/arm/metis/issues/171)) ([a74d5cf](https://github.com/arm/metis/commit/a74d5cf68ffb8dba48a60ee9e394cf41e0e25e2e))
+* **metisignore:** support allowlist patterns consistently ([#181](https://github.com/arm/metis/issues/181)) ([cc42aba](https://github.com/arm/metis/commit/cc42abaf995f9a4eb5aef5a9d3e237310e73764e))
+
 ## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2026-03-09)
 
 
