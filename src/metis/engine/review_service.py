@@ -125,8 +125,8 @@ class ReviewService:
                 if os.path.isabs(file_diff.path)
                 else os.path.join(base_path, file_diff.path)
             )
-            relative_path = os.path.relpath(abs_path, base_path)
-            if metisignore_spec and metisignore_spec.match_file(relative_path):
+            relative_path = self._repository.normalize_match_path(abs_path)
+            if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
                 continue
             ext = os.path.splitext(file_diff.path)[1].lower()
             plugin = self._repository.get_plugin_for_extension(ext)
