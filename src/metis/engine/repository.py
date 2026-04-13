@@ -45,17 +45,46 @@ class EngineRepository:
         base_path = os.path.abspath(self._config.codebase_path)
         return base_path, os.path.relpath(path, base_path)
 
+    def resolve_metisignore_path(self) -> str | None:
+        metisignore_file = self._config.metisignore_file
+        if not metisignore_file:
+            return None
+        if os.path.isabs(metisignore_file):
+            return metisignore_file
+        return os.path.abspath(
+            os.path.join(self._config.codebase_path, metisignore_file)
+        )
+
+    def normalize_match_path(self, path: str) -> str:
+        base_path = os.path.abspath(self._config.codebase_path)
+        if os.path.isabs(path):
+            abs_path = os.path.abspath(path)
+            try:
+                if os.path.commonpath([base_path, abs_path]) == base_path:
+                    return os.path.relpath(abs_path, base_path)
+            except ValueError:
+                return os.path.normpath(path)
+        return os.path.normpath(path)
+
+    def is_metisignored(
+        self, path: str, spec: pathspec.GitIgnoreSpec | None = None
+    ) -> bool:
+        if spec is None:
+            spec = self.load_metisignore()
+        return bool(spec and spec.match_file(self.normalize_match_path(path)))
+
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
+        metisignore_path = self.resolve_metisignore_path()
         try:
-            if not self._config.metisignore_file:
+            if not metisignore_path:
                 logger.info("No MetisIgnore file provided")
                 return None
-            with open(self._config.metisignore_file, "r") as f:
+            with open(metisignore_path, "r") as f:
                 spec = pathspec.GitIgnoreSpec.from_lines(f)
-                logger.info(f"MetisIgnore file loaded: {self._config.metisignore_file}")
+                logger.info(f"MetisIgnore file loaded: {metisignore_path}")
             return spec
         except FileNotFoundError:
-            logger.info(f"MetisIgnore file not loaded {self._config.metisignore_file}")
+            logger.info(f"MetisIgnore file not loaded {metisignore_path}")
             return None
 
     def get_code_files(self):
@@ -78,7 +107,7 @@ class EngineRepository:
                 ext = os.path.splitext(file)[1].lower()
                 if ext not in self._config.code_exts:
                     continue
-                rel_path = os.path.relpath(full_path, base_path)
+                rel_path = self.normalize_match_path(full_path)
                 if metisignore_spec and metisignore_spec.match_file(rel_path):
                     continue
                 if include_spec and not include_spec.match_file(rel_path):

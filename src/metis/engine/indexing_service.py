@@ -44,10 +44,15 @@ class IndexingService:
 
         doc_count = 0
         base_path = os.path.abspath(self._config.codebase_path)
-        for _, _, files in os.walk(base_path):
+        metisignore_spec = self._repository.load_metisignore()
+        for root, _, files in os.walk(base_path):
             for file_name in files:
-                if os.path.splitext(file_name)[1].lower() in docs_exts:
-                    doc_count += 1
+                full_path = os.path.join(root, file_name)
+                if os.path.splitext(file_name)[1].lower() not in docs_exts:
+                    continue
+                if self._repository.is_metisignored(full_path, spec=metisignore_spec):
+                    continue
+                doc_count += 1
 
         return code_count + doc_count
 
@@ -77,15 +82,12 @@ class IndexingService:
         code_docs = []
         doc_docs = []
         for doc in documents:
+            if self._repository.is_metisignored(doc.id_, spec=metisignore_spec):
+                continue
             ext = os.path.splitext(doc.id_)[1].lower()
             new_id = os.path.relpath(doc.id_, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
-
-            if metisignore_spec and metisignore_spec.match_file(
-                os.path.join(parent_dir, new_id)
-            ):
-                continue
 
             if ext in docs_supported_exts:
                 doc_docs.append(doc)
