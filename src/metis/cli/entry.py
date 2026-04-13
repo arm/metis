@@ -23,6 +23,7 @@ except ImportError:
 
 
 from .command_registry import COMMANDS, completer
+from .command_runtime import CommandRuntime
 from .utils import (
     configure_logger,
     PG_SUPPORTED,
@@ -158,6 +159,52 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
+def _command_requests_ignore_index(args, cmd_args):
+    filtered_args = []
+    ignore_index = bool(getattr(args, "ignore_index", False))
+    for arg in cmd_args:
+        if arg == "--ignore-index":
+            ignore_index = True
+            continue
+        filtered_args.append(arg)
+    return filtered_args, ignore_index
+
+
+def _prepare_command_runtime(cmd, cmd_args, args):
+    spec = COMMANDS[cmd]
+    filtered_args, ignore_index = _command_requests_ignore_index(args, cmd_args)
+    if not spec.validate_options(cmd, args, ignore_index_requested=ignore_index):
+        return None
+
+    if spec.index_policy == "none":
+        return CommandRuntime(
+            command=cmd,
+            command_args=filtered_args,
+            use_retrieval_context=False,
+        )
+
+    if ignore_index and spec.index_policy == "optional":
+        return CommandRuntime(
+            command=cmd,
+            command_args=filtered_args,
+            use_retrieval_context=False,
+        )
+
+    return CommandRuntime(
+        command=cmd,
+        command_args=filtered_args,
+        use_retrieval_context=True,
+    )
+
+
+def _interactive_command_ignores_index(cmd, cmd_args, args):
+    spec = COMMANDS.get(cmd)
+    if spec is None or spec.index_policy != "optional":
+        return False
+    _filtered_args, ignore_index = _command_requests_ignore_index(args, cmd_args)
+    return ignore_index
+
+
 def execute_command(engine, cmd, cmd_args, args):
     if cmd not in COMMANDS:
         print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
@@ -166,27 +213,30 @@ def execute_command(engine, cmd, cmd_args, args):
     spec = COMMANDS[cmd]
     if cmd == "exit":
         return EXIT_REQUESTED
+    runtime = _prepare_command_runtime(cmd, list(cmd_args), args)
+    if runtime is None:
+        return
 
     if spec.prepares_output_file:
-        determine_output_file(cmd, args, cmd_args)
+        determine_output_file(cmd, args, runtime.command_args)
 
-    if not spec.validate(cmd, cmd_args, args):
+    if not spec.validate(cmd, runtime.command_args, args):
         return
 
     usage_command = None
     if spec.tracked:
         usage_command = engine.usage_command(
             cmd,
-            target=spec.usage_target(cmd_args),
-            display_name=spec.usage_display_name(cmd, cmd_args),
+            target=spec.usage_target(runtime.command_args),
+            display_name=spec.usage_display_name(cmd, runtime.command_args),
         )
 
     if usage_command is None:
-        spec.invoke(engine, cmd_args, args)
+        spec.invoke(engine, runtime.command_args, args, runtime)
         return
 
     with usage_command as command:
-        spec.invoke(engine, cmd_args, args)
+        spec.invoke(engine, runtime.command_args, args, runtime)
 
     record = engine.finalize_usage_command(command)
     print_usage_summary(
@@ -239,6 +289,7 @@ def run_interactive_loop(engine, args, vector_backend):
                     continue
                 if (
                     cmd in {"ask", "review_code", "review_file"}
+                    and not _interactive_command_ignores_index(cmd, cmd_args, args)
                     and not vector_backend.check_project_schema_exists()
                 ):
                     print_console(
@@ -309,6 +360,11 @@ def main():
         "--include-triaged",
         action="store_true",
         help="Include findings already triaged by Metis when running triage.",
+    )
+    parser.add_argument(
+        "--ignore-index",
+        action="store_true",
+        help="Allow selected analysis commands to run without an index-backed context.",
     )
 
     args = parser.parse_args()

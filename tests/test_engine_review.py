@@ -56,3 +56,48 @@ def test_review_patch_handles_parse_error(engine, tmp_path):
     result = engine.review.review_patch(str(bad_patch_file))
     assert "reviews" in result
     assert result["reviews"] == []
+
+
+def test_review_file_no_index_skips_query_engine_init(engine, monkeypatch, tmp_path):
+    sample = tmp_path / "sample.c"
+    sample.write_text("int main(){return 0;}", encoding="utf-8")
+
+    class _DummyReviewGraph:
+        def review(self, req):
+            assert req["use_retrieval_context"] is False
+            assert req["retriever_code"] is None
+            assert req["retriever_docs"] is None
+            return {"file": "sample.c", "reviews": []}
+
+    engine.vector_backend.get_query_engines.reset_mock()
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    result = engine.review.review_file(str(sample), use_retrieval_context=False)
+
+    assert result["reviews"] == []
+    engine.vector_backend.get_query_engines.assert_not_called()
+
+
+def test_review_patch_no_index_skips_query_engine_init(engine, monkeypatch, tmp_path):
+    patch = """--- a/test.py
++++ b/test.py
+@@ -0,0 +1 @@
++print('Hello')
+"""
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_text(patch, encoding="utf-8")
+
+    class _DummyReviewGraph:
+        def review(self, req):
+            assert req["use_retrieval_context"] is False
+            assert req["retriever_code"] is None
+            assert req["retriever_docs"] is None
+            return {"file": "test.py", "reviews": []}
+
+    engine.vector_backend.get_query_engines.reset_mock()
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    result = engine.review.review_patch(str(patch_file), use_retrieval_context=False)
+
+    assert isinstance(result["reviews"], list)
+    engine.vector_backend.get_query_engines.assert_not_called()

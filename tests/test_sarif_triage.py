@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from metis.sarif.triage import extract_findings
 
 
@@ -207,6 +209,53 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
 
     assert out_path == str(input_path)
     assert writes == [2, 4, 5]
+
+
+def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
+    }
+
+    class _DummyGraph:
+        def triage(self, request):
+            assert request["use_retrieval_context"] is False
+            assert request["retriever_code"] is None
+            assert request["retriever_docs"] is None
+            return {"status": "valid", "reason": "confirmed"}
+
+    monkeypatch.setattr(
+        engine._triage_service,
+        "_init_and_get_triage_query_engines",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("should not initialize query engines")
+        ),
+    )
+    monkeypatch.setattr(
+        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+    )
+    engine._triage_service.max_workers = 1
+
+    out = engine.triage_sarif_payload(payload, use_retrieval_context=False)
+
+    result = out["runs"][0]["results"][0]
+    assert result["properties"]["metisTriaged"] is True
+
+
+def test_triage_payload_raises_when_query_engine_init_fails(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
+    }
+
+    monkeypatch.setattr(
+        engine._triage_service,
+        "_init_and_get_triage_query_engines",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        engine.triage_sarif_payload(payload)
 
 
 def test_triage_request_propagates_source_metadata(engine, monkeypatch):

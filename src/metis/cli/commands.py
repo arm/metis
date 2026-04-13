@@ -6,6 +6,8 @@ import importlib
 from pathlib import Path
 from rich.markup import escape
 
+from metis.engine.options import ReviewOptions, TriageOptions
+from .command_runtime import CommandRuntime
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
 from metis.usage import usage_operation
@@ -21,6 +23,29 @@ from .utils import (
     save_output,
     print_console,
 )
+
+
+def _print_no_index_warning(args, runtime: CommandRuntime):
+    if runtime.use_retrieval_context:
+        return
+    if runtime.no_index_warning_emitted:
+        return
+    print_console(
+        "[yellow]Warning:[/yellow] Running without index; relevant-context retrieval was skipped.",
+        args.quiet,
+    )
+    runtime.no_index_warning_emitted = True
+
+
+def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
+    return ReviewOptions(use_retrieval_context=runtime.use_retrieval_context)
+
+
+def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
+    return TriageOptions(
+        use_retrieval_context=runtime.use_retrieval_context,
+        include_triaged=bool(getattr(args, "include_triaged", False)),
+    )
 
 
 def show_help(args=None):
@@ -46,6 +71,7 @@ Options:
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
+    --ignore-index             Allow review_file, review_code, review_patch, and triage to run without index-backed context.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -59,25 +85,31 @@ def show_version(args=None):
     print_console("Metis [green]" + version + "[/green]")
 
 
-def run_review(engine, patch_file, args):
+def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
+    _print_no_index_warning(args, runtime)
+    options = _review_options_for_runtime(runtime)
     results = with_spinner(
         "Reviewing patch...",
         engine.review.review_patch,
         patch_file=patch_file,
+        options=options,
         quiet=args.quiet,
     )
-    _finalize_review_output(engine, results, args)
+    _finalize_review_output(engine, results, args, runtime)
 
 
-def run_file_review(engine, file_path, args):
+def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
+    _print_no_index_warning(args, runtime)
+    options = _review_options_for_runtime(runtime)
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
         engine.review.review_file,
         file_path=file_path,
+        options=options,
         quiet=args.quiet,
     )
 
@@ -86,20 +118,29 @@ def run_file_review(engine, file_path, args):
     else:
         results = {"reviews": []}
 
-    _finalize_review_output(engine, results, args)
+    _finalize_review_output(engine, results, args, runtime)
 
 
-def run_review_code(engine, args):
+def run_review_code(engine, args, runtime: CommandRuntime):
+    _print_no_index_warning(args, runtime)
+    options = _review_options_for_runtime(runtime)
     if args.verbose:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
         total = len(engine.review.get_code_files())
-        file_reviews = iterate_with_progress(total, engine.review.review_code())
+        file_reviews = iterate_with_progress(
+            total,
+            engine.review.review_code(options=options),
+        )
         results = {"reviews": file_reviews}
     else:
         results = with_spinner(
-            "Reviewing codebase...", collect_reviews, engine, quiet=args.quiet
+            "Reviewing codebase...",
+            collect_reviews,
+            engine,
+            options=options,
+            quiet=args.quiet,
         )
-    _finalize_review_output(engine, results, args)
+    _finalize_review_output(engine, results, args, runtime)
 
 
 def run_index(engine, verbose=False, quiet=False):
@@ -120,7 +161,7 @@ def run_index(engine, verbose=False, quiet=False):
     print_console("[green]Indexing completed successfully.[/green]", quiet)
 
 
-def run_update(engine, patch_file, args):
+def run_update(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
     file_diff = read_file_content(patch_file)
@@ -133,7 +174,7 @@ def run_update(engine, patch_file, args):
     print_console("[green]Index update completed.[/green]", args.quiet)
 
 
-def run_ask(engine, question, args):
+def run_ask(engine, question, args, runtime: CommandRuntime):
     answer = with_spinner(
         "Thinking...", engine.ask_question, question, quiet=args.quiet
     )
@@ -152,13 +193,15 @@ def run_ask(engine, question, args):
     save_output(args.output_file, answer, args.quiet)
 
 
-def run_triage(engine, sarif_path, args):
+def run_triage(engine, sarif_path, args, runtime: CommandRuntime):
     if not check_file_exists(sarif_path, quiet=args.quiet):
         return
     if Path(sarif_path).suffix.lower() != ".sarif":
         print_console("[red]Only .sarif input files are supported.[/red]", args.quiet)
         return
+    _print_no_index_warning(args, runtime)
     print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
+    options = _triage_options_for_runtime(args, runtime)
 
     output_target = None
     if args.output_file:
@@ -169,7 +212,12 @@ def run_triage(engine, sarif_path, args):
             output_target = sarif_targets[0]
 
     def _invoke(kwargs):
-        return engine.triage_sarif_file(sarif_path, output_target, **kwargs)
+        return engine.triage_sarif_file(
+            sarif_path,
+            output_target,
+            options=options,
+            **kwargs,
+        )
 
     saved_path = run_triage_action(
         args,
@@ -182,14 +230,20 @@ def run_triage(engine, sarif_path, args):
     )
 
 
-def _build_triaged_sarif_payload(engine, results, args):
+def _build_triaged_sarif_payload(engine, results, args, runtime: CommandRuntime):
     if not getattr(args, "triage", False):
         return None
     try:
         sarif_payload = generate_sarif(results)
+        _print_no_index_warning(args, runtime)
+        options = _triage_options_for_runtime(args, runtime)
 
         def _invoke(kwargs):
-            return engine.triage_sarif_payload(sarif_payload, **kwargs)
+            return engine.triage_sarif_payload(
+                sarif_payload,
+                options=options,
+                **kwargs,
+            )
 
         with usage_operation("triage"):
             return run_triage_action(
@@ -205,7 +259,7 @@ def _build_triaged_sarif_payload(engine, results, args):
         return None
 
 
-def _finalize_review_output(engine, results, args):
+def _finalize_review_output(engine, results, args, runtime: CommandRuntime):
     pretty_print_reviews(results, args.quiet)
-    sarif_payload = _build_triaged_sarif_payload(engine, results, args)
+    sarif_payload = _build_triaged_sarif_payload(engine, results, args, runtime)
     save_output(args.output_file, results, args.quiet, sarif_payload=sarif_payload)
