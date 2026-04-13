@@ -99,6 +99,9 @@ class TriageGraph:
                 "triage_analyzer": request.get("triage_analyzer"),
                 "triage_codebase_path": request.get("triage_codebase_path", "."),
                 "debug_callback": request.get("debug_callback"),
+                "use_retrieval_context": bool(
+                    request.get("use_retrieval_context", True)
+                ),
                 "triage_system_prompt": self.triage_system_prompt,
                 "triage_decision_prompt": self.triage_decision_prompt,
             }

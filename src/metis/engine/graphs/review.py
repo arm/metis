@@ -56,6 +56,7 @@ def _build_body_text(state: ReviewState) -> str:
     snippet = state.get("snippet", "") or ""
     context = state.get("context", "") or ""
     mode = state.get("mode", "file")
+    include_context = bool(state.get("use_retrieval_context", True))
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -64,10 +65,9 @@ def _build_body_text(state: ReviewState) -> str:
             "SNIPPET:",
             snippet,
             "",
-            "CONTEXT:",
-            context,
-            "",
         ]
+        if include_context:
+            sections.extend(["CONTEXT:", context, ""])
     else:
         original_file = state.get("original_file") or ""
         sections = [
@@ -77,10 +77,9 @@ def _build_body_text(state: ReviewState) -> str:
             "FILE_CHANGES:",
             snippet,
             "",
-            "CONTEXT:",
-            context,
-            "",
         ]
+        if include_context:
+            sections.extend(["CONTEXT:", context, ""])
 
     return "\n".join(sections)
 
@@ -100,9 +99,13 @@ def _post_process_reviews(
 
 
 def review_node_retrieve(state: ReviewState) -> ReviewState:
+    if not state.get("use_retrieval_context", True):
+        new_state: ReviewState = dict(state)
+        new_state["context"] = ""
+        return new_state
     cp = state.get("context_prompt", "")
-    code = retrieve_text(state["retriever_code"], cp)
-    docs = retrieve_text(state["retriever_docs"], cp)
+    code = retrieve_text(state.get("retriever_code"), cp)
+    docs = retrieve_text(state.get("retriever_docs"), cp)
     context = synthesize_context(code, docs)
     new_state: ReviewState = dict(state)
     new_state["context"] = context
@@ -119,6 +122,7 @@ def review_node_build_prompt(
     schema_prompt_section: str,
     hardware_cwe_guidance: str = "",
 ) -> ReviewState:
+    include_relevant_context = bool(state.get("use_retrieval_context", True))
     system = build_review_system_prompt(
         language_prompts,
         default_prompt_key,
@@ -127,6 +131,7 @@ def review_node_build_prompt(
         custom_guidance_precedence,
         schema_prompt_section,
         hardware_cwe_guidance,
+        include_relevant_context=include_relevant_context,
     )
     new_state: ReviewState = dict(state)
     new_state["system_prompt"] = system
@@ -290,6 +295,7 @@ class ReviewGraph:
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
+        use_retrieval_context = bool(request.get("use_retrieval_context", True))
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
@@ -304,6 +310,7 @@ class ReviewGraph:
                 "relative_file": relative_file,
                 "mode": mode,
                 "original_file": original_file,
+                "use_retrieval_context": use_retrieval_context,
             }
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []
