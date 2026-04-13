@@ -44,6 +44,105 @@ def test_build_review_system_prompt_replaces_placeholder():
     assert schema_section in prompt
 
 
+def test_build_review_system_prompt_preserves_legacy_context_prompt():
+    language_prompts = {
+        "security_review_file": (
+            "Use FILE and RELEVANT_CONTEXT.\n"
+            "2. RELEVANT_CONTEXT - information about what these changes do.\n"
+            "[[REVIEW_SCHEMA_FIELDS]]"
+        ),
+        "security_review_checks": "- If RELEVANT_CONTEXT is empty, ignore it.",
+    }
+    schema_section = '- "issue": description'
+    prompt = build_review_system_prompt(
+        language_prompts,
+        "security_review_file",
+        report_prompt="Reporting instructions.",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section=schema_section,
+    )
+
+    expected = (
+        "Use FILE and RELEVANT_CONTEXT.\n"
+        "2. RELEVANT_CONTEXT - information about what these changes do.\n"
+        '- "issue": description \n '
+        "- If RELEVANT_CONTEXT is empty, ignore it. \n Reporting instructions."
+    )
+    assert prompt == expected
+
+
+def test_build_review_system_prompt_omits_relevant_context_when_disabled():
+    language_prompts = {
+        "security_review_file": (
+            "Use FILE and RELEVANT_CONTEXT.\n"
+            "2. RELEVANT_CONTEXT - information about what these changes do.\n"
+            "3. ORIGINAL_FILE - original contents.\n"
+            "Only produce findings justified by FILE and RELEVANT_CONTEXT.\n"
+            "[[REVIEW_SCHEMA_FIELDS]]"
+        ),
+        "security_review_checks": "- If RELEVANT_CONTEXT is empty, ignore it.",
+    }
+    schema_section = '- "issue": description'
+    prompt = build_review_system_prompt(
+        language_prompts,
+        "security_review_file",
+        report_prompt="Reporting instructions.",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section=schema_section,
+        include_relevant_context=False,
+    )
+
+    assert "2. RELEVANT_CONTEXT" not in prompt
+    assert "RELEVANT_CONTEXT" not in prompt
+    assert "2. ORIGINAL_FILE" in prompt
+
+
+def test_build_review_system_prompt_replaces_context_placeholders():
+    language_prompts = {
+        "security_review_file": (
+            "1. FILE - source\n"
+            "[[RELEVANT_CONTEXT_INPUT_CHANGES]]\n"
+            "[[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - old\n"
+            "[[REVIEW_SCHEMA_FIELDS]]"
+        ),
+        "security_review_checks": "[[RELEVANT_CONTEXT]]",
+    }
+    schema_section = '- "issue": description'
+
+    with_context = build_review_system_prompt(
+        language_prompts,
+        "security_review_file",
+        report_prompt="Reporting instructions.",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section=schema_section,
+    )
+    without_context = build_review_system_prompt(
+        language_prompts,
+        "security_review_file",
+        report_prompt="Reporting instructions.",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section=schema_section,
+        include_relevant_context=False,
+    )
+
+    assert (
+        "2. RELEVANT_CONTEXT - information about what these changes do." in with_context
+    )
+    assert "- If it is empty, ignore it." in with_context
+    assert "3. ORIGINAL_FILE - old" in with_context
+    assert "[[RELEVANT_CONTEXT_" not in with_context
+    assert (
+        "RELEVANT_CONTEXT - information about what these changes do."
+        not in without_context
+    )
+    assert "- If it is empty, ignore it." not in without_context
+    assert "2. ORIGINAL_FILE - old" in without_context
+
+
 def test_sanitize_review_payload_fills_missing_fields():
     payload = {
         "reviews": [

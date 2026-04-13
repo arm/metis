@@ -8,6 +8,7 @@ from metis.engine.graphs.review import (
     review_node_llm,
     review_node_parse,
 )
+from metis.engine.graphs.triage.llm import _build_user_prompt, triage_node_llm
 
 
 class _Doc:
@@ -101,3 +102,103 @@ def test_review_nodes_pipeline_parses():
     # Step 4: parse
     s4 = review_node_parse(s3)
     assert s4.get("parsed_reviews") and isinstance(s4["parsed_reviews"], list)
+
+
+def test_review_node_retrieve_no_index_skips_retrievers():
+    class _BoomRetriever:
+        def get_relevant_documents(self, _query):
+            raise AssertionError("retriever should not be called")
+
+    state = {
+        "file_path": "a/file.c",
+        "snippet": "int main(){}",
+        "retriever_code": _BoomRetriever(),
+        "retriever_docs": _BoomRetriever(),
+        "context_prompt": "ignored",
+        "use_retrieval_context": False,
+    }
+
+    out = review_node_retrieve(state)
+
+    assert out["context"] == ""
+
+
+def test_review_node_llm_omits_context_section_in_no_index_mode():
+    captured = {}
+
+    class _DummyNode:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"reviews": []}
+
+    state = {
+        "file_path": "foo.py",
+        "snippet": "print('hello')",
+        "context": "should not appear",
+        "mode": "file",
+        "system_prompt": "prompt",
+        "use_retrieval_context": False,
+    }
+
+    review_node_llm(
+        state,
+        structured_node=_DummyNode(),
+        fallback_node=None,
+    )
+
+    assert "CONTEXT:" not in captured["body_text"]
+
+
+def test_triage_user_prompt_omits_rag_context_in_no_index_mode():
+    prompt = _build_user_prompt(
+        {
+            "finding_rule_id": "R1",
+            "finding_file_path": "a.c",
+            "finding_line": 1,
+            "finding_message": "msg",
+            "finding_snippet": "code",
+            "context": "should not appear",
+            "use_retrieval_context": False,
+        }
+    )
+
+    assert "RAG Context:" not in prompt
+
+
+def test_triage_node_llm_omits_context_wording_in_no_index_mode():
+    captured = {}
+
+    class _Decision:
+        status = "valid"
+        reason = "ok"
+        evidence = []
+        resolution_chain = []
+        unresolved_hops = []
+
+    class _DecisionModel:
+        def invoke(self, messages):
+            captured["system"] = messages[0].content
+            captured["user"] = messages[1].content
+            return _Decision()
+
+    triage_node_llm(
+        {
+            "finding_rule_id": "R1",
+            "finding_file_path": "a.c",
+            "finding_line": 1,
+            "finding_message": "msg",
+            "finding_snippet": "code",
+            "context": "should not appear",
+            "use_retrieval_context": False,
+            "triage_system_prompt": "system",
+            "triage_decision_prompt": (
+                "Given the finding details, RAG context, and tool outputs, return a final triage decision.\n\n"
+                "{triage_input}\n\nTool Outputs:\n{tool_outputs}\n"
+            ),
+            "evidence_pack": "tools",
+        },
+        decision_model=_DecisionModel(),
+    )
+
+    combined = captured["system"] + "\n" + captured["user"]
+    assert "RAG Context:" not in combined

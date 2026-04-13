@@ -8,18 +8,20 @@ class ReviewRequest(TypedDict):
     # Required fields
     file_path: Required[str]
     snippet: Required[str]
-    retriever_code: Required[Any]
-    retriever_docs: Required[Any]
     context_prompt: Required[str]
     language_prompts: Required[Dict[str, str]]
 
     # Optional fields
+    retriever_code: NotRequired[Any | None]
+    retriever_docs: NotRequired[Any | None]
     default_prompt_key: NotRequired[str]
     relative_file: NotRequired[Optional[str]]
     # Explicit mode: 'file' or 'patch'
     mode: NotRequired[str]
     # Optional original file contents for patch mode
     original_file: NotRequired[Optional[str]]
+    use_retrieval_context: NotRequired[bool]
+    debug_callback: NotRequired[Any]
 
 
 class AskRequest(TypedDict):
@@ -39,6 +41,8 @@ class ReviewState(TypedDict, total=False):
     relative_file: Optional[str]
     mode: str
     original_file: Optional[str]
+    use_retrieval_context: bool
+    debug_callback: Any
     # Derived
     context: str
     system_prompt: str
@@ -66,11 +70,12 @@ class TriageRequest(TypedDict):
     finding_source_tool: NotRequired[str]
     finding_is_metis: NotRequired[bool]
     finding_explanation: NotRequired[str]
-    retriever_code: Required[Any]
-    retriever_docs: Required[Any]
+    retriever_code: NotRequired[Any | None]
+    retriever_docs: NotRequired[Any | None]
     debug_callback: NotRequired[Any]
     triage_analyzer: NotRequired[Any]
     triage_codebase_path: NotRequired[str]
+    use_retrieval_context: NotRequired[bool]
 
 
 class TriageState(TypedDict, total=False):
@@ -87,6 +92,7 @@ class TriageState(TypedDict, total=False):
     debug_callback: Any
     triage_analyzer: Any
     triage_codebase_path: str
+    use_retrieval_context: bool
     triage_system_prompt: str
     triage_decision_prompt: str
     context: str

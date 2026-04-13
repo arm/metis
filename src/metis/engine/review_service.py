@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from collections.abc import Callable, Iterator
@@ -17,6 +18,7 @@ from metis.utils import read_file_content
 from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
+from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
 from .runtime import EngineConfig
 
@@ -39,8 +41,20 @@ class ReviewService:
     def get_code_files(self):
         return self._repository.get_code_files()
 
-    def review_file(self, file_path):
-        qe_code, qe_docs = self._get_query_engines()
+    def review_file(
+        self,
+        file_path,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
+    ):
+        options = coerce_review_options(
+            options,
+            use_retrieval_context=use_retrieval_context,
+        )
+        qe_code = qe_docs = None
+        if options.use_retrieval_context:
+            qe_code, qe_docs = self._get_query_engines()
         base_path = os.path.abspath(self._config.codebase_path)
         snippet = read_file_content(file_path)
         if not snippet:
@@ -70,24 +84,68 @@ class ReviewService:
                 "default_prompt_key": "security_review_file",
                 "relative_file": relative_path,
                 "mode": "file",
+                "use_retrieval_context": options.use_retrieval_context,
             }
             return self._review_graph_factory().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
             return None
 
+    def _invoke_review_file(
+        self,
+        review_fn,
+        path: str,
+        options: ReviewOptions,
+    ):
+        try:
+            signature = inspect.signature(review_fn)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature is not None:
+            params = signature.parameters
+            if "options" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            ):
+                return review_fn(path, options=options)
+            if "use_retrieval_context" in params:
+                return review_fn(
+                    path,
+                    use_retrieval_context=options.use_retrieval_context,
+                )
+
+        if options.use_retrieval_context:
+            return review_fn(path)
+
+        raise TypeError(
+            "review_file_func must accept 'options' or 'use_retrieval_context' "
+            "when retrieval context is disabled"
+        )
+
     def review_code(
         self,
         review_file_func=None,
         get_code_files_func=None,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
     ) -> Iterator[dict | None]:
+        options = coerce_review_options(
+            options,
+            use_retrieval_context=use_retrieval_context,
+        )
         files = (get_code_files_func or self.get_code_files)()
         if not files:
             return
+        review_fn = review_file_func or self.review_file
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
-                    executor, review_file_func or self.review_file, path
+                    executor,
+                    self._invoke_review_file,
+                    review_fn,
+                    path,
+                    options,
                 ): path
                 for path in files
             }
@@ -104,8 +162,20 @@ class ReviewService:
                 else:
                     yield None
 
-    def review_patch(self, patch_file):
-        qe_code, qe_docs = self._get_query_engines()
+    def review_patch(
+        self,
+        patch_file,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
+    ):
+        options = coerce_review_options(
+            options,
+            use_retrieval_context=use_retrieval_context,
+        )
+        qe_code = qe_docs = None
+        if options.use_retrieval_context:
+            qe_code, qe_docs = self._get_query_engines()
         patch_text = read_file_content(patch_file)
         try:
             diff = unidiff.PatchSet.from_string(patch_text)
@@ -156,6 +226,7 @@ class ReviewService:
                     "relative_file": relative_path,
                     "mode": "patch",
                     "original_file": original_content or "",
+                    "use_retrieval_context": options.use_retrieval_context,
                 }
                 review_dict = self._review_graph_factory().review(req)
             except Exception as e:
