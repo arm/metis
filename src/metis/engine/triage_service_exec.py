@@ -6,6 +6,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
+from metis.engine.options import TriageOptions, coerce_triage_options
 from metis.engine.graphs.types import TriageRequest
 from metis.sarif.triage import (
     apply_triage_result,
@@ -50,6 +51,7 @@ class TriageServiceExecutionMixin:
         retriever_code,
         retriever_docs,
         debug_callback,
+        options: TriageOptions,
     ) -> TriageRequest:
         analyzer = self._get_thread_triage_analyzer(finding.file_path)
         return {
@@ -66,6 +68,7 @@ class TriageServiceExecutionMixin:
             "debug_callback": debug_callback,
             "triage_analyzer": analyzer,
             "triage_codebase_path": self.codebase_path,
+            "use_retrieval_context": options.use_retrieval_context,
         }
 
     def _triage_one_finding(
@@ -73,13 +76,17 @@ class TriageServiceExecutionMixin:
         finding,
         *,
         debug_callback,
+        options: TriageOptions,
     ) -> dict:
-        retriever_code, retriever_docs = self._get_thread_triage_query_engines()
+        retriever_code = retriever_docs = None
+        if options.use_retrieval_context:
+            retriever_code, retriever_docs = self._get_thread_triage_query_engines()
         req = self._build_triage_request(
             finding=finding,
             retriever_code=retriever_code,
             retriever_docs=retriever_docs,
             debug_callback=debug_callback,
+            options=options,
         )
         return self._get_thread_triage_graph().triage(req)
 
@@ -149,6 +156,7 @@ class TriageServiceExecutionMixin:
         progress_callback,
         debug_callback,
         checkpoint_callback,
+        options: TriageOptions,
     ) -> None:
         processed = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -166,6 +174,7 @@ class TriageServiceExecutionMixin:
                     self._triage_one_finding,
                     finding,
                     debug_callback=debug_callback,
+                    options=options,
                 )
                 future_map[future] = (idx, finding)
 
@@ -195,23 +204,27 @@ class TriageServiceExecutionMixin:
         progress_callback=None,
         debug_callback=None,
         checkpoint_callback=None,
-        include_triaged: bool = False,
+        options: TriageOptions | None = None,
+        include_triaged: bool | None = None,
+        use_retrieval_context: bool | None = None,
     ) -> dict:
+        options = coerce_triage_options(
+            options,
+            include_triaged=include_triaged,
+            use_retrieval_context=use_retrieval_context,
+        )
         triaged = payload
-        findings = extract_findings(triaged, include_triaged=include_triaged)
+        findings = extract_findings(
+            triaged,
+            include_triaged=options.include_triaged,
+        )
         if not findings:
             return triaged
 
         total = len(findings)
 
-        try:
+        if options.use_retrieval_context:
             self._get_thread_triage_query_engines()
-        except Exception as exc:
-            logger.warning(
-                "Skipping triage annotations due to initialization failure: %s",
-                exc,
-            )
-            return triaged
 
         self._triage_findings_parallel(
             findings=findings,
@@ -220,6 +233,7 @@ class TriageServiceExecutionMixin:
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_callback=checkpoint_callback,
+            options=options,
         )
 
         return triaged
@@ -231,8 +245,15 @@ class TriageServiceExecutionMixin:
         progress_callback=None,
         debug_callback=None,
         checkpoint_every: int | None = None,
-        include_triaged: bool = False,
+        options: TriageOptions | None = None,
+        include_triaged: bool | None = None,
+        use_retrieval_context: bool | None = None,
     ) -> str:
+        options = coerce_triage_options(
+            options,
+            include_triaged=include_triaged,
+            use_retrieval_context=use_retrieval_context,
+        )
         payload = load_sarif_file(input_path)
         target_path = output_path or input_path
 
@@ -260,7 +281,7 @@ class TriageServiceExecutionMixin:
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_callback=_checkpoint,
-            include_triaged=include_triaged,
+            options=options,
         )
         save_sarif_file(target_path, triaged)
         return target_path

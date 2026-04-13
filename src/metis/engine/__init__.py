@@ -2,5 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .core import MetisEngine
+from .options import ReviewOptions, TriageOptions
 
-__all__ = ["MetisEngine"]
+__all__ = ["MetisEngine", "ReviewOptions", "TriageOptions"]

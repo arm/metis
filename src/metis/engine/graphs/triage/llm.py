@@ -7,22 +7,34 @@ from .debug import _emit_debug
 from ..types import TriageState
 
 
+def _build_decision_prompt_template(state: TriageState) -> str:
+    template = state.get("triage_decision_prompt", "") or ""
+    if state.get("use_retrieval_context", True):
+        return template
+    return template.replace(
+        "Given the finding details, RAG context, and tool outputs",
+        "Given the finding details and tool outputs",
+    )
+
+
 def _build_user_prompt(state: TriageState) -> str:
     source_tool = str(state.get("finding_source_tool", "") or "")
     source_kind = "metis" if bool(state.get("finding_is_metis", False)) else "external"
     explanation = str(state.get("finding_explanation", "") or "").strip()
-    return (
-        "TRIAGE INPUT\n"
-        f"SARIF Source Kind: {source_kind}\n"
-        f"SARIF Source Tool: {source_tool}\n"
-        f"Rule ID: {state.get('finding_rule_id', '')}\n"
-        f"File: {state.get('finding_file_path', '')}\n"
-        f"Line: {state.get('finding_line', 1)}\n"
-        f"Finding Message: {state.get('finding_message', '')}\n"
-        f"Snippet:\n{state.get('finding_snippet', '')}\n\n"
-        f"Finding Explanation:\n{explanation}\n\n"
-        f"RAG Context:\n{state.get('context', '')}\n"
-    )
+    sections = [
+        "TRIAGE INPUT\n",
+        f"SARIF Source Kind: {source_kind}\n",
+        f"SARIF Source Tool: {source_tool}\n",
+        f"Rule ID: {state.get('finding_rule_id', '')}\n",
+        f"File: {state.get('finding_file_path', '')}\n",
+        f"Line: {state.get('finding_line', 1)}\n",
+        f"Finding Message: {state.get('finding_message', '')}\n",
+        f"Snippet:\n{state.get('finding_snippet', '')}\n\n",
+        f"Finding Explanation:\n{explanation}\n\n",
+    ]
+    if state.get("use_retrieval_context", True):
+        sections.append(f"RAG Context:\n{state.get('context', '')}\n")
+    return "".join(sections)
 
 
 def _build_gate_reason(missing: list[str]) -> str:
@@ -67,7 +79,7 @@ def triage_node_llm(state: TriageState, *, decision_model) -> TriageState:
     system_prompt = state.get("triage_system_prompt", "")
     user_prompt = _build_user_prompt(state)
     transcript = state.get("evidence_pack", "") or ""
-    decision_template = state.get("triage_decision_prompt", "")
+    decision_template = _build_decision_prompt_template(state)
     decision_prompt = decision_template.replace("{triage_input}", user_prompt).replace(
         "{tool_outputs}", transcript
     )

@@ -22,6 +22,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from metis.engine.options import ReviewOptions
 from .exporters import export_csv, export_html, export_sarif
 from metis.sarif.utils import create_fingerprint
 
@@ -230,8 +231,9 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     return result
 
 
-def collect_reviews(engine):
-    return {"reviews": [r for r in engine.review.review_code() if r]}
+def collect_reviews(engine, options: ReviewOptions | None = None):
+    reviews = engine.review.review_code(options=options)
+    return {"reviews": [r for r in reviews if r]}
 
 
 def iterate_with_progress(total, iterable):

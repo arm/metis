@@ -10,8 +10,10 @@ from metis.engine.graphs.schemas import TriageDecisionModel
 class _App:
     def __init__(self, payload):
         self.payload = payload
+        self.last_input = None
 
-    def invoke(self, _):
+    def invoke(self, state):
+        self.last_input = state
         return self.payload
 
 
@@ -73,6 +75,35 @@ def test_triage_graph_accepts_inconclusive(monkeypatch):
         }
     )
     assert out["status"] == "inconclusive"
+
+
+def test_triage_graph_propagates_retrieval_context_flag(monkeypatch):
+    g = _build_graph()
+    app = _App(
+        {
+            "decision_status": "valid",
+            "decision_reason": "ok",
+            "decision_evidence": ["a.c:1"],
+            "decision_resolution_chain": ["x -> y"],
+            "decision_unresolved_hops": [],
+        }
+    )
+    monkeypatch.setattr(g, "_get_app", lambda: app)
+
+    g.triage(
+        {
+            "finding_message": "msg",
+            "finding_file_path": "a.c",
+            "finding_line": 1,
+            "finding_rule_id": "R1",
+            "finding_snippet": "",
+            "retriever_code": None,
+            "retriever_docs": None,
+            "use_retrieval_context": False,
+        }
+    )
+
+    assert app.last_input["use_retrieval_context"] is False
 
 
 def test_triage_graph_fills_unresolved_hops_for_inconclusive(monkeypatch):

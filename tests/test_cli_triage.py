@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import json
 
+from metis.cli.command_runtime import CommandRuntime
 from metis.cli.commands import _build_triaged_sarif_payload, run_triage
 from metis.cli.utils import save_output
+from metis.engine.options import TriageOptions
 from metis.sarif.utils import create_fingerprint
 
 
@@ -17,17 +19,53 @@ def test_build_triaged_sarif_payload_reuses_engine_path():
 
         def triage_sarif_payload(self, payload, **kwargs):
             self.called = True
-            assert kwargs.get("include_triaged") is False
+            assert isinstance(kwargs.get("options"), TriageOptions)
+            assert kwargs["options"].include_triaged is False
             payload["runs"] = []
             return payload
 
     engine = _DummyEngine()
     args = SimpleNamespace(triage=True, quiet=True, include_triaged=False)
+    runtime = CommandRuntime(
+        command="review_code",
+        command_args=[],
+        use_retrieval_context=True,
+    )
     results = {"reviews": []}
 
-    payload = _build_triaged_sarif_payload(engine, results, args)
+    payload = _build_triaged_sarif_payload(engine, results, args, runtime)
     assert engine.called is True
     assert isinstance(payload, dict)
+    assert payload["runs"] == []
+
+
+def test_build_triaged_sarif_payload_propagates_no_index_mode():
+    class _DummyEngine:
+        def __init__(self):
+            self.called = False
+
+        def triage_sarif_payload(self, payload, **kwargs):
+            self.called = True
+            assert isinstance(kwargs.get("options"), TriageOptions)
+            assert kwargs["options"].use_retrieval_context is False
+            payload["runs"] = []
+            return payload
+
+    engine = _DummyEngine()
+    args = SimpleNamespace(
+        triage=True,
+        quiet=True,
+        include_triaged=False,
+    )
+    runtime = CommandRuntime(
+        command="review_code",
+        command_args=[],
+        use_retrieval_context=False,
+    )
+    results = {"reviews": []}
+
+    payload = _build_triaged_sarif_payload(engine, results, args, runtime)
+    assert engine.called is True
     assert payload["runs"] == []
 
 
@@ -39,11 +77,21 @@ def test_run_triage_defaults_to_inplace(tmp_path):
         def triage_sarif_file(self, input_path, output_path=None, **kwargs):
             assert input_path == str(sarif_path)
             assert output_path is None
-            assert kwargs.get("include_triaged") is False
+            assert isinstance(kwargs.get("options"), TriageOptions)
+            assert kwargs["options"].include_triaged is False
             return input_path
 
     args = SimpleNamespace(quiet=True, output_file=None, include_triaged=False)
-    run_triage(_DummyEngine(), str(sarif_path), args)
+    run_triage(
+        _DummyEngine(),
+        str(sarif_path),
+        args,
+        CommandRuntime(
+            command="triage",
+            command_args=[str(sarif_path)],
+            use_retrieval_context=True,
+        ),
+    )
 
 
 def test_run_triage_uses_sarif_output_target(tmp_path):
@@ -55,7 +103,8 @@ def test_run_triage_uses_sarif_output_target(tmp_path):
         def triage_sarif_file(self, input_path, output_path=None, **kwargs):
             assert input_path == str(sarif_path)
             assert output_path == str(expected_output_path)
-            assert kwargs.get("include_triaged") is True
+            assert isinstance(kwargs.get("options"), TriageOptions)
+            assert kwargs["options"].include_triaged is True
             return output_path
 
     args = SimpleNamespace(
@@ -63,7 +112,16 @@ def test_run_triage_uses_sarif_output_target(tmp_path):
         output_file=[str(expected_output_path), "x.json"],
         include_triaged=True,
     )
-    run_triage(_DummyEngine(), str(sarif_path), args)
+    run_triage(
+        _DummyEngine(),
+        str(sarif_path),
+        args,
+        CommandRuntime(
+            command="triage",
+            command_args=[str(sarif_path)],
+            use_retrieval_context=True,
+        ),
+    )
 
 
 def test_save_output_json_includes_triage_annotations(tmp_path):

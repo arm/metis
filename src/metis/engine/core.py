@@ -13,6 +13,7 @@ from metis.vector_store.base import BaseVectorStore
 
 from .graphs import AskGraph, ReviewGraph
 from .indexing_service import IndexingService
+from .options import TriageOptions, coerce_triage_options
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
@@ -314,14 +315,21 @@ class MetisEngine:
         progress_callback=None,
         debug_callback=None,
         checkpoint_callback=None,
-        include_triaged: bool = False,
+        options: TriageOptions | None = None,
+        include_triaged: bool | None = None,
+        use_retrieval_context: bool | None = None,
     ) -> dict:
+        options = coerce_triage_options(
+            options,
+            include_triaged=include_triaged,
+            use_retrieval_context=use_retrieval_context,
+        )
         return self._triage_service.triage_sarif_payload(
             payload,
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_callback=checkpoint_callback,
-            include_triaged=include_triaged,
+            options=options,
         )
 
     def triage_sarif_file(
@@ -331,15 +339,22 @@ class MetisEngine:
         progress_callback=None,
         debug_callback=None,
         checkpoint_every: int | None = None,
-        include_triaged: bool = False,
+        options: TriageOptions | None = None,
+        include_triaged: bool | None = None,
+        use_retrieval_context: bool | None = None,
     ) -> str:
+        options = coerce_triage_options(
+            options,
+            include_triaged=include_triaged,
+            use_retrieval_context=use_retrieval_context,
+        )
         return self._triage_service.triage_sarif_file(
             input_path=input_path,
             output_path=output_path,
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_every=checkpoint_every,
-            include_triaged=include_triaged,
+            options=options,
         )
 
     def close(self):
