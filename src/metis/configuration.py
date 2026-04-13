@@ -155,32 +155,50 @@ def load_plugin_config(plugins_path: str | Path | None = None):
 
 
 def load_metis_config(config_path: str | Path | None = None):
-    return config_path_fallback("metis.yaml", "metis", config_path)
+    return config_path_fallback(
+        "metis.yaml",
+        "metis",
+        config_path,
+        alt_filenames=("metis.yml",),
+    )
 
 
 def config_path_fallback(
-    filename: str, anchor: str, config_path: str | Path | None = None
+    filename: str,
+    anchor: str,
+    config_path: str | Path | None = None,
+    alt_filenames: tuple[str, ...] = (),
 ):
     """
     Loads the config from either a given path, the current working
     directory or from the packaged resource directory.
     """
+    candidate_filenames = (filename, *alt_filenames)
+
     if config_path is not None:
         config_path = Path(config_path)
         if not config_path.is_file():
             raise FileNotFoundError(f"Config not found: {config_path}")
-        logger.info(f"Loading {filename} from {config_path}")
+        logger.info(f"Loading {config_path.name} from {config_path}")
         return load_yaml(config_path)
 
-    cwd_path = Path.cwd() / filename
-    if cwd_path.is_file():
-        logger.info(f"Loading {filename} from {cwd_path}")
-        return load_yaml(cwd_path)
+    for candidate_filename in candidate_filenames:
+        cwd_path = Path.cwd() / candidate_filename
+        if cwd_path.is_file():
+            logger.info(f"Loading {candidate_filename} from {cwd_path}")
+            return load_yaml(cwd_path)
 
-    resource = files(anchor) / filename
-    if not resource.is_file():
-        raise FileNotFoundError(f"No {filename} found in CWD or package resources")
-    # ensure we have a real path
-    with as_file(resource) as real_path:
-        logger.info(f"Loading default {filename}")
-        return load_yaml(real_path)
+    for candidate_filename in candidate_filenames:
+        resource = files(anchor) / candidate_filename
+        if not resource.is_file():
+            continue
+
+        # ensure we have a real path
+        with as_file(resource) as real_path:
+            logger.info(f"Loading default {candidate_filename}")
+            return load_yaml(real_path)
+
+    supported_names = ", ".join(candidate_filenames)
+    raise FileNotFoundError(
+        f"No config file ({supported_names}) found in CWD or package resources"
+    )
