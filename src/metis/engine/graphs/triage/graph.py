@@ -64,7 +64,10 @@ class TriageGraph:
             return self._app
         self._ensure_models()
         graph = StateGraph(TriageState)
-        graph.add_node("retrieve", triage_node_retrieve)
+        graph.add_node(
+            "retrieve",
+            partial(triage_node_retrieve, toolbox=self.toolbox),
+        )
         graph.add_node(
             "collect_evidence",
             partial(triage_node_collect_evidence, toolbox=self.toolbox),

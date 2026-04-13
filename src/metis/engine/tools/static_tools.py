@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import shutil
 import subprocess
@@ -14,6 +15,25 @@ from typing import Sequence
 _PYTHON_REGEX_REWRITES = (
     ("[[:space:]]", r"\s"),
     ("[[:blank:]]", r"[ \t]"),
+)
+_SHELL_REGEX_REWRITES = (
+    (r"\s", "[[:space:]]"),
+    (r"\S", "[^[:space:]]"),
+    (r"\d", "[[:digit:]]"),
+    (r"\D", "[^[:digit:]]"),
+    (r"\w", "[[:alnum:]_]"),
+    (r"\W", "[^[:alnum:]_]"),
+    ("(?:", "("),
+    (r"\A", "^"),
+    (r"\Z", "$"),
+)
+_RISKY_SHELL_GREP_PATTERNS = (
+    re.compile(r"\\[1-9]"),
+    re.compile(r"\\[bB]"),
+    re.compile(r"\\[pPkKQEGg]"),
+    re.compile(r"\(\?(?!i\))"),
+    re.compile(r"(\*\?|\+\?|\?\?|\*\+|\+\+|\?\+)"),
+    re.compile(r"\{\d+(,\d*)?\}[?+]"),
 )
 
 
@@ -48,14 +68,99 @@ class StaticToolRunner:
             return {"backend": backend}
         return {}
 
+    def describe_call(self, name: str, *args, **kwargs) -> dict[str, str]:
+        if name != "grep":
+            return self.describe_tool(name)
+        pattern = ""
+        if args:
+            pattern = str(args[0] or "")
+        elif "pattern" in kwargs:
+            pattern = str(kwargs.get("pattern") or "")
+        backend = self._grep_backend(pattern)
+        return {"backend": backend}
+
     def _resolve_path(self, raw_path: str) -> Path:
-        candidate = (self.codebase_path / raw_path).resolve()
-        if (
-            candidate != self.codebase_path
-            and self.codebase_path not in candidate.parents
-        ):
+        fallback = None
+        for candidate_raw in self._normalize_tool_path_candidates(raw_path):
+            if os.path.isabs(candidate_raw):
+                candidate = Path(candidate_raw).resolve()
+            else:
+                candidate = (self.codebase_path / candidate_raw).resolve()
+            if not self._is_within_codebase(candidate):
+                continue
+            if fallback is None:
+                fallback = candidate
+            if candidate.exists():
+                return candidate
+        if fallback is None:
             raise ValueError("Path escapes codebase")
-        return candidate
+        return fallback
+
+    def _is_within_codebase(self, candidate: Path) -> bool:
+        return (
+            candidate == self.codebase_path or self.codebase_path in candidate.parents
+        )
+
+    def _normalize_tool_path_candidates(self, raw_path: str) -> list[str]:
+        raw = str(raw_path or "").strip()
+        if not raw:
+            return [raw]
+        if os.path.isabs(raw):
+            return [raw]
+
+        normalized = raw.replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        normalized = normalized or "."
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add(candidate: str) -> None:
+            text = str(candidate or "").strip() or "."
+            if text in seen:
+                return
+            seen.add(text)
+            candidates.append(text)
+
+        add(normalized)
+
+        raw_parts = PurePosixPath(normalized).parts
+        codebase_parts = tuple(
+            part
+            for part in PurePosixPath(self.codebase_path.as_posix()).parts
+            if part != "/"
+        )
+        suffixes = sorted(
+            (
+                codebase_parts[idx:]
+                for idx in range(len(codebase_parts))
+                if codebase_parts[idx:]
+            ),
+            key=len,
+            reverse=True,
+        )
+        for suffix in suffixes:
+            if len(suffix) > len(raw_parts):
+                continue
+            if raw_parts[: len(suffix)] != suffix:
+                continue
+            remainder = raw_parts[len(suffix) :]
+            add(PurePosixPath(*remainder).as_posix() if remainder else ".")
+
+        tail_candidates = [
+            codebase_parts[idx:]
+            for idx in range(len(codebase_parts))
+            if codebase_parts[idx:]
+        ]
+        for tail in tail_candidates:
+            if len(raw_parts) > len(tail):
+                continue
+            if tail[: len(raw_parts)] != raw_parts:
+                continue
+            add(".")
+
+        return candidates
 
     def _run(
         self,
@@ -82,6 +187,55 @@ class StaticToolRunner:
             return text[: self.max_chars] + "\n...[truncated]"
         return text
 
+    def _grep_backend(self, pattern: str) -> str:
+        if not self._has_grep:
+            return "python_regex"
+        if self._is_risky_shell_grep_pattern(pattern):
+            return "python_regex"
+        return "shell_grep"
+
+    def _is_risky_shell_grep_pattern(self, pattern: str) -> bool:
+        text = str(pattern or "")
+        for compiled in _RISKY_SHELL_GREP_PATTERNS:
+            if compiled.search(text):
+                return True
+        return False
+
+    def _normalize_shell_grep_pattern(self, pattern: str) -> tuple[str, bool]:
+        normalized = str(pattern or "")
+        ignore_case = False
+        if normalized.startswith("(?i)"):
+            ignore_case = True
+            normalized = normalized[4:]
+        for source, replacement in _SHELL_REGEX_REWRITES:
+            normalized = normalized.replace(source, replacement)
+        return normalized, ignore_case
+
+    def _compile_python_regex(self, pattern: str) -> re.Pattern[str]:
+        normalized, ignore_case = self._normalize_shell_grep_pattern(pattern)
+        translated = normalized
+        for source, replacement in _PYTHON_REGEX_REWRITES:
+            translated = translated.replace(source, replacement)
+        flags = re.IGNORECASE if ignore_case else 0
+        return re.compile(translated, flags)
+
+    def _prepare_grep_call(
+        self, pattern: str
+    ) -> tuple[str, list[str] | re.Pattern[str]]:
+        backend = self._grep_backend(pattern)
+        if backend == "shell_grep":
+            normalized, ignore_case = self._normalize_shell_grep_pattern(pattern)
+            argv = ["grep"]
+            if ignore_case:
+                argv.append("-i")
+            argv.extend(["-HREn", "--", normalized])
+            return backend, argv
+        try:
+            compiled = self._compile_python_regex(pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid grep pattern: {exc}") from exc
+        return backend, compiled
+
     def _iter_files(self, base: Path):
         if base.is_file():
             yield base
@@ -95,19 +249,14 @@ class StaticToolRunner:
 
     def grep(self, pattern: str, path: str) -> str:
         target = self._resolve_path(path)
-        if self._has_grep:
+        backend, prepared = self._prepare_grep_call(pattern)
+        if backend == "shell_grep":
             return self._run(
-                ["grep", "-HREn", "--", pattern, str(target)],
+                [*prepared, str(target)],
                 ok_returncodes=(0, 1),
             )
 
-        try:
-            translated = pattern
-            for source, replacement in _PYTHON_REGEX_REWRITES:
-                translated = translated.replace(source, replacement)
-            regex = re.compile(translated)
-        except re.error as exc:
-            raise ValueError(f"Invalid grep pattern: {exc}") from exc
+        regex = prepared
 
         lines: list[str] = []
         for file_path in self._iter_files(target):

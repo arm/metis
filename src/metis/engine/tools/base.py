@@ -39,6 +39,12 @@ class ToolBox:
     def has(self, name: str) -> bool:
         return name in self._tools
 
+    def without(self, *names: str) -> "ToolBox":
+        blocked = set(names)
+        return ToolBox(
+            {name: tool for name, tool in self._tools.items() if name not in blocked}
+        )
+
     def run(self, name: str, *args, **kwargs):
         try:
             tool = self._tools[name]
@@ -62,6 +68,21 @@ class ToolBox:
             return {}
         return dict(details)
 
+    def describe_call(self, name: str, *args, **kwargs) -> dict[str, Any]:
+        try:
+            tool = self._tools[name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown tool: {name}") from exc
+        provider = getattr(tool, "__self__", None)
+        if provider is None:
+            return self.describe(name)
+        describe_call = getattr(provider, "describe_call", None)
+        if callable(describe_call):
+            details = describe_call(name, *args, **kwargs)
+            if isinstance(details, dict):
+                return dict(details)
+        return self.describe(name)
+
     def grep(self, pattern: str, path: str) -> str:
         return self.run("grep", pattern, path)
 
@@ -73,3 +94,17 @@ class ToolBox:
 
     def sed(self, path: str, start_line: int, end_line: int) -> str:
         return self.run("sed", path, start_line, end_line)
+
+    def rag_search(
+        self,
+        query: str,
+        *,
+        retriever_code=None,
+        retriever_docs=None,
+    ) -> str:
+        return self.run(
+            "rag_search",
+            query,
+            retriever_code=retriever_code,
+            retriever_docs=retriever_docs,
+        )

@@ -18,7 +18,7 @@ def test_triage_runtime_builds_graph_with_domain_toolbox(engine, monkeypatch):
 
     assert graph.toolbox is sentinel
     assert captured == {
-        "policy": "triage_evidence",
+        "policy": "code_evidence",
         "codebase_path": engine.codebase_path,
         "timeout_seconds": engine.triage_tool_timeout_seconds,
     }

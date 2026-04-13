@@ -66,11 +66,6 @@ class ReviewService:
             return None
 
         language_prompts = plugin.get_prompts()
-        context_prompt_template = self._config.plugin_config.get(
-            "general_prompts", {}
-        ).get("retrieve_context", "")
-
-        formatted_context_prompt = context_prompt_template.format(file_path=file_path)
         relative_path = os.path.relpath(file_path, base_path)
 
         try:
@@ -79,12 +74,12 @@ class ReviewService:
                 "snippet": snippet,
                 "retriever_code": qe_code,
                 "retriever_docs": qe_docs,
-                "context_prompt": formatted_context_prompt,
                 "language_prompts": language_prompts,
                 "default_prompt_key": "security_review_file",
                 "relative_file": relative_path,
                 "mode": "file",
                 "use_retrieval_context": options.use_retrieval_context,
+                "debug_callback": options.debug_callback,
             }
             return self._review_graph_factory().review(req)
         except Exception as e:
@@ -207,11 +202,6 @@ class ReviewService:
             )
             if not snippet:
                 continue
-            context_prompt = self._config.plugin_config.get("general_prompts", {}).get(
-                "retrieve_context", ""
-            )
-            formatted_context = context_prompt.format(file_path=file_diff.path)
-
             language_prompts = plugin.get_prompts()
             try:
                 original_content = read_file_content(abs_path)
@@ -220,13 +210,13 @@ class ReviewService:
                     "snippet": snippet,
                     "retriever_code": qe_code,
                     "retriever_docs": qe_docs,
-                    "context_prompt": formatted_context,
                     "language_prompts": language_prompts,
                     "default_prompt_key": "security_review",
                     "relative_file": relative_path,
                     "mode": "patch",
                     "original_file": original_content or "",
                     "use_retrieval_context": options.use_retrieval_context,
+                    "debug_callback": options.debug_callback,
                 }
                 review_dict = self._review_graph_factory().review(req)
             except Exception as e:

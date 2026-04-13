@@ -8,7 +8,6 @@ class ReviewRequest(TypedDict):
     # Required fields
     file_path: Required[str]
     snippet: Required[str]
-    context_prompt: Required[str]
     language_prompts: Required[Dict[str, str]]
 
     # Optional fields
@@ -37,14 +36,15 @@ class ReviewState(TypedDict, total=False):
     snippet: str
     retriever_code: Any
     retriever_docs: Any
-    context_prompt: str
     relative_file: Optional[str]
     mode: str
     original_file: Optional[str]
     use_retrieval_context: bool
     debug_callback: Any
     # Derived
-    context: str
+    tool_evidence: str
+    tool_evidence_summary: str
+    tool_evidence_citations: str
     system_prompt: str
     parsed_reviews: list[dict]
 

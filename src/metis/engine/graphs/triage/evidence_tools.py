@@ -71,11 +71,12 @@ def _safe_tool_capture(
 
 def _tool_debug_args(toolbox, tool_name: str, **tool_args) -> dict:
     out = dict(tool_args)
-    describe = getattr(toolbox, "describe", None)
-    if not callable(describe):
-        return out
+    describe_call = getattr(toolbox, "describe_call", None)
     try:
-        details = describe(tool_name)
+        if callable(describe_call):
+            details = describe_call(tool_name, **tool_args)
+        else:
+            details = toolbox.describe(tool_name)
     except Exception:
         return out
     if not isinstance(details, dict):

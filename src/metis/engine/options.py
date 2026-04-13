@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class ReviewOptions:
     use_retrieval_context: bool = True
+    debug_callback: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,16 +23,27 @@ def coerce_review_options(
     options: ReviewOptions | None = None,
     *,
     use_retrieval_context: bool | None = None,
+    debug_callback: Any = None,
 ) -> ReviewOptions:
     if options is None:
         return ReviewOptions(
             use_retrieval_context=(
                 True if use_retrieval_context is None else use_retrieval_context
-            )
+            ),
+            debug_callback=debug_callback,
         )
-    if use_retrieval_context is None:
+    if use_retrieval_context is None and debug_callback is None:
         return options
-    return ReviewOptions(use_retrieval_context=use_retrieval_context)
+    return ReviewOptions(
+        use_retrieval_context=(
+            options.use_retrieval_context
+            if use_retrieval_context is None
+            else use_retrieval_context
+        ),
+        debug_callback=(
+            options.debug_callback if debug_callback is None else debug_callback
+        ),
+    )
 
 
 def coerce_triage_options(

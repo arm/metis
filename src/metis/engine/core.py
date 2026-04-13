@@ -19,6 +19,7 @@ from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
+from .tools.registry import build_toolbox
 
 logger = logging.getLogger("metis")
 
@@ -217,6 +218,11 @@ class MetisEngine:
         if self._state.review_graph is None:
             self._state.review_graph = ReviewGraph(
                 llm_provider=self.llm_provider,
+                toolbox=build_toolbox(
+                    policy="code_evidence",
+                    codebase_path=self.codebase_path,
+                    timeout_seconds=self.triage_tool_timeout_seconds,
+                ),
                 plugin_config=self.plugin_config,
                 custom_prompt_text=self.custom_prompt_text,
                 custom_guidance_precedence=self.custom_guidance_precedence,

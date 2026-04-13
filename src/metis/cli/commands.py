@@ -8,6 +8,7 @@ from rich.markup import escape
 
 from metis.engine.options import ReviewOptions, TriageOptions
 from .command_runtime import CommandRuntime
+from .review_cli import make_review_debug_callback
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
 from metis.usage import usage_operation
@@ -37,8 +38,11 @@ def _print_no_index_warning(args, runtime: CommandRuntime):
     runtime.no_index_warning_emitted = True
 
 
-def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
-    return ReviewOptions(use_retrieval_context=runtime.use_retrieval_context)
+def _review_options_for_runtime(args, runtime: CommandRuntime) -> ReviewOptions:
+    return ReviewOptions(
+        use_retrieval_context=runtime.use_retrieval_context,
+        debug_callback=make_review_debug_callback(args),
+    )
 
 
 def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
@@ -89,7 +93,7 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
+    options = _review_options_for_runtime(args, runtime)
     results = with_spinner(
         "Reviewing patch...",
         engine.review.review_patch,
@@ -104,7 +108,7 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
+    options = _review_options_for_runtime(args, runtime)
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
         engine.review.review_file,
@@ -123,7 +127,7 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
+    options = _review_options_for_runtime(args, runtime)
     if args.verbose:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
         total = len(engine.review.get_code_files())

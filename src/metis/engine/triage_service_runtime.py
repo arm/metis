@@ -41,7 +41,7 @@ class _FallbackTriageAnalyzer:
 class TriageServiceRuntimeMixin:
     def _build_triage_graph(self):
         toolbox = build_toolbox(
-            policy="triage_evidence",
+            policy="code_evidence",
             codebase_path=self.codebase_path,
             timeout_seconds=self.triage_tool_timeout_seconds,
         )

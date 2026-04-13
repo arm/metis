@@ -7,17 +7,50 @@ general_prompts:
     instructions or checks below, follow 'Custom Guidance'. If guidance excludes
     certain issue classes, omit them from analysis and do not report them unless
     directly necessary to explain another issue.
-  retrieve_context: |-
-    You are a senior software engineer and your task is to explain what the following FILE does and what its purpose is.
-    Include any data flows, function calls, or dependencies that could impact security.
-    Make sure you flag any function input that is externally controlled.
-    FILE: {file_path}
   security_review_report: |-
-    3. How to Report
+    4. How to Report
         - List all identified security issues in a JSON array.
         - Each element must strictly follow this structure:
           [[REVIEW_SCHEMA_FIELDS]]
         - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
+  review_tool_guidance: |-
+    3. How to Use Tool Evidence
+        - If TOOL_EVIDENCE is present, treat it as additional grounding alongside FILE, FILE_CHANGES, ORIGINAL_FILE, and any directly provided context.
+        - Prefer local inspection first with `sed` / `cat` before broader lookup with `grep` / `find_name` when more evidence is needed.
+        - Use `rag_search` when local inspection is not enough and you need broader security-relevant context from indexed code and docs.
+        - In particular, use `rag_search` to ask:
+          - what inputs reach this file, function, or module and whether any may be externally controlled
+          - what the component is architecturally supposed to do
+          - how the code is used by callers, wrappers, or surrounding subsystems
+          - what trust boundaries, privilege boundaries, or security assumptions apply
+          - what related checks, validation steps, authorization gates, sanitization steps, or enforcement points exist elsewhere
+          - whether the implementation aligns with the intended security design and documented behavior
+        - Phrase `rag_search` queries as short natural-language security questions, not keyword bags.
+        - Good examples include:
+          - “What inputs reach this component, and are any externally controlled?”
+          - “What is this module supposed to enforce from a security perspective?”
+          - “How is this function used by callers, and what security assumptions do they rely on?”
+          - “What related code or docs explain the trust boundary around this logic?”
+          - “Where are authentication, authorization, validation, or sanitization responsibilities defined for this path?”
+        - `rag_search` can return separate code and docs sections; use both when they are relevant.
+        - Do not use `rag_search` for exact symbol/file lookup when `grep`, `find_name`, `sed`, or `cat` are a better fit.
+        - Do not invent tool results that are not present in TOOL_EVIDENCE.
+  review_tool_system_prompt: |-
+    You are gathering grounded static evidence for a security code review.
+    Use tools only when they materially improve confidence.
+    Prefer local inspection first with sed/cat on the current file or hunk.
+    Use rag_search when you need broader security context across indexed code and docs, especially for questions about attacker-controlled inputs, module purpose, architecture, trust boundaries, privilege expectations, validation or sanitization responsibilities, enforcement points, and whether the implementation matches the intended security design.
+    Ask rag_search focused natural-language security questions, not keyword bags.
+    Use grep or find_name for broader lookup only when direct local inspection is not enough.
+    Keep tool use bounded and evidence-driven.
+    After finishing tool use, return a concise plain-text evidence summary. Do not return JSON.
+  review_tool_system_prompt_no_rag: |-
+    You are gathering grounded static evidence for a security code review.
+    Use tools only when they materially improve confidence.
+    Prefer local inspection first with sed/cat on the current file or hunk.
+    Use grep or find_name for broader lookup only when direct local inspection is not enough.
+    Keep tool use bounded and evidence-driven.
+    After finishing tool use, return a concise plain-text evidence summary. Do not return JSON.
   triage_system_prompt: |-
     You triage static analysis findings.
     Decide whether the finding is valid, invalid, or inconclusive based on static code evidence.
@@ -53,7 +86,7 @@ general_prompts:
     {tool_outputs}
   hardware_cwe_guidance: |-
     2. What to Check (CWE-based, hardware-focused)
-       - Treat ALL control/inputs as potentially adversarial unless explicitly proven internal-only[[RELEVANT_CONTEXT_INTERNAL_ONLY_SUFFIX]].
+       - Treat ALL control/inputs as potentially adversarial unless explicitly proven internal-only in TOOL_EVIDENCE.
          Externally-controlled candidates commonly include: reset, clock enables, test/debug enables,
          strap pins, fuse/OTP reads, JTAG/scan signals, memory-mapped register writes, bus transactions,
          interrupt lines, and power/debug state transitions.
@@ -133,32 +166,32 @@ plugins:
     prompts: &c_cpp_prompts
       security_review_file: |-
         You are a thorough security engineer specializing in C/C++.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-           - Only produce findings that are fully justified by FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]]. If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT]]
+           - Only produce findings that are fully justified by FILE and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+           - If TOOL_EVIDENCE is empty, ignore it.
       security_review: |-
         You are a thorough security engineer specializing in C/C++.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE [[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT]]
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE , and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+           - If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -183,11 +216,11 @@ plugins:
       validation_review: |-
         You will be given:
         SNIPPET: The relevant C/C++ code snippet.
-        RELEVANT CONTEXT: Additional details or commentary on the snippet.
+        TOOL_EVIDENCE: Additional details or commentary on the snippet.
         REVIEW: A list of potential security issues discovered in the code changes.
 
         Your task is to:
-        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and RELEVANT CONTEXT.
+        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and TOOL_EVIDENCE.
         2. Remove any issues that are false positives or are already mitigated in the code (e.g., null checks exist, safe boundaries are enforced, etc.).
         3. Keep only the issues that definitely represent real security risks.
         4. If an issue is missing details, add the necessary clarifications or background.
@@ -212,22 +245,22 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in RTL security for SystemVerilog designs.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by
-        the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        the specific changes or TOOL_EVIDENCE provided.
 
         You will be given:
         1. FILE_CHANGES - a set of SystemVerilog code changes with lines marked by "+" (added) or "-" (removed).
-        [[RELEVANT_CONTEXT_INPUT_RTL]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - the original file before being modified (may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - the original file before being modified (may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of FILE_CHANGES, focusing on "+" and "-" lines but reasoning about full-module behavior.
-           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]].
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE.
            - If no real issues exist, return an empty reviews list.
            - If ORIGINAL_FILE is empty, ignore it.
-           [[RELEVANT_CONTEXT_NAMED]]
+           - If TOOL_EVIDENCE is empty, ignore it.
 
         Output requirements:
         - Output ONLY a JSON object: {\"reviews\": [...]}
@@ -237,19 +270,19 @@ plugins:
 
       security_review_file: |-
         You are a thorough security engineer specializing in RTL security for SystemVerilog designs.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific code[[RELEVANT_CONTEXT_CODE_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific code or TOOL_EVIDENCE provided.
 
         You will be given:
         1. FILE - a SystemVerilog source file
-        [[RELEVANT_CONTEXT_INPUT_MODULE_PACKAGE]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search about related module/package behavior. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of FILE.
-           - Only produce findings that are fully justified by FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
+           - Only produce findings that are fully justified by FILE and TOOL_EVIDENCE.
            - If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT_NAMED]]
+           - If TOOL_EVIDENCE is empty, ignore it.
 
         Output requirements:
         - Output ONLY a JSON object: {\"reviews\": [...]}
@@ -266,17 +299,17 @@ plugins:
         - `bind` inserted logic or assertions changing behavior in synthesizable builds (often CWE-1191 / CWE-1234).
         - Use of DPI/PLI/VPI in synthesizable contexts or mixed RTL/TB packages leaking secrets or enabling backdoors (CWE-1191 / CWE-1431).
         - `unique/priority case` and incomplete case coverage leading to unintended privilege paths or latch inference (often CWE-1262 / CWE-1298).
-        [[RELEVANT_CONTEXT_ASSERTION_GUIDANCE]]
+        - Assertions: ensure security properties are not "simulation-only" crutches when TOOL_EVIDENCE suggests enforcement should exist in RTL.
           (If properties imply missing enforcement logic, map to the relevant CWE, commonly CWE-1262 / CWE-1191.)
 
       validation_review: |-
         You will be given:
         SNIPPET: The relevant SystemVerilog code snippet.
-        [[RELEVANT_CONTEXT_ADDITIONAL_DETAILS]]
+        TOOL_EVIDENCE: Additional details or commentary on the snippet.
         REVIEW: A list of potential security issues discovered.
 
         Your task is to:
-        1. Validate each item against SNIPPET[[RELEVANT_CONTEXT_SNIPPET_VALIDATION_SUFFIX]].
+        1. Validate each item against SNIPPET and TOOL_EVIDENCE.
         2. Remove false positives or issues already mitigated (e.g., deterministic reset, sticky locks, explicit privilege checks).
         3. Keep only issues that definitely represent real security risks.
         4. If no real issues remain, respond with an empty array: [].
@@ -303,22 +336,22 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in RTL security for Verilog designs.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by
-        the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        the specific changes or TOOL_EVIDENCE provided.
 
         You will be given:
         1. FILE_CHANGES - a set of RTL code changes with lines marked by "+" (added) or "-" (removed).
-        [[RELEVANT_CONTEXT_INPUT_RTL]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - the original file before being modified (may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - the original file before being modified (may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of FILE_CHANGES, focusing on "+" and "-" lines but reasoning about full-module behavior.
-           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]].
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE.
            - If no real issues exist, return an empty reviews list.
            - If ORIGINAL_FILE is empty, ignore it.
-           [[RELEVANT_CONTEXT_NAMED]]
+           - If TOOL_EVIDENCE is empty, ignore it.
 
         Output requirements:
         - Output ONLY a JSON object: {\"reviews\": [...]}
@@ -328,19 +361,19 @@ plugins:
 
       security_review_file: |-
         You are a thorough security engineer specializing in RTL security for Verilog designs.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific code[[RELEVANT_CONTEXT_CODE_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific code or TOOL_EVIDENCE provided.
 
         You will be given:
         1. FILE - a Verilog RTL file
-        [[RELEVANT_CONTEXT_INPUT_MODULE]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search about related module behavior. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of FILE.
-           - Only produce findings that are fully justified by FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
+           - Only produce findings that are fully justified by FILE and TOOL_EVIDENCE.
            - If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT_NAMED]]
+           - If TOOL_EVIDENCE is empty, ignore it.
 
         Output requirements:
         - Output ONLY a JSON object: {\"reviews\": [...]}
@@ -354,11 +387,11 @@ plugins:
       validation_review: |-
         You will be given:
         SNIPPET: The relevant Verilog code snippet.
-        [[RELEVANT_CONTEXT_ADDITIONAL_DETAILS]]
+        TOOL_EVIDENCE: Additional details or commentary on the snippet.
         REVIEW: A list of potential security issues discovered.
 
         Your task is to:
-        1. Validate each item against SNIPPET[[RELEVANT_CONTEXT_SNIPPET_VALIDATION_SUFFIX]].
+        1. Validate each item against SNIPPET and TOOL_EVIDENCE.
         2. Remove false positives or issues already mitigated (e.g., deterministic reset, sticky locks, explicit privilege checks).
         3. Keep only issues that definitely represent real security risks.
         4. If no real issues remain, respond with an empty array: [].
@@ -388,26 +421,26 @@ plugins:
     prompts:
       security_review: |-
         1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
-        Always tie identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
-        and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+        Always tie identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
+        and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents or TOOL_EVIDENCE.
 
         You will be given:
         1) FILE_CHANGES — a set of .td changes with lines marked by “+” (added) or “-” (removed).
-        [[RELEVANT_CONTEXT_INPUT_TD]]
-        [[ORIGINAL_FILE_INDEX_PAREN]] ORIGINAL_FILE — the original TableGen file (this may be empty).
+        2) TOOL_EVIDENCE — optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3) ORIGINAL_FILE — the original TableGen file (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but taking into account how they interact with the whole file.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
       security_review_file: |-
         1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
-        Always tie identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+        Always tie identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce conclusions that are not supported by the .td contents or TOOL_EVIDENCE.
 
         You will be given:
         1) FILE — a TableGen file (e.g., instruction/operand/register definitions, patterns, features).
-        [[RELEVANT_CONTEXT_INPUT_TD]]
+        2) TOOL_EVIDENCE — optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
       security_review_checks: |-
         Your tasks:
@@ -460,18 +493,18 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Python.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -484,16 +517,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the Python code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in Python.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   ruby:
     supported_extensions: [".rb"]
     splitting:
@@ -503,18 +536,18 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Ruby.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -527,16 +560,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the Ruby code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in Ruby.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   go:
     supported_extensions: [".go"]
     splitting:
@@ -546,19 +579,19 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Go services, CLIs, and libraries.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of Go code changes with lines marked by “+” for additions and “-” for removals.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” while reasoning about how they interact with the entire package.
-           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT]]
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+           - If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -576,16 +609,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the Go code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in Go.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   typescript:
     supported_extensions: [".ts", ".tsx"]
     splitting:
@@ -595,18 +628,18 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in TypeScript across both Node.js and browser environments.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -625,16 +658,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the TypeScript code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in TypeScript across both Node.js and browser environments.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   solidity:
     supported_extensions: [".sol"]
     splitting:
@@ -644,20 +677,20 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Solidity smart contracts and the EVM.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported by the specific
         changes or context provided.
 
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” while considering interactions with the whole file.
-           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-           [[RELEVANT_CONTEXT]]
+           - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+           - If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
            - Look for potential security issues such as:
@@ -684,16 +717,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the Solidity code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in Solidity smart contracts and the EVM.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   rust:
     supported_extensions: [".rs"]
     splitting:
@@ -703,18 +736,18 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Rust.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
         - Look for potential security issues such as:
@@ -740,16 +773,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the Rust code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough security engineer specializing in Rust.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   terraform:
     supported_extensions: [".tf"]
     splitting:
@@ -759,17 +792,17 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in Terraform (HCL) and cloud security.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce security conclusions that are not supported by the
-        specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided. Where possible, cite exact line numbers and resource
+        specific changes or TOOL_EVIDENCE provided. Where possible, cite exact line numbers and resource
         addresses from FILE_CHANGES.
 
         You will be given:
         1) FILE_CHANGES  – A unified diff of Terraform files (HCL) with lines marked by “+” for
            additions and “-” for removals. This may include modules, variables, providers,
            backend configuration, and environment files. Treat “+” and “-” as the primary scope.
-        [[RELEVANT_CONTEXT_INPUT_TERRAFORM]]
-        [[ORIGINAL_FILE_INDEX_PAREN]] ORIGINAL_FILE  – The original configuration before modification. Use this to understand
+        2) TOOL_EVIDENCE – optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3) ORIGINAL_FILE  – The original configuration before modification. Use this to understand
            how changes alter behavior. (If empty, ignore.)
 
         Your tasks are:
@@ -778,7 +811,7 @@ plugins:
            - Review the security implications of FILE_CHANGES, focusing on “+” (added) and “-”
              (removed) lines, but reason about how these interact with the whole module/stack.
            - Only draw conclusions that are directly evidenced by FILE_CHANGES and/or
-             [[RELEVANT_CONTEXT_TERRAFORM_ORIGINAL_PREFIX]]ORIGINAL_FILE.
+             ORIGINAL_FILE.
       security_review_checks: |-
         2. What to check
         - Look for potential security issues such as:
@@ -793,16 +826,16 @@ plugins:
       attempt_fix: "Based on the issues detected in the terraform code changes, propose a fix/patch. Issues: {issues} Patch: {patch}"
       security_review_file: |-
         You are a thorough DecSecOps engineer specializing in Terraform.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
            - Review the security implications of the FILE.
-        [[RELEVANT_CONTEXT_UNINDENTED]]
+        If TOOL_EVIDENCE is empty, ignore it.
   php:
     supported_extensions: [".php", ".phps", ".phtm", ".phtml", ".phpt", ".pht", ".php2", ".php3", ".php4", ".php5", ".php6", ".php7", ".php8"]
     splitting:
@@ -812,32 +845,32 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in PHP.
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-          [[RELEVANT_CONTEXT_TWO_SPACE]]
+          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+          - If TOOL_EVIDENCE is empty, ignore it.
       security_review_file: |-
         You are a thorough security engineer specializing in PHP.
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
           - Review the security implications of the FILE.
-          - Only produce findings that are fully justified by FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]]. If no real issues exist, return an empty reviews list.
-          [[RELEVANT_CONTEXT_TWO_SPACE]]
+          - Only produce findings that are fully justified by FILE and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+          - If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
           - Look for potential security issues such as:
@@ -853,11 +886,11 @@ plugins:
       validation_review: |-
         You will be given:
         SNIPPET: The relevant PHP code snippet.
-        RELEVANT CONTEXT: Additional details or commentary on the snippet.
+        TOOL_EVIDENCE: Additional details or commentary on the snippet.
         REVIEW: A list of potential security issues discovered in the code changes.
 
         Your task is to:
-        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and RELEVANT CONTEXT.
+        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and TOOL_EVIDENCE.
         2. Remove any issues that are false positives or are already mitigated in the code (e.g., prepared statements for SQL, escaping for output).
         3. Keep only the issues that definitely represent real security risks.
         4. If an issue is missing details, add the necessary clarifications or background.
@@ -882,32 +915,32 @@ plugins:
     prompts:
       security_review: |-
         You are a thorough security engineer specializing in JavaScript (including Node.js and browser contexts).
-        Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+        Always tie your identified issues directly to the evidence in FILE_CHANGES, TOOL_EVIDENCE,
         and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-        by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE_CHANGES - a set of code changes with lines marked by “+” indicating what has been added or “-” for removed.
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-        [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
+        3. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
         Your tasks are:
         1. Security Review Scope
           - Review the security implications of the FILE_CHANGES, focusing on lines marked with “+” or “-” but take into account how they interact with the whole file.
-          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-          [[RELEVANT_CONTEXT_TWO_SPACE]]
+          - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE, and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+          - If TOOL_EVIDENCE is empty, ignore it.
       security_review_file: |-
         You are a thorough security engineer specializing in JavaScript (including Node.js and browser contexts).
-        Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-        Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+        Always tie your identified issues directly to the evidence in FILE and TOOL_EVIDENCE.
+        Do not introduce new security conclusions that are not supported by the specific changes or TOOL_EVIDENCE provided.
         You will be given:
         1. FILE - A source code file
-        [[RELEVANT_CONTEXT_INPUT_CHANGES]]
+        2. TOOL_EVIDENCE - optional additional evidence collected via tools such as sed, cat, grep, find_name, and rag_search. If empty, ignore it.
 
         Your tasks are:
         1. Security Review Scope
           - Review the security implications of the FILE.
-          - Only produce findings that are fully justified by FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]]. If no real issues exist, return an empty reviews list.
-          [[RELEVANT_CONTEXT_TWO_SPACE]]
+          - Only produce findings that are fully justified by FILE and TOOL_EVIDENCE. If no real issues exist, return an empty reviews list.
+          - If TOOL_EVIDENCE is empty, ignore it.
       security_review_checks: |-
         2. What to Check
           - Look for potential security issues such as:
@@ -923,11 +956,11 @@ plugins:
       validation_review: |-
         You will be given:
         SNIPPET: The relevant JavaScript code snippet.
-        RELEVANT CONTEXT: Additional details or commentary on the snippet.
+        TOOL_EVIDENCE: Additional details or commentary on the snippet.
         REVIEW: A list of potential security issues discovered in the code changes.
 
         Your task is to:
-        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and RELEVANT CONTEXT.
+        1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET and TOOL_EVIDENCE.
         2. Remove any issues that are false positives or are already mitigated in the code (e.g., sanitization libraries like DOMPurify).
         3. Keep only the issues that definitely represent real security risks.
         4. If an issue is missing details, add the necessary clarifications or background.

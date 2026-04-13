@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 from .base import ToolBox, ToolContext, ToolDefinition
+from .retrieval_tools import RetrievalToolRunner
 from .static_tools import StaticToolRunner
 
 
 def get_tool_policies() -> dict[str, tuple[str, ...]]:
     return {
-        "triage_evidence": ("grep", "find_name", "cat", "sed"),
+        "code_evidence": ("grep", "find_name", "cat", "sed", "rag_search"),
+        "triage_evidence": ("grep", "find_name", "cat", "sed", "rag_search"),
     }
 
 
@@ -19,7 +21,10 @@ def _build_providers(context: ToolContext) -> dict[str, object]:
             codebase_path=context.codebase_path,
             timeout_seconds=context.timeout_seconds,
             max_chars=context.max_chars,
-        )
+        ),
+        "retrieval": RetrievalToolRunner(
+            max_chars=context.max_chars,
+        ),
     }
 
 
@@ -91,6 +96,12 @@ def get_tool_definitions() -> tuple[ToolDefinition, ...]:
             domains=tuple(get_tool_policies()),
             provider="static",
             operation="sed",
+        ),
+        ToolDefinition(
+            name="rag_search",
+            domains=tuple(get_tool_policies()),
+            provider="retrieval",
+            operation="rag_search",
         ),
     )
 

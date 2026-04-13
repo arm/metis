@@ -11,25 +11,71 @@ def test_tool_definitions_expose_named_tools():
     defs = get_tool_definitions()
     names = {tool.name for tool in defs}
 
-    assert names == {"grep", "find_name", "cat", "sed"}
-    assert all(tool.domains == ("triage_evidence",) for tool in defs)
+    assert names == {"grep", "find_name", "cat", "sed", "rag_search"}
+    assert all(tool.domains == ("code_evidence", "triage_evidence") for tool in defs)
 
 
 def test_build_toolbox_for_policy_exposes_list_and_invocation(tmp_path):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "a.c").write_text("alpha\nbeta\n", encoding="utf-8")
+    codebase = tmp_path / "src" / "metis" / "sarif"
+    codebase.mkdir(parents=True)
+    (codebase / "a.c").write_text("alpha\nbeta\n", encoding="utf-8")
 
     toolbox = build_toolbox(
-        policy="triage_evidence", codebase_path=str(tmp_path), max_chars=200
+        policy="code_evidence", codebase_path=str(codebase), max_chars=200
     )
 
-    assert toolbox.list_tools() == ("cat", "find_name", "grep", "sed")
+    assert toolbox.list_tools() == ("cat", "find_name", "grep", "rag_search", "sed")
     assert toolbox.has("grep") is True
     assert any(
-        line.endswith("src/a.c:2:beta")
-        for line in toolbox.grep("beta", "src").splitlines()
+        line.endswith("a.c:2:beta") for line in toolbox.grep("beta", "src").splitlines()
     )
     assert toolbox.describe("grep") == {"backend": "shell_grep"}
+    assert toolbox.describe_call("grep", pattern=r"beta\b", path="src") == {
+        "backend": "python_regex"
+    }
+
+
+def test_build_toolbox_rag_search_exposes_code_and_docs_sections(tmp_path):
+    toolbox = build_toolbox(policy="code_evidence", codebase_path=str(tmp_path))
+
+    class _Doc:
+        def __init__(self, text, source):
+            self.page_content = text
+            self.metadata = {"source": source}
+
+    class _Retriever:
+        def __init__(self, label):
+            self._label = label
+
+        def get_relevant_documents(self, query):
+            return [_Doc(f"{self._label} hit for {query}", f"{self._label}.txt")]
+
+    output = toolbox.rag_search(
+        "memory safety",
+        retriever_code=_Retriever("code"),
+        retriever_docs=_Retriever("docs"),
+    )
+
+    assert "[CODE_RAG]" in output
+    assert "[DOCS_RAG]" in output
+    assert "memory safety" in output
+
+
+def test_build_toolbox_rag_search_gracefully_handles_missing_retrievers(tmp_path):
+    toolbox = build_toolbox(policy="code_evidence", codebase_path=str(tmp_path))
+
+    output = toolbox.rag_search("bounds checks")
+
+    assert "retrieval unavailable" in output
+
+
+def test_toolbox_without_hides_named_tool(tmp_path):
+    toolbox = build_toolbox(policy="code_evidence", codebase_path=str(tmp_path))
+
+    hidden = toolbox.without("rag_search")
+
+    assert hidden.has("rag_search") is False
+    assert "rag_search" not in hidden.list_tools()
 
 
 def test_build_toolbox_rejects_unknown_policy(tmp_path):
@@ -68,10 +114,10 @@ def test_validate_registry_rejects_missing_operation(tmp_path):
 def test_validate_policy_map_rejects_unknown_tool_name():
     defs = get_tool_definitions()
     with pytest.raises(ValueError, match="references unknown tool"):
-        registry._validate_policy_map(defs, {"triage_evidence": ("missing_tool",)})
+        registry._validate_policy_map(defs, {"code_evidence": ("missing_tool",)})
 
 
 def test_validate_policy_map_rejects_duplicate_tool_name():
     defs = get_tool_definitions()
     with pytest.raises(ValueError, match="contains duplicate tool"):
-        registry._validate_policy_map(defs, {"triage_evidence": ("grep", "grep")})
+        registry._validate_policy_map(defs, {"code_evidence": ("grep", "grep")})

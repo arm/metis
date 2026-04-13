@@ -1,73 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
-
 from metis.engine.analysis.c_family_helpers import extract_code_like_symbols
+from metis.engine.retrieval_support import retrieve_context_deterministic
 
 from . import constants as C
 from .debug import _emit_debug
 from ..types import TriageState
 from ..utils import synthesize_context
-
-
-def _normalize_doc(doc):
-    content = str(getattr(doc, "page_content", "") or "")
-    meta = getattr(doc, "metadata", {}) or {}
-    source = str(
-        meta.get("file_path") or meta.get("source") or meta.get("doc_id") or ""
-    )
-    raw_line = meta.get("line") or meta.get("start_line") or meta.get("line_number")
-    try:
-        line = int(raw_line)
-    except Exception:
-        line = 0
-    digest = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-    return source, line, content, digest
-
-
-def _retrieve_context_deterministic(
-    retriever, query: str, max_chars: int = C.RETRIEVAL_CONTEXT_MAX_CHARS
-) -> str:
-    try:
-        docs = retriever.get_relevant_documents(query) or []
-    except Exception:
-        return ""
-
-    normalized = [_normalize_doc(doc) for doc in docs]
-    dedup = {}
-    for source, line, content, digest in normalized:
-        key = (source, line, digest)
-        dedup[key] = (source, line, content, digest)
-
-    ordered = sorted(
-        dedup.values(),
-        key=lambda x: (
-            x[0].lower(),
-            x[1],
-            x[3],
-        ),
-    )
-
-    parts: list[str] = []
-    used = 0
-    for source, line, content, _digest in ordered:
-        label = source if source else "<unknown>"
-        line_label = f":{line}" if line > 0 else ""
-        section = f"[{label}{line_label}]\n{content.strip()}\n"
-        if not section.strip():
-            continue
-        remaining = max_chars - used
-        if remaining <= 0:
-            break
-        if len(section) > remaining:
-            parts.append(section[:remaining] + "\n...[truncated]")
-            used = max_chars
-            break
-        parts.append(section)
-        used += len(section)
-
-    return "\n".join(parts).strip()
 
 
 def _extract_symbol_candidates(
@@ -109,15 +49,38 @@ def _build_retrieval_query(state: TriageState) -> str:
     )
 
 
-def triage_node_retrieve(state: TriageState) -> TriageState:
+def triage_node_retrieve(state: TriageState, *, toolbox) -> TriageState:
     if not state.get("use_retrieval_context", True):
-        new_state: TriageState = dict(state)
-        new_state["context"] = ""
-        return new_state
+        disabled_state: TriageState = dict(state)
+        disabled_state["context"] = ""
+        return disabled_state
     query = _build_retrieval_query(state)
-    code = _retrieve_context_deterministic(state.get("retriever_code"), query)
-    docs = _retrieve_context_deterministic(state.get("retriever_docs"), query)
-    context = synthesize_context(code, docs)
+    if getattr(toolbox, "has", lambda _name: False)("rag_search"):
+        context = toolbox.rag_search(
+            query,
+            retriever_code=state.get("retriever_code"),
+            retriever_docs=state.get("retriever_docs"),
+        )
+        _emit_debug(
+            state,
+            "tool_call",
+            tool_name="rag_search",
+            tool_args={"query": query, "sources": ["code", "docs"]},
+            tool_output=context,
+        )
+        code = docs = ""
+    else:
+        code = retrieve_context_deterministic(
+            state.get("retriever_code"),
+            query,
+            max_chars=C.RETRIEVAL_CONTEXT_MAX_CHARS,
+        )
+        docs = retrieve_context_deterministic(
+            state.get("retriever_docs"),
+            query,
+            max_chars=C.RETRIEVAL_CONTEXT_MAX_CHARS,
+        )
+        context = synthesize_context(code, docs)
     _emit_debug(
         state,
         "retrieval",
@@ -126,6 +89,6 @@ def triage_node_retrieve(state: TriageState) -> TriageState:
         docs_context=docs,
         context=context,
     )
-    new_state: TriageState = dict(state)
-    new_state["context"] = context
-    return new_state
+    next_state: TriageState = dict(state)
+    next_state["context"] = context
+    return next_state
