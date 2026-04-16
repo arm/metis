@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import subprocess
 
 from metis.engine.tools.static_tools import StaticToolRunner
 
@@ -62,3 +63,46 @@ def test_grep_fallback_invalid_pattern_raises(tmp_path):
     runner = _build_runner(tmp_path)
     with pytest.raises(ValueError, match="Invalid grep pattern"):
         runner.grep("(", ".")
+
+
+def test_grep_can_force_python_regex_even_when_shell_grep_exists(tmp_path, monkeypatch):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.c").write_text("foo\t(\n", encoding="utf-8")
+
+    runner = StaticToolRunner(codebase_path=str(tmp_path))
+    runner._has_grep = False
+
+    def _unexpected_run(*args, **kwargs):
+        raise AssertionError("shell grep should not run when _has_grep=False")
+
+    monkeypatch.setattr(subprocess, "run", _unexpected_run)
+
+    out = runner.grep(r"foo[[:space:]]*\(", "src")
+
+    assert out.splitlines() == ["src/a.c:1:foo\t("]
+
+
+def test_shell_grep_forces_filename_prefix_for_single_file(tmp_path):
+    source = tmp_path / "a.c"
+    source.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    runner = StaticToolRunner(codebase_path=str(tmp_path))
+    runner._has_grep = True
+
+    out = runner.grep("beta", "a.c")
+
+    assert len(out.splitlines()) == 1
+    assert (
+        out.splitlines()[0].endswith("/a.c:2:beta")
+        or out.splitlines()[0] == "a.c:2:beta"
+    )
+
+
+def test_describe_tool_reports_grep_backend(tmp_path):
+    runner = StaticToolRunner(codebase_path=str(tmp_path))
+    runner._has_grep = True
+    assert runner.describe_tool("grep") == {"backend": "shell_grep"}
+
+    runner = StaticToolRunner(codebase_path=str(tmp_path))
+    runner._has_grep = False
+    assert runner.describe_tool("grep") == {"backend": "python_regex"}

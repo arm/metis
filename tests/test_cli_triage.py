@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 
 import json
-
+from metis.cli import triage_cli
 from metis.cli.command_runtime import CommandRuntime
 from metis.cli.commands import _build_triaged_sarif_payload, run_triage
 from metis.cli.utils import save_output
@@ -269,3 +269,30 @@ def test_save_output_json_matches_triage_annotations_by_identity(tmp_path):
     assert issues[0]["metisTriageStatus"] == "valid"
     assert issues[1]["issue"] == "Issue B"
     assert issues[1]["metisTriageStatus"] == "invalid"
+
+
+def test_triage_debug_callback_enabled_without_verbose():
+    args = SimpleNamespace(log_level="DEBUG", verbose=False, quiet=True)
+
+    callback = triage_cli._make_triage_debug_callback(args)
+
+    assert callable(callback)
+
+
+def test_triage_debug_callback_ignores_quiet(monkeypatch):
+    args = SimpleNamespace(log_level="DEBUG", verbose=False, quiet=True)
+    calls = []
+
+    monkeypatch.setattr(
+        triage_cli,
+        "print_console",
+        lambda message, quiet=False, **kwargs: calls.append((str(message), quiet)),
+    )
+
+    callback = triage_cli._make_triage_debug_callback(args)
+    callback(
+        {"event": "model_output", "decision_status": "valid", "decision_reason": "ok"}
+    )
+
+    assert calls
+    assert all(quiet is False for _message, quiet in calls)

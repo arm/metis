@@ -289,7 +289,10 @@ def collect_c_macro_definition_sections(
             unresolved.append(macro)
             continue
         resolved = False
-        define_pattern = rf"^\s*#\s*define\s+{re.escape(macro)}([^A-Za-z0-9_]|$)"
+        define_pattern = (
+            rf"^[[:space:]]*#[[:space:]]*define[[:space:]]+"
+            rf"{re.escape(macro)}([^A-Za-z0-9_]|$)"
+        )
         for path in candidate_paths:
             if len(sections) >= max_sections:
                 break
@@ -375,7 +378,7 @@ def _extract_include_candidates(
 ) -> list[str]:
     if not file_path or len(sections) >= max_sections:
         return []
-    include_pattern = r"^\s*#\s*include\s+[<\"][^>\"]+[>\"]"
+    include_pattern = r'^[[:space:]]*#[[:space:]]*include[[:space:]]+[<"][^>"]+[>"]'
     output = safe_tool_capture(
         tool_name="grep",
         tool_args={

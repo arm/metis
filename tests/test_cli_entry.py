@@ -211,3 +211,18 @@ def test_execute_command_rejects_inline_ignore_index_flag_before_index_gating(
     assert result is None
     assert any("--ignore-index can only be used" in message for message in captured)
     assert not any("Index missing" in message for message in captured)
+
+
+def test_run_non_interactive_keeps_quiet_without_verbose():
+    args = SimpleNamespace(
+        command="triage data.sarif",
+        verbose=False,
+        quiet=True,
+        log_level="DEBUG",
+    )
+
+    exit_code, farewell = entry.run_non_interactive(SimpleNamespace(), args)
+
+    assert exit_code == 1
+    assert farewell is None
+    assert args.quiet is True

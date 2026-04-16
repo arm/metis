@@ -9,7 +9,7 @@ RUN uv sync --no-dev --no-editable
 
 FROM python:3.13-slim-trixie@sha256:47b6eb1efcabc908e264051140b99d08ebb37fd2b0bf62273e2c9388911490c1 AS runtime
 
-RUN groupadd -r metisuser && useradd -r -g metisuser metisuser
+RUN groupadd -r metisuser && useradd -r -m -d /home/metisuser -g metisuser metisuser
 
 WORKDIR /app
 

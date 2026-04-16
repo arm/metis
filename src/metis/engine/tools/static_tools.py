@@ -11,9 +11,19 @@ import subprocess
 from typing import Sequence
 
 
+_PYTHON_REGEX_REWRITES = (
+    ("[[:space:]]", r"\s"),
+    ("[[:blank:]]", r"[ \t]"),
+)
+
+
 class StaticToolRunner:
     def __init__(
-        self, *, codebase_path: str, timeout_seconds: int = 8, max_chars: int = 16000
+        self,
+        *,
+        codebase_path: str,
+        timeout_seconds: int = 8,
+        max_chars: int = 16000,
     ):
         self.codebase_path = Path(codebase_path).resolve()
         self.timeout_seconds = timeout_seconds
@@ -22,6 +32,21 @@ class StaticToolRunner:
         self._has_find = shutil.which("find") is not None
         self._has_cat = shutil.which("cat") is not None
         self._has_sed = shutil.which("sed") is not None
+
+    def describe_tool(self, name: str) -> dict[str, str]:
+        if name == "grep":
+            backend = "shell_grep" if self._has_grep else "python_regex"
+            return {"backend": backend}
+        if name == "find_name":
+            backend = "shell_find" if self._has_find else "python_walk"
+            return {"backend": backend}
+        if name == "cat":
+            backend = "shell_cat" if self._has_cat else "python_read"
+            return {"backend": backend}
+        if name == "sed":
+            backend = "shell_sed" if self._has_sed else "python_slice"
+            return {"backend": backend}
+        return {}
 
     def _resolve_path(self, raw_path: str) -> Path:
         candidate = (self.codebase_path / raw_path).resolve()
@@ -72,12 +97,15 @@ class StaticToolRunner:
         target = self._resolve_path(path)
         if self._has_grep:
             return self._run(
-                ["grep", "-REn", "--", pattern, str(target)],
+                ["grep", "-HREn", "--", pattern, str(target)],
                 ok_returncodes=(0, 1),
             )
 
         try:
-            regex = re.compile(pattern)
+            translated = pattern
+            for source, replacement in _PYTHON_REGEX_REWRITES:
+                translated = translated.replace(source, replacement)
+            regex = re.compile(translated)
         except re.error as exc:
             raise ValueError(f"Invalid grep pattern: {exc}") from exc
 
