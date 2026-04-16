@@ -46,6 +46,22 @@ class ToolBox:
             raise ValueError(f"Unknown tool: {name}") from exc
         return tool(*args, **kwargs)
 
+    def describe(self, name: str) -> dict[str, Any]:
+        try:
+            tool = self._tools[name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown tool: {name}") from exc
+        provider = getattr(tool, "__self__", None)
+        if provider is None:
+            return {}
+        describe_tool = getattr(provider, "describe_tool", None)
+        if not callable(describe_tool):
+            return {}
+        details = describe_tool(name)
+        if not isinstance(details, dict):
+            return {}
+        return dict(details)
+
     def grep(self, pattern: str, path: str) -> str:
         return self.run("grep", pattern, path)
 

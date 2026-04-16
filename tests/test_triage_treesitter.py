@@ -56,15 +56,20 @@ class _ToolRunner:
     def find_name(self, _name, max_results=20):
         return []
 
+    def describe(self, name):
+        return {"backend": f"test_{name}"}
+
 
 class _CaptureToolRunner(_ToolRunner):
     def __init__(self):
         super().__init__()
         self.grep_paths = []
+        self.grep_patterns = []
 
     def grep(self, pattern, path):
         self.grep_calls += 1
         self.grep_paths.append(path)
+        self.grep_patterns.append(pattern)
         return ""
 
 
@@ -225,6 +230,25 @@ def test_triage_collect_evidence_metis_appends_explanation_section():
     assert "reasoning: foo reaches sink" in evidence_pack
 
 
+def test_triage_collect_evidence_uses_portable_grep_patterns():
+    runner = _CaptureToolRunner()
+    state = {
+        "finding_message": "Possible issue around foo",
+        "finding_file_path": "src/main.c",
+        "finding_line": 20,
+        "finding_rule_id": "R1",
+        "finding_snippet": "foo(x);",
+        "triage_analyzer": _WeakAnalyzer(),
+        "triage_codebase_path": ".",
+    }
+
+    triage_node_collect_evidence(state, toolbox=runner)
+
+    assert any("[[:space:]]*\\(" in pattern for pattern in runner.grep_patterns)
+    assert any("[[:space:]]*=" in pattern for pattern in runner.grep_patterns)
+    assert all("\\s*" not in pattern for pattern in runner.grep_patterns)
+
+
 def test_triage_collect_evidence_resolves_macro_definition_with_tools():
     runner = _MacroExpandRunner()
     state = {
@@ -263,3 +287,81 @@ def test_triage_collect_evidence_resolves_macro_definition_via_find_name():
         in evidence_pack
     )
     assert "[MACRO_RESOLUTION]\nPROJECT_STACK_ALLOC -> alloca" in evidence_pack
+
+
+def test_triage_collect_evidence_emits_evidence_gate_debug_event():
+    runner = _ToolRunner()
+    events = []
+    state = {
+        "finding_message": "Possible issue around foo and bar",
+        "finding_file_path": "src/main.c",
+        "finding_line": 20,
+        "finding_rule_id": "R1",
+        "finding_snippet": "foo(x); bar(y);",
+        "triage_analyzer": _WeakAnalyzer(),
+        "triage_codebase_path": ".",
+        "debug_callback": events.append,
+    }
+
+    out = triage_node_collect_evidence(state, toolbox=runner)
+
+    assert out["evidence_gate_missing"] == ["OBLIGATION_MISSING:use_site"]
+    gate_events = [event for event in events if event.get("event") == "evidence_gate"]
+    assert len(gate_events) == 1
+    assert gate_events[0]["missing"] == ["OBLIGATION_MISSING:use_site"]
+    assert "FILE_WINDOW src/main.c:14-26" in gate_events[0]["section_labels"]
+    assert "SYMBOL_GREP foo IN src/main.c (local)" in gate_events[0]["section_labels"]
+
+
+def test_triage_debug_tool_calls_include_backend():
+    runner = _ToolRunner()
+    events = []
+    state = {
+        "finding_message": "Possible issue around foo and bar",
+        "finding_file_path": "src/main.c",
+        "finding_line": 20,
+        "finding_rule_id": "R1",
+        "finding_snippet": "foo(x); bar(y);",
+        "triage_analyzer": _WeakAnalyzer(),
+        "triage_codebase_path": ".",
+        "debug_callback": events.append,
+    }
+
+    triage_node_collect_evidence(state, toolbox=runner)
+
+    grep_event = next(
+        event
+        for event in events
+        if event.get("event") == "tool_call" and event.get("tool_name") == "grep"
+    )
+    assert grep_event["tool_args"]["backend"] == "test_grep"
+
+
+def test_triage_collect_evidence_skips_duplicate_fallback_probe_for_local_file():
+    runner = _ToolRunner()
+    events = []
+    state = {
+        "finding_message": "Possible issue around foo",
+        "finding_file_path": "src/main.c",
+        "finding_line": 20,
+        "finding_rule_id": "R1",
+        "finding_snippet": "foo(x);",
+        "triage_analyzer": _WeakAnalyzer(),
+        "triage_codebase_path": ".",
+        "debug_callback": events.append,
+    }
+
+    triage_node_collect_evidence(state, toolbox=runner)
+
+    symbol_grep_events = [
+        event
+        for event in events
+        if event.get("event") == "tool_call"
+        and event.get("tool_name") == "grep"
+        and event.get("tool_args", {}).get("path") == "src/main.c"
+    ]
+    assert symbol_grep_events
+    assert all(
+        event.get("tool_args", {}).get("mode") != "fallback"
+        for event in symbol_grep_events
+    )

@@ -66,6 +66,16 @@ def _token_pattern(term: str) -> str:
     return rf"(^|[^A-Za-z0-9_]){escaped}([^A-Za-z0-9_]|$)"
 
 
+def _call_pattern(term: str) -> str:
+    escaped = re.escape(term)
+    return rf"(^|[^A-Za-z0-9_]){escaped}[[:space:]]*\("
+
+
+def _assignment_pattern(term: str) -> str:
+    escaped = re.escape(term)
+    return rf"(^|[^A-Za-z0-9_]){escaped}[[:space:]]*="
+
+
 def _limit_output(text: str, *, max_lines: int = 120, max_chars: int = 5000) -> str:
     lines = (text or "").splitlines()
     if len(lines) > max_lines:

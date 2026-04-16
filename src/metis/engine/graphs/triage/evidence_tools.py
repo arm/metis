@@ -17,7 +17,9 @@ from . import constants as C
 from .debug import _emit_debug
 from ..types import TriageState
 from .evidence_text import (
+    _assignment_pattern,
     _extend_hits,
+    _call_pattern,
     _limit_output,
     _parse_grep_hits,
     _token_pattern,
@@ -67,6 +69,22 @@ def _safe_tool_capture(
     return output
 
 
+def _tool_debug_args(toolbox, tool_name: str, **tool_args) -> dict:
+    out = dict(tool_args)
+    describe = getattr(toolbox, "describe", None)
+    if not callable(describe):
+        return out
+    try:
+        details = describe(tool_name)
+    except Exception:
+        return out
+    if not isinstance(details, dict):
+        return out
+    for key, value in details.items():
+        out.setdefault(key, value)
+    return out
+
+
 def _collect_file_context(
     state: TriageState,
     sections: list[str],
@@ -88,7 +106,13 @@ def _collect_file_context(
         state,
         sections,
         tool_name="sed",
-        tool_args={"path": file_path, "start_line": start, "end_line": end},
+        tool_args=_tool_debug_args(
+            toolbox,
+            "sed",
+            path=file_path,
+            start_line=start,
+            end_line=end,
+        ),
         section_label=f"FILE_WINDOW {file_path}:{start}-{end}",
         error_label="FILE_WINDOW_ERROR",
         max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
@@ -100,7 +124,13 @@ def _collect_file_context(
         state,
         sections,
         tool_name="sed",
-        tool_args={"path": file_path, "start_line": line, "end_line": line},
+        tool_args=_tool_debug_args(
+            toolbox,
+            "sed",
+            path=file_path,
+            start_line=line,
+            end_line=line,
+        ),
         section_label=f"REPORTED_LINE {file_path}:{line}",
         error_label="REPORTED_LINE_ERROR",
         max_lines=C.REPORTED_LINE_MAX_LINES,
@@ -356,7 +386,7 @@ def _collect_macro_definition_sections(
             state,
             sections,
             tool_name=tool_name,
-            tool_args=tool_args,
+            tool_args=_tool_debug_args(toolbox, tool_name, **tool_args),
             section_label=section_label,
             max_lines=max_lines,
             max_chars=max_chars,
@@ -426,6 +456,7 @@ def _gather_symbol_definition_hits(
     local_path = (
         file_path if file_path else (fallback_paths[0] if fallback_paths else ".")
     )
+    fallback_paths = [path for path in fallback_paths if path != local_path]
 
     def _probe_symbol(symbol: str, path: str, mode: str) -> bool:
         if len(sections) >= max_sections or len(followup_hits) >= max_followup_hits:
@@ -433,8 +464,8 @@ def _gather_symbol_definition_hits(
         hit_found = False
         probes = (
             _token_pattern(symbol),
-            rf"(^|[^A-Za-z0-9_]){re.escape(symbol)}\\s*\\(",
-            rf"(^|[^A-Za-z0-9_]){re.escape(symbol)}\\s*=",
+            _call_pattern(symbol),
+            _assignment_pattern(symbol),
         )
         for probe in probes:
             if len(sections) >= max_sections or len(followup_hits) >= max_followup_hits:
@@ -443,7 +474,13 @@ def _gather_symbol_definition_hits(
                 state,
                 sections,
                 tool_name="grep",
-                tool_args={"pattern": probe, "path": path, "mode": mode},
+                tool_args=_tool_debug_args(
+                    toolbox,
+                    "grep",
+                    pattern=probe,
+                    path=path,
+                    mode=mode,
+                ),
                 section_label=f"SYMBOL_GREP {symbol} IN {path} ({mode})",
                 max_lines=C.RELATED_GREP_MAX_LINES,
                 max_chars=C.RELATED_GREP_MAX_CHARS,
@@ -512,7 +549,13 @@ def _collect_hit_context_sections(
             state,
             sections,
             tool_name="sed",
-            tool_args={"path": path, "start_line": start, "end_line": end},
+            tool_args=_tool_debug_args(
+                toolbox,
+                "sed",
+                path=path,
+                start_line=start,
+                end_line=end,
+            ),
             section_label=f"HIT_CONTEXT {path}:{start}-{end}",
             error_label=f"HIT_CONTEXT_ERROR {path}:{hit_line}",
             max_lines=C.HIT_CONTEXT_MAX_LINES,

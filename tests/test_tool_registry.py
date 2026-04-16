@@ -29,6 +29,7 @@ def test_build_toolbox_for_policy_exposes_list_and_invocation(tmp_path):
         line.endswith("src/a.c:2:beta")
         for line in toolbox.grep("beta", "src").splitlines()
     )
+    assert toolbox.describe("grep") == {"backend": "shell_grep"}
 
 
 def test_build_toolbox_rejects_unknown_policy(tmp_path):

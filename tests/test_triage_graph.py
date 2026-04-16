@@ -5,6 +5,7 @@ import pytest
 
 from metis.engine.graphs.triage import TriageGraph
 from metis.engine.graphs.schemas import TriageDecisionModel
+from metis.engine.analysis.c_family_helpers import extract_c_family_seed_symbols
 
 
 class _App:
@@ -24,6 +25,17 @@ def _build_graph():
         toolbox=object(),
         plugin_config={},
     )
+
+
+def test_extract_c_family_seed_symbols_ignores_file_path_tokens():
+    out = extract_c_family_seed_symbols(
+        "foo(x);",
+        "missingIncludeSystem",
+        "src/main.c",
+    )
+    assert "foo" in out
+    assert "main" not in out
+    assert "c" not in out
 
 
 def test_triage_schema_allows_inconclusive_with_unresolved_hops():

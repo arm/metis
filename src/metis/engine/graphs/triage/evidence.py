@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import os
+import re
 
 from metis.engine.analysis.c_family_macro import (
     is_c_family_file_path,
     is_c_macro_like_symbol,
 )
-from metis.engine.analysis.c_family_helpers import extract_c_family_seed_symbols
+from metis.engine.analysis.c_family_helpers import (
+    extract_c_family_seed_symbols,
+    is_low_value_c_family_probe_term,
+)
 
 from . import constants as C
 from ..types import TriageState
@@ -29,6 +33,7 @@ from .evidence_analyzer import (
     _collect_analyzer_sections,
     _finalize_evidence_pack_state,
 )
+from .debug import _emit_debug
 from .obligations import (
     compute_obligation_coverage,
     derive_obligations,
@@ -55,40 +60,52 @@ def _derive_line_symbols(
     is_metis_source: bool,
     max_symbol_terms: int,
 ) -> list[str]:
+    snippet_text = state.get("finding_snippet", "") or ""
     explanation_text = state.get("finding_explanation", "") if is_metis_source else ""
     term_source = " ".join(
         [
             state.get("finding_message", "") or "",
-            state.get("finding_snippet", "") or "",
+            snippet_text,
             explanation_text or "",
         ]
     )
     line_terms = _extract_call_like_identifiers(
-        "\n".join([exact_line_context, state.get("finding_snippet", "") or ""]),
+        "\n".join([exact_line_context, snippet_text]),
         limit=12,
     )
-    symbol_candidates = _extract_symbol_candidates(
-        exact_line_context,
-        " ".join(treesitter_scope_symbols),
-        state.get("finding_snippet", "") or "",
-        state.get("finding_rule_id", "") or "",
-        os.path.basename(file_path or ""),
-        limit=12,
-    )
+    snippet_candidates = _extract_symbol_candidates(snippet_text, limit=12)
+    exact_candidates = _extract_symbol_candidates(exact_line_context, limit=12)
     prose_terms = _extract_terms(term_source, limit=12)
 
     out: list[str] = []
     seen: set[str] = set()
-    for term in line_terms + treesitter_scope_symbols + symbol_candidates + prose_terms:
+    for term in (
+        line_terms
+        + treesitter_scope_symbols
+        + snippet_candidates
+        + prose_terms
+        + exact_candidates
+    ):
         if not term or term in seen:
             continue
         if len(term) > 64:
+            continue
+        if not _is_probe_term(term, file_path=file_path):
             continue
         seen.add(term)
         out.append(term)
         if len(out) >= max_symbol_terms:
             break
     return out
+
+
+def _is_probe_term(term: str, *, file_path: str) -> bool:
+    text = str(term or "").strip()
+    if not text:
+        return False
+    if is_c_family_file_path(file_path) and is_low_value_c_family_probe_term(text):
+        return False
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,127}$", text))
 
 
 def _filter_resolved_macro_unresolved_hops(
@@ -117,6 +134,17 @@ def _filter_resolved_macro_unresolved_hops(
         if not drop:
             kept.append(text)
     return kept
+
+
+def _section_labels(sections: list[str]) -> list[str]:
+    labels: list[str] = []
+    for section in sections:
+        if not str(section).startswith("["):
+            continue
+        raw = str(section)[1:].split("]", 1)[0].strip()
+        if raw:
+            labels.append(raw)
+    return labels
 
 
 def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
@@ -275,5 +303,13 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     state["evidence_obligations"] = obligations
     state["obligation_coverage"] = obligation_coverage
     state["evidence_gate_missing"] = evidence_gate_missing
+    _emit_debug(
+        state,
+        "evidence_gate",
+        obligations=obligations,
+        obligation_coverage=obligation_coverage,
+        missing=evidence_gate_missing,
+        section_labels=_section_labels(sections),
+    )
 
     return _finalize_evidence_pack_state(state, sections)

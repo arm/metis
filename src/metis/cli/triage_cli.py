@@ -115,8 +115,11 @@ def _make_triage_progress_callback(args, progress, task):
 
 def _make_triage_debug_callback(args):
     log_level = str(getattr(args, "log_level", "") or "").upper()
-    if log_level != "DEBUG" or not bool(getattr(args, "verbose", False)):
+    if log_level != "DEBUG":
         return None
+
+    def _debug_print(message, **kwargs):
+        print_console(message, quiet=False, **kwargs)
 
     def _clip(value, limit=900):
         text = str(value or "")
@@ -132,68 +135,56 @@ def _make_triage_debug_callback(args):
     def _callback(event):
         kind = event.get("event")
         if kind == "retrieval":
-            print_console(
-                "[bright_black]-- triage debug: retrieval query --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                "[bright_black]-- triage debug: retrieval query --[/bright_black]"
             )
-            print_console(
-                f"[bright_black]query {_summarize_text(event.get('query'))} (omitted)[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]query {_summarize_text(event.get('query'))} (omitted)[/bright_black]"
             )
             context_text = str(event.get("context") or "")
-            print_console(
-                f"[bright_black]-- triage debug: rag context chars={len(context_text)} (omitted) --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]-- triage debug: rag context chars={len(context_text)} (omitted) --[/bright_black]"
             )
             return
         if kind == "model_input":
             stage = event.get("stage", "unknown")
-            print_console(
-                f"[bright_black]-- triage debug: model input ({escape(str(stage))}) --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]-- triage debug: model input ({escape(str(stage))}) --[/bright_black]"
             )
-            print_console("[bright_black]system:[/bright_black]", args.quiet)
-            print_console(escape(_clip(event.get("system_prompt"))), args.quiet)
             user_prompt = str(event.get("user_prompt") or "")
-            print_console(
-                f"[bright_black]user: chars={len(user_prompt)} (omitted)[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]user: chars={len(user_prompt)} (omitted)[/bright_black]"
             )
             return
         if kind == "tool_call":
             tool_name = str(event.get("tool_name", "unknown"))
-            print_console(
-                f"[bright_black]-- triage debug: tool {escape(tool_name)} --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]-- triage debug: tool {escape(tool_name)} --[/bright_black]"
             )
-            print_console(escape(_clip(event.get("tool_args"))), args.quiet)
+            _debug_print(escape(_clip(event.get("tool_args"))))
             tool_output = event.get("tool_output")
             if isinstance(tool_output, str):
-                print_console(
-                    f"[bright_black]tool_output {_summarize_text(tool_output)} (omitted)[/bright_black]",
-                    args.quiet,
+                _debug_print(
+                    f"[bright_black]tool_output {_summarize_text(tool_output)} (omitted)[/bright_black]"
                 )
             else:
-                print_console(
-                    f"[bright_black]tool_output_type={escape(type(tool_output).__name__)}[/bright_black]",
-                    args.quiet,
+                _debug_print(
+                    f"[bright_black]tool_output_type={escape(type(tool_output).__name__)}[/bright_black]"
                 )
-                print_console(escape(_clip(tool_output)), args.quiet)
+                _debug_print(escape(_clip(tool_output)))
             return
         if kind == "model_output":
             status = event.get("decision_status", "")
             reason = event.get("decision_reason", "")
-            print_console(
-                f"[bright_black]-- triage debug: model output status={escape(str(status))} --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                f"[bright_black]-- triage debug: model output status={escape(str(status))} --[/bright_black]"
             )
-            print_console(escape(_clip(reason)), args.quiet)
+            _debug_print(escape(_clip(reason)))
             return
         if kind == "status_adjudication":
-            print_console(
-                "[bright_black]-- triage debug: status adjudication --[/bright_black]",
-                args.quiet,
+            _debug_print(
+                "[bright_black]-- triage debug: status adjudication --[/bright_black]"
             )
-            print_console(escape(_clip(event)), args.quiet)
+            _debug_print(escape(_clip(event)))
 
     return _callback
