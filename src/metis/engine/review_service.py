@@ -237,6 +237,8 @@ class ReviewService:
                 issues = "\n".join(
                     issue.get("issue", "") for issue in review_dict.get("reviews", [])
                 )
+                if not issues.strip():
+                    continue
                 summary_prompt = language_prompts["snippet_security_summary"]
                 summary_prompt = apply_custom_guidance(
                     summary_prompt,
