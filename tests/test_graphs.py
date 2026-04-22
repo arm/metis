@@ -3,37 +3,32 @@
 
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
-    review_node_collect_baseline_context,
-    review_node_collect_tool_evidence,
     review_node_build_prompt,
+    review_node_collect_project_context,
+    review_node_collect_tool_evidence,
     review_node_llm,
     review_node_parse,
+    review_node_retrieve,
 )
 from metis.engine.graphs.review_tools import (
     build_review_langchain_tools,
     run_review_tool_phase,
-)
-from metis.engine.graphs.review_retrieval import (
-    assess_review_context_quality,
-    compute_review_obligation_coverage,
 )
 from metis.engine.graphs.triage.llm import _build_user_prompt, triage_node_llm
 from metis.engine.graphs.triage.retrieval import triage_node_retrieve
 
 
 class _Doc:
-    def __init__(self, text, source="doc.txt"):
+    def __init__(self, text):
         self.page_content = text
-        self.metadata = {"source": source}
 
 
 class DummyRetriever:
-    def __init__(self, label, source="doc.txt"):
+    def __init__(self, label):
         self._label = label
-        self._source = source
 
     def get_relevant_documents(self, q):
-        return [_Doc(f"{self._label} context for: {q}", source=self._source)]
+        return [_Doc(f"{self._label} context for: {q}")]
 
 
 def test_ask_graph_returns_code_and_docs():
@@ -51,22 +46,25 @@ def test_ask_graph_returns_code_and_docs():
 
 
 def test_review_nodes_pipeline_parses():
-    # Initial minimal state
     state = {
         "file_path": "a/file.c",
         "snippet": "int main(){}",
-        "retriever_code": object(),
-        "retriever_docs": object(),
+        "retriever_code": DummyRetriever("code"),
+        "retriever_docs": DummyRetriever("docs"),
+        "use_retrieval_context": True,
     }
 
-    # Step 1: build prompt
+    s1 = review_node_retrieve(state)
+    assert "context" in s1
+    assert "context for:" in s1["context"]
+
     language_prompts = {
         "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
         "security_review_checks": "Checks...",
         "validation_review": "Validate...",
     }
     s2 = review_node_build_prompt(
-        state,
+        s1,
         language_prompts=language_prompts,
         default_prompt_key="security_review_file",
         report_prompt="",
@@ -76,7 +74,6 @@ def test_review_nodes_pipeline_parses():
     )
     assert "system_prompt" in s2
 
-    # Step 2: run LLM review (stub)
     class _DummyNode:
         def __init__(self, payload):
             self._payload = payload
@@ -106,31 +103,293 @@ def test_review_nodes_pipeline_parses():
     assert "parsed_reviews" in s3
     assert s3["parsed_reviews"]
 
-    # Step 3: parse
     s4 = review_node_parse(s3)
     assert s4.get("parsed_reviews") and isinstance(s4["parsed_reviews"], list)
 
 
-def test_review_langchain_tools_hide_rag_when_retrieval_disabled():
+def test_review_node_retrieve_no_index_skips_retrievers():
+    class _BoomRetriever:
+        def get_relevant_documents(self, _query):
+            raise AssertionError("retriever should not be called")
+
+    state = {
+        "file_path": "a/file.c",
+        "snippet": "int main(){}",
+        "retriever_code": _BoomRetriever(),
+        "retriever_docs": _BoomRetriever(),
+        "use_retrieval_context": False,
+    }
+
+    out = review_node_retrieve(state)
+
+    assert out["context"] == ""
+
+
+def test_review_node_llm_omits_tool_evidence_section_in_no_index_mode():
+    captured = {}
+
+    class _DummyNode:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"reviews": []}
+
+    state = {
+        "file_path": "foo.py",
+        "snippet": "print('hello')",
+        "context": "should not appear",
+        "mode": "file",
+        "system_prompt": "prompt",
+        "use_retrieval_context": False,
+    }
+
+    review_node_llm(
+        state,
+        structured_node=_DummyNode(),
+        fallback_node=None,
+    )
+
+    assert "TOOL_EVIDENCE:" not in captured["body_text"]
+
+
+def test_review_node_llm_includes_context_as_tool_evidence():
+    captured = {}
+
+    class _DummyNode:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"reviews": []}
+
+    state = {
+        "file_path": "foo.py",
+        "snippet": "print('hello')",
+        "mode": "file",
+        "system_prompt": "prompt",
+        "context": "[foo.py]\ncallers validate input",
+        "use_retrieval_context": True,
+    }
+
+    review_node_llm(
+        state,
+        structured_node=_DummyNode(),
+        fallback_node=None,
+    )
+
+    assert "TOOL_EVIDENCE:" in captured["body_text"]
+
+
+def test_review_node_llm_includes_rag_tool_evidence():
+    captured = {}
+
+    class _DummyNode:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"reviews": []}
+
+    state = {
+        "file_path": "foo.py",
+        "snippet": "print('hello')",
+        "mode": "file",
+        "system_prompt": "prompt",
+        "context": "[foo.py]\ndeterministic context",
+        "project_context": "[PROJECT_CONTEXT]\nuserspace C library",
+        "tool_evidence": "[RAG_TOOL_RESULTS]\nextra context",
+        "use_retrieval_context": True,
+    }
+
+    review_node_llm(
+        state,
+        structured_node=_DummyNode(),
+        fallback_node=None,
+    )
+
+    assert "deterministic context" in captured["body_text"]
+    assert "userspace C library" in captured["body_text"]
+    assert "extra context" in captured["body_text"]
+
+
+def test_review_langchain_tools_only_expose_rag():
     class _Toolbox:
         def has(self, name):
-            return name in {"sed", "cat", "grep", "find_name"}
+            return name == "rag_search"
 
-        def sed(self, path, start_line, end_line):
-            return ""
-
-        def cat(self, path):
-            return ""
-
-        def grep(self, pattern, path):
-            return ""
-
-        def find_name(self, name, max_results=20):
-            return []
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            return query
 
     tools, _ = build_review_langchain_tools(_Toolbox())
 
-    assert {tool.name for tool in tools} == {"sed", "cat", "grep", "find_name"}
+    assert [tool.name for tool in tools] == ["rag_search"]
+
+
+def test_review_tool_phase_runs_rag_search():
+    captured = {}
+
+    class _Toolbox:
+        def has(self, name):
+            return name == "rag_search"
+
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            captured["query"] = query
+            return "[CODE_RAG]\ncode\n\n[DOCS_RAG]\ndocs"
+
+    class _ToolModel:
+        def __init__(self):
+            self.turn = 0
+
+        def invoke(self, _messages):
+            self.turn += 1
+            if self.turn == 1:
+                return type(
+                    "Msg",
+                    (),
+                    {
+                        "tool_calls": [
+                            {
+                                "name": "rag_search",
+                                "id": "tool-1",
+                                "args": {"query": "what callers reach this auth path?"},
+                            }
+                        ],
+                        "content": "",
+                    },
+                )()
+            return type("Msg", (), {"tool_calls": [], "content": "done"})()
+
+    class _ChatModel:
+        def bind_tools(self, _tools):
+            return _ToolModel()
+
+    tools, tools_by_name = build_review_langchain_tools(_Toolbox())
+    out = run_review_tool_phase(
+        chat_model=_ChatModel(),
+        tools=tools,
+        tools_by_name=tools_by_name,
+        system_prompt="prompt",
+        body_text="body",
+    )
+
+    assert "callers reach this auth path" in captured["query"]
+    assert "[RAG_TOOL_RESULTS]" in out["tool_evidence"]
+    assert "[RAG_TOOL_QUERIES]" in out["tool_evidence"]
+
+
+def test_review_langchain_tools_emit_debug_callback():
+    events = []
+
+    class _Toolbox:
+        def has(self, name):
+            return name == "rag_search"
+
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            return f"result for {query}"
+
+    tools, tools_by_name = build_review_langchain_tools(
+        _Toolbox(),
+        debug_callback=events.append,
+    )
+
+    result = tools_by_name["rag_search"].invoke({"query": "what is this project?"})
+
+    assert "result for" in result
+    assert events
+    assert events[0]["event"] == "tool_call"
+    assert events[0]["tool_name"] == "rag_search"
+
+
+def test_review_node_collect_tool_evidence_uses_only_rag():
+    captured = {}
+
+    class _Toolbox:
+        def has(self, name):
+            return name == "rag_search"
+
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            captured["query"] = query
+            return "[CODE_RAG]\ncode\n\n[DOCS_RAG]\ndocs"
+
+    class _ToolChat:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, _messages):
+            if not hasattr(self, "_seen"):
+                self._seen = True
+                return type(
+                    "Msg",
+                    (),
+                    {
+                        "tool_calls": [
+                            {
+                                "name": "rag_search",
+                                "id": "tool-1",
+                                "args": {"query": "what trust boundary applies here?"},
+                            }
+                        ],
+                        "content": "",
+                    },
+                )()
+            return type("Msg", (), {"tool_calls": [], "content": "done"})()
+
+    state = {
+        "file_path": "src/auth.py",
+        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
+        "mode": "file",
+        "context": "[src/auth.py]\ndeterministic context",
+        "retriever_code": object(),
+        "retriever_docs": object(),
+        "use_retrieval_context": True,
+    }
+
+    out = review_node_collect_tool_evidence(
+        state,
+        chat_model=_ToolChat(),
+        toolbox=_Toolbox(),
+        tool_system_prompt="prompt",
+    )
+
+    assert "trust boundary applies" in captured["query"]
+    assert "[RAG_TOOL_RESULTS]" in out["tool_evidence"]
+
+
+def test_review_node_collect_project_context_uses_static_rag_query():
+    captured = {}
+    events = []
+
+    class _Toolbox:
+        def has(self, name):
+            return name == "rag_search"
+
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            captured["query"] = query
+            captured["retriever_code"] = retriever_code
+            captured["retriever_docs"] = retriever_docs
+            return "[CODE_RAG]\nuserspace library auth helpers\n\n[DOCS_RAG]\ncomponent trust assumptions"
+
+    state = {
+        "file_path": "src/auth.py",
+        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
+        "mode": "file",
+        "retriever_code": object(),
+        "retriever_docs": object(),
+        "use_retrieval_context": True,
+        "debug_callback": events.append,
+    }
+
+    out = review_node_collect_project_context(
+        state,
+        toolbox=_Toolbox(),
+    )
+
+    assert (
+        "What project, subsystem, or component does this code belong to?"
+        in captured["query"]
+    )
+    assert (
+        "kernel, driver, firmware, runtime, service, userspace library"
+        in captured["query"]
+    )
+    assert "[PROJECT_CONTEXT]" in out["project_context"]
+    assert events
+    assert events[0]["tool_name"] == "project_context_rag"
 
 
 def test_triage_node_retrieve_uses_shared_rag_tool():
@@ -162,403 +421,6 @@ def test_triage_node_retrieve_uses_shared_rag_tool():
     assert "[CODE_RAG]" in out["context"]
     assert captured["retriever_code"] is state["retriever_code"]
     assert captured["retriever_docs"] is state["retriever_docs"]
-
-
-def test_review_node_llm_omits_context_section_in_no_index_mode():
-    captured = {}
-
-    class _DummyNode:
-        def invoke(self, payload):
-            captured.update(payload)
-            return {"reviews": []}
-
-    state = {
-        "file_path": "foo.py",
-        "snippet": "print('hello')",
-        "context": "should not appear",
-        "mode": "file",
-        "system_prompt": "prompt",
-        "use_retrieval_context": False,
-    }
-
-    review_node_llm(
-        state,
-        structured_node=_DummyNode(),
-        fallback_node=None,
-    )
-
-    assert "CONTEXT:" not in captured["body_text"]
-
-
-def test_review_node_llm_includes_baseline_context_and_evidence_frame():
-    captured = {}
-
-    class _DummyNode:
-        def invoke(self, payload):
-            captured.update(payload)
-            return {"reviews": []}
-
-    state = {
-        "file_path": "foo.py",
-        "snippet": "print('hello')",
-        "mode": "file",
-        "system_prompt": "prompt",
-        "baseline_context": "[foo.py]\ncallers validate input",
-        "review_evidence_frame": "[OBLIGATION_COVERAGE]\n- callers or wrappers: covered",
-        "tool_evidence": "[SUMMARY]\nextra",
-    }
-
-    review_node_llm(
-        state,
-        structured_node=_DummyNode(),
-        fallback_node=None,
-    )
-
-    assert "BASELINE_CONTEXT:" in captured["body_text"]
-    assert "REVIEW_EVIDENCE_FRAME:" in captured["body_text"]
-    assert "TOOL_EVIDENCE:" in captured["body_text"]
-
-
-def test_review_node_collect_baseline_context_builds_hybrid_context():
-    state = {
-        "file_path": "src/auth.py",
-        "relative_file": "src/auth.py",
-        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
-        "mode": "file",
-        "retriever_code": DummyRetriever("src/auth.py check_token validate_token"),
-        "retriever_docs": DummyRetriever("security docs validate_token contract"),
-        "use_retrieval_context": True,
-    }
-
-    out = review_node_collect_baseline_context(state)
-
-    assert "Candidate symbols:" in out["baseline_context_query"]
-    assert out["baseline_context"]
-    assert "[OBLIGATION_COVERAGE]" in out["review_evidence_frame"]
-    assert "code=" in out["baseline_context_quality"]
-
-
-def test_review_node_collect_baseline_context_drops_low_signal_retrieval():
-    class _StaticRetriever:
-        def __init__(self, text, source):
-            self._text = text
-            self._source = source
-
-        def get_relevant_documents(self, _query):
-            return [_Doc(self._text, source=self._source)]
-
-    state = {
-        "file_path": "src/auth.py",
-        "relative_file": "src/auth.py",
-        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
-        "mode": "file",
-        "retriever_code": _StaticRetriever("completely unrelated prose", "other.txt"),
-        "retriever_docs": _StaticRetriever("more unrelated prose", "docs.txt"),
-        "use_retrieval_context": True,
-    }
-
-    out = review_node_collect_baseline_context(state)
-
-    assert out["baseline_context"] == ""
-    assert "low-signal" in out["baseline_context_quality"]
-
-
-def test_review_context_quality_accepts_symbolic_overlap_without_filename():
-    accepted, quality = assess_review_context_quality(
-        "[CODE_RAG]\ncheck_token callers validate_token guard user token\n[DOCS_RAG]\nauthorization boundary",
-        file_path="src/auth.py",
-        symbols=["check_token", "validate_token"],
-        focus_terms=["auth", "validate", "token"],
-    )
-
-    assert accepted is True
-    assert "query-tokens=" in quality or "obligations=" in quality
-
-
-def test_review_tool_phase_blocks_rag_in_first_stage():
-    class _Toolbox:
-        def has(self, name):
-            return name in {"sed", "cat", "grep", "find_name", "rag_search"}
-
-        def sed(self, path, start_line, end_line):
-            return ""
-
-        def cat(self, path):
-            return ""
-
-        def grep(self, pattern, path):
-            return ""
-
-        def find_name(self, name, max_results=20):
-            return []
-
-        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
-            raise AssertionError("rag_search should be blocked in stage 1")
-
-    class _ToolModel:
-        def __init__(self):
-            self.turn = 0
-
-        def invoke(self, _messages):
-            self.turn += 1
-            if self.turn == 1:
-                return type(
-                    "Msg",
-                    (),
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "rag_search",
-                                "id": "tool-1",
-                                "args": {"query": "what validates auth.py"},
-                            }
-                        ],
-                        "content": "",
-                    },
-                )()
-            return type("Msg", (), {"tool_calls": [], "content": "done"})()
-
-    class _ChatModel:
-        def bind_tools(self, _tools):
-            return _ToolModel()
-
-    tools, tools_by_name = build_review_langchain_tools(_Toolbox())
-    out = run_review_tool_phase(
-        chat_model=_ChatModel(),
-        tools=tools,
-        tools_by_name=tools_by_name,
-        system_prompt="prompt",
-        body_text="body",
-    )
-
-    assert "disabled in review stage 1" in out["tool_evidence"]
-    assert "[RETRIEVAL_NOTES]" in out["tool_evidence"]
-
-
-def test_review_tool_phase_shapes_and_rejects_low_signal_rag():
-    captured = {}
-
-    class _Toolbox:
-        def has(self, name):
-            return name in {"sed", "cat", "grep", "find_name", "rag_search"}
-
-        def sed(self, path, start_line, end_line):
-            return "local"
-
-        def cat(self, path):
-            return "local"
-
-        def grep(self, pattern, path):
-            return "lookup"
-
-        def find_name(self, name, max_results=20):
-            return []
-
-        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
-            captured["query"] = query
-            return "[CODE_RAG]\ncompletely unrelated prose\n\n[DOCS_RAG]\nmore unrelated prose"
-
-    class _ToolModel:
-        def __init__(self):
-            self.turn = 0
-
-        def invoke(self, _messages):
-            self.turn += 1
-            if self.turn == 1:
-                return type(
-                    "Msg",
-                    (),
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "cat",
-                                "id": "tool-1",
-                                "args": {"path": "src/auth.py"},
-                            }
-                        ],
-                        "content": "",
-                    },
-                )()
-            if self.turn == 2:
-                return type(
-                    "Msg",
-                    (),
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "grep",
-                                "id": "tool-2",
-                                "args": {"pattern": "validate_token", "path": "src"},
-                            }
-                        ],
-                        "content": "",
-                    },
-                )()
-            if self.turn == 3:
-                return type(
-                    "Msg",
-                    (),
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "rag_search",
-                                "id": "tool-3",
-                                "args": {"query": "what validates this"},
-                            }
-                        ],
-                        "content": "",
-                    },
-                )()
-            return type("Msg", (), {"tool_calls": [], "content": "done"})()
-
-    class _ChatModel:
-        def bind_tools(self, _tools):
-            return _ToolModel()
-
-    tools, tools_by_name = build_review_langchain_tools(_Toolbox())
-    out = run_review_tool_phase(
-        chat_model=_ChatModel(),
-        tools=tools,
-        tools_by_name=tools_by_name,
-        system_prompt="prompt",
-        body_text="body",
-        review_search_context={
-            "file_path": "src/auth.py",
-            "mode": "file",
-            "symbols": ["check_token", "validate_token"],
-            "focus_terms": ["auth", "validate"],
-            "baseline_query": "baseline question",
-            "uncovered_obligations": [
-                "callers or wrappers",
-                "trust or privilege boundary",
-            ],
-        },
-    )
-
-    assert "Missing obligations:" in captured["query"]
-    assert "src/auth.py" in captured["query"]
-    assert "[RAG_REJECTED]" in out["tool_evidence"]
-    assert "[RAG_CONTEXT]" in out["tool_evidence"]
-
-
-def test_review_tool_phase_emits_typed_obligation_sections():
-    class _Toolbox:
-        def has(self, name):
-            return name in {"sed", "cat", "grep", "find_name"}
-
-        def sed(self, path, start_line, end_line):
-            return ""
-
-        def cat(self, path):
-            return "caller wrapper validate auth boundary unresolved gap"
-
-        def grep(self, pattern, path):
-            return ""
-
-        def find_name(self, name, max_results=20):
-            return []
-
-    class _ToolModel:
-        def __init__(self):
-            self.turn = 0
-
-        def invoke(self, _messages):
-            self.turn += 1
-            if self.turn == 1:
-                return type(
-                    "Msg",
-                    (),
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "cat",
-                                "id": "tool-1",
-                                "args": {"path": "src/auth.py"},
-                            }
-                        ],
-                        "content": "",
-                    },
-                )()
-            return type("Msg", (), {"tool_calls": [], "content": "done"})()
-
-    class _ChatModel:
-        def bind_tools(self, _tools):
-            return _ToolModel()
-
-    tools, tools_by_name = build_review_langchain_tools(_Toolbox())
-    out = run_review_tool_phase(
-        chat_model=_ChatModel(),
-        tools=tools,
-        tools_by_name=tools_by_name,
-        system_prompt="prompt",
-        body_text="body",
-        review_search_context={
-            "file_path": "src/auth.py",
-            "mode": "file",
-            "symbols": ["check_token"],
-            "focus_terms": ["auth", "validate"],
-            "baseline_query": "baseline question",
-            "uncovered_obligations": ["callers or wrappers"],
-        },
-    )
-
-    assert "[RELATED_CALLERS]" in out["tool_evidence"]
-    assert "[VALIDATION_GUARDS]" in out["tool_evidence"]
-    assert "[TRUST_BOUNDARY]" in out["tool_evidence"]
-    assert "[UNRESOLVED]" in out["tool_evidence"]
-
-
-def test_review_node_collect_tool_evidence_updates_coverage_frame():
-    class _Toolbox:
-        def without(self, *_names):
-            return self
-
-        def has(self, _name):
-            return True
-
-    class _ToolChat:
-        def bind_tools(self, _tools):
-            return self
-
-        def invoke(self, _messages):
-            return type(
-                "Msg",
-                (),
-                {"tool_calls": [], "content": "Callers validate auth boundary none"},
-            )()
-
-    state = {
-        "file_path": "src/auth.py",
-        "relative_file": "src/auth.py",
-        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
-        "mode": "file",
-        "use_retrieval_context": True,
-        "baseline_context": "[src/auth.py]\nvalidate_token checks auth",
-        "baseline_context_quality": "code=accepted, docs=empty",
-    }
-
-    out = review_node_collect_tool_evidence(
-        state,
-        chat_model=_ToolChat(),
-        toolbox=_Toolbox(),
-        tool_system_prompt="prompt",
-        tool_system_prompt_no_rag="prompt",
-    )
-
-    assert "[OBLIGATION_COVERAGE]" in out["review_evidence_frame"]
-    assert "[MISSING_OBLIGATIONS]" in out["review_evidence_frame"]
-
-
-def test_review_obligation_coverage_prefers_typed_sections():
-    coverage = compute_review_obligation_coverage(
-        "[RELATED_CALLERS]\ncheck_token wrapper\n\n[VALIDATION_GUARDS]\nvalidate token guard\n\n[TRUST_BOUNDARY]\nauth privilege boundary",
-        symbols=["check_token", "validate_token"],
-        focus_terms=["auth", "validate"],
-    )
-
-    assert coverage["callers or wrappers"] is True
-    assert coverage["validation / sanitization / authorization checks"] is True
-    assert coverage["trust or privilege boundary"] is True
 
 
 def test_triage_user_prompt_omits_rag_context_in_no_index_mode():

@@ -48,13 +48,18 @@ def make_review_debug_callback(args):
         print_console(escape(_clip(event.get("tool_args"))), args.quiet)
         tool_output = event.get("tool_output")
         if isinstance(tool_output, str):
-            summary = f"tool_output {_summarize_text(tool_output)} (omitted)"
+            show_full_output = tool_name in {"rag_search", "project_context_rag"}
+            summary = f"tool_output {_summarize_text(tool_output)}"
+            if not show_full_output:
+                summary += " (omitted)"
             if _looks_like_error_text(tool_name, tool_output):
                 summary += " [possible error text]"
             print_console(f"[bright_black]{summary}[/bright_black]", args.quiet)
-            if str(tool_output or "").startswith("Tool execution failed:"):
+            if show_full_output or str(tool_output or "").startswith(
+                "Tool execution failed:"
+            ):
                 print_console(
-                    escape(_clip(tool_output)),
+                    escape(str(tool_output)),
                     args.quiet,
                 )
             return

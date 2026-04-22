@@ -17,9 +17,9 @@ from .options import TriageOptions, coerce_triage_options
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
+from .tools.registry import build_toolbox
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
-from .tools.registry import build_toolbox
 
 logger = logging.getLogger("metis")
 

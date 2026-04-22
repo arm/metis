@@ -6,6 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from metis.cli import commands
+from metis.cli import review_cli
 from metis.cli.command_runtime import CommandRuntime
 from metis.engine.options import ReviewOptions, TriageOptions
 
@@ -242,3 +243,52 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     commands.run_review_code(engine, args, runtime)
 
     assert calls == [False]
+
+
+def test_review_debug_callback_prints_full_rag_output(monkeypatch):
+    captured = []
+    args = SimpleNamespace(log_level="debug", verbose=True, quiet=False)
+    callback = review_cli.make_review_debug_callback(args)
+
+    monkeypatch.setattr(
+        review_cli,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    callback(
+        {
+            "event": "tool_call",
+            "tool_name": "rag_search",
+            "tool_args": {"query": "what is this project?"},
+            "tool_output": "[CODE_RAG]\nfull output\n\n[DOCS_RAG]\nfull docs output",
+        }
+    )
+
+    assert any("tool_output chars=" in line for line in captured)
+    assert any("[CODE_RAG]" in line for line in captured)
+    assert not any("(omitted)" in line for line in captured if "tool_output" in line)
+
+
+def test_review_debug_callback_keeps_non_rag_output_summarized(monkeypatch):
+    captured = []
+    args = SimpleNamespace(log_level="debug", verbose=True, quiet=False)
+    callback = review_cli.make_review_debug_callback(args)
+
+    monkeypatch.setattr(
+        review_cli,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    callback(
+        {
+            "event": "tool_call",
+            "tool_name": "other_tool",
+            "tool_args": {"query": "x"},
+            "tool_output": "some large output",
+        }
+    )
+
+    assert any("(omitted)" in line for line in captured if "tool_output" in line)
+    assert not any("some large output" == line for line in captured)
