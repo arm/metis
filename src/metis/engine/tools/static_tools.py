@@ -42,16 +42,32 @@ class StaticToolRunner:
         self,
         *,
         codebase_path: str,
+        workspace_root: str | None = None,
         timeout_seconds: int = 8,
         max_chars: int = 16000,
     ):
         self.codebase_path = Path(codebase_path).resolve()
+        self.workspace_root = self._resolve_workspace_root(workspace_root)
+        self.search_root = self.workspace_root
         self.timeout_seconds = timeout_seconds
         self.max_chars = max_chars
         self._has_grep = shutil.which("grep") is not None
         self._has_find = shutil.which("find") is not None
         self._has_cat = shutil.which("cat") is not None
         self._has_sed = shutil.which("sed") is not None
+
+    def _resolve_workspace_root(self, workspace_root: str | None) -> Path:
+        if workspace_root:
+            root = Path(workspace_root).resolve()
+            if root == self.codebase_path or root in self.codebase_path.parents:
+                return root
+            return self.codebase_path
+
+        for candidate in (self.codebase_path, *self.codebase_path.parents):
+            git_dir = candidate / ".git"
+            if git_dir.exists():
+                return candidate
+        return self.codebase_path
 
     def describe_tool(self, name: str) -> dict[str, str]:
         if name == "grep":
@@ -82,24 +98,39 @@ class StaticToolRunner:
     def _resolve_path(self, raw_path: str) -> Path:
         fallback = None
         for candidate_raw in self._normalize_tool_path_candidates(raw_path):
-            if os.path.isabs(candidate_raw):
-                candidate = Path(candidate_raw).resolve()
-            else:
-                candidate = (self.codebase_path / candidate_raw).resolve()
-            if not self._is_within_codebase(candidate):
-                continue
-            if fallback is None:
-                fallback = candidate
-            if candidate.exists():
-                return candidate
+            for base_root in self._candidate_base_roots(candidate_raw):
+                if os.path.isabs(candidate_raw):
+                    candidate = Path(candidate_raw).resolve()
+                else:
+                    candidate = (base_root / candidate_raw).resolve()
+                if not self._is_within_allowed_roots(candidate):
+                    continue
+                if fallback is None:
+                    fallback = candidate
+                if candidate.exists():
+                    return candidate
         if fallback is None:
             raise ValueError("Path escapes codebase")
         return fallback
 
-    def _is_within_codebase(self, candidate: Path) -> bool:
-        return (
-            candidate == self.codebase_path or self.codebase_path in candidate.parents
-        )
+    def _candidate_base_roots(self, candidate_raw: str) -> list[Path]:
+        if os.path.isabs(candidate_raw):
+            return [Path("/")]
+        ordered: list[Path] = []
+        for root in (self.codebase_path, self.workspace_root):
+            if root in ordered:
+                continue
+            ordered.append(root)
+        return ordered
+
+    def _is_within_allowed_roots(self, candidate: Path) -> bool:
+        for root in {self.codebase_path, self.workspace_root}:
+            if candidate == root or root in candidate.parents:
+                return True
+        return False
+
+    def _display_root(self) -> Path:
+        return self.workspace_root
 
     def _normalize_tool_path_candidates(self, raw_path: str) -> list[str]:
         raw = str(raw_path or "").strip()
@@ -260,7 +291,7 @@ class StaticToolRunner:
 
         lines: list[str] = []
         for file_path in self._iter_files(target):
-            rel = file_path.relative_to(self.codebase_path).as_posix()
+            rel = file_path.relative_to(self._display_root()).as_posix()
             try:
                 text = file_path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
@@ -276,22 +307,29 @@ class StaticToolRunner:
         if not name or "/" in name or "\\" in name:
             return []
         if self._has_find:
-            output = self._run(["find", ".", "-type", "f", "-name", name])
+            output = self._run(
+                ["find", str(self.search_root), "-type", "f", "-name", name]
+            )
             found: list[str] = []
             for line in (output or "").splitlines():
                 item = line.strip()
                 if not item or item.startswith("find:"):
                     continue
-                if item.startswith("./"):
-                    item = item[2:]
-                found.append(item.replace("\\", "/"))
+                candidate = Path(item)
+                try:
+                    rel = (
+                        candidate.resolve().relative_to(self._display_root()).as_posix()
+                    )
+                except Exception:
+                    rel = item[2:] if item.startswith("./") else item
+                found.append(rel.replace("\\", "/"))
         else:
             found = []
-            for file_path in self._iter_files(self.codebase_path):
+            for file_path in self._iter_files(self.search_root):
                 if file_path.name != name:
                     continue
                 try:
-                    item = file_path.relative_to(self.codebase_path).as_posix()
+                    item = file_path.relative_to(self._display_root()).as_posix()
                 except Exception:
                     continue
                 found.append(item)

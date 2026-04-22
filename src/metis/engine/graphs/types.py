@@ -42,9 +42,11 @@ class ReviewState(TypedDict, total=False):
     use_retrieval_context: bool
     debug_callback: Any
     # Derived
+    baseline_context_query: str
+    baseline_context: str
+    baseline_context_quality: str
+    review_evidence_frame: str
     tool_evidence: str
-    tool_evidence_summary: str
-    tool_evidence_citations: str
     system_prompt: str
     parsed_reviews: list[dict]
 

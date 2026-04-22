@@ -11,11 +11,18 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from .review_retrieval import (
+    assess_review_context_quality,
+    classify_review_evidence,
+    shape_review_rag_query,
+)
+
 logger = logging.getLogger("metis")
 
 MAX_REVIEW_TOOL_ROUNDS = 4
 MAX_REVIEW_TOOL_EVIDENCE_CHARS = 6000
 MAX_REVIEW_TOOL_CITATION_EXCERPT_CHARS = 240
+MAX_REVIEW_RAG_CALLS = 1
 
 
 class _SedArgs(BaseModel):
@@ -245,18 +252,49 @@ def _format_tool_citation(
 def _format_tool_evidence(
     *,
     summary: str,
+    local_inspection: list[str],
+    repo_lookups: list[str],
+    rag_context: list[str],
+    typed_evidence: dict[str, list[str]],
+    notes: list[str],
     citations: list[str],
-    transcript: str,
 ) -> str:
     sections: list[str] = []
     if summary:
-        sections.extend(["[SUMMARY]", summary.strip(), ""])
+        sections.extend(["[TOOL_SUMMARY]", summary.strip(), ""])
+    if local_inspection:
+        sections.extend(["[LOCAL_INSPECTION]", "\n\n".join(local_inspection), ""])
+    if repo_lookups:
+        sections.extend(["[REPO_LOOKUPS]", "\n\n".join(repo_lookups), ""])
+    if rag_context:
+        sections.extend(["[RAG_CONTEXT]", "\n\n".join(rag_context), ""])
+    for section_name in (
+        "COMPONENT_PURPOSE",
+        "INPUT_SOURCES",
+        "RELATED_CALLERS",
+        "TRUST_BOUNDARY",
+        "VALIDATION_GUARDS",
+        "UNRESOLVED",
+    ):
+        values = typed_evidence.get(section_name) or []
+        if values:
+            sections.extend([f"[{section_name}]", "\n\n".join(values), ""])
+    if notes:
+        sections.extend(["[RETRIEVAL_NOTES]", "\n".join(notes), ""])
     if citations:
-        sections.extend(["[CITATIONS]", "\n".join(citations), ""])
+        sections.extend(["[TOOL_CITATIONS]", "\n".join(citations), ""])
     formatted = "\n".join(part for part in sections if part).strip()
     if formatted:
         return _clip_text(formatted)
-    return _clip_text(transcript)
+    return ""
+
+
+def _allowed_review_tools_for_round(round_index: int) -> set[str]:
+    if round_index <= 0:
+        return {"sed", "cat"}
+    if round_index == 1:
+        return {"sed", "cat", "grep", "find_name"}
+    return {"sed", "cat", "grep", "find_name", "rag_search"}
 
 
 def run_review_tool_phase(
@@ -266,40 +304,130 @@ def run_review_tool_phase(
     tools_by_name: dict[str, StructuredTool],
     system_prompt: str,
     body_text: str,
+    review_search_context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    transcript_parts: list[str] = []
+    local_inspection: list[str] = []
+    repo_lookups: list[str] = []
+    rag_context: list[str] = []
+    typed_evidence: dict[str, list[str]] = {
+        "COMPONENT_PURPOSE": [],
+        "INPUT_SOURCES": [],
+        "RELATED_CALLERS": [],
+        "TRUST_BOUNDARY": [],
+        "VALIDATION_GUARDS": [],
+        "UNRESOLVED": [],
+    }
+    notes: list[str] = []
     citations: list[str] = []
     messages = [SystemMessage(system_prompt), HumanMessage(body_text)]
     tool_model = chat_model.bind_tools(tools)
     summary = ""
+    rag_calls = 0
 
-    for _ in range(MAX_REVIEW_TOOL_ROUNDS):
+    for round_index in range(MAX_REVIEW_TOOL_ROUNDS):
         ai_message = tool_model.invoke(messages)
         messages.append(ai_message)
         tool_calls = list(getattr(ai_message, "tool_calls", []) or [])
         if not tool_calls:
             summary = _message_content_to_text(getattr(ai_message, "content", ""))
-            if summary:
-                transcript_parts.append(f"[EVIDENCE_SUMMARY]\n{summary}")
             break
 
         for tool_call in tool_calls:
             tool_name = str(tool_call.get("name", "") or "")
             tool_id = str(tool_call.get("id", "") or "")
-            tool_args = tool_call.get("args") or {}
+            tool_args = dict(tool_call.get("args") or {})
             tool = tools_by_name.get(tool_name)
-            if tool is None:
+            allowed_tools = _allowed_review_tools_for_round(round_index)
+            if tool_name not in allowed_tools:
+                allowed_text = ", ".join(sorted(allowed_tools))
+                result_text = (
+                    f"Tool {tool_name} is disabled in review stage {round_index + 1}. "
+                    f"Allowed tools now: {allowed_text}"
+                )
+                notes.append(result_text)
+            elif tool_name == "rag_search" and rag_calls >= MAX_REVIEW_RAG_CALLS:
+                result_text = "rag_search already used in this review tool phase."
+                notes.append(result_text)
+            elif tool is None:
                 result_text = f"Unknown tool: {tool_name}"
+                notes.append(result_text)
             else:
+                if tool_name == "rag_search":
+                    tool_args["query"] = shape_review_rag_query(
+                        str(tool_args.get("query", "") or ""),
+                        file_path=str(
+                            (review_search_context or {}).get("file_path", "") or ""
+                        ),
+                        mode=str(
+                            (review_search_context or {}).get("mode", "file") or "file"
+                        ),
+                        symbols=list(
+                            (review_search_context or {}).get("symbols", []) or []
+                        ),
+                        focus_terms=list(
+                            (review_search_context or {}).get("focus_terms", []) or []
+                        ),
+                        uncovered_obligations=list(
+                            (review_search_context or {}).get(
+                                "uncovered_obligations", []
+                            )
+                            or []
+                        ),
+                        baseline_query=str(
+                            (review_search_context or {}).get("baseline_query", "")
+                            or ""
+                        ),
+                    )
                 try:
                     result = tool.invoke(tool_args)
                 except Exception as exc:
                     result = f"Tool execution failed: {exc}"
                 result_text = _stringify_tool_output(result)
+                if tool_name == "rag_search":
+                    rag_calls += 1
+                    accepted, quality = assess_review_context_quality(
+                        result_text,
+                        file_path=str(
+                            (review_search_context or {}).get("file_path", "") or ""
+                        ),
+                        symbols=list(
+                            (review_search_context or {}).get("symbols", []) or []
+                        ),
+                        focus_terms=list(
+                            (review_search_context or {}).get("focus_terms", []) or []
+                        ),
+                    )
+                    if not accepted:
+                        result_text = (
+                            "[RAG_REJECTED]\n"
+                            f"quality={quality}\n"
+                            f"query={json.dumps(tool_args.get('query', ''), ensure_ascii=True)}"
+                        )
+                        notes.append(f"rag_search rejected: {quality}")
 
-            transcript_parts.append(
-                f"[TOOL {tool_name}]\nargs={json.dumps(tool_args, sort_keys=True)}\n{_clip_text(result_text, limit=1600)}"
+            formatted_tool_output = (
+                f"[TOOL {tool_name}]\nargs={json.dumps(tool_args, sort_keys=True)}\n"
+                f"{_clip_text(result_text, limit=1600)}"
             )
+            if tool_name in {"sed", "cat"}:
+                local_inspection.append(formatted_tool_output)
+            elif tool_name in {"grep", "find_name"}:
+                repo_lookups.append(formatted_tool_output)
+            elif tool_name == "rag_search":
+                rag_context.append(formatted_tool_output)
+            else:
+                notes.append(formatted_tool_output)
+            classified = classify_review_evidence(
+                result_text,
+                symbols=list((review_search_context or {}).get("symbols", []) or []),
+                focus_terms=list(
+                    (review_search_context or {}).get("focus_terms", []) or []
+                ),
+            )
+            for section_name, values in classified.items():
+                if not values:
+                    continue
+                typed_evidence.setdefault(section_name, []).extend(values)
             citations.append(_format_tool_citation(tool_name, tool_args, result_text))
             messages.append(
                 ToolMessage(
@@ -308,16 +436,13 @@ def run_review_tool_phase(
                 )
             )
 
-    transcript = "\n\n".join(part for part in transcript_parts if part)
     evidence = _format_tool_evidence(
         summary=summary,
+        local_inspection=local_inspection,
+        repo_lookups=repo_lookups,
+        rag_context=rag_context,
+        typed_evidence=typed_evidence,
+        notes=notes,
         citations=citations,
-        transcript=transcript,
     )
-    return {
-        "tool_evidence": evidence,
-        "tool_evidence_summary": _clip_text(summary) if summary else "",
-        "tool_evidence_citations": (
-            _clip_text("\n".join(citations)) if citations else ""
-        ),
-    }
+    return {"tool_evidence": evidence}

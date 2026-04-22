@@ -27,6 +27,23 @@ def test_cat_fallback_reads_file(tmp_path):
     assert out == "line1\nline2\n"
 
 
+def test_cat_fallback_reads_repo_relative_path_from_nested_codebase(tmp_path):
+    codebase = tmp_path / "src" / "metis" / "sarif"
+    codebase.mkdir(parents=True)
+    source = tmp_path / "src" / "metis" / "cli" / "utils.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("print('ok')\n", encoding="utf-8")
+
+    runner = StaticToolRunner(
+        codebase_path=str(codebase),
+        workspace_root=str(tmp_path),
+    )
+    runner._has_cat = False
+
+    out = runner.cat("src/metis/cli/utils.py")
+    assert out == "print('ok')\n"
+
+
 def test_sed_fallback_slices_lines(tmp_path):
     source = tmp_path / "a.txt"
     source.write_text("1\n2\n3\n4\n5\n", encoding="utf-8")
@@ -46,6 +63,23 @@ def test_find_name_fallback_finds_matching_files(tmp_path):
     runner = _build_runner(tmp_path)
     out = runner.find_name("target.c")
     assert out == ["lib/target.c", "src/target.c"]
+
+
+def test_find_name_fallback_searches_workspace_root_when_codebase_is_nested(tmp_path):
+    codebase = tmp_path / "src" / "metis" / "sarif"
+    codebase.mkdir(parents=True)
+    target = tmp_path / "src" / "metis" / "cli" / "utils.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("x", encoding="utf-8")
+
+    runner = StaticToolRunner(
+        codebase_path=str(codebase),
+        workspace_root=str(tmp_path),
+    )
+    runner._has_find = False
+
+    out = runner.find_name("utils.py")
+    assert out == ["src/metis/cli/utils.py"]
 
 
 def test_grep_fallback_searches_recursively(tmp_path):

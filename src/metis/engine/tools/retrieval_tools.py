@@ -21,16 +21,17 @@ class RetrievalToolRunner:
         if not normalized_query:
             return "[RAG_SEARCH]\nEmpty query."
 
-        half_budget = max(400, self.max_chars // 2)
+        code_budget = max(600, int(self.max_chars * 0.7))
+        docs_budget = max(400, self.max_chars - code_budget)
         code = retrieve_context_deterministic(
             retriever_code,
             normalized_query,
-            max_chars=half_budget,
+            max_chars=code_budget,
         )
         docs = retrieve_context_deterministic(
             retriever_docs,
             normalized_query,
-            max_chars=half_budget,
+            max_chars=docs_budget,
         )
 
         sections: list[str] = ["[RAG_QUERY]", normalized_query, ""]

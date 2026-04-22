@@ -10,16 +10,28 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
+from metis.engine.retrieval_support import retrieve_context_deterministic
 from metis.utils import split_snippet, parse_json_output, enrich_issues
+from .review_retrieval import (
+    assess_review_context_quality,
+    build_review_evidence_frame,
+    build_review_retrieval_query,
+    compute_review_obligation_coverage,
+)
 from .review_tools import build_review_langchain_tools, run_review_tool_phase
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
     build_review_system_prompt,
     sanitize_review_payload,
+    synthesize_context,
 )
 from .types import ReviewRequest, ReviewState
 
 logger = logging.getLogger("metis")
+
+_REVIEW_BASELINE_CONTEXT_MAX_CHARS = 3600
+_REVIEW_BASELINE_CODE_CONTEXT_CHARS = 2600
+_REVIEW_BASELINE_DOC_CONTEXT_CHARS = 1000
 
 
 def _normalize_reviews(raw) -> list[dict]:
@@ -53,18 +65,10 @@ def _build_body_text(state: ReviewState, *, include_tool_evidence: bool = True) 
     Format the user/body portion of the review prompt based on mode.
     """
     snippet = state.get("snippet", "") or ""
+    baseline_context = state.get("baseline_context", "") or ""
+    review_evidence_frame = state.get("review_evidence_frame", "") or ""
     tool_evidence = state.get("tool_evidence", "") or ""
-    tool_evidence_summary = state.get("tool_evidence_summary", "") or ""
-    tool_evidence_citations = state.get("tool_evidence_citations", "") or ""
     mode = state.get("mode", "file")
-
-    if not tool_evidence and (tool_evidence_summary or tool_evidence_citations):
-        tool_sections: list[str] = []
-        if tool_evidence_summary:
-            tool_sections.extend(["[SUMMARY]", tool_evidence_summary.strip(), ""])
-        if tool_evidence_citations:
-            tool_sections.extend(["[CITATIONS]", tool_evidence_citations.strip(), ""])
-        tool_evidence = "\n".join(part for part in tool_sections if part).strip()
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -74,6 +78,10 @@ def _build_body_text(state: ReviewState, *, include_tool_evidence: bool = True) 
             snippet,
             "",
         ]
+        if baseline_context:
+            sections.extend(["BASELINE_CONTEXT:", baseline_context, ""])
+        if review_evidence_frame:
+            sections.extend(["REVIEW_EVIDENCE_FRAME:", review_evidence_frame, ""])
         if include_tool_evidence and tool_evidence:
             sections.extend(["TOOL_EVIDENCE:", tool_evidence, ""])
     else:
@@ -90,10 +98,23 @@ def _build_body_text(state: ReviewState, *, include_tool_evidence: bool = True) 
             snippet,
             "",
         ]
+        if baseline_context:
+            sections.extend(["BASELINE_CONTEXT:", baseline_context, ""])
+        if review_evidence_frame:
+            sections.extend(["REVIEW_EVIDENCE_FRAME:", review_evidence_frame, ""])
         if include_tool_evidence and tool_evidence:
             sections.extend(["TOOL_EVIDENCE:", tool_evidence, ""])
 
     return "\n".join(sections)
+
+
+def _emit_review_debug(debug_callback, event: str, **payload) -> None:
+    if not callable(debug_callback):
+        return
+    try:
+        debug_callback({"event": event, **payload})
+    except Exception:
+        logger.debug("Review debug callback failed", exc_info=True)
 
 
 def _post_process_reviews(
@@ -123,6 +144,14 @@ def review_node_build_prompt(
 ) -> ReviewState:
     retrieval_enabled = bool(state.get("use_retrieval_context", True))
     new_state = cast(ReviewState, dict(state))
+    grounding_guidance = ""
+    if retrieval_enabled:
+        grounding_guidance = (
+            "Additional retrieval grounding may be provided as BASELINE_CONTEXT and "
+            "REVIEW_EVIDENCE_FRAME. Treat BASELINE_CONTEXT as deterministic repository "
+            "context and REVIEW_EVIDENCE_FRAME as evidence obligations plus likely gaps. "
+            "If either section is empty, ignore it."
+        )
     system = build_review_system_prompt(
         language_prompts,
         default_prompt_key,
@@ -131,9 +160,92 @@ def review_node_build_prompt(
         custom_guidance_precedence,
         schema_prompt_section,
         hardware_cwe_guidance,
-        tool_guidance=tool_guidance if retrieval_enabled else "",
+        tool_guidance=(
+            "\n".join(part for part in (grounding_guidance, tool_guidance) if part)
+            if retrieval_enabled
+            else ""
+        ),
     )
     new_state["system_prompt"] = system
+    return new_state
+
+
+def review_node_collect_baseline_context(state: ReviewState) -> ReviewState:
+    new_state = cast(ReviewState, dict(state))
+    new_state["baseline_context_query"] = ""
+    new_state["baseline_context"] = ""
+    new_state["baseline_context_quality"] = ""
+    new_state["review_evidence_frame"] = ""
+    if not bool(state.get("use_retrieval_context", True)):
+        return new_state
+
+    query, symbols, focus_terms = build_review_retrieval_query(
+        file_path=str(state.get("file_path", "") or ""),
+        relative_file=str(state.get("relative_file", "") or ""),
+        mode=str(state.get("mode", "file") or "file"),
+        snippet=str(state.get("snippet", "") or ""),
+        original_file=str(state.get("original_file", "") or ""),
+    )
+    code = retrieve_context_deterministic(
+        state.get("retriever_code"),
+        query,
+        max_chars=_REVIEW_BASELINE_CODE_CONTEXT_CHARS,
+    )
+    docs = retrieve_context_deterministic(
+        state.get("retriever_docs"),
+        query,
+        max_chars=_REVIEW_BASELINE_DOC_CONTEXT_CHARS,
+    )
+
+    code_ok, code_quality = assess_review_context_quality(
+        code,
+        file_path=str(state.get("file_path", "") or ""),
+        symbols=symbols,
+        focus_terms=focus_terms,
+    )
+    docs_ok, docs_quality = assess_review_context_quality(
+        docs,
+        file_path=str(state.get("file_path", "") or ""),
+        symbols=symbols,
+        focus_terms=focus_terms,
+    )
+
+    accepted_code = code if code_ok else ""
+    accepted_docs = docs if docs_ok else ""
+    baseline_context = synthesize_context(accepted_code, accepted_docs)
+    quality_parts = [
+        f"code={code_quality or 'empty'}",
+        f"docs={docs_quality or 'empty'}",
+    ]
+    if baseline_context and len(baseline_context) > _REVIEW_BASELINE_CONTEXT_MAX_CHARS:
+        baseline_context = (
+            baseline_context[:_REVIEW_BASELINE_CONTEXT_MAX_CHARS] + "\n...[truncated]"
+        )
+
+    new_state["baseline_context_query"] = query
+    new_state["baseline_context"] = baseline_context
+    new_state["baseline_context_quality"] = ", ".join(quality_parts)
+    baseline_coverage = compute_review_obligation_coverage(
+        baseline_context,
+        symbols=symbols,
+        focus_terms=focus_terms,
+    )
+    new_state["review_evidence_frame"] = build_review_evidence_frame(
+        query=query,
+        symbols=symbols,
+        focus_terms=focus_terms,
+        baseline_quality=new_state["baseline_context_quality"],
+        baseline_context=baseline_context,
+        coverage=baseline_coverage,
+    )
+    _emit_review_debug(
+        state.get("debug_callback"),
+        "retrieval",
+        query=query,
+        code_quality=code_quality,
+        docs_quality=docs_quality,
+        baseline_context=baseline_context,
+    )
     return new_state
 
 
@@ -147,8 +259,6 @@ def review_node_collect_tool_evidence(
 ) -> ReviewState:
     new_state = cast(ReviewState, dict(state))
     new_state["tool_evidence"] = ""
-    new_state["tool_evidence_summary"] = ""
-    new_state["tool_evidence_citations"] = ""
     if toolbox is None or chat_model is None:
         return new_state
     if not hasattr(chat_model, "bind_tools"):
@@ -173,6 +283,19 @@ def review_node_collect_tool_evidence(
     if not tools:
         return new_state
 
+    baseline_query, symbols, focus_terms = build_review_retrieval_query(
+        file_path=str(state.get("file_path", "") or ""),
+        relative_file=str(state.get("relative_file", "") or ""),
+        mode=str(state.get("mode", "file") or "file"),
+        snippet=str(state.get("snippet", "") or ""),
+        original_file=str(state.get("original_file", "") or ""),
+    )
+    baseline_coverage = compute_review_obligation_coverage(
+        str(state.get("baseline_context", "") or ""),
+        symbols=symbols,
+        focus_terms=focus_terms,
+    )
+
     try:
         outputs = run_review_tool_phase(
             chat_model=chat_model,
@@ -180,15 +303,42 @@ def review_node_collect_tool_evidence(
             tools_by_name=tools_by_name,
             system_prompt=active_tool_prompt,
             body_text=_build_body_text(state, include_tool_evidence=False),
+            review_search_context={
+                "file_path": str(state.get("file_path", "") or ""),
+                "mode": str(state.get("mode", "file") or "file"),
+                "symbols": symbols,
+                "focus_terms": focus_terms,
+                "baseline_query": baseline_query,
+                "uncovered_obligations": [
+                    name for name, covered in baseline_coverage.items() if not covered
+                ],
+            },
         )
     except Exception as exc:
         logger.warning("Review tool evidence phase failed: %s", exc)
         return new_state
 
     new_state["tool_evidence"] = outputs.get("tool_evidence", "") or ""
-    new_state["tool_evidence_summary"] = outputs.get("tool_evidence_summary", "") or ""
-    new_state["tool_evidence_citations"] = (
-        outputs.get("tool_evidence_citations", "") or ""
+    combined_evidence = "\n\n".join(
+        part
+        for part in (
+            str(state.get("baseline_context", "") or "").strip(),
+            new_state["tool_evidence"].strip(),
+        )
+        if part
+    )
+    combined_coverage = compute_review_obligation_coverage(
+        combined_evidence,
+        symbols=symbols,
+        focus_terms=focus_terms,
+    )
+    new_state["review_evidence_frame"] = build_review_evidence_frame(
+        query=baseline_query,
+        symbols=symbols,
+        focus_terms=focus_terms,
+        baseline_quality=str(state.get("baseline_context_quality", "") or ""),
+        baseline_context=str(state.get("baseline_context", "") or ""),
+        coverage=combined_coverage,
     )
     return new_state
 
@@ -348,6 +498,7 @@ class ReviewGraph:
             schema_prompt_section=self._schema_prompt_section,
             hardware_cwe_guidance=self.hardware_cwe_guidance,
         )
+        collect_baseline_context = review_node_collect_baseline_context
         collect_tool_evidence = partial(
             review_node_collect_tool_evidence,
             chat_model=self._review_chat_model,
@@ -363,12 +514,14 @@ class ReviewGraph:
         parse = review_node_parse
 
         graph.add_node("build_prompt", build_prompt)
+        graph.add_node("collect_baseline_context", collect_baseline_context)
         graph.add_node("collect_tool_evidence", collect_tool_evidence)
         graph.add_node("review", review)
         graph.add_node("parse", parse)
 
         graph.set_entry_point("build_prompt")
-        graph.add_edge("build_prompt", "collect_tool_evidence")
+        graph.add_edge("build_prompt", "collect_baseline_context")
+        graph.add_edge("collect_baseline_context", "collect_tool_evidence")
         graph.add_edge("collect_tool_evidence", "review")
         graph.add_edge("review", "parse")
         graph.add_edge("parse", END)
