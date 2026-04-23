@@ -65,25 +65,10 @@ class ReviewService:
         return list(self._reachability_cache)
 
     def _find_reachability_review_for_file(self, file_path):
-        base_path = os.path.abspath(self._config.codebase_path)
-        abs_target = (
-            file_path if os.path.isabs(file_path) else os.path.join(base_path, file_path)
+        return self._reachability_service.review_single_file_from_codebase(
+            file_path,
+            **self._reachability_settings,
         )
-        abs_target = os.path.abspath(abs_target)
-        relative_target = os.path.relpath(abs_target, base_path)
-
-        for review in self._get_reachability_reviews():
-            if review.get("file") == relative_target:
-                return review
-            review_file_path = review.get("file_path")
-            if review_file_path and os.path.abspath(review_file_path) == abs_target:
-                return review
-
-        return {
-            "file": relative_target,
-            "file_path": abs_target,
-            "reviews": [],
-        }
 
     def review_file(
         self,

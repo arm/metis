@@ -205,6 +205,42 @@ def _severity_title(value, default="Medium"):
     return text[:1].upper() + text[1:]
 
 
+def _chunked(items, size):
+    if size <= 0:
+        size = 1
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _dedupe_paths(paths):
+    seen = set()
+    results = []
+    for p in paths:
+        key = (p.source, p.sink, tuple(p.path))
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(p)
+    return results
+
+
+def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):
+    content = read_file_content(os.path.join(codebase_path, rel_file))
+    if not content:
+        return ""
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    try:
+        line_number = max(1, int(line_number))
+    except Exception:
+        line_number = 1
+    start = max(0, line_number - 1 - context)
+    end = min(len(lines), line_number + context)
+    snippet = "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
+    return snippet[:max_chars]
+
+
 _VULN_TO_CWE = {
     "buffer_overflow": "CWE-120",
     "out_of_bounds": "CWE-787",
@@ -451,6 +487,50 @@ Be conservative."""
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
 
 
+_FILE_CONFIRM_SYS = """\
+You are a security researcher specializing in C and C++ code analysis.
+
+You are reviewing ONE target file from a larger codebase.
+
+You are given:
+- reachable call paths from external or attacker-controlled sources
+- the relevant code from the target file
+- supporting code for upstream/downstream functions on the path
+
+Only report a vulnerability when the primary bug mechanism is actually present in the TARGET FILE code shown.
+Do not report generic race, use-after-free, integer-overflow, or path-traversal hypotheses unless the concrete target-file code supports that conclusion.
+Be conservative and prefer precision over recall.
+
+For EACH path determine if it is a real exploitable vulnerability in the target file:
+
+- Does attacker input actually propagate through the path into the target file logic?
+- Does the target file contain the missing validation, unsafe state transition, unsafe publish/use ordering, or dangerous sink usage?
+- Are there checks or lifecycle constraints that make the path non-exploitable?
+- Is the root cause in the target file rather than merely elsewhere on the path?
+
+Return ONLY valid JSON:
+
+{{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow", "severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "..." }}, ...]}}
+
+vulnerability_type should be one of: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, other
+severity should be one of: low, medium, high, critical
+confidence should be one of: low, medium, high
+
+Be conservative."""
+
+
+_FILE_CONFIRM_USR = """Target file: {target_file}
+
+{paths_section}
+
+== TARGET FILE CODE ==
+{target_file_code}
+
+== RELATED PATH CODE ==
+{related_code_section}
+"""
+
+
 class VulnerabilityConfirmer:
     def __init__(self, llm_provider, model, usage_runtime, codebase_path, max_tokens=4096):
        self._p = llm_provider
@@ -571,6 +651,141 @@ class VulnerabilityConfirmer:
                 path=list(rp.path), description=str(e.get("description") or ""), root_cause=str(e.get("root_cause") or ""),
                 evidence=str(e.get("evidence") or ""), analysis_type="reachability"))
         
+        return results
+
+    def confirm_for_file(self, target_file, paths, graph, *, max_workers=4, progress_callback=None):
+        target_file = str(target_file)
+        paths = _dedupe_paths(paths)
+        if not paths:
+            return []
+
+        batches = list(_chunked(paths, 8))
+        total = len(batches)
+        all_findings = []
+        done = 0
+
+        if progress_callback:
+            progress_callback({"event": "file_confirmation_start", "file": target_file, "total": total})
+
+        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, total))) as ex:
+            futs = {
+                submit_with_current_context(ex, self._confirm_file_batch, target_file, batch, graph): idx
+                for idx, batch in enumerate(batches)
+            }
+
+            for fut in as_completed(futs):
+                done += 1
+                try:
+                    all_findings.extend(fut.result())
+                except Exception as e:
+                    logger.warning(f"Error confirming file-focused paths for {target_file}: {e}")
+                if progress_callback:
+                    progress_callback({"event": "file_confirmation_progress", "file": target_file, "completed": done, "total": total})
+
+        if progress_callback:
+            progress_callback({"event": "file_confirmation_done", "file": target_file, "confirmed": len(all_findings)})
+        return all_findings
+
+    def _confirm_file_batch(self, target_file, batch, graph):
+        needed = {}
+        target_nodes = {}
+        related_nodes = {}
+
+        for p in batch:
+            for u in p.path:
+                n = graph.get_node(u)
+                if not n:
+                    continue
+                needed[u] = n
+                if n.file_path == target_file:
+                    target_nodes[u] = n
+                else:
+                    related_nodes[u] = n
+
+        ps = ["== CANDIDATE PATHS =="]
+
+        for i, p in enumerate(batch):
+            sn, sk = graph.get_node(p.source), graph.get_node(p.sink)
+            ps.append(f"\nPath {i}:\n Chain: {' -> '.join(p.path)}")
+            if sn:
+                ps.append(f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}")
+            if sk:
+                ps.append(f" Sink: {sk.unique_name} (line {sk.line_number}) [{sk.sink_type}] - {sk.sink_reason}")
+
+        target_code = ["-- Functions from target file implicated by the reachable paths --"]
+        for u, n in target_nodes.items():
+            body = _read_function_body(self._cb, n, 5000)
+            if body:
+                target_code.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
+
+        related_code = ["-- Supporting code from the rest of the reachable paths --"]
+        for u, n in related_nodes.items():
+            body = _read_function_body(self._cb, n, 2500)
+            if body:
+                related_code.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
+
+        kw = self._u.hooks.chat_model_kwargs()
+        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", _FILE_CONFIRM_SYS),
+            ("user", _FILE_CONFIRM_USR)
+        ])
+
+        raw = (prompt | chat | StrOutputParser()).invoke(
+            {
+                "target_file": target_file,
+                "paths_section": "\n".join(ps),
+                "target_file_code": "\n".join(target_code),
+                "related_code_section": "\n".join(related_code),
+            }
+        ).strip()
+
+        parsed = parse_json_output(raw)
+        if not isinstance(parsed, dict):
+            return []
+
+        fl = parsed.get("findings")
+        if not isinstance(fl, list):
+            return []
+
+        results = []
+
+        for e in fl:
+            if not isinstance(e, dict) or not e.get("is_vulnerable"):
+                continue
+
+            idx = int(e.get("path_index", -1))
+            if idx < 0 or idx >= len(batch):
+                continue
+
+            rp = batch[idx]
+            sn = graph.get_node(rp.source)
+            sk = graph.get_node(rp.sink)
+
+            if sk and sk.file_path != target_file:
+                continue
+
+            results.append(
+                VulnerabilityFinding(
+                    id=uuid.uuid4().hex[:16],
+                    vulnerability_type=str(e.get("vulnerability_type") or rp.sink_type or "other"),
+                    severity=str(e.get("severity") or "medium"),
+                    confidence=str(e.get("confidence") or "medium"),
+                    source_function=rp.source,
+                    source_file=sn.file_path if sn else "",
+                    source_line=sn.line_number if sn else 0,
+                    sink_function=rp.sink,
+                    sink_file=sk.file_path if sk else "",
+                    sink_line=sk.line_number if sk else 0,
+                    path=list(rp.path),
+                    description=str(e.get("description") or ""),
+                    root_cause=str(e.get("root_cause") or ""),
+                    evidence=str(e.get("evidence") or ""),
+                    analysis_type="reachability",
+                )
+            )
+
         return results
    
 
@@ -1036,6 +1251,9 @@ class ReachabilityService:
         self._repository = repository
         self._llm_provider = llm_provider
         self._usage_runtime = usage_runtime
+        self._graph_cache: dict[tuple, tuple[ReachabilityGraph, list[ReachabilityPath]]] = {}
+        self._file_review_cache: dict[tuple, dict] = {}
+        self._cache_lock = threading.Lock()
 
     def get_c_cpp_files(self):
         return [f for f in self._repository.get_code_files() if os.path.splitext(f)[1].lower() in _C_CPP_EXTS]
@@ -1060,7 +1278,121 @@ class ReachabilityService:
         cm = confirmation_model or self._config.llama_query_model
         return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_parallel(
             paths, graph, max_workers=max_workers, output_path=output_path, progress_callback=progress_callback)
-    
+
+    def confirm_paths_for_file(
+        self,
+        target_file,
+        paths,
+        graph,
+        *,
+        confirmation_model=None,
+        max_workers=8,
+        progress_callback=None,
+    ):
+        cm = confirmation_model or self._config.llama_query_model
+        return VulnerabilityConfirmer(
+            self._llm_provider,
+            cm,
+            self._usage_runtime,
+            self._config.codebase_path,
+        ).confirm_for_file(
+            target_file,
+            paths,
+            graph,
+            max_workers=max_workers,
+            progress_callback=progress_callback,
+        )
+
+    def _graph_cache_key(self, *, extraction_model, max_workers, max_paths, max_path_length):
+        return (
+            str(extraction_model or ""),
+            int(max_workers),
+            int(max_paths),
+            int(max_path_length),
+        )
+
+    def _file_review_cache_key(
+        self,
+        *,
+        target_file,
+        extraction_model,
+        confirmation_model,
+        max_workers,
+        max_paths,
+        max_paths_per_sink,
+        max_path_length,
+    ):
+        return (
+            str(target_file),
+            str(extraction_model or ""),
+            str(confirmation_model or self._config.llama_query_model or ""),
+            int(max_workers),
+            int(max_paths),
+            int(max_paths_per_sink),
+            int(max_path_length),
+        )
+
+    def _ensure_graph_and_paths(
+        self,
+        *,
+        extraction_model="gpt-4.1-mini",
+        max_workers=8,
+        max_paths=0,
+        max_path_length=25,
+        progress_callback=None,
+    ):
+        key = self._graph_cache_key(
+            extraction_model=extraction_model,
+            max_workers=max_workers,
+            max_paths=max_paths,
+            max_path_length=max_path_length,
+        )
+        with self._cache_lock:
+            cached = self._graph_cache.get(key)
+        if cached is not None:
+            return cached
+
+        files = self.get_c_cpp_files()
+        if not files:
+            graph = ReachabilityGraph()
+            paths = []
+        else:
+            graph = self.build_graph(
+                files,
+                extraction_model=extraction_model,
+                max_workers=max_workers,
+                progress_callback=progress_callback,
+            )
+            if graph.node_count() == 0:
+                paths = []
+            else:
+                paths = self.trace_paths(graph, max_path_length=max_path_length)
+                if max_paths > 0:
+                    paths = paths[:max_paths]
+                paths = _dedupe_paths(paths)
+
+        cached = (graph, paths)
+        with self._cache_lock:
+            self._graph_cache[key] = cached
+        return cached
+
+    def _normalize_target_file(self, file_path):
+        base_path = os.path.abspath(self._config.codebase_path)
+        abs_target = (
+            file_path if os.path.isabs(file_path) else os.path.join(base_path, file_path)
+        )
+        abs_target = os.path.abspath(abs_target)
+        relative_target = os.path.relpath(abs_target, base_path)
+        return abs_target, relative_target
+
+    def _paths_for_target_file(self, graph, paths, target_file):
+        results = []
+        for p in paths:
+            sink = graph.get_node(p.sink)
+            if sink and sink.file_path == target_file:
+                results.append(p)
+        return _dedupe_paths(results)
+
     def review_codebase(
         self,
         *,
@@ -1072,69 +1404,141 @@ class ReachabilityService:
         max_path_length=25,
         progress_callback=None,
     ):
-        files = self.get_c_cpp_files()
-        if not files:
-            return []
-
-        graph = self.build_graph(
-            files,
+        graph, paths = self._ensure_graph_and_paths(
             extraction_model=extraction_model,
             max_workers=max_workers,
+            max_paths=max_paths,
+            max_path_length=max_path_length,
             progress_callback=progress_callback,
         )
 
-        if graph.node_count() == 0:
+        if graph.node_count() == 0 or not paths:
             return []
 
-        paths = self.trace_paths(graph, max_path_length=max_path_length)
+        files = sorted({graph.get_node(p.sink).file_path for p in paths if graph.get_node(p.sink)})
+        results = []
 
-        if max_paths > 0:
-            paths = paths[:max_paths]
+        if progress_callback:
+            progress_callback({"event": "file_review_start", "files": len(files)})
 
-        supp_findings = self.run_supplementary_analysis(
+        completed = 0
+        for target_file in files:
+            review = self.review_single_file_from_codebase(
+                target_file,
+                extraction_model=extraction_model,
+                confirmation_model=confirmation_model,
+                max_workers=max_workers,
+                max_paths=max_paths,
+                max_paths_per_sink=max_paths_per_sink,
+                max_path_length=max_path_length,
+                progress_callback=progress_callback,
+            )
+            completed += 1
+            if review and review.get("reviews"):
+                results.append(review)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "event": "file_review_progress",
+                        "completed": completed,
+                        "total": len(files),
+                        "file": target_file,
+                    }
+                )
+
+        if progress_callback:
+            progress_callback({"event": "file_review_done", "files": len(results)})
+
+        return results
+
+    def review_single_file_from_codebase(
+        self,
+        file_path,
+        *,
+        extraction_model="gpt-4.1-mini",
+        confirmation_model=None,
+        max_workers=8,
+        max_paths=0,
+        max_paths_per_sink=3,
+        max_path_length=25,
+        progress_callback=None,
+    ):
+        abs_target, relative_target = self._normalize_target_file(file_path)
+        cache_key = self._file_review_cache_key(
+            target_file=relative_target,
+            extraction_model=extraction_model,
+            confirmation_model=confirmation_model,
+            max_workers=max_workers,
+            max_paths=max_paths,
+            max_paths_per_sink=max_paths_per_sink,
+            max_path_length=max_path_length,
+        )
+
+        with self._cache_lock:
+            cached = self._file_review_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
+        graph, paths = self._ensure_graph_and_paths(
+            extraction_model=extraction_model,
+            max_workers=max_workers,
+            max_paths=max_paths,
+            max_path_length=max_path_length,
+            progress_callback=progress_callback,
+        )
+
+        if graph.node_count() == 0 or not paths:
+            review = {
+                "file": relative_target,
+                "file_path": abs_target,
+                "reviews": [],
+            }
+            with self._cache_lock:
+                self._file_review_cache[cache_key] = review
+            return dict(review)
+
+        target_paths = self._paths_for_target_file(graph, paths, relative_target)
+        if not target_paths:
+            review = {
+                "file": relative_target,
+                "file_path": abs_target,
+                "reviews": [],
+            }
+            with self._cache_lock:
+                self._file_review_cache[cache_key] = review
+            return dict(review)
+
+        file_findings = self.confirm_paths_for_file(
+            relative_target,
+            target_paths,
             graph,
-            audit_model=extraction_model,
-            strong_model=confirmation_model,
+            confirmation_model=confirmation_model,
             max_workers=max_workers,
             progress_callback=progress_callback,
         )
 
-        reach_findings = []
-        if paths:
-            reach_findings = self.confirm_paths(
-                paths,
-                graph,
-                confirmation_model=confirmation_model,
-                max_workers=max_workers,
-                progress_callback=progress_callback,
-            )
-
         deduped, _total, _removed = Deduplicator.deduplicate(
-            reach_findings + supp_findings,
+            file_findings,
             max_per_sink=max_paths_per_sink,
         )
-        return self._group_findings_as_reviews(deduped)
 
-    def review_single_file_from_codebase(self, file_path, **kwargs):
-        base_path = os.path.abspath(self._config.codebase_path)
-        abs_target = (
-            file_path if os.path.isabs(file_path) else os.path.join(base_path, file_path)
-        )
-        abs_target = os.path.abspath(abs_target)
-        relative_target = os.path.relpath(abs_target, base_path)
+        grouped = self._group_findings_as_reviews(deduped)
+        review = None
+        for item in grouped:
+            if item.get("file") == relative_target:
+                review = item
+                break
 
-        for review in self.review_codebase(**kwargs):
-            if review.get("file") == relative_target:
-                return review
-            review_file_path = review.get("file_path")
-            if review_file_path and os.path.abspath(review_file_path) == abs_target:
-                return review
+        if review is None:
+            review = {
+                "file": relative_target,
+                "file_path": abs_target,
+                "reviews": [],
+            }
 
-        return {
-            "file": relative_target,
-            "file_path": abs_target,
-            "reviews": [],
-        }
+        with self._cache_lock:
+            self._file_review_cache[cache_key] = review
+        return dict(review)
 
     def _group_findings_as_reviews(self, findings):
         grouped = defaultdict(list)
@@ -1174,10 +1578,20 @@ class ReachabilityService:
         if str(finding.root_cause or "").strip():
             reasoning_parts.append(f"Root cause: {str(finding.root_cause).strip()}")
 
+        code_snippet = ""
+        target_file = finding.sink_file or finding.source_file
+        if target_file:
+            code_snippet = _read_line_context(
+                self._config.codebase_path,
+                target_file,
+                line_number,
+                context=2,
+            )
+
         return {
             "issue": issue,
             "line_number": line_number,
-            "code_snippet": "",
+            "code_snippet": code_snippet,
             "cwe": _VULN_TO_CWE.get(str(finding.vulnerability_type or "").strip()),
             "severity": _severity_title(finding.severity, "Medium"),
             "confidence": _severity_title(finding.confidence, "Medium"),
