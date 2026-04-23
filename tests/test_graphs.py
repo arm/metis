@@ -4,7 +4,7 @@
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
     review_node_build_prompt,
-    review_node_collect_project_context,
+    review_node_collect_obligation_context,
     review_node_collect_tool_evidence,
     review_node_llm,
     review_node_parse,
@@ -107,6 +107,48 @@ def test_review_nodes_pipeline_parses():
     assert s4.get("parsed_reviews") and isinstance(s4["parsed_reviews"], list)
 
 
+def test_review_node_build_prompt_includes_rag_evidence_guidance_when_enabled():
+    language_prompts = {
+        "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
+        "security_review_checks": "Checks...",
+    }
+    state = {"use_retrieval_context": True}
+
+    out = review_node_build_prompt(
+        state,
+        language_prompts=language_prompts,
+        default_prompt_key="security_review_file",
+        report_prompt="",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section='- "issue": desc',
+        tool_guidance="Treat RAG as supporting context only.",
+    )
+
+    assert "Treat RAG as supporting context only." in out["system_prompt"]
+
+
+def test_review_node_build_prompt_omits_rag_evidence_guidance_when_no_index():
+    language_prompts = {
+        "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
+        "security_review_checks": "Checks...",
+    }
+    state = {"use_retrieval_context": False}
+
+    out = review_node_build_prompt(
+        state,
+        language_prompts=language_prompts,
+        default_prompt_key="security_review_file",
+        report_prompt="",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section='- "issue": desc',
+        tool_guidance="Treat RAG as supporting context only.",
+    )
+
+    assert "Treat RAG as supporting context only." not in out["system_prompt"]
+
+
 def test_review_node_retrieve_no_index_skips_retrievers():
     class _BoomRetriever:
         def get_relevant_documents(self, _query):
@@ -191,7 +233,7 @@ def test_review_node_llm_includes_rag_tool_evidence():
         "mode": "file",
         "system_prompt": "prompt",
         "context": "[foo.py]\ndeterministic context",
-        "project_context": "[PROJECT_CONTEXT]\nuserspace C library",
+        "obligation_context": "[OBLIGATION_RAG]\nobligation=callers/reachability\nuserspace C library",
         "tool_evidence": "[RAG_TOOL_RESULTS]\nextra context",
         "use_retrieval_context": True,
     }
@@ -350,8 +392,41 @@ def test_review_node_collect_tool_evidence_uses_only_rag():
     assert "[RAG_TOOL_RESULTS]" in out["tool_evidence"]
 
 
-def test_review_node_collect_project_context_uses_static_rag_query():
-    captured = {}
+def test_review_node_collect_tool_evidence_skips_when_no_index():
+    class _Toolbox:
+        def has(self, name):
+            if name == "rag_search":
+                raise AssertionError(
+                    "rag_search should not be checked in no-index mode"
+                )
+            return False
+
+    class _ToolChat:
+        def bind_tools(self, _tools):
+            raise AssertionError("tool phase should not run in no-index mode")
+
+    state = {
+        "file_path": "src/auth.py",
+        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
+        "mode": "file",
+        "context": "",
+        "retriever_code": None,
+        "retriever_docs": None,
+        "use_retrieval_context": False,
+    }
+
+    out = review_node_collect_tool_evidence(
+        state,
+        chat_model=_ToolChat(),
+        toolbox=_Toolbox(),
+        tool_system_prompt="prompt",
+    )
+
+    assert out["tool_evidence"] == ""
+
+
+def test_review_node_collect_obligation_context_uses_focused_rag_queries():
+    captured = []
     events = []
 
     class _Toolbox:
@@ -359,10 +434,14 @@ def test_review_node_collect_project_context_uses_static_rag_query():
             return name == "rag_search"
 
         def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
-            captured["query"] = query
-            captured["retriever_code"] = retriever_code
-            captured["retriever_docs"] = retriever_docs
-            return "[CODE_RAG]\nuserspace library auth helpers\n\n[DOCS_RAG]\ncomponent trust assumptions"
+            captured.append(
+                {
+                    "query": query,
+                    "retriever_code": retriever_code,
+                    "retriever_docs": retriever_docs,
+                }
+            )
+            return "[CODE_RAG]\nuserspace library auth helpers validate_token caller\n\n[DOCS_RAG]\ncomponent trust assumptions"
 
     state = {
         "file_path": "src/auth.py",
@@ -374,22 +453,72 @@ def test_review_node_collect_project_context_uses_static_rag_query():
         "debug_callback": events.append,
     }
 
-    out = review_node_collect_project_context(
+    out = review_node_collect_obligation_context(
         state,
         toolbox=_Toolbox(),
     )
 
-    assert (
-        "What project, subsystem, or component does this code belong to?"
-        in captured["query"]
+    assert captured
+    assert all("Evidence obligation:" in call["query"] for call in captured)
+    assert all(
+        "Security review obligation-focused RAG lookup" in call["query"]
+        for call in captured
     )
-    assert (
-        "kernel, driver, firmware, runtime, service, userspace library"
-        in captured["query"]
-    )
-    assert "[PROJECT_CONTEXT]" in out["project_context"]
+    assert all(call["retriever_code"] is state["retriever_code"] for call in captured)
+    assert all(call["retriever_docs"] is state["retriever_docs"] for call in captured)
+    assert "[OBLIGATION_RAG]" in out["obligation_context"]
+    assert "obligation=callers/reachability" in out["obligation_context"]
     assert events
-    assert events[0]["tool_name"] == "project_context_rag"
+    assert events[0]["tool_name"] == "obligation_rag_search"
+
+
+def test_review_node_collect_obligation_context_drops_empty_rag_results():
+    class _Toolbox:
+        def has(self, name):
+            return name == "rag_search"
+
+        def rag_search(self, query, *, retriever_code=None, retriever_docs=None):
+            return "[RAG_QUERY]\nq\n\n[CODE_RAG]\n<none>\n\n[DOCS_RAG]\n<none>"
+
+    state = {
+        "file_path": "src/auth.py",
+        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
+        "mode": "file",
+        "retriever_code": object(),
+        "retriever_docs": object(),
+        "use_retrieval_context": True,
+    }
+
+    out = review_node_collect_obligation_context(
+        state,
+        toolbox=_Toolbox(),
+    )
+
+    assert out["obligation_context"] == ""
+
+
+def test_review_node_collect_obligation_context_skips_when_no_index():
+    class _Toolbox:
+        def has(self, name):
+            if name == "rag_search":
+                raise AssertionError("obligation rag should not run in no-index mode")
+            return False
+
+    state = {
+        "file_path": "src/auth.py",
+        "snippet": "def check_token(user_token):\n    return validate_token(user_token)\n",
+        "mode": "file",
+        "retriever_code": None,
+        "retriever_docs": None,
+        "use_retrieval_context": False,
+    }
+
+    out = review_node_collect_obligation_context(
+        state,
+        toolbox=_Toolbox(),
+    )
+
+    assert out["obligation_context"] == ""
 
 
 def test_triage_node_retrieve_uses_shared_rag_tool():

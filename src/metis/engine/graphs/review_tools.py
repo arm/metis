@@ -21,7 +21,8 @@ MAX_REVIEW_RAG_CALLS = 2
 class _RagArgs(BaseModel):
     query: str = Field(
         description=(
-            "Question or search text for indexed code and documentation retrieval"
+            "A focused security question for indexed code and documentation retrieval. "
+            "Name the relevant file, function, API, or behavior and ask for one missing fact."
         )
     )
 
@@ -86,8 +87,10 @@ def build_review_langchain_tools(
         name="rag_search",
         description=(
             "Ask a natural-language security question over indexed code and documentation. "
-            "Use this when you need broader context about callers, externally controlled inputs, "
-            "trust boundaries, validation, authorization, enforcement points, or intended design."
+            "Use this only for a specific missing fact about callers, externally controlled inputs, "
+            "trust boundaries, validation, authorization, enforcement points, or intended design. "
+            "Obligation-focused RAG may already be present in TOOL_EVIDENCE, so do not repeat it. "
+            "Results may be empty or noisy; ignore anything not clearly relevant to the reviewed code."
         ),
         args_schema=_RagArgs,
     )

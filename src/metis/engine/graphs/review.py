@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import re
 from functools import partial
 from typing import Any, cast
 
@@ -23,6 +24,82 @@ from .utils import (
 )
 
 logger = logging.getLogger("metis")
+
+_REVIEW_RAG_RESULT_CHARS = 2200
+_REVIEW_OBLIGATION_CONTEXT_CHARS = 6000
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+_COMMON_IDENTIFIERS = {
+    "and",
+    "const",
+    "def",
+    "else",
+    "for",
+    "if",
+    "int",
+    "let",
+    "return",
+    "static",
+    "struct",
+    "the",
+    "var",
+    "void",
+    "while",
+}
+
+_REVIEW_RAG_OBLIGATIONS = {
+    "callers/reachability": (
+        "Which callers, wrappers, API routes, or integration points reach this reviewed code, "
+        "and can that path be external, cross-boundary, or attacker influenced?"
+    ),
+    "input/trust boundary": (
+        "Which inputs or state reaching this code are externally controlled or cross a trust boundary, "
+        "and where does that boundary come from?"
+    ),
+    "validation/authorization": (
+        "Where are validation, sanitization, bounds checks, authorization checks, or enforcement responsibilities "
+        "for this path defined or applied?"
+    ),
+    "memory/bounds": (
+        "What evidence explains buffer sizes, allocation sizes, index ranges, pointer ownership, "
+        "or bounds guarantees for the reviewed memory operations?"
+    ),
+    "lifetime/concurrency": (
+        "What evidence explains object lifetime, ownership transfer, locking, reference counting, "
+        "or concurrency guarantees for this reviewed code?"
+    ),
+}
+
+DEFAULT_REVIEW_RAG_EVIDENCE_GUIDANCE = """
+3. How to Use RAG Evidence
+   - TOOL_EVIDENCE may include deterministic retrieval, OBLIGATION_RAG sections, and RAG_TOOL_RESULTS from rag_search.
+   - Treat RAG as supporting context only. FILE, FILE_CHANGES, and ORIGINAL_FILE remain authoritative for the code being reviewed.
+   - OBLIGATION_RAG sections are grouped by evidence obligation, such as callers/reachability, input/trust boundary, validation/authorization, memory/bounds, or lifetime/concurrency.
+   - Ignore RAG sections that are empty, unavailable, generic, unrelated, or not clearly tied to the current file, symbols, data flow, or security condition.
+   - Do not report a finding solely because RAG mentions a threat model, component purpose, possible caller, or security expectation. A report still needs concrete vulnerable behavior in the reviewed code plus plausible security impact.
+   - If RAG conflicts with the reviewed code, prefer the reviewed code and lower confidence unless the conflict is resolved by concrete evidence.
+   - Prefer returning an empty reviews list over speculative findings when RAG is weak, noisy, or only describes background design.
+""".strip()
+
+DEFAULT_REVIEW_RAG_TOOL_PROMPT = """
+You are gathering optional RAG context for a security code review.
+You have exactly one tool: rag_search.
+
+Use rag_search only when one specific missing fact would materially change review confidence.
+Do not ask for generic project or component summaries; obligation-focused RAG evidence is collected separately.
+Prefer one focused query. Use a second query only for a different concrete obligation.
+
+Good queries name the file, function, API, or changed behavior and ask one security question about:
+- externally controlled inputs or reachability
+- callers, wrappers, or integration points
+- validation, sanitization, authorization, or enforcement responsibilities
+- trust or privilege boundaries
+- intended security contract documented elsewhere
+
+If results are empty, unavailable, generic, or off-topic, say that no useful RAG evidence was found and stop.
+Summarize only concrete evidence that is relevant to the reviewed code, plus any unresolved gap.
+Do not turn broad design context into a vulnerability by itself.
+Return a short plain-text summary, not JSON.
+""".strip()
 
 
 def _emit_review_debug(debug_callback, event: str, **payload) -> None:
@@ -55,46 +132,160 @@ def _normalize_reviews(raw) -> list[dict]:
     return []
 
 
-def _build_review_context_query(state: ReviewState) -> str:
+def _clip_review_rag_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...[truncated]"
+
+
+def _extract_review_identifiers(snippet: str, *, limit: int = 10) -> list[str]:
+    seen: set[str] = set()
+    identifiers: list[str] = []
+    for match in _IDENTIFIER_RE.finditer(snippet):
+        identifier = match.group(0)
+        lowered = identifier.lower()
+        if lowered in _COMMON_IDENTIFIERS or lowered in seen:
+            continue
+        seen.add(lowered)
+        identifiers.append(identifier)
+        if len(identifiers) >= limit:
+            break
+    return identifiers
+
+
+def _has_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in terms)
+
+
+def _select_review_rag_obligations(state: ReviewState) -> list[str]:
+    snippet = str(state.get("snippet", "") or "")
+    selected = ["callers/reachability"]
+
+    if _has_any(
+        snippet,
+        (
+            "argv",
+            "env",
+            "http",
+            "input",
+            "ioctl",
+            "parse",
+            "read",
+            "recv",
+            "request",
+            "socket",
+            "user",
+        ),
+    ):
+        selected.append("input/trust boundary")
+
+    if _has_any(
+        snippet,
+        (
+            "access",
+            "auth",
+            "bound",
+            "check",
+            "escape",
+            "permission",
+            "priv",
+            "sanit",
+            "token",
+            "valid",
+        ),
+    ):
+        selected.append("validation/authorization")
+
+    if _has_any(
+        snippet,
+        (
+            "alloc",
+            "array",
+            "buf",
+            "copy",
+            "free",
+            "index",
+            "malloc",
+            "mem",
+            "ptr",
+            "size",
+            "str",
+        ),
+    ):
+        selected.append("memory/bounds")
+
+    if _has_any(
+        snippet,
+        (
+            "atomic",
+            "free",
+            "lock",
+            "mutex",
+            "ref",
+            "release",
+            "thread",
+            "unlock",
+        ),
+    ):
+        selected.append("lifetime/concurrency")
+
+    if len(selected) == 1:
+        selected.append("validation/authorization")
+
+    deduped: list[str] = []
+    for obligation in selected:
+        if obligation not in deduped:
+            deduped.append(obligation)
+    return deduped[:3]
+
+
+def _build_obligation_rag_query(state: ReviewState, obligation: str) -> str:
     file_path = str(state.get("file_path", "") or "")
     mode = str(state.get("mode", "file") or "file")
     snippet = str(state.get("snippet", "") or "")
-    if mode == "patch":
-        return (
-            "You are a senior software engineer. Explain what the following code changes do, "
-            "which callers or surrounding code they affect, and any security-relevant assumptions "
-            "or validation behavior that matters.\n"
-            f"FILE: {file_path}\n"
-            f"FILE_CHANGES:\n{snippet}"
-        )
+    identifiers = _extract_review_identifiers(snippet)
+    question = _REVIEW_RAG_OBLIGATIONS[obligation]
+    id_text = ", ".join(identifiers) if identifiers else "<none extracted>"
+    subject = "FILE_CHANGES" if mode == "patch" else "SNIPPET"
     return (
-        "You are a senior software engineer. Explain what the following file or code region does, "
-        "how it is used, what inputs reach it, and any security-relevant assumptions, trust boundaries, "
-        "or validation behavior that matter.\n"
-        f"FILE: {file_path}\n"
-        f"SNIPPET:\n{snippet}"
-    )
-
-
-def _build_project_context_query(state: ReviewState) -> str:
-    file_path = str(state.get("file_path", "") or "")
-    mode = str(state.get("mode", "file") or "file")
-    snippet = str(state.get("snippet", "") or "")
-    return (
-        "Security review project-context retrieval.\n"
+        "Security review obligation-focused RAG lookup.\n"
         f"File: {file_path or '<unknown>'}\n"
         f"Mode: {mode}\n"
-        "Question: What project, subsystem, or component does this code belong to? "
-        "Is it kernel, driver, firmware, runtime, service, userspace library, compiler, or application logic? "
-        "What is the component supposed to do, what trust or privilege model applies, and what security expectations "
-        "or threat assumptions are important for reviewing this code?\n\n"
-        f"Snippet:\n{snippet}"
+        f"Evidence obligation: {obligation}\n"
+        f"Relevant identifiers: {id_text}\n"
+        f"Question: {question}\n\n"
+        f"{subject}:\n{snippet}\n\n"
+        "Return concrete code or documentation evidence only when it is tied to this file, "
+        "these identifiers, or this security obligation."
     )
+
+
+def _rag_result_has_signal(result: str) -> bool:
+    text = str(result or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if "tool execution failed:" in lowered:
+        return False
+    if "[rag_search]\nempty query" in lowered:
+        return False
+    if "retrieval unavailable; continuing without indexed context" in lowered:
+        return False
+    if "[code_rag]\n<none>" in lowered and "[docs_rag]\n<none>" in lowered:
+        return False
+    return bool(text.replace("<none>", "").strip())
+
+
+def _build_review_context_query(state: ReviewState) -> str:
+    return _build_obligation_rag_query(state, "callers/reachability")
 
 
 def _build_body_text(state: ReviewState) -> str:
     snippet = state.get("snippet", "") or ""
     context = state.get("context", "") or ""
+    obligation_context = state.get("obligation_context", "") or ""
     project_context = state.get("project_context", "") or ""
     tool_evidence = state.get("tool_evidence", "") or ""
     mode = state.get("mode", "file")
@@ -103,6 +294,7 @@ def _build_body_text(state: ReviewState) -> str:
         part
         for part in (
             context.strip(),
+            obligation_context.strip(),
             project_context.strip(),
             tool_evidence.strip(),
         )
@@ -153,7 +345,19 @@ def review_node_retrieve(state: ReviewState) -> ReviewState:
     query = _build_review_context_query(state)
     code = retrieve_text(state.get("retriever_code"), query)
     docs = retrieve_text(state.get("retriever_docs"), query)
-    new_state["context"] = synthesize_context(code, docs)
+    context = synthesize_context(code, docs)
+    new_state["context"] = (
+        "\n".join(
+            [
+                "[DETERMINISTIC_RAG]",
+                "obligation=callers/reachability",
+                "[RAG_RESULT]",
+                context,
+            ]
+        )
+        if context
+        else ""
+    )
     return new_state
 
 
@@ -166,6 +370,7 @@ def review_node_build_prompt(
     custom_guidance_precedence: str,
     schema_prompt_section: str,
     hardware_cwe_guidance: str = "",
+    tool_guidance: str = "",
 ) -> ReviewState:
     new_state = cast(ReviewState, dict(state))
     system = build_review_system_prompt(
@@ -176,6 +381,7 @@ def review_node_build_prompt(
         custom_guidance_precedence,
         schema_prompt_section,
         hardware_cwe_guidance,
+        tool_guidance=tool_guidance if state.get("use_retrieval_context", True) else "",
     )
     new_state["system_prompt"] = system
     return new_state
@@ -222,13 +428,13 @@ def review_node_collect_tool_evidence(
     return new_state
 
 
-def review_node_collect_project_context(
+def review_node_collect_obligation_context(
     state: ReviewState,
     *,
     toolbox,
 ) -> ReviewState:
     new_state = cast(ReviewState, dict(state))
-    new_state["project_context"] = ""
+    new_state["obligation_context"] = ""
     if toolbox is None:
         return new_state
     if not bool(state.get("use_retrieval_context", True)):
@@ -236,27 +442,67 @@ def review_node_collect_project_context(
     if not getattr(toolbox, "has", lambda _name: False)("rag_search"):
         return new_state
 
-    query = _build_project_context_query(state)
-    try:
-        project_context = toolbox.rag_search(
-            query,
-            retriever_code=state.get("retriever_code"),
-            retriever_docs=state.get("retriever_docs"),
-        )
-    except Exception as exc:
-        logger.warning("Review project-context rag_search failed: %s", exc)
-        return new_state
+    sections: list[str] = []
+    obligations = _select_review_rag_obligations(state)
+    if str(state.get("context", "") or "").strip():
+        obligations = [
+            obligation
+            for obligation in obligations
+            if obligation != "callers/reachability"
+        ]
 
-    if project_context:
-        new_state["project_context"] = "[PROJECT_CONTEXT]\n" f"{project_context}"
+    for obligation in obligations:
+        query = _build_obligation_rag_query(state, obligation)
+        try:
+            result = toolbox.rag_search(
+                query,
+                retriever_code=state.get("retriever_code"),
+                retriever_docs=state.get("retriever_docs"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Review obligation rag_search failed for %s: %s", obligation, exc
+            )
+            continue
+
         _emit_review_debug(
             state.get("debug_callback"),
             "tool_call",
-            tool_name="project_context_rag",
-            tool_args={"query": query},
-            tool_output=project_context,
+            tool_name="obligation_rag_search",
+            tool_args={"obligation": obligation, "query": query},
+            tool_output=result,
+        )
+
+        result_text = str(result or "")
+        if not _rag_result_has_signal(result_text):
+            continue
+        sections.append(
+            "\n".join(
+                [
+                    "[OBLIGATION_RAG]",
+                    f"obligation={obligation}",
+                    "[QUESTION]",
+                    _REVIEW_RAG_OBLIGATIONS[obligation],
+                    "[RAG_RESULT]",
+                    _clip_review_rag_text(result_text, _REVIEW_RAG_RESULT_CHARS),
+                ]
+            )
+        )
+
+    if sections:
+        new_state["obligation_context"] = _clip_review_rag_text(
+            "\n\n".join(sections),
+            _REVIEW_OBLIGATION_CONTEXT_CHARS,
         )
     return new_state
+
+
+def review_node_collect_project_context(
+    state: ReviewState,
+    *,
+    toolbox,
+) -> ReviewState:
+    return review_node_collect_obligation_context(state, toolbox=toolbox)
 
 
 def review_node_llm(
@@ -323,18 +569,16 @@ class ReviewGraph:
         self.chat_model_kwargs = chat_model_kwargs or {}
         self._schema_prompt_section = review_schema_prompt()
 
-        self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
-            "security_review_report", ""
+        general_prompts = self.plugin_config.get("general_prompts", {})
+        self.report_prompt = general_prompts.get("security_review_report", "")
+        self.hardware_cwe_guidance = general_prompts.get("hardware_cwe_guidance", "")
+        self.review_rag_evidence_guidance = general_prompts.get(
+            "review_rag_evidence_guidance",
+            DEFAULT_REVIEW_RAG_EVIDENCE_GUIDANCE,
         )
-        self.hardware_cwe_guidance = self.plugin_config.get("general_prompts", {}).get(
-            "hardware_cwe_guidance", ""
-        )
-        self.review_rag_tool_prompt = (
-            "You are gathering additional security context for a code review. "
-            "You have exactly one tool: rag_search. Use it only when the file and deterministic context "
-            "are not enough. Ask focused natural-language security questions about callers, externally controlled inputs, "
-            "trust boundaries, validation, authorization, sanitization, or intended enforcement behavior. "
-            "After using the tool, provide a short plain-text summary of what matters for the security review."
+        self.review_rag_tool_prompt = general_prompts.get(
+            "review_rag_tool_prompt",
+            DEFAULT_REVIEW_RAG_TOOL_PROMPT,
         )
 
         self._review_chat_model = None
@@ -395,6 +639,7 @@ class ReviewGraph:
                 custom_guidance_precedence=self.custom_guidance_precedence,
                 schema_prompt_section=self._schema_prompt_section,
                 hardware_cwe_guidance=self.hardware_cwe_guidance,
+                tool_guidance=self.review_rag_evidence_guidance,
             ),
         )
         graph.add_node(
@@ -407,9 +652,9 @@ class ReviewGraph:
             ),
         )
         graph.add_node(
-            "collect_project_context",
+            "collect_obligation_context",
             partial(
-                review_node_collect_project_context,
+                review_node_collect_obligation_context,
                 toolbox=self.toolbox,
             ),
         )
@@ -425,8 +670,8 @@ class ReviewGraph:
 
         graph.set_entry_point("retrieve")
         graph.add_edge("retrieve", "build_prompt")
-        graph.add_edge("build_prompt", "collect_project_context")
-        graph.add_edge("collect_project_context", "collect_tool_evidence")
+        graph.add_edge("build_prompt", "collect_obligation_context")
+        graph.add_edge("collect_obligation_context", "collect_tool_evidence")
         graph.add_edge("collect_tool_evidence", "review")
         graph.add_edge("review", "parse")
         graph.add_edge("parse", END)

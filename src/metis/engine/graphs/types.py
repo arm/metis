@@ -43,6 +43,7 @@ class ReviewState(TypedDict, total=False):
     debug_callback: Any
     # Derived
     context: str
+    obligation_context: str
     project_context: str
     tool_evidence: str
     system_prompt: str

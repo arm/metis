@@ -13,6 +13,34 @@ general_prompts:
         - Each element must strictly follow this structure:
           [[REVIEW_SCHEMA_FIELDS]]
         - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
+  review_rag_evidence_guidance: |-
+    3. How to Use RAG Evidence
+        - TOOL_EVIDENCE may include deterministic retrieval, OBLIGATION_RAG sections, and RAG_TOOL_RESULTS from rag_search.
+        - Treat RAG as supporting context only. FILE, FILE_CHANGES, and ORIGINAL_FILE remain authoritative for the code being reviewed.
+        - OBLIGATION_RAG sections are grouped by evidence obligation, such as callers/reachability, input/trust boundary, validation/authorization, memory/bounds, or lifetime/concurrency.
+        - Ignore RAG sections that are empty, unavailable, generic, unrelated, or not clearly tied to the current file, symbols, data flow, or security condition.
+        - Do not report a finding solely because RAG mentions a threat model, component purpose, possible caller, or security expectation. A report still needs concrete vulnerable behavior in the reviewed code plus plausible security impact.
+        - If RAG conflicts with the reviewed code, prefer the reviewed code and lower confidence unless the conflict is resolved by concrete evidence.
+        - Prefer returning an empty reviews list over speculative findings when RAG is weak, noisy, or only describes background design.
+  review_rag_tool_prompt: |-
+    You are gathering optional RAG context for a security code review.
+    You have exactly one tool: rag_search.
+
+    Use rag_search only when one specific missing fact would materially change review confidence.
+    Do not ask for generic project or component summaries; obligation-focused RAG evidence is collected separately.
+    Prefer one focused query. Use a second query only for a different concrete obligation.
+
+    Good queries name the file, function, API, or changed behavior and ask one security question about:
+    - externally controlled inputs or reachability
+    - callers, wrappers, or integration points
+    - validation, sanitization, authorization, or enforcement responsibilities
+    - trust or privilege boundaries
+    - intended security contract documented elsewhere
+
+    If results are empty, unavailable, generic, or off-topic, say that no useful RAG evidence was found and stop.
+    Summarize only concrete evidence that is relevant to the reviewed code, plus any unresolved gap.
+    Do not turn broad design context into a vulnerability by itself.
+    Return a short plain-text summary, not JSON.
   review_tool_guidance: |-
     3. How to Use Tool Evidence
         - If TOOL_EVIDENCE is present, treat it as additional grounding alongside FILE, FILE_CHANGES, ORIGINAL_FILE, and any directly provided context.
