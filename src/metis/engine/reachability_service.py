@@ -425,6 +425,15 @@ class PathTracer:
             return []
         paths = []
         for s in sources:
+            if s.unique_name in sinks:
+                paths.append(
+                    ReachabilityPath(
+                        source=s.unique_name,
+                        sink=s.unique_name,
+                        path=[s.unique_name],
+                        sink_type=s.sink_type,
+                    )
+                )
             paths.extend(self._bfs(s.unique_name, sinks))
         return paths
     
