@@ -14,6 +14,7 @@ from metis.vector_store.base import BaseVectorStore
 from .graphs import AskGraph, ReviewGraph
 from .indexing_service import IndexingService
 from .options import TriageOptions, coerce_triage_options
+from .reachability_service import ReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
@@ -72,6 +73,22 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
+        self.use_reachability_for_review = bool(
+            kwargs.get("use_reachability_for_review", False)
+        )
+        print("ENGINE FLAG use_reachability_for_review =", self.use_reachability_for_review)
+        self.reachability_settings = {
+            "extraction_model": kwargs.get(
+                "reachability_extraction_model", "gpt-4.1-mini"
+            ),
+            "confirmation_model": kwargs.get("reachability_confirmation_model"),
+            "max_workers": int(kwargs.get("reachability_workers", self.max_workers)),
+            "max_paths": int(kwargs.get("reachability_max_paths", 0)),
+            "max_paths_per_sink": int(
+                kwargs.get("reachability_max_paths_per_sink", 3)
+            ),
+            "max_path_length": int(kwargs.get("reachability_max_path_length", 25)),
+        }
 
         self.plugin_config = load_plugin_config()
         self.custom_guidance_precedence = self.plugin_config.get(
@@ -124,11 +141,21 @@ class MetisEngine:
             self._state,
             self.repository,
         )
+        self.reachability = ReachabilityService(
+            config=self._config,
+            repository=self.repository,
+            llm_provider=self.llm_provider,
+            usage_runtime=self.usage_runtime
+
+        )
         self.review = ReviewService(
             self._config,
             self.repository,
             get_query_engines=lambda: self._init_and_get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
+            reachability_service=self.reachability,
+            use_reachability_for_review=self.use_reachability_for_review,
+            reachability_settings=self.reachability_settings,
         )
         self._triage_service = self._build_triage_service()
 

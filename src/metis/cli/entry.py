@@ -116,6 +116,12 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
+        use_reachability_for_review=True,
+        reachability_extraction_model=args.reachability_extraction_model,
+        reachability_confirmation_model=args.reachability_confirmation_model,
+        reachability_workers=args.reachability_workers,
+        reachability_max_paths=args.reachability_max_paths,
+        reachability_max_paths_per_sink=args.reachability_max_paths_per_sink,
         **runtime,
     )
     return engine, vector_backend
@@ -338,7 +344,7 @@ def main():
     parser.add_argument(
         "--output-file",
         action="append",
-        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif)",
+        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif/.jsonl)",
     )
     parser.add_argument(
         "--output-files",
@@ -368,6 +374,39 @@ def main():
         action="store_true",
         help="Allow selected analysis commands to run without an index-backed context.",
     )
+
+    
+    parser.add_argument(
+        "--reachability-extraction-model",
+        type=str,
+        default="gpt-4.1-mini",
+        help="LLM model for reachability function extraction (default: gpt-4.1-mini)",
+    )
+    parser.add_argument(
+        "--reachability-confirmation-model",
+        type=str,
+        default=None,
+        help="LLM model for reachability vulnerability confirmation (default: configured query model)",
+    )
+    parser.add_argument(
+        "--reachability-max-paths-per-sink",
+        type=int,
+        default=3,
+        help="Maximum diverse paths per root-cause sink in reachability output (default: 3)",
+    )
+    parser.add_argument(
+        "--reachability-workers",
+        type=int,
+        default=8,
+        help="Parallel workers for reachability extraction and confirmation (default: 8)",
+    )
+    parser.add_argument(
+        "--reachability-max-paths",
+        type=int,
+        default=0,
+        help="Max paths to analyze (0 = all, interactive mode will prompt). Default: 0",
+    )
+
 
     args = parser.parse_args()
 

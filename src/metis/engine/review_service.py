@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -32,17 +33,57 @@ class ReviewService:
         repository: EngineRepository,
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
+        reachability_service=None,
+        use_reachability_for_review: bool = False,
+        reachability_settings: dict[str, Any] | None = None,
     ):
         self._config = config
         self._repository = repository
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
+        self._reachability_service = reachability_service
+        self._use_reachability_for_review = use_reachability_for_review
+        self._reachability_settings = dict(reachability_settings or {})
+        self._reachability_cache = None
+        self._reachability_lock = threading.Lock()
 
     def get_code_files(self, options: ReviewOptions | None = None):
         options = coerce_review_options(options)
         return self._repository.get_code_files(
             include_suffixed_sources=not options.use_retrieval_context
         )
+
+    def _get_reachability_reviews(self):
+        if self._reachability_cache is not None:
+            return list(self._reachability_cache)
+
+        with self._reachability_lock:
+            if self._reachability_cache is None:
+                self._reachability_cache = self._reachability_service.review_codebase(
+                    **self._reachability_settings
+                )
+        return list(self._reachability_cache)
+
+    def _find_reachability_review_for_file(self, file_path):
+        base_path = os.path.abspath(self._config.codebase_path)
+        abs_target = (
+            file_path if os.path.isabs(file_path) else os.path.join(base_path, file_path)
+        )
+        abs_target = os.path.abspath(abs_target)
+        relative_target = os.path.relpath(abs_target, base_path)
+
+        for review in self._get_reachability_reviews():
+            if review.get("file") == relative_target:
+                return review
+            review_file_path = review.get("file_path")
+            if review_file_path and os.path.abspath(review_file_path) == abs_target:
+                return review
+
+        return {
+            "file": relative_target,
+            "file_path": abs_target,
+            "reviews": [],
+        }
 
     def review_file(
         self,
@@ -55,6 +96,11 @@ class ReviewService:
             options,
             use_retrieval_context=use_retrieval_context,
         )
+        if (
+            self._use_reachability_for_review
+            and self._reachability_service is not None
+        ):
+            return self._find_reachability_review_for_file(file_path)
         qe_code = qe_docs = None
         if options.use_retrieval_context:
             qe_code, qe_docs = self._get_query_engines()
@@ -136,6 +182,18 @@ class ReviewService:
             options,
             use_retrieval_context=use_retrieval_context,
         )
+        if (
+            self._use_reachability_for_review
+            and self._reachability_service is not None
+            and review_file_func is None
+            and get_code_files_func is None
+        ):
+            results = self._get_reachability_reviews()
+            if not results:
+                return
+            for result in results:
+                yield result
+            return
         files = (
             get_code_files_func()
             if get_code_files_func is not None
