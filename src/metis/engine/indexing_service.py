@@ -14,7 +14,7 @@ from metis.exceptions import ParsingError
 from metis.utils import read_file_content
 
 from .diff_utils import extract_content_from_diff
-from .helpers import prepare_nodes_iter
+from .helpers import annotate_code_nodes, prepare_nodes_iter
 from .repository import EngineRepository
 from .runtime import EngineConfig, EngineState
 
@@ -188,21 +188,33 @@ class IndexingService:
                     id_=doc_id,
                 )
 
-                if diff_file.is_added_file:
-                    if ext in self._repository.get_all_supported_code_extensions():
-                        plugin = self._repository.get_plugin_for_extension(ext)
-                        if not plugin:
-                            continue
-                        splitter = self._repository.get_splitter_cached(plugin)
+                if ext in self._repository.get_all_supported_code_extensions():
+                    plugin = self._repository.get_plugin_for_extension(ext)
+                    if not plugin:
+                        continue
+                    splitter = self._repository.get_splitter_cached(plugin)
+                    try:
+                        nodes = splitter.get_nodes_from_documents([doc])
+                        annotate_code_nodes(nodes, doc)
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not parse code with language {plugin.get_name()} for file {doc.id_} (ext {ext}): {e}"
+                        )
+                        continue
+                    if not diff_file.is_added_file:
                         try:
-                            nodes = splitter.get_nodes_from_documents([doc])
-                        except Exception as e:
-                            logger.warning(
-                                f"Could not parse code with language {plugin.get_name()} for file {doc.id_} (ext {ext}): {e}"
+                            target_index.delete_ref_doc(
+                                doc_id, delete_from_docstore=True
                             )
-                            continue
-                    else:
-                        nodes = doc_splitter.get_nodes_from_documents([doc])
+                        except Exception:
+                            logger.debug(
+                                "Could not delete existing indexed code doc %s",
+                                doc_id,
+                                exc_info=True,
+                            )
+                    target_index.insert_nodes(nodes)
+                elif diff_file.is_added_file:
+                    nodes = doc_splitter.get_nodes_from_documents([doc])
                     target_index.insert_nodes(nodes)
                 else:
                     target_index.refresh_ref_docs([doc])

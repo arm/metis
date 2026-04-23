@@ -10,7 +10,11 @@ def normalize_retrieved_doc(doc):
     content = str(getattr(doc, "page_content", "") or "")
     meta = getattr(doc, "metadata", {}) or {}
     source = str(
-        meta.get("file_path") or meta.get("source") or meta.get("doc_id") or ""
+        meta.get("file_path")
+        or meta.get("source")
+        or meta.get("file_name")
+        or meta.get("doc_id")
+        or ""
     )
     raw_line = meta.get("line") or meta.get("start_line") or meta.get("line_number")
     try:
@@ -35,19 +39,14 @@ def retrieve_context_deterministic(
         return ""
 
     normalized = [normalize_retrieved_doc(doc) for doc in docs]
-    dedup = {}
+    seen = set()
+    ordered = []
     for source, line, content, digest in normalized:
         key = (source, line, digest)
-        dedup[key] = (source, line, content, digest)
-
-    ordered = sorted(
-        dedup.values(),
-        key=lambda x: (
-            x[0].lower(),
-            x[1],
-            x[3],
-        ),
-    )
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append((source, line, content, digest))
 
     parts: list[str] = []
     used = 0
