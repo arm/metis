@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import threading
 import uuid
 
@@ -12,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -25,6 +27,7 @@ logger = logging.getLogger("metis")
 
 
 # types
+
 
 @dataclass
 class FunctionNode:
@@ -197,6 +200,10 @@ _VULN_TO_CWE = {
     "boolean_coercion": "CWE-253", "wrong_constant": "CWE-697", "wrong_field": "CWE-688",
     "stale_length": "CWE-131", "double_close": "CWE-675", "callback_uaf": "CWE-416",
     "stale_pointer": "CWE-825", "refcount_imbalance": "CWE-911",
+    "missing_auth": "CWE-862", "ignored_return": "CWE-252", "sscanf_overflow": "CWE-120",
+    "toctou": "CWE-367", "static_buffer_reuse": "CWE-562", "pool_free_mismatch": "CWE-762",
+    "fd_leak": "CWE-775", "thread_unsafe": "CWE-362", "assignment_in_condition": "CWE-481",
+    "sign_confusion": "CWE-195", "permission_escalation": "CWE-269",
 }
 
 
@@ -360,8 +367,6 @@ severity: critical, high, medium, low. confidence: high, medium, low. Be conserv
 
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
 
-# --- Inbound: bugs rooted IN the target file ---
-
 _FILE_CONFIRM_SYS = """\
 You are a security researcher specializing in C and C++ code analysis.
 You are reviewing ONE target file from a larger codebase.
@@ -389,8 +394,6 @@ _FILE_CONFIRM_USR = """Target file: {target_file}
 == RELATED PATH CODE ==
 {related_code_section}
 """
-
-# --- Cross-file: bugs involving the target file's functions used by OTHER files ---
 
 _CROSS_FILE_SYS = """\
 You are a security researcher specializing in C and C++ code analysis.
@@ -441,8 +444,6 @@ class VulnerabilityConfirmer:
     def __init__(self, llm_provider, model, usage_runtime, codebase_path, max_tokens=4096):
         self._p = llm_provider; self._m = model; self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path); self._t = max_tokens
-
-    # --- Bulk confirmation (used by standalone reachability command) ---
 
     def confirm_parallel(self, paths, graph, *, max_workers=8, output_path=None, progress_callback=None):
         if not paths: return []
@@ -516,7 +517,6 @@ class VulnerabilityConfirmer:
                 root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""), analysis_type="reachability"))
         return results
 
-
     def confirm_for_file(self, target_file, paths, graph, *, max_workers=4, progress_callback=None):
         paths = _dedupe_paths(paths)
         if not paths: return []
@@ -559,9 +559,7 @@ class VulnerabilityConfirmer:
             "target_file_code": "\n".join(tc), "related_code_section": "\n".join(rc)}).strip()
         return self._parse_confirm(raw, batch, graph)
 
-
     def confirm_cross_file(self, target_file, paths, graph, *, max_workers=4, progress_callback=None):
-        """Find bugs where OTHER files misuse functions defined in target_file."""
         paths = _dedupe_paths(paths)
         if not paths: return []
         batches = list(_chunked(paths, 8))
@@ -580,42 +578,31 @@ class VulnerabilityConfirmer:
             for u in p.path:
                 n = graph.get_node(u)
                 if not n: continue
-                if n.file_path == target_file:
-                    target_nodes[u] = n
-                else:
-                    caller_nodes[u] = n
-
-        if not target_nodes or not caller_nodes:
-            return []
-
+                if n.file_path == target_file: target_nodes[u] = n
+                else: caller_nodes[u] = n
+        if not target_nodes or not caller_nodes: return []
         ps = ["== PATHS INVOLVING FOCUS FILE FUNCTIONS =="]
         for i, p in enumerate(batch):
             sn, sk = graph.get_node(p.source), graph.get_node(p.sink)
             ps.append(f"\nPath {i}:\n Chain: {' -> '.join(p.path)}")
             if sn: ps.append(f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}")
             if sk: ps.append(f" Sink: {sk.unique_name} (line {sk.line_number}) [{sk.sink_type}] - {sk.sink_reason}")
-            # highlight which functions are from focus file
             focus_fns = [u for u in p.path if graph.get_node(u) and graph.get_node(u).file_path == target_file]
-            if focus_fns:
-                ps.append(f" Focus-file functions on this path: {', '.join(focus_fns)}")
-
+            if focus_fns: ps.append(f" Focus-file functions on this path: {', '.join(focus_fns)}")
         tc = ["-- FOCUS FILE: functions defined here --"]
         for u, n in target_nodes.items():
             body = _read_function_body(self._cb, n, 5000)
             if body: tc.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
-
         rc = ["-- CALLERS: code in other files that uses focus-file functions --"]
         for u, n in caller_nodes.items():
             body = _read_function_body(self._cb, n, 3000)
             if body: rc.append(f"\n--- {u} (line {n.line_number} in {n.file_path}) ---\n{body}")
-
         kw = self._u.hooks.chat_model_kwargs()
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _CROSS_FILE_SYS), ("user", _CROSS_FILE_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({
             "target_file": target_file, "paths_section": "\n".join(ps),
             "target_file_code": "\n".join(tc), "related_code_section": "\n".join(rc)}).strip()
-
         parsed = parse_json_output(raw)
         if not isinstance(parsed, dict): return []
         fl = parsed.get("findings")
@@ -629,27 +616,24 @@ class VulnerabilityConfirmer:
             focus_fn = None
             for u in rp.path:
                 n = graph.get_node(u)
-                if n and n.file_path == target_file:
-                    focus_fn = n; break
+                if n and n.file_path == target_file: focus_fn = n; break
             sink_file = target_file
             sink_fn = focus_fn.unique_name if focus_fn else rp.sink
             sink_line = focus_fn.line_number if focus_fn else (sk.line_number if sk else 0)
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16],
-                vulnerability_type=str(e.get("vulnerability_type") or "other"),
-                severity=str(e.get("severity") or "medium"),
-                confidence=str(e.get("confidence") or "medium"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or "other"),
+                severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
                 source_function=rp.source, source_file=sn.file_path if sn else "",
                 source_line=sn.line_number if sn else 0,
                 sink_function=sink_fn, sink_file=sink_file, sink_line=sink_line,
                 path=list(rp.path), description=str(e.get("description") or ""),
-                root_cause=str(e.get("root_cause") or ""),
-                evidence=str(e.get("evidence") or ""),
+                root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
                 analysis_type="cross_file"))
         return results
 
 
-# supplementary analyzer
+# supplementary analyzer, only for review code for now
+
 
 _RESOURCE_KW = frozenset({"free", "malloc", "calloc", "realloc", "close", "destroy", "release", "delete", "munmap", "unref", "grow", "compact", "resize"})
 _AUTH_KW = frozenset({"auth", "login", "check", "verify", "compare", "validate", "token", "password", "permit", "deny", "match", "level", "permission"})
@@ -889,7 +873,6 @@ class SupplementaryAnalyzer:
 
 # deduplicator
 
-
 class Deduplicator:
     @staticmethod
     def deduplicate(findings, *, max_per_sink=3):
@@ -917,6 +900,370 @@ def _select_diverse(findings, limit):
 
 
 # service
+
+_FILE_AUDIT_SYS = """\
+You are a world-class C/C++ security auditor performing an exhaustive review of a \
+single source file from a larger codebase. Your job is to find EVERY potential \
+security issue — confirmed bugs AND suspicious patterns that MIGHT be exploitable \
+depending on how the rest of the codebase uses this file's functions.
+
+## Categories to check thoroughly
+
+1. MEMORY SAFETY: buffer overflow, heap/stack overflow (including via sscanf %%s \
+into fixed buffers), use-after-free, double-free, NULL dereference before check, \
+out-of-bounds read/write, uninitialized memory exposure
+2. RESOURCE MANAGEMENT: file descriptor leaks on error paths, double-close, \
+pool_alloc() freed with free() (allocator mismatch), missing cleanup on early return
+3. AUTH & ACCESS CONTROL: missing permission/auth checks before privileged operations, \
+wrong permission constants (e.g. RES_MSG where RES_CHANNEL needed), boolean coercion \
+of rich return values (treating enum/level as bool with if(!func())), ignored return \
+values from auth/verify functions, any handler that performs a sensitive action \
+without checking the caller's role or auth status
+4. DATA FLOW: user-controlled data passed as printf format string, sscanf with \
+unbounded %%s, sign confusion (int32 vs uint32 vs size_t), integer overflow in \
+size calculations (count * sizeof(large_struct))
+5. CROSS-FILE HAZARDS — flag these even if you cannot confirm exploitability:
+   - Functions that free/close resources (callers may also free/close the same thing)
+   - Functions returning pointers to static/global buffers (callers may store the pointer \
+     and call the function again, overwriting previous return)
+   - Functions with ambiguous ownership on error paths (sometimes frees, sometimes doesn't)
+   - Functions whose return values callers might misinterpret
+   - Functions that sanitize/transform data without updating length/size metadata
+   - Functions that register callbacks/timers but don't unregister on cleanup
+   - Functions using pool allocators where callers might use free() instead of pool_free()
+6. LOGIC ERRORS: assignment (=) instead of comparison (==) in conditions, off-by-one \
+in capacity/indexing (e.g. capacity = requested - 1), TOCTOU (stat then open), \
+stale data after mutation
+7. CONCURRENCY: unsynchronized increment/decrement of shared counters, global state \
+modified without locks, non-atomic read-modify-write on shared variables
+
+## Output format
+
+Return ONLY valid JSON. For each issue found, include investigation_hints — short \
+grep patterns or function names a reviewer should search for in the rest of the \
+codebase to determine reachability and exploitability.
+
+{{"candidates": [
+  {{"function_name": "func_name", "line": 42, "type": "double_close",
+    "severity": "high", "description": "conn_close closes c->fd but caller may also close the same fd",
+    "cross_file_concern": true,
+    "investigation_hints": ["conn_close(", "close(cfd)"]}}
+]}}
+
+If you find NOTHING, return {{"candidates": []}}. But be thorough — err on the side \
+of flagging suspicious patterns. It is much better to flag a false positive than to \
+miss a real vulnerability."""
+
+_FILE_AUDIT_USR = "File under review: {file_path}\n\n{file_content}"
+
+
+class FileAuditor:
+    """Phase 1: Strong model reviews a single file for all potential security issues."""
+
+    def __init__(self, llm_provider, model, usage_runtime, max_tokens=16384):
+        self._p = llm_provider
+        self._m = model
+        self._u = usage_runtime
+        self._t = max_tokens
+
+    def audit(self, file_path, file_content):
+        kw = self._u.hooks.chat_model_kwargs()
+        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", _FILE_AUDIT_SYS),
+            ("user", _FILE_AUDIT_USR),
+        ])
+        raw = (prompt | chat | StrOutputParser()).invoke({
+            "file_path": file_path,
+            "file_content": _number_lines(file_content),
+        }).strip()
+
+        parsed = parse_json_output(raw)
+        if not isinstance(parsed, dict):
+            return []
+        candidates = parsed.get("candidates")
+        if not isinstance(candidates, list):
+            return []
+        result = []
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            fn = str(c.get("function_name") or "").strip()
+            if not fn:
+                continue
+            line = 1
+            try:
+                line = max(1, int(c.get("line", 1)))
+            except:
+                pass
+            result.append({
+                "function_name": fn,
+                "line": line,
+                "type": str(c.get("type") or "other").strip(),
+                "severity": str(c.get("severity") or "medium").strip().lower(),
+                "description": str(c.get("description") or ""),
+                "cross_file_concern": bool(c.get("cross_file_concern")),
+                "investigation_hints": [str(h).strip() for h in (c.get("investigation_hints") or []) if str(h).strip()],
+            })
+        return result
+
+
+# file investigation
+
+_INVESTIGATE_SYS = """\
+You are a security researcher investigating whether a potential vulnerability in a \
+C/C++ codebase is actually reachable and exploitable by an external attacker.
+
+You are given:
+- A candidate vulnerability description from a file audit
+- The source code of the file containing the potential issue
+- Optionally, some initial search results from the codebase
+
+## Available actions
+
+Output ONLY valid JSON with one of these formats:
+
+### 1. Search the codebase (grep)
+{{"actions": [
+  {{"type": "search", "pattern": "function_name\\\\("}},
+  {{"type": "search", "pattern": "close\\\\(cfd\\\\)"}}
+]}}
+Maximum 5 search actions per turn. Use specific patterns to avoid huge results.
+
+### 2. Read lines from a file
+{{"actions": [
+  {{"type": "read", "path": "src/main.c", "start_line": 28, "end_line": 60}}
+]}}
+Maximum 3 read actions per turn. Max 80 lines per read.
+
+### 3. Conclude your investigation
+{{"verdict": {{
+  "is_vulnerable": true,
+  "vulnerability_type": "double_close",
+  "severity": "high",
+  "confidence": "high",
+  "function_name": "conn_close",
+  "line": 58,
+  "description": "conn_close closes c->fd, then handle_client also closes cfd which is the same descriptor",
+  "root_cause": "Ambiguous fd ownership: conn_close takes ownership and closes c->fd, but handle_client still holds cfd and closes it after conn_close returns",
+  "evidence": "src/connection.c:72 close(c->fd); src/main.c:46 close(cfd); cfd == c->fd from conn_create",
+  "reachability_chain": "main -> handle_client -> conn_close -> close(c->fd) ... handle_client -> close(cfd)"
+}}}}
+
+## Investigation strategy
+
+1. First, use the investigation_hints from the audit to search for relevant callers/callees
+2. Read the key functions you find to understand data flow
+3. Determine: can an external attacker (network client, file input, etc.) actually reach this code?
+4. Check for mitigating factors: bounds checks, auth checks, sanitization
+5. When you have enough evidence, conclude with a verdict
+
+If the vulnerability is NOT exploitable or NOT reachable, conclude with is_vulnerable: false.
+Be thorough but efficient. Output ONLY valid JSON, no prose."""
+
+_INVESTIGATE_CONCLUDE_SYS = """\
+You must now conclude your investigation based on everything you have seen. \
+Determine whether the vulnerability candidate is a real, exploitable issue.
+
+Output ONLY valid JSON:
+{{"verdict": {{
+  "is_vulnerable": true,
+  "vulnerability_type": "...",
+  "severity": "high",
+  "confidence": "high",
+  "function_name": "...",
+  "line": 0,
+  "description": "...",
+  "root_cause": "...",
+  "evidence": "...",
+  "reachability_chain": "func_a -> func_b -> func_c"
+}}}}
+
+Set is_vulnerable to false if there is insufficient evidence of exploitability."""
+
+_GREP_MAX_LINES = 60
+_GREP_TIMEOUT = 10
+_C_EXTENSIONS = ["*.c", "*.h", "*.cc", "*.cpp", "*.hpp", "*.hh", "*.hxx", "*.cxx"]
+
+
+def _run_grep(pattern, codebase_path, max_lines=_GREP_MAX_LINES):
+    """Execute grep on the codebase, returning truncated output."""
+    try:
+        cmd = ["grep", "-rn"]
+        for ext in _C_EXTENSIONS:
+            cmd.extend(["--include", ext])
+        cmd.extend([pattern, "."])
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=_GREP_TIMEOUT, cwd=codebase_path,
+        )
+        output = result.stdout
+        if not output.strip():
+            return "(no matches found)"
+        lines = output.splitlines()
+        if len(lines) > max_lines:
+            return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines truncated — use a more specific pattern)"
+        return output.strip()
+    except subprocess.TimeoutExpired:
+        return "(search timed out — pattern too broad, use a more specific pattern)"
+    except Exception as e:
+        return f"(search error: {e})"
+
+
+def _read_file_lines(codebase_path, rel_path, start_line, end_line, max_lines=80):
+    """Read specific lines from a file in the codebase."""
+    try:
+        full_path = os.path.normpath(os.path.join(codebase_path, rel_path))
+        if not full_path.startswith(os.path.abspath(codebase_path)):
+            return "(path outside codebase)"
+        content = read_file_content(full_path)
+        if not content:
+            return "(file not found or empty)"
+        lines = content.splitlines()
+        start = max(0, start_line - 1)
+        end = min(len(lines), end_line)
+        if end - start > max_lines:
+            end = start + max_lines
+        return "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
+    except Exception as e:
+        return f"(read error: {e})"
+
+
+class FindingInvestigator:
+    """Phase 2: Multi-turn investigation of each candidate finding via grep."""
+
+    def __init__(self, llm_provider, model, usage_runtime, codebase_path, max_tokens=4096):
+        self._p = llm_provider
+        self._m = model
+        self._u = usage_runtime
+        self._cb = os.path.abspath(codebase_path)
+        self._t = max_tokens
+
+    def investigate(self, candidate, target_file, target_file_content, *, max_turns=4):
+        """Investigate a single candidate finding. Returns a verdict dict or None."""
+        kw = self._u.hooks.chat_model_kwargs()
+        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
+
+        initial_user = self._build_initial_prompt(candidate, target_file, target_file_content)
+        messages = [
+            SystemMessage(content=_INVESTIGATE_SYS),
+            HumanMessage(content=initial_user),
+        ]
+
+        for turn in range(max_turns):
+            is_last_turn = (turn == max_turns - 1)
+
+            if is_last_turn:
+                messages.append(HumanMessage(content=(
+                    "This is your final turn. You must conclude now with a verdict. "
+                    "Based on everything you've seen, output your verdict JSON."
+                )))
+                call_messages = [SystemMessage(content=_INVESTIGATE_CONCLUDE_SYS)] + messages[1:]
+            else:
+                call_messages = messages
+
+            try:
+                response = chat.invoke(call_messages)
+                raw = response.content if hasattr(response, 'content') else str(response)
+            except Exception as e:
+                logger.warning("Investigation call failed on turn %d: %s", turn, e)
+                return None
+
+            parsed = parse_json_output(raw.strip())
+            if not isinstance(parsed, dict):
+                messages.append(AIMessage(content=raw))
+                messages.append(HumanMessage(content="Please output valid JSON only — either actions or a verdict."))
+                continue
+
+            verdict = parsed.get("verdict")
+            if isinstance(verdict, dict):
+                return verdict
+
+            actions = parsed.get("actions")
+            if not isinstance(actions, list) or not actions:
+                messages.append(AIMessage(content=raw))
+                messages.append(HumanMessage(content="Output actions to search/read the codebase, or a verdict to conclude."))
+                continue
+
+            results_text = self._execute_actions(actions)
+            messages.append(AIMessage(content=raw))
+            messages.append(HumanMessage(content=f"Results from your actions:\n\n{results_text}\n\nContinue investigating or conclude with a verdict."))
+
+        return None
+
+    def _build_initial_prompt(self, candidate, target_file, target_file_content):
+        hints = candidate.get("investigation_hints", [])
+        hints_text = ""
+        if hints:
+            hints_text = f"\nSuggested search patterns to start with: {', '.join(hints)}"
+
+        auto_results = []
+        for hint in hints[:3]:
+            result = _run_grep(hint, self._cb)
+            auto_results.append(f"grep '{hint}':\n{result}")
+        auto_section = ""
+        if auto_results:
+            auto_section = "\n\n== INITIAL SEARCH RESULTS (auto-run from investigation hints) ==\n" + "\n\n".join(auto_results)
+
+        return (
+            f"== CANDIDATE VULNERABILITY ==\n"
+            f"Function: {candidate['function_name']}\n"
+            f"Line: {candidate['line']}\n"
+            f"Type: {candidate['type']}\n"
+            f"Severity: {candidate['severity']}\n"
+            f"Description: {candidate['description']}\n"
+            f"Cross-file concern: {candidate.get('cross_file_concern', False)}\n"
+            f"{hints_text}\n\n"
+            f"== TARGET FILE: {target_file} ==\n"
+            f"{_number_lines(target_file_content)}"
+            f"{auto_section}\n\n"
+            f"Investigate whether this vulnerability is reachable and exploitable. "
+            f"Search for callers, check data flow from external input, look for mitigations."
+        )
+
+    def _execute_actions(self, actions):
+        results = []
+        search_count = 0
+        read_count = 0
+
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            atype = str(action.get("type") or "").strip().lower()
+
+            if atype == "search" and search_count < 5:
+                pattern = str(action.get("pattern") or "").strip()
+                if not pattern:
+                    results.append("(empty search pattern — skipped)")
+                    continue
+                if len(pattern) > 200:
+                    pattern = pattern[:200]
+                output = _run_grep(pattern, self._cb)
+                results.append(f"grep '{pattern}':\n{output}")
+                search_count += 1
+
+            elif atype == "read" and read_count < 3:
+                path = str(action.get("path") or "").strip()
+                try:
+                    start = int(action.get("start_line", 1))
+                except:
+                    start = 1
+                try:
+                    end = int(action.get("end_line", start + 80))
+                except:
+                    end = start + 80
+                if not path:
+                    results.append("(empty path — skipped)")
+                    continue
+                output = _read_file_lines(self._cb, path, start, end)
+                results.append(f"read {path}:{start}-{end}:\n{output}")
+                read_count += 1
+
+        if not results:
+            return "(no valid actions were executed)"
+        return "\n\n".join(results)
+
+
 
 _C_CPP_EXTS = frozenset({".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"})
 DEFAULT_OUTPUT_DIR = "metis_reachability_results"
@@ -951,16 +1298,6 @@ class ReachabilityService:
         return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_parallel(
             paths, graph, max_workers=max_workers, output_path=output_path, progress_callback=progress_callback)
 
-    def confirm_paths_for_file(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None):
-        cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_for_file(
-            target_file, paths, graph, max_workers=max_workers, progress_callback=progress_callback)
-
-    def confirm_cross_file_for_target(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None):
-        cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_cross_file(
-            target_file, paths, graph, max_workers=max_workers, progress_callback=progress_callback)
-
 
     def _graph_cache_key(self, *, extraction_model, max_workers, max_paths, max_path_length):
         return (str(extraction_model or ""), int(max_workers), int(max_paths), int(max_path_length))
@@ -968,10 +1305,6 @@ class ReachabilityService:
     def _supp_cache_key(self, *, extraction_model, confirmation_model, max_workers, max_paths, max_path_length):
         return (str(extraction_model or ""), str(confirmation_model or self._config.llama_query_model or ""),
                 int(max_workers), int(max_paths), int(max_path_length))
-
-    def _file_review_cache_key(self, *, target_file, extraction_model, confirmation_model, max_workers, max_paths, max_paths_per_sink, max_path_length):
-        return (str(target_file), str(extraction_model or ""), str(confirmation_model or self._config.llama_query_model or ""),
-                int(max_workers), int(max_paths), int(max_paths_per_sink), int(max_path_length))
 
 
     def _ensure_graph_and_paths(self, *, extraction_model="gpt-4.1-mini", max_workers=8, max_paths=0, max_path_length=25, progress_callback=None):
@@ -994,7 +1327,6 @@ class ReachabilityService:
         with self._cache_lock: self._graph_cache[key] = result
         return result
 
-
     def _ensure_supplementary(self, graph, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
                               max_workers=8, max_paths=0, max_path_length=25, progress_callback=None):
         key = self._supp_cache_key(extraction_model=extraction_model, confirmation_model=confirmation_model,
@@ -1015,18 +1347,7 @@ class ReachabilityService:
         abs_target = os.path.abspath(abs_target)
         return abs_target, os.path.relpath(abs_target, base_path)
 
-    def _paths_touching_file(self, graph, paths, target_file):
-        """All paths where any node on the path is in the target file."""
-        results = []
-        for p in paths:
-            for node_name in p.path:
-                node = graph.get_node(node_name)
-                if node and node.file_path == target_file:
-                    results.append(p); break
-        return _dedupe_paths(results)
-
     def _split_paths_for_file(self, graph, paths, target_file):
-        """Split paths into inbound (sink in target) and cross-file (target is intermediate, sink elsewhere)."""
         inbound, cross_file = [], []
         for p in paths:
             sink = graph.get_node(p.sink)
@@ -1035,12 +1356,9 @@ class ReachabilityService:
                 node = graph.get_node(node_name)
                 if node and node.file_path == target_file:
                     has_target_node = True; break
-            if not has_target_node:
-                continue
-            if sink and sink.file_path == target_file:
-                inbound.append(p)
-            else:
-                cross_file.append(p)
+            if not has_target_node: continue
+            if sink and sink.file_path == target_file: inbound.append(p)
+            else: cross_file.append(p)
         return _dedupe_paths(inbound), _dedupe_paths(cross_file)
 
     def _supp_findings_for_file(self, supp_findings, target_file):
@@ -1070,68 +1388,168 @@ class ReachabilityService:
         if progress_callback: progress_callback({"event": "file_review_start", "files": len(all_target_files)})
         results = []; completed = 0
         for target_file in all_target_files:
-            review = self.review_single_file_from_codebase(
-                target_file, extraction_model=extraction_model, confirmation_model=confirmation_model,
-                max_workers=max_workers, max_paths=max_paths, max_paths_per_sink=max_paths_per_sink,
-                max_path_length=max_path_length, progress_callback=progress_callback)
+            review = self._review_file_for_codebase(
+                target_file, graph, paths, supp_findings,
+                confirmation_model=confirmation_model, max_workers=max_workers,
+                max_paths_per_sink=max_paths_per_sink, progress_callback=progress_callback)
             completed += 1
             if review and review.get("reviews"): results.append(review)
             if progress_callback: progress_callback({"event": "file_review_progress", "completed": completed, "total": len(all_target_files), "file": target_file})
         if progress_callback: progress_callback({"event": "file_review_done", "files": len(results)})
         return results
 
-    def review_single_file_from_codebase(self, file_path, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
-                                          max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25, progress_callback=None):
-        abs_target, relative_target = self._normalize_target_file(file_path)
-        cache_key = self._file_review_cache_key(
-            target_file=relative_target, extraction_model=extraction_model, confirmation_model=confirmation_model,
-            max_workers=max_workers, max_paths=max_paths, max_paths_per_sink=max_paths_per_sink, max_path_length=max_path_length)
-        with self._cache_lock:
-            cached = self._file_review_cache.get(cache_key)
-        if cached is not None: return dict(cached)
+    def _review_file_for_codebase(self, target_file, graph, paths, supp_findings, *,
+                                   confirmation_model=None, max_workers=8, max_paths_per_sink=3, progress_callback=None):
+        """Graph-based per-file review used by review_codebase."""
+        base_path = os.path.abspath(self._config.codebase_path)
+        abs_target = os.path.join(base_path, target_file)
 
-        graph, paths = self._ensure_graph_and_paths(
-            extraction_model=extraction_model, max_workers=max_workers,
-            max_paths=max_paths, max_path_length=max_path_length, progress_callback=progress_callback)
-        if graph.node_count() == 0:
-            review = {"file": relative_target, "file_path": abs_target, "reviews": []}
-            with self._cache_lock: self._file_review_cache[cache_key] = review
-            return dict(review)
+        file_supp = self._supp_findings_for_file(supp_findings, target_file)
+        inbound_paths, cross_file_paths = self._split_paths_for_file(graph, paths, target_file)
 
-        supp_findings = self._ensure_supplementary(
-            graph, extraction_model=extraction_model, confirmation_model=confirmation_model,
-            max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length, progress_callback=progress_callback)
-        file_supp = self._supp_findings_for_file(supp_findings, relative_target)
-
-        inbound_paths, cross_file_paths = self._split_paths_for_file(graph, paths, relative_target)
+        cm = confirmation_model or self._config.llama_query_model
+        confirmer = VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path)
 
         file_reach = []
         if inbound_paths:
-            file_reach = self.confirm_paths_for_file(
-                relative_target, inbound_paths, graph,
-                confirmation_model=confirmation_model, max_workers=max_workers, progress_callback=progress_callback)
+            file_reach = confirmer.confirm_for_file(target_file, inbound_paths, graph, max_workers=max_workers, progress_callback=progress_callback)
 
         cross_findings = []
         if cross_file_paths:
-            cross_findings = self.confirm_cross_file_for_target(
-                relative_target, cross_file_paths, graph,
-                confirmation_model=confirmation_model, max_workers=max_workers, progress_callback=progress_callback)
+            cross_findings = confirmer.confirm_cross_file(target_file, cross_file_paths, graph, max_workers=max_workers, progress_callback=progress_callback)
 
         all_findings = file_reach + cross_findings + file_supp
         if not all_findings:
-            review = {"file": relative_target, "file_path": abs_target, "reviews": []}
-            with self._cache_lock: self._file_review_cache[cache_key] = review
-            return dict(review)
+            return {"file": target_file, "file_path": abs_target, "reviews": []}
 
         deduped, _, _ = Deduplicator.deduplicate(all_findings, max_per_sink=max_paths_per_sink)
         grouped = self._group_findings_as_reviews(deduped)
         review = None
         for item in grouped:
-            if item.get("file") == relative_target: review = item; break
+            if item.get("file") == target_file: review = item; break
         if review is None:
-            review = {"file": relative_target, "file_path": abs_target, "reviews": []}
-        with self._cache_lock: self._file_review_cache[cache_key] = review
-        return dict(review)
+            review = {"file": target_file, "file_path": abs_target, "reviews": []}
+        return review
+
+    def review_single_file_from_codebase(self, file_path, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
+                                          max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25,
+                                          max_investigation_turns=4, progress_callback=None):
+        """Deep file review: Phase 1 (strong model audit) + Phase 2 (multi-turn grep investigation)."""
+        abs_target, relative_target = self._normalize_target_file(file_path)
+
+        content = read_file_content(abs_target)
+        if not content or not content.strip():
+            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+
+        strong_model = confirmation_model or self._config.llama_query_model
+
+        if progress_callback:
+            progress_callback({"event": "file_audit_start", "file": relative_target})
+
+        auditor = FileAuditor(self._llm_provider, strong_model, self._usage_runtime)
+        candidates = auditor.audit(relative_target, content)
+
+        if progress_callback:
+            progress_callback({"event": "file_audit_done", "candidates": len(candidates), "file": relative_target})
+
+        if not candidates:
+            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+
+        if len(candidates) > 25:
+            sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            candidates.sort(key=lambda c: sev_order.get(c.get("severity", "medium"), 5))
+            candidates = candidates[:25]
+
+        if progress_callback:
+            progress_callback({"event": "investigation_start", "total": len(candidates), "file": relative_target})
+
+        investigator = FindingInvestigator(
+            self._llm_provider, strong_model, self._usage_runtime,
+            self._config.codebase_path,
+        )
+
+        confirmed_findings = []
+        lock = threading.Lock()
+        done_count = [0]
+
+        def _investigate_one(candidate):
+            try:
+                return investigator.investigate(
+                    candidate, relative_target, content,
+                    max_turns=max_investigation_turns,
+                )
+            except Exception as e:
+                logger.warning("Investigation failed for %s/%s: %s",
+                             relative_target, candidate.get("function_name"), e)
+                return None
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(candidates))) as ex:
+            futs = {submit_with_current_context(ex, _investigate_one, c): c for c in candidates}
+            for fut in as_completed(futs):
+                c = futs[fut]
+                try:
+                    verdict = fut.result()
+                    if verdict and verdict.get("is_vulnerable"):
+                        with lock:
+                            confirmed_findings.append(verdict)
+                except Exception as e:
+                    logger.warning("Investigation error: %s", e)
+                with lock:
+                    done_count[0] += 1
+                if progress_callback:
+                    progress_callback({"event": "investigation_progress",
+                                     "completed": done_count[0], "total": len(candidates),
+                                     "file": relative_target})
+
+        if progress_callback:
+            progress_callback({"event": "investigation_done", "confirmed": len(confirmed_findings), "file": relative_target})
+
+        if not confirmed_findings:
+            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+
+        reviews = []
+        seen_keys = set()
+        for v in confirmed_findings:
+            fn = str(v.get("function_name") or "unknown")
+            vtype = str(v.get("vulnerability_type") or "other")
+            line = 1
+            try:
+                line = max(1, int(v.get("line", 1)))
+            except:
+                pass
+
+            dedup_key = (fn, vtype)
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
+            code_snippet = _read_line_context(self._config.codebase_path, relative_target, line, context=2)
+
+            chain = str(v.get("reachability_chain") or "")
+            evidence = str(v.get("evidence") or "")
+            root_cause = str(v.get("root_cause") or "")
+            description = str(v.get("description") or f"{vtype.replace('_', ' ')} in {fn}")
+
+            reasoning_parts = []
+            if evidence:
+                reasoning_parts.append(evidence)
+            if chain:
+                reasoning_parts.append(f"Reachability path: {chain}")
+            if root_cause:
+                reasoning_parts.append(f"Root cause: {root_cause}")
+
+            reviews.append({
+                "issue": description,
+                "line_number": line,
+                "code_snippet": code_snippet,
+                "cwe": _VULN_TO_CWE.get(vtype),
+                "severity": _severity_title(v.get("severity"), "Medium"),
+                "confidence": _severity_title(v.get("confidence"), "Medium"),
+                "reasoning": "\n".join(reasoning_parts),
+                "mitigation": root_cause,
+            })
+
+        return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
 
     def _group_findings_as_reviews(self, findings):
