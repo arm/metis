@@ -770,6 +770,155 @@ def _build_same_file_clusters(file_content, seed_functions, *, max_clusters=4, m
             break
     return results
 
+
+_REVIEW_FILE_LARGE_FILE_CHAR_THRESHOLD = 120000
+_REVIEW_FILE_LARGE_FILE_LINE_THRESHOLD = 2500
+_REVIEW_FILE_FULL_PROMPT_BUDGET = 60000
+_REVIEW_FILE_TARGET_PROMPT_BUDGET = 45000
+_REVIEW_FILE_LOCAL_PROMPT_BUDGET = 35000
+_REVIEW_FILE_MAX_GENERAL_SEEDS = 8
+_REVIEW_FILE_MAX_GENERAL_CLUSTERS = 4
+_REVIEW_FILE_MAX_CLUSTER_FUNCTIONS = 6
+
+_REVIEW_FILE_GENERAL_INTEREST_TOKENS = (
+    "queue_work(", "schedule_work(", "cancel_work_sync(", "destroy_workqueue(",
+    "del_timer_sync(", "timer_shutdown_sync(", "hrtimer_cancel(",
+    "get_user_pages", "put_page(", "mapping_get", "mapping_put",
+    "pm_runtime_get_sync(", "enable_gpu_power_control(", "flush_noretain",
+    "reset", "doorbell", "enabled", "terminated", "override",
+    "gpu_mappings", "alias", "refcount", "NO_USER_FREE", "DONT_NEED",
+    "struct file_operations", ".release", ".flush", ".poll", ".open",
+    "printk(", "dev_err(", "pr_err(", "%pa", "%px",
+    "u32", "u64", "uint32_t", "uint64_t",
+    "matrix", "vector", "constructor", "column", "row", "expr.u.value",
+)
+
+def _is_large_review_file(file_content):
+    text = str(file_content or "")
+    if len(text) >= _REVIEW_FILE_LARGE_FILE_CHAR_THRESHOLD:
+        return True
+    return text.count("\n") >= _REVIEW_FILE_LARGE_FILE_LINE_THRESHOLD
+
+def _safe_numbered_excerpt(content, max_chars):
+    numbered = _number_lines(content)
+    if len(numbered) <= max_chars:
+        return numbered
+    return numbered[:max_chars] + "\n... [truncated for large-file review]"
+
+def _derive_large_file_seed_functions(file_content, max_seeds=_REVIEW_FILE_MAX_GENERAL_SEEDS):
+    bodies = _collect_function_bodies(file_content)
+    if not bodies:
+        return []
+
+    scored = []
+    lowered_tokens = tuple(t.lower() for t in _REVIEW_FILE_GENERAL_INTEREST_TOKENS)
+    for name, start, body_lines in bodies:
+        body = "\n".join(body_lines).lower()
+        score = sum(1 for token in lowered_tokens if token in body)
+        if score > 0:
+            scored.append((-score, start, name))
+
+    if not scored:
+        return [name for name, _, _ in bodies[:max_seeds]]
+
+    scored.sort()
+    seeds = []
+    seen = set()
+    for _, _, name in scored:
+        if name in seen:
+            continue
+        seen.add(name)
+        seeds.append(name)
+        if len(seeds) >= max_seeds:
+            break
+    return seeds
+
+def _safe_build_same_file_clusters(file_content, seed_functions, *, max_clusters=4, max_functions_per_cluster=6):
+    try:
+        return _build_same_file_clusters(
+            file_content,
+            seed_functions,
+            max_clusters=max_clusters,
+            max_functions_per_cluster=max_functions_per_cluster,
+        )
+    except Exception as e:
+        logger.warning("Same-file cluster build failed: %s", e)
+        return []
+
+def _build_large_file_review_payload(file_path, file_content, max_chars=_REVIEW_FILE_FULL_PROMPT_BUDGET):
+    seeds = _derive_large_file_seed_functions(file_content, max_seeds=_REVIEW_FILE_MAX_GENERAL_SEEDS)
+    clusters = _safe_build_same_file_clusters(
+        file_content,
+        seeds,
+        max_clusters=_REVIEW_FILE_MAX_GENERAL_CLUSTERS,
+        max_functions_per_cluster=_REVIEW_FILE_MAX_CLUSTER_FUNCTIONS,
+    )
+
+    if not clusters:
+        return _safe_numbered_excerpt(file_content, max_chars)
+
+    parts = []
+    total = 0
+    for cluster in clusters:
+        part = f"== CLUSTER seed: {cluster['seed']} ==\n{cluster['code']}"
+        if total + len(part) > max_chars and parts:
+            break
+        if total + len(part) > max_chars:
+            part = part[: max(0, max_chars - total)]
+        parts.append(part)
+        total += len(part)
+        if total >= max_chars:
+            break
+
+    if not parts:
+        return _safe_numbered_excerpt(file_content, max_chars)
+
+    payload = "\n\n".join(parts)
+    if len(payload) > max_chars:
+        payload = payload[:max_chars]
+    if len(payload) < max_chars and len(payload) < len(file_content):
+        payload += "\n\n... [truncated large-file cluster excerpt]"
+    return payload
+
+def _build_prompt_ready_file_content(file_path, file_content, *, focus_function=None, focus_line=None, max_chars=_REVIEW_FILE_FULL_PROMPT_BUDGET):
+    if not _is_large_review_file(file_content):
+        return _safe_numbered_excerpt(file_content, max_chars)
+
+    sections = []
+
+    if focus_function and str(focus_function).strip() not in {"", "unknown", "file_operations"}:
+        clusters = _safe_build_same_file_clusters(
+            file_content,
+            [str(focus_function).strip()],
+            max_clusters=1,
+            max_functions_per_cluster=_REVIEW_FILE_MAX_CLUSTER_FUNCTIONS,
+        )
+        if clusters:
+            sections.append("== FOCUS CLUSTER ==\n" + clusters[0]["code"])
+
+    if focus_line:
+        try:
+            focus_line = max(1, int(focus_line))
+        except Exception:
+            focus_line = 1
+        local = _line_context_from_content(file_content, focus_line, context=25, max_chars=max_chars // 3)
+        if local:
+            sections.append("== FOCUS WINDOW ==\n" + local)
+
+    remaining_budget = max_chars - len("\n\n".join(sections))
+    if remaining_budget > max_chars // 3:
+        general = _build_large_file_review_payload(file_path, file_content, max_chars=remaining_budget)
+        if general:
+            sections.append("== LARGE FILE EXCERPT ==\n" + general)
+
+    if not sections:
+        return _safe_numbered_excerpt(file_content, max_chars)
+
+    payload = "\n\n".join(sections)
+    if len(payload) > max_chars:
+        payload = payload[:max_chars]
+    return payload
+
 def _detect_obvious_local_candidates(file_content):
     lines = file_content.splitlines()
     function_starts = _collect_function_starts(lines)
@@ -1697,6 +1846,16 @@ class VulnerabilityConfirmer:
         local_context = str(candidate.get("code_snippet") or "")
         if not local_context:
             local_context = _line_context_from_content(target_file_content, candidate.get("line") or 1, context=5)
+        local_context = local_context[:6000] if len(local_context) > 6000 else local_context
+
+        target_payload = _build_prompt_ready_file_content(
+            target_file,
+            target_file_content,
+            focus_function=str(candidate.get("function_name") or "unknown"),
+            focus_line=int(candidate.get("line") or 1),
+            max_chars=_REVIEW_FILE_LOCAL_PROMPT_BUDGET,
+        )
+
         prompt = ChatPromptTemplate.from_messages([("system", _LOCAL_CONFIRM_SYS), ("user", _LOCAL_CONFIRM_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({
             "candidate_type": str(candidate.get("type") or "other"),
@@ -1704,7 +1863,7 @@ class VulnerabilityConfirmer:
             "candidate_description": str(candidate.get("description") or ""),
             "function_name": str(candidate.get("function_name") or "unknown"),
             "line": int(candidate.get("line") or 1),
-            "target_file_code": _number_lines(target_file_content),
+            "target_file_code": target_payload,
             "local_context": local_context,
         }).strip()
         return _parse_verdict_payload(raw)
@@ -2385,11 +2544,26 @@ class FileAuditor:
             ("system", system_prompt),
             ("user", user_template),
         ])
+        prompt_ready_content = _build_prompt_ready_file_content(
+            file_path,
+            file_content,
+            max_chars=_REVIEW_FILE_FULL_PROMPT_BUDGET,
+        )
         raw = (prompt | chat | StrOutputParser()).invoke({
             "file_path": file_path,
-            "file_content": _number_lines(file_content),
+            "file_content": prompt_ready_content,
         }).strip()
         return _parse_candidate_payload(raw, default_driver_context=default_driver_context)
+
+    def _safe_invoke_candidates(self, label, system_prompt, user_template, file_path, file_content, *, default_driver_context=False):
+        try:
+            return self._invoke_candidates(
+                system_prompt, user_template, file_path, file_content,
+                default_driver_context=default_driver_context,
+            )
+        except Exception as e:
+            logger.warning("Audit pass %s failed for %s: %s", label, file_path, e)
+            return []
 
     def _invoke_cluster_candidates(self, file_path, cluster, *, default_driver_context=False):
         kw = self._u.hooks.chat_model_kwargs()
@@ -2398,72 +2572,183 @@ class FileAuditor:
             ("system", _FILE_CLUSTER_SYS),
             ("user", _FILE_CLUSTER_USR),
         ])
+        cluster_code = str(cluster.get("code") or "")
+        if len(cluster_code) > _REVIEW_FILE_FULL_PROMPT_BUDGET:
+            cluster_code = cluster_code[:_REVIEW_FILE_FULL_PROMPT_BUDGET] + "\n... [truncated cluster excerpt]"
         raw = (prompt | chat | StrOutputParser()).invoke({
             "file_path": file_path,
             "seed": cluster["seed"],
             "functions": ", ".join(cluster["functions"]),
-            "cluster_code": cluster["code"],
+            "cluster_code": cluster_code,
         }).strip()
         return _parse_candidate_payload(raw, default_driver_context=default_driver_context)
+
+    def _safe_invoke_cluster_candidates(self, file_path, cluster, *, default_driver_context=False):
+        try:
+            return self._invoke_cluster_candidates(
+                file_path, cluster, default_driver_context=default_driver_context,
+            )
+        except Exception as e:
+            logger.warning("Cluster audit failed for %s [seed=%s]: %s", file_path, cluster.get("seed"), e)
+            return []
 
     def audit(self, file_path, file_content):
         is_driver = _looks_driver_file(file_path, file_content)
         is_compilerish = _looks_compilerish_file(file_path, file_content)
 
-        result = self._invoke_candidates(_FILE_AUDIT_SYS, _FILE_AUDIT_USR, file_path, file_content, default_driver_context=is_driver)
+        def _safe_collect(label, fn, *args):
+            try:
+                return fn(*args)
+            except Exception as e:
+                logger.warning("%s failed for %s: %s", label, file_path, e)
+                return []
 
-        static_candidates = _detect_obvious_local_candidates(file_content)
-        driver_static_candidates = _detect_driver_specific_candidates(file_path, file_content)
-        stale_unlock_candidates = _detect_stale_after_unlock_candidates(file_path, file_content)
-        width_candidates = _detect_width_mismatch_candidates(file_path, file_content)
-        fileops_candidates = _detect_fileops_candidates(file_path, file_content)
-        logging_candidates = _detect_logging_candidates(file_path, file_content)
-        compiler_static_candidates = _detect_compiler_semantic_candidates(file_path, file_content)
+        try:
+            result = self._safe_invoke_candidates(
+                "primary",
+                _FILE_AUDIT_SYS, _FILE_AUDIT_USR,
+                file_path, file_content,
+                default_driver_context=is_driver,
+            )
 
-        targeted_candidates = []
+            static_candidates = _safe_collect("obvious-local detector", _detect_obvious_local_candidates, file_content)
+            driver_static_candidates = _safe_collect("driver-specific detector", _detect_driver_specific_candidates, file_path, file_content)
+            stale_unlock_candidates = _safe_collect("stale-after-unlock detector", _detect_stale_after_unlock_candidates, file_path, file_content)
+            width_candidates = _safe_collect("width-mismatch detector", _detect_width_mismatch_candidates, file_path, file_content)
+            fileops_candidates = _safe_collect("fileops detector", _detect_fileops_candidates, file_path, file_content)
+            logging_candidates = _safe_collect("logging detector", _detect_logging_candidates, file_path, file_content)
+            compiler_static_candidates = _safe_collect("compiler-semantic detector", _detect_compiler_semantic_candidates, file_path, file_content)
 
-        if is_driver or not result:
-            targeted_candidates.extend(self._invoke_candidates(_FILE_CLEANUP_SYS, _FILE_CLEANUP_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_STATE_SYS, _FILE_STATE_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_SEMANTIC_SYS, _FILE_SEMANTIC_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_STALE_UNLOCK_SYS, _FILE_STALE_UNLOCK_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_WIDTH_SYS, _FILE_WIDTH_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_FILEOPS_SYS, _FILE_FILEOPS_USR, file_path, file_content, default_driver_context=is_driver))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_LOGGING_SYS, _FILE_LOGGING_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates = []
 
-        if is_compilerish:
-            targeted_candidates.extend(self._invoke_candidates(_FILE_COMPILER_SYS, _FILE_COMPILER_USR, file_path, file_content, default_driver_context=is_driver))
+            if is_driver or not result:
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "cleanup",
+                    _FILE_CLEANUP_SYS, _FILE_CLEANUP_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "state",
+                    _FILE_STATE_SYS, _FILE_STATE_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "semantic",
+                    _FILE_SEMANTIC_SYS, _FILE_SEMANTIC_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "stale-unlock",
+                    _FILE_STALE_UNLOCK_SYS, _FILE_STALE_UNLOCK_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "width",
+                    _FILE_WIDTH_SYS, _FILE_WIDTH_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "fileops",
+                    _FILE_FILEOPS_SYS, _FILE_FILEOPS_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "logging",
+                    _FILE_LOGGING_SYS, _FILE_LOGGING_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
 
-        combined = result + targeted_candidates + static_candidates + driver_static_candidates + stale_unlock_candidates + width_candidates + fileops_candidates + logging_candidates + compiler_static_candidates
-        combined = _prune_audit_candidates([
-            dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
-            for c in combined
-        ], limit=40)
+            if is_compilerish:
+                targeted_candidates.extend(self._safe_invoke_candidates(
+                    "compiler",
+                    _FILE_COMPILER_SYS, _FILE_COMPILER_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
 
-        seed_functions = []
-        for c in combined[:8]:
-            fn = str(c.get("function_name") or "").strip()
-            if fn and fn != "unknown" and fn != "file_operations":
-                seed_functions.append(fn)
-        if not seed_functions:
-            seed_functions = [name for name, _, _ in _collect_function_bodies(file_content)[:4]]
+            combined = (
+                result
+                + targeted_candidates
+                + static_candidates
+                + driver_static_candidates
+                + stale_unlock_candidates
+                + width_candidates
+                + fileops_candidates
+                + logging_candidates
+                + compiler_static_candidates
+            )
 
-        cluster_candidates = []
-        for cluster in _build_same_file_clusters(file_content, seed_functions, max_clusters=4 if is_driver else 2):
-            cluster_candidates.extend(self._invoke_cluster_candidates(file_path, cluster, default_driver_context=is_driver))
+            combined = _prune_audit_candidates([
+                dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
+                for c in combined
+            ], limit=40)
 
-        combined.extend(cluster_candidates)
+            seed_functions = []
+            for c in combined[:8]:
+                fn = str(c.get("function_name") or "").strip()
+                if fn and fn != "unknown" and fn != "file_operations":
+                    seed_functions.append(fn)
+            if not seed_functions:
+                seed_functions = [name for name, _, _ in _collect_function_bodies(file_content)[:4]]
 
-        family_coverage = {c.get("mechanism_family") for c in combined}
-        if is_driver and (len(combined) < 5 or len(family_coverage) < 2):
-            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content, default_driver_context=True))
-        elif not combined:
-            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content, default_driver_context=is_driver))
+            cluster_candidates = []
+            clusters = _safe_build_same_file_clusters(
+                file_content,
+                seed_functions,
+                max_clusters=4 if is_driver else 2,
+                max_functions_per_cluster=_REVIEW_FILE_MAX_CLUSTER_FUNCTIONS,
+            )
+            for cluster in clusters:
+                cluster_candidates.extend(
+                    self._safe_invoke_cluster_candidates(
+                        file_path, cluster, default_driver_context=is_driver,
+                    )
+                )
 
-        return _prune_audit_candidates([
-            dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
-            for c in combined
-        ], limit=25)
+            combined.extend(cluster_candidates)
+
+            family_coverage = {c.get("mechanism_family") for c in combined}
+            if is_driver and (len(combined) < 5 or len(family_coverage) < 2):
+                combined.extend(self._safe_invoke_candidates(
+                    "deep-driver",
+                    _FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR,
+                    file_path, file_content,
+                    default_driver_context=True,
+                ))
+            elif not combined:
+                combined.extend(self._safe_invoke_candidates(
+                    "deep-fallback",
+                    _FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR,
+                    file_path, file_content,
+                    default_driver_context=is_driver,
+                ))
+
+            return _prune_audit_candidates([
+                dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
+                for c in combined
+            ], limit=25)
+
+        except Exception as e:
+            logger.exception("File audit crashed for %s: %s", file_path, e)
+            fallback = []
+            fallback.extend(_safe_collect("obvious-local detector", _detect_obvious_local_candidates, file_content))
+            fallback.extend(_safe_collect("driver-specific detector", _detect_driver_specific_candidates, file_path, file_content))
+            fallback.extend(_safe_collect("stale-after-unlock detector", _detect_stale_after_unlock_candidates, file_path, file_content))
+            fallback.extend(_safe_collect("width-mismatch detector", _detect_width_mismatch_candidates, file_path, file_content))
+            fallback.extend(_safe_collect("fileops detector", _detect_fileops_candidates, file_path, file_content))
+            fallback.extend(_safe_collect("logging detector", _detect_logging_candidates, file_path, file_content))
+            fallback.extend(_safe_collect("compiler-semantic detector", _detect_compiler_semantic_candidates, file_path, file_content))
+            return _prune_audit_candidates([
+                dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
+                for c in fallback
+            ], limit=25)
 
 
 # file investigation
@@ -2646,7 +2931,12 @@ def _structured_read_requests(candidate, target_file, target_file_content):
     fn = str(candidate.get("function_name") or "").strip()
     if not fn or fn in {"unknown", "file_operations"}:
         return []
-    clusters = _build_same_file_clusters(target_file_content, [fn], max_clusters=1, max_functions_per_cluster=5)
+    clusters = _safe_build_same_file_clusters(
+        target_file_content,
+        [fn],
+        max_clusters=1,
+        max_functions_per_cluster=5,
+    )
     if not clusters:
         return []
     requests = []
@@ -2754,12 +3044,13 @@ class FindingInvestigator:
             output = _read_file_lines(self._cb, req["path"], req["start_line"], req["end_line"])
             auto_results.append(f"read {req['path']}:{req['start_line']}-{req['end_line']}:\n{output}")
 
-        cluster_section = ""
-        fn = str(candidate.get("function_name") or "").strip()
-        if fn and fn not in {"unknown", "file_operations"}:
-            clusters = _build_same_file_clusters(target_file_content, [fn], max_clusters=1, max_functions_per_cluster=5)
-            if clusters:
-                cluster_section = "\n\n== SAME-FILE FUNCTION CLUSTER ==\n" + clusters[0]["code"]
+        target_payload = _build_prompt_ready_file_content(
+            target_file,
+            target_file_content,
+            focus_function=str(candidate.get("function_name") or "unknown"),
+            focus_line=int(candidate.get("line") or 1),
+            max_chars=_REVIEW_FILE_TARGET_PROMPT_BUDGET,
+        )
 
         auto_section = ""
         if auto_results:
@@ -2778,8 +3069,7 @@ class FindingInvestigator:
             f"Cross-file concern: {candidate.get('cross_file_concern', False)}\n"
             f"{hints_text}\n\n"
             f"== TARGET FILE: {target_file} ==\n"
-            f"{_number_lines(target_file_content)}"
-            f"{cluster_section}"
+            f"{target_payload}"
             f"{auto_section}\n\n"
             f"Investigate whether this vulnerability is reachable and exploitable. "
             f"Search for callers, check data flow from external input, look for mitigations. "
@@ -3000,136 +3290,168 @@ class ReachabilityService:
                                           max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25,
                                           max_investigation_turns=4, progress_callback=None):
         """Deep file review: Phase 1 (strong model audit) + Phase 2 (multi-turn grep investigation)."""
-        abs_target, relative_target = self._normalize_target_file(file_path)
+        abs_target = str(file_path)
+        relative_target = str(file_path)
 
-        content = read_file_content(abs_target)
-        if not content or not content.strip():
-            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+        try:
+            abs_target, relative_target = self._normalize_target_file(file_path)
 
-        strong_model = confirmation_model or self._config.llama_query_model
+            content = read_file_content(abs_target)
+            if not content or not content.strip():
+                return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        if progress_callback:
-            progress_callback({"event": "file_audit_start", "file": relative_target})
+            strong_model = confirmation_model or self._config.llama_query_model
 
-        auditor = FileAuditor(self._llm_provider, strong_model, self._usage_runtime)
-        candidates = auditor.audit(relative_target, content)
+            if progress_callback:
+                progress_callback({"event": "file_audit_start", "file": relative_target})
 
-        if progress_callback:
-            progress_callback({"event": "file_audit_done", "candidates": len(candidates), "file": relative_target})
+            auditor = FileAuditor(self._llm_provider, strong_model, self._usage_runtime)
 
-        if not candidates:
-            return {"file": relative_target, "file_path": abs_target, "reviews": []}
-
-        if progress_callback:
-            progress_callback({"event": "investigation_start", "total": len(candidates), "file": relative_target})
-
-        investigator = FindingInvestigator(
-            self._llm_provider, strong_model, self._usage_runtime,
-            self._config.codebase_path,
-        )
-
-        confirmed_findings = []
-        lock = threading.Lock()
-        done_count = [0]
-
-        def _investigate_one(candidate):
             try:
-                return investigator.investigate(
-                    candidate, relative_target, content,
-                    max_turns=max_investigation_turns,
+                candidates = auditor.audit(relative_target, content)
+            except Exception as e:
+                logger.exception("File audit crashed for %s: %s", relative_target, e)
+                candidates = _prune_audit_candidates(
+                    _detect_obvious_local_candidates(content)
+                    + _detect_driver_specific_candidates(relative_target, content)
+                    + _detect_stale_after_unlock_candidates(relative_target, content)
+                    + _detect_width_mismatch_candidates(relative_target, content)
+                    + _detect_fileops_candidates(relative_target, content)
+                    + _detect_logging_candidates(relative_target, content)
+                    + _detect_compiler_semantic_candidates(relative_target, content),
+                    limit=25,
+                )
+
+            if progress_callback:
+                progress_callback({"event": "file_audit_done", "candidates": len(candidates), "file": relative_target})
+
+            if not candidates:
+                return {"file": relative_target, "file_path": abs_target, "reviews": []}
+
+            if progress_callback:
+                progress_callback({"event": "investigation_start", "total": len(candidates), "file": relative_target})
+
+            try:
+                investigator = FindingInvestigator(
+                    self._llm_provider, strong_model, self._usage_runtime,
+                    self._config.codebase_path,
                 )
             except Exception as e:
-                logger.warning("Investigation failed for %s/%s: %s",
-                             relative_target, candidate.get("function_name"), e)
-                return None
+                logger.exception("Investigator init failed for %s: %s", relative_target, e)
+                return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(candidates))) as ex:
-            futs = {submit_with_current_context(ex, _investigate_one, c): c for c in candidates}
-            for fut in as_completed(futs):
-                c = futs[fut]
+            confirmed_findings = []
+            lock = threading.Lock()
+            done_count = [0]
+
+            def _investigate_one(candidate):
                 try:
-                    verdict = fut.result()
-                    if verdict and verdict.get("is_vulnerable"):
-                        with lock:
-                            confirmed_findings.append(verdict)
+                    return investigator.investigate(
+                        candidate, relative_target, content,
+                        max_turns=max_investigation_turns,
+                    )
                 except Exception as e:
-                    logger.warning("Investigation error: %s", e)
-                with lock:
-                    done_count[0] += 1
-                if progress_callback:
-                    progress_callback({"event": "investigation_progress",
-                                     "completed": done_count[0], "total": len(candidates),
-                                     "file": relative_target})
+                    logger.warning("Investigation failed for %s/%s: %s",
+                                 relative_target, candidate.get("function_name"), e)
+                    return None
 
-        if progress_callback:
-            progress_callback({"event": "investigation_done", "confirmed": len(confirmed_findings), "file": relative_target})
+            worker_count = max(1, min(max_workers, len(candidates)))
+            with ThreadPoolExecutor(max_workers=worker_count) as ex:
+                futs = {submit_with_current_context(ex, _investigate_one, c): c for c in candidates}
+                for fut in as_completed(futs):
+                    c = futs[fut]
+                    try:
+                        verdict = fut.result()
+                        if verdict and verdict.get("is_vulnerable"):
+                            with lock:
+                                confirmed_findings.append(verdict)
+                    except Exception as e:
+                        logger.warning("Investigation error for %s/%s: %s", relative_target, c.get("function_name"), e)
+                    with lock:
+                        done_count[0] += 1
+                    if progress_callback:
+                        progress_callback({"event": "investigation_progress",
+                                         "completed": done_count[0], "total": len(candidates),
+                                         "file": relative_target})
 
-        if not confirmed_findings:
-            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+            if progress_callback:
+                progress_callback({"event": "investigation_done", "confirmed": len(confirmed_findings), "file": relative_target})
 
-        reviews = []
-        seen_keys = set()
-        normalized_verdicts = []
-        for item in confirmed_findings:
-            mechanism = _normalize_mechanism(item.get("mechanism"), item.get("vulnerability_type"))
-            vtype = _resolve_vulnerability_type(mechanism, item.get("vulnerability_type") or "other")
-            item["mechanism"] = mechanism
-            item["mechanism_family"] = _mechanism_family(mechanism, vtype)
-            item["vulnerability_type"] = vtype
-            normalized_verdicts.append(item)
+            if not confirmed_findings:
+                return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        for v in sorted(normalized_verdicts, key=lambda item: _candidate_priority_key({
-            "type": str(item.get("vulnerability_type") or "other"),
-            "mechanism": str(item.get("mechanism") or "generic_memory"),
-            "mechanism_family": str(item.get("mechanism_family") or ""),
-            "severity": str(item.get("severity") or "medium").lower(),
-            "line": int(item.get("line") or 1),
-            "primary": True,
-            "locality": "local_direct" if str(item.get("reachability_chain") or "").startswith("Target file") else "cross_file",
-            "driver_context": _looks_driver_file(relative_target, content),
-        })):
-            fn = str(v.get("function_name") or "unknown")
-            vtype = str(v.get("vulnerability_type") or "other")
-            mechanism = str(v.get("mechanism") or "generic_memory")
-            mechanism_family = str(v.get("mechanism_family") or _mechanism_family(mechanism, vtype))
-            line = 1
-            try:
-                line = max(1, int(v.get("line", 1)))
-            except:
-                pass
+            reviews = []
+            seen_keys = set()
+            normalized_verdicts = []
+            for item in confirmed_findings:
+                mechanism = _normalize_mechanism(item.get("mechanism"), item.get("vulnerability_type"))
+                vtype = _resolve_vulnerability_type(mechanism, item.get("vulnerability_type") or "other")
+                item["mechanism"] = mechanism
+                item["mechanism_family"] = _mechanism_family(mechanism, vtype)
+                item["vulnerability_type"] = vtype
+                normalized_verdicts.append(item)
 
-            dedup_key = (fn, mechanism_family)
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
+            for v in sorted(normalized_verdicts, key=lambda item: _candidate_priority_key({
+                "type": str(item.get("vulnerability_type") or "other"),
+                "mechanism": str(item.get("mechanism") or "generic_memory"),
+                "mechanism_family": str(item.get("mechanism_family") or ""),
+                "severity": str(item.get("severity") or "medium").lower(),
+                "line": int(item.get("line") or 1),
+                "primary": True,
+                "locality": "local_direct" if str(item.get("reachability_chain") or "").startswith("Target file") else "cross_file",
+                "driver_context": _looks_driver_file(relative_target, content),
+            })):
+                fn = str(v.get("function_name") or "unknown")
+                vtype = str(v.get("vulnerability_type") or "other")
+                mechanism = str(v.get("mechanism") or "generic_memory")
+                mechanism_family = str(v.get("mechanism_family") or _mechanism_family(mechanism, vtype))
+                line = 1
+                try:
+                    line = max(1, int(v.get("line", 1)))
+                except Exception:
+                    pass
 
-            code_snippet = _read_line_context(self._config.codebase_path, relative_target, line, context=2)
+                dedup_key = (fn, mechanism_family)
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
 
-            chain = str(v.get("reachability_chain") or "")
-            evidence = str(v.get("evidence") or "")
-            root_cause = str(v.get("root_cause") or "")
-            description = str(v.get("description") or f"{vtype.replace('_', ' ')} in {fn}")
+                code_snippet = _read_line_context(self._config.codebase_path, relative_target, line, context=2)
 
-            reasoning_parts = [f"Mechanism: {mechanism}"]
-            if evidence:
-                reasoning_parts.append(evidence)
-            if chain:
-                reasoning_parts.append(f"Reachability path: {chain}")
-            if root_cause:
-                reasoning_parts.append(f"Root cause: {root_cause}")
+                chain = str(v.get("reachability_chain") or "")
+                evidence = str(v.get("evidence") or "")
+                root_cause = str(v.get("root_cause") or "")
+                description = str(v.get("description") or f"{vtype.replace('_', ' ')} in {fn}")
 
-            reviews.append({
-                "issue": description,
-                "line_number": line,
-                "code_snippet": code_snippet,
-                "cwe": _cwe_for(vtype, mechanism),
-                "severity": _severity_title(v.get("severity"), "Medium"),
-                "confidence": _severity_title(v.get("confidence"), "Medium"),
-                "reasoning": "\n".join(reasoning_parts),
-                "mitigation": root_cause,
-            })
+                reasoning_parts = [f"Mechanism: {mechanism}"]
+                if evidence:
+                    reasoning_parts.append(evidence)
+                if chain:
+                    reasoning_parts.append(f"Reachability path: {chain}")
+                if root_cause:
+                    reasoning_parts.append(f"Root cause: {root_cause}")
 
-        return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
+                reviews.append({
+                    "issue": description,
+                    "line_number": line,
+                    "code_snippet": code_snippet,
+                    "cwe": _cwe_for(vtype, mechanism),
+                    "severity": _severity_title(v.get("severity"), "Medium"),
+                    "confidence": _severity_title(v.get("confidence"), "Medium"),
+                    "reasoning": "\n".join(reasoning_parts),
+                    "mitigation": root_cause,
+                })
+
+            return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
+
+        except Exception as e:
+            logger.exception("review_single_file_from_codebase failed for %s: %s", file_path, e)
+            if progress_callback:
+                try:
+                    progress_callback({"event": "review_file_error", "file": relative_target, "error": str(e)})
+                except Exception:
+                    pass
+            return {"file": relative_target, "file_path": abs_target, "reviews": []}    
 
 
     def _group_findings_as_reviews(self, findings):
