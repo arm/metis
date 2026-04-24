@@ -247,162 +247,109 @@ def _merge_hint_lists(*hint_lists):
             merged.append(text)
     return merged
 
-def _severity_rank(value):
-    return {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(str(value or "medium").strip().lower(), 5)
-
-def _type_rank(value):
-    return {
+def _candidate_priority_key(candidate):
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    type_order = {
         "command_injection": 0,
-        "path_traversal": 1,
-        "buffer_overflow": 2,
-        "sscanf_overflow": 3,
+        "buffer_overflow": 1,
+        "sscanf_overflow": 2,
+        "path_traversal": 3,
         "format_string": 4,
-        "out_of_bounds": 5,
-        "integer_overflow": 6,
+        "integer_overflow": 5,
+        "out_of_bounds": 6,
         "use_after_free": 7,
         "double_free": 8,
-        "type_confusion": 9,
-        "boolean_coercion": 10,
-        "stale_length": 11,
-        "wrong_constant": 12,
-        "wrong_field": 13,
-        "missing_auth": 14,
-        "permission_escalation": 15,
-        "toctou": 30,
-        "null_deref": 31,
-        "fd_leak": 32,
-        "other": 40,
-    }.get(str(value or "other").strip(), 50)
-
-def _candidate_priority_key(candidate):
+        "null_deref": 9,
+        "toctou": 20,
+        "other": 30,
+    }
     return (
         0 if candidate.get("primary") else 1,
         0 if candidate.get("locality") == "local_direct" else 1,
-        _severity_rank(candidate.get("severity")),
-        _type_rank(candidate.get("type")),
+        sev_order.get(str(candidate.get("severity") or "medium").lower(), 5),
+        type_order.get(str(candidate.get("type") or "other").strip(), 50),
         int(candidate.get("line") or 0),
     )
 
-def _verdict_priority_key(verdict):
-    locality = "local_direct" if str(verdict.get("reachability_chain") or "").startswith("Target file") else "cross_file"
-    return (
-        0 if locality == "local_direct" else 1,
-        _severity_rank(verdict.get("severity")),
-        _type_rank(verdict.get("vulnerability_type")),
-        int(verdict.get("line") or 0),
-    )
-
-def _normalize_candidate(candidate):
-    normalized = dict(candidate)
-    normalized["function_name"] = str(normalized.get("function_name") or "unknown").strip() or "unknown"
-    try:
-        normalized["line"] = max(1, int(normalized.get("line", 1)))
-    except:
-        normalized["line"] = 1
-    normalized["type"] = str(normalized.get("type") or "other").strip() or "other"
-    normalized["severity"] = str(normalized.get("severity") or "medium").strip().lower()
-    normalized["description"] = str(normalized.get("description") or "").strip()
-    normalized["locality"] = str(normalized.get("locality") or "cross_file").strip()
-    normalized["primary"] = bool(normalized.get("primary"))
-    normalized["cross_file_concern"] = bool(normalized.get("cross_file_concern"))
-    normalized["code_snippet"] = str(normalized.get("code_snippet") or "")
-    normalized["investigation_hints"] = _merge_hint_lists(normalized.get("investigation_hints") or [])
-    return normalized
-
-def _candidate_is_direct_primary(candidate):
-    return bool(candidate.get("primary")) and str(candidate.get("locality") or "") == "local_direct"
-
-def _low_signal_type(candidate_type):
-    return str(candidate_type or "").strip() in {
-        "null_deref", "fd_leak", "toctou", "other", "ignored_return"
-    }
-
-def _candidate_group_key(candidate):
-    return (
-        str(candidate.get("function_name") or "unknown").strip(),
-        int(candidate.get("line") or 1),
-    )
-
-def _prune_audit_candidates(candidates, limit=12):
+def _prune_audit_candidates(candidates, limit=25):
     if not candidates:
         return []
-
     merged = {}
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        c = _normalize_candidate(candidate)
-        key = (c["function_name"], c["line"], c["type"])
+        fn = str(candidate.get("function_name") or "unknown").strip() or "unknown"
+        try:
+            line = max(1, int(candidate.get("line", 1)))
+        except:
+            line = 1
+        ctype = str(candidate.get("type") or "other").strip() or "other"
+        key = (fn, line, ctype)
+        normalized = dict(candidate)
+        normalized["function_name"] = fn
+        normalized["line"] = line
+        normalized["type"] = ctype
+        normalized["severity"] = str(normalized.get("severity") or "medium").strip().lower()
+        normalized["description"] = str(normalized.get("description") or "").strip()
+        normalized["locality"] = str(normalized.get("locality") or "cross_file").strip()
+        normalized["primary"] = bool(normalized.get("primary"))
+        normalized["cross_file_concern"] = bool(normalized.get("cross_file_concern"))
+        normalized["code_snippet"] = str(normalized.get("code_snippet") or "")
+        normalized["investigation_hints"] = _merge_hint_lists(normalized.get("investigation_hints") or [])
         existing = merged.get(key)
         if existing is None:
-            merged[key] = c
+            merged[key] = normalized
             continue
-
-        better, worse = (c, existing) if _candidate_priority_key(c) < _candidate_priority_key(existing) else (existing, c)
-        better["investigation_hints"] = _merge_hint_lists(better.get("investigation_hints"), worse.get("investigation_hints"))
-        better["primary"] = bool(better.get("primary")) or bool(worse.get("primary"))
-        better["cross_file_concern"] = bool(better.get("cross_file_concern")) or bool(worse.get("cross_file_concern"))
-        if better.get("locality") != "local_direct" and worse.get("locality") == "local_direct":
-            better["locality"] = "local_direct"
+        if _candidate_priority_key(normalized) < _candidate_priority_key(existing):
+            better = normalized
+            worse = existing
+        else:
+            better = existing
+            worse = normalized
+        better["investigation_hints"] = _merge_hint_lists(
+            better.get("investigation_hints") or [],
+            worse.get("investigation_hints") or [],
+        )
         if len(str(worse.get("description") or "")) > len(str(better.get("description") or "")):
             better["description"] = str(worse.get("description") or "")
         if not str(better.get("code_snippet") or "") and str(worse.get("code_snippet") or ""):
             better["code_snippet"] = str(worse.get("code_snippet") or "")
-        if _severity_rank(worse.get("severity")) < _severity_rank(better.get("severity")):
+        better["primary"] = bool(better.get("primary")) or bool(worse.get("primary"))
+        better["cross_file_concern"] = bool(better.get("cross_file_concern")) or bool(worse.get("cross_file_concern"))
+        if better.get("locality") != "local_direct" and worse.get("locality") == "local_direct":
+            better["locality"] = "local_direct"
+        sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        if sev_order.get(str(worse.get("severity") or "medium").lower(), 5) < sev_order.get(str(better.get("severity") or "medium").lower(), 5):
             better["severity"] = str(worse.get("severity") or "medium").lower()
         merged[key] = better
-
     ordered = sorted(merged.values(), key=_candidate_priority_key)
-
-    strong_groups = {
-        _candidate_group_key(c)
-        for c in ordered
-        if _candidate_is_direct_primary(c)
-    }
-
     pruned = []
-    per_group_counts = defaultdict(int)
-
+    seen_primary_local = set()
     for candidate in ordered:
-        group = _candidate_group_key(candidate)
-
-        if group in strong_groups and not _candidate_is_direct_primary(candidate):
-            if _low_signal_type(candidate.get("type")):
-                continue
-
-        if per_group_counts[group] >= (1 if group in strong_groups else 2):
+        group_key = (candidate["function_name"], candidate["line"])
+        if candidate.get("primary") and candidate.get("locality") == "local_direct":
+            seen_primary_local.add(group_key)
+            pruned.append(candidate)
             continue
-
-        if _low_signal_type(candidate.get("type")) and not candidate.get("cross_file_concern") and not candidate.get("primary"):
+        if group_key in seen_primary_local and str(candidate.get("type") or "") in {"toctou", "other"}:
             continue
-
         pruned.append(candidate)
-        per_group_counts[group] += 1
-
     return pruned[:limit]
 
 def _detect_obvious_local_candidates(file_content):
     lines = file_content.splitlines()
     function_starts = _collect_function_starts(lines)
     candidates = []
-
-    command_re = re.compile(r"\b(?:system|popen|_popen|execl|execv|execvp|execve)\s*\(")
-    format_sink_re = re.compile(r"\b(?:sprintf|vsprintf|strcpy|strcat|gets)\s*\(")
-    scanf_re = re.compile(r"\b(?:sscanf|scanf)\s*\(")
-    open_re = re.compile(r"\b(?:std::ifstream|std::ofstream|ifstream|ofstream|fopen|open|freopen)\b")
-    alloc_mul_re = re.compile(r"\b(?:malloc|calloc|realloc)\s*\([^)]*\*[^)]*\)")
-    printf_re = re.compile(r"\b(?:printf|fprintf|sprintf|snprintf|syslog)\s*\(")
-
+    command_tokens = ("system(", "popen(", "_popen(", "execl(", "execv(", "execvp(", "execve(")
+    open_tokens = ("std::ifstream", "std::ofstream", "ifstream ", "ofstream ", "fopen(", "open(", "freopen(")
     for idx, line in enumerate(lines):
         stripped = line.strip()
         line_number = idx + 1
         function_name = _function_name_for_line(function_starts, line_number)
-        window_before = "\n".join(lines[max(0, idx - 5):idx + 1])
-        window_local = "\n".join(lines[max(0, idx - 4):min(len(lines), idx + 4)])
+        local_window = "\n".join(lines[max(0, idx - 4):min(len(lines), idx + 3)])
         code_snippet = _line_context_from_content(file_content, line_number, context=3)
-
-        if command_re.search(stripped):
-            if any(token in window_local for token in (' + ', '.append(', 'command', 'cmd', '.string()', 'destination', 'path', 'report_name')):
+        if any(token in stripped for token in command_tokens):
+            if any(token in local_window for token in (' + ', '.append(', 'std::string', 'command', 'cmd', 'destination', 'path', '.string()')):
                 candidates.append({
                     "function_name": function_name,
                     "line": line_number,
@@ -413,39 +360,37 @@ def _detect_obvious_local_candidates(file_content):
                     "primary": True,
                     "cross_file_concern": False,
                     "code_snippet": code_snippet,
-                    "investigation_hints": [f"{function_name}(", "system(", "popen("] if function_name != "unknown" else ["system(", "popen("],
-                })
-
-        if format_sink_re.search(stripped):
+                    "investigation_hints": [f"{function_name}(", "system(", "popen("] if function_name != "unknown" else ["system(", "popen("]},
+                )
+        if any(token in stripped for token in ("sprintf(", "vsprintf(", "strcpy(", "strcat(", "gets(")):
             candidates.append({
                 "function_name": function_name,
                 "line": line_number,
                 "type": "buffer_overflow",
                 "severity": "high",
-                "description": "The target file contains an unbounded write primitive into a caller-visible or fixed-size buffer.",
+                "description": "The target file contains an unbounded write primitive into a caller-visible buffer or local buffer.",
                 "locality": "local_direct",
                 "primary": True,
                 "cross_file_concern": False,
                 "code_snippet": code_snippet,
-                "investigation_hints": [f"{function_name}(", "sprintf(", "strcpy("] if function_name != "unknown" else ["sprintf(", "strcpy("],
-            })
-
-        if scanf_re.search(stripped) and "%s" in window_local:
+                "investigation_hints": [f"{function_name}(", "sprintf(", "strcpy("] if function_name != "unknown" else ["sprintf(", "strcpy("]},
+            )
+        if any(token in stripped for token in ("sscanf(", "scanf(")) and "%s" in local_window:
             candidates.append({
                 "function_name": function_name,
                 "line": line_number,
                 "type": "sscanf_overflow",
                 "severity": "high",
-                "description": "The target file uses scanf-style parsing with %s and no visible width bound, which can overflow fixed buffers.",
+                "description": "The target file uses scanf-style parsing with %s, which can overflow fixed buffers when width is not constrained.",
                 "locality": "local_direct",
                 "primary": True,
                 "cross_file_concern": False,
                 "code_snippet": code_snippet,
-                "investigation_hints": [f"{function_name}(", "sscanf(", "%s"] if function_name != "unknown" else ["sscanf(", "%s"],
-            })
-
-        if open_re.search(stripped):
-            if any(token in window_before for token in (' + "/" + ', '+ "/" +', 'std::filesystem::path', 'fs::path', ' / (', '/ (', '.append("/")', 'path =', '.string()', '.c_str()')):
+                "investigation_hints": [f"{function_name}(", "sscanf(", "%s"] if function_name != "unknown" else ["sscanf(", "%s"]},
+            )
+        if any(token in stripped for token in open_tokens):
+            path_window = "\n".join(lines[max(0, idx - 5):idx + 1])
+            if any(token in path_window for token in (' + "/" + ', '+ "/" +', 'std::filesystem::path', 'fs::path', ' / (', '/ (', '.append("/")', 'path =', '.string()', '.c_str()')):
                 candidates.append({
                     "function_name": function_name,
                     "line": max(1, line_number - 1),
@@ -456,68 +401,30 @@ def _detect_obvious_local_candidates(file_content):
                     "primary": True,
                     "cross_file_concern": False,
                     "code_snippet": _line_context_from_content(file_content, max(1, line_number - 1), context=3),
-                    "investigation_hints": [f"{function_name}(", "ifstream", "fopen("] if function_name != "unknown" else ["ifstream", "fopen("],
-                })
-
-        if alloc_mul_re.search(stripped):
+                    "investigation_hints": [f"{function_name}(", "ifstream", "fopen("] if function_name != "unknown" else ["ifstream", "fopen("]},
+                )
+        if any(token in stripped for token in ("malloc(", "calloc(", "realloc(")) and "*" in stripped:
             candidates.append({
                 "function_name": function_name,
                 "line": line_number,
                 "type": "integer_overflow",
                 "severity": "medium",
-                "description": "The target file performs multiplication inside an allocation expression, which can overflow and under-allocate memory.",
+                "description": "The target file performs size arithmetic in an allocation expression, which may overflow if inputs are large.",
                 "locality": "local_direct",
                 "primary": False,
                 "cross_file_concern": False,
                 "code_snippet": code_snippet,
-                "investigation_hints": [f"{function_name}(", "malloc(", "realloc("] if function_name != "unknown" else ["malloc(", "realloc("],
-            })
-
-        if printf_re.search(stripped):
-            arg_text = stripped.split("(", 1)[1] if "(" in stripped else ""
-            if arg_text and not arg_text.lstrip().startswith(("\"", "'")):
-                if "printf(" in stripped or "fprintf(" in stripped or "syslog(" in stripped:
-                    candidates.append({
-                        "function_name": function_name,
-                        "line": line_number,
-                        "type": "format_string",
-                        "severity": "high",
-                        "description": "The target file appears to pass variable data as a format string in a printf-style API.",
-                        "locality": "local_direct",
-                        "primary": True,
-                        "cross_file_concern": False,
-                        "code_snippet": code_snippet,
-                        "investigation_hints": [f"{function_name}(", "printf(", "fprintf("] if function_name != "unknown" else ["printf(", "fprintf("],
-                    })
-
-    return _prune_audit_candidates(candidates, limit=12)
+                "investigation_hints": [f"{function_name}(", "malloc(", "realloc("] if function_name != "unknown" else ["malloc(", "realloc("]},
+            )
+    return _prune_audit_candidates(candidates, limit=25)
 
 def _candidate_is_local_direct(candidate):
     if str(candidate.get("locality") or "").strip() == "local_direct":
         return True
     return str(candidate.get("type") or "").strip() in {
         "command_injection", "buffer_overflow", "sscanf_overflow", "path_traversal",
-        "format_string", "integer_overflow", "out_of_bounds",
+        "format_string", "integer_overflow", "out_of_bounds", "null_deref",
     }
-
-def _fallback_select_best_verdicts(verdicts, limit=3):
-    if not verdicts:
-        return []
-    ordered = sorted(verdicts, key=_verdict_priority_key)
-    selected = []
-    seen = set()
-    for verdict in ordered:
-        key = (
-            str(verdict.get("function_name") or "unknown"),
-            str(verdict.get("vulnerability_type") or "other"),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append(verdict)
-        if len(selected) >= limit:
-            break
-    return selected
 
 _VULN_TO_CWE = {
     "buffer_overflow": "CWE-120", "out_of_bounds": "CWE-787", "use_after_free": "CWE-416",
@@ -809,89 +716,6 @@ Line: {line}
 
 == LOCAL CONTEXT ==
 {local_context}
-"""
-
-_INVESTIGATE_VERIFY_SYS = """\
-You are the strong verifier for a single-file C/C++ security review.
-
-Your job is to decide whether the candidate is a real, report-worthy vulnerability after
-reviewing:
-- the candidate claim
-- the full target file
-- grep/read evidence collected from the repo
-- an optional draft verdict from the reasoning model
-
-Rules:
-- Prefer the PRIMARY direct bug over speculative secondary bugs.
-- For obvious unsafe sink patterns in the target file, local file evidence is sufficient.
-- For cross-file, ownership, lifecycle, or caller-dependent issues, require repo evidence.
-- Do not emit generic low-value findings when a stronger direct bug exists in the same function/area.
-- Avoid duplicates and near-duplicates.
-- Suppress allocation-failure-only, leak-only, and generic null-check findings unless they form the core security issue.
-
-Return ONLY valid JSON:
-{{"verdict": {{
-  "is_vulnerable": true,
-  "vulnerability_type": "command_injection",
-  "severity": "high",
-  "confidence": "high",
-  "function_name": "SendReport",
-  "line": 0,
-  "description": "...",
-  "root_cause": "...",
-  "evidence": "...",
-  "reachability_chain": "Target file local path"
-}}}}
-
-Set is_vulnerable to false if the candidate should not be kept."""
-
-_INVESTIGATE_VERIFY_USR = """== CANDIDATE ==
-Function: {function_name}
-Line: {line}
-Type: {candidate_type}
-Severity: {severity}
-Locality: {locality}
-Primary: {primary}
-Cross-file concern: {cross_file_concern}
-Description: {description}
-
-== TARGET FILE: {target_file} ==
-{target_file_code}
-
-== INVESTIGATION TRANSCRIPT ==
-{transcript}
-
-== DRAFT VERDICT ==
-{draft_verdict}
-"""
-
-_SELECT_BEST_REVIEWS_SYS = """\
-You are the final strong selector for single-file security review findings.
-
-You are given several already-confirmed candidate findings for one target file.
-Select the best 1 to 3 findings to keep.
-
-Selection rules:
-- Keep the strongest benchmark-relevant findings.
-- Prefer primary direct bugs over secondary or speculative issues.
-- Prefer command injection, path traversal, buffer overflow, format string, out-of-bounds,
-  use-after-free, and direct integer-overflow-to-underallocation bugs.
-- Drop duplicates and near-duplicates.
-- Drop generic null checks, allocation-failure-only issues, leak-only issues, and weak
-  secondary TOCTOU findings when a stronger direct sink bug exists in the same function.
-- If multiple findings describe the same root cause family, keep only the strongest one.
-
-Return ONLY valid JSON:
-{{"selected_indices": [0, 2]}}
-"""
-
-_SELECT_BEST_REVIEWS_USR = """Target file: {target_file}
-
-== TARGET FILE CODE ==
-{target_file_code}
-
-== CONFIRMED FINDINGS ==
-{findings_section}
 """
 
 
@@ -1422,12 +1246,6 @@ Prefer the PRIMARY direct bug over speculative secondary issues. For example:
 - prefer buffer_overflow over vague downstream memory-corruption concerns when sprintf/strcpy is present
 - prefer path_traversal when a path is built from variable input and opened without validation
 
-Avoid noisy, low-value candidates unless they appear to be the actual main issue:
-- generic null checks
-- allocation-failure-only crashes
-- leak-only findings
-- weak secondary TOCTOU findings when a stronger direct sink is present
-
 For each issue found, classify locality:
 - local_direct: the target file itself shows a classic unsafe sink or missing validation pattern that can be confirmed from this file alone
 - cross_file: the issue likely depends on caller behavior, ownership across files, or wider repo context
@@ -1473,18 +1291,34 @@ class FileAuditor:
             "file_content": _number_lines(file_content),
         }).strip()
 
-        result = []
         parsed = parse_json_output(raw)
+        result = []
         if isinstance(parsed, dict):
             candidates = parsed.get("candidates")
             if isinstance(candidates, list):
                 for c in candidates:
                     if not isinstance(c, dict):
                         continue
-                    result.append(_normalize_candidate(c))
-
+                    fn = str(c.get("function_name") or "").strip() or "unknown"
+                    line = 1
+                    try:
+                        line = max(1, int(c.get("line", 1)))
+                    except:
+                        pass
+                    result.append({
+                        "function_name": fn,
+                        "line": line,
+                        "type": str(c.get("type") or "other").strip(),
+                        "severity": str(c.get("severity") or "medium").strip().lower(),
+                        "description": str(c.get("description") or ""),
+                        "locality": str(c.get("locality") or "cross_file").strip(),
+                        "primary": bool(c.get("primary")),
+                        "cross_file_concern": bool(c.get("cross_file_concern")),
+                        "code_snippet": str(c.get("code_snippet") or ""),
+                        "investigation_hints": [str(h).strip() for h in (c.get("investigation_hints") or []) if str(h).strip()],
+                    })
         static_candidates = _detect_obvious_local_candidates(file_content)
-        return _prune_audit_candidates(result + static_candidates, limit=12)
+        return _prune_audit_candidates(result + static_candidates, limit=25)
 
 
 # file investigation
@@ -1619,18 +1453,15 @@ def _read_file_lines(codebase_path, rel_path, start_line, end_line, max_lines=80
 class FindingInvestigator:
     """Phase 2: Multi-turn investigation of each candidate finding via grep."""
 
-    def __init__(self, llm_provider, model, verifier_model, usage_runtime, codebase_path, max_tokens=4096):
+    def __init__(self, llm_provider, model, usage_runtime, codebase_path, max_tokens=4096):
         self._p = llm_provider
         self._m = model
-        self._vm = verifier_model
         self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path)
         self._t = max_tokens
 
-    def investigate(self, candidate, target_file, target_file_content, *, max_turns=3):
+    def investigate(self, candidate, target_file, target_file_content, *, max_turns=4):
         """Investigate a single candidate finding. Returns a verdict dict or None."""
-        candidate = _normalize_candidate(candidate)
-
         if _candidate_is_local_direct(candidate):
             local_verdict = self._confirm_local_direct(candidate, target_file, target_file_content)
             if isinstance(local_verdict, dict) and local_verdict.get("is_vulnerable"):
@@ -1639,104 +1470,64 @@ class FindingInvestigator:
                 return local_verdict
 
         kw = self._u.hooks.chat_model_kwargs()
-        reasoning_chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
+        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
 
         initial_user = self._build_initial_prompt(candidate, target_file, target_file_content)
         messages = [
             SystemMessage(content=_INVESTIGATE_SYS),
             HumanMessage(content=initial_user),
         ]
-        transcript_parts = [initial_user]
-        proposed_verdict = None
 
-        for turn in range(max(1, min(max_turns, 3))):
-            is_last_turn = (turn == max(1, min(max_turns, 3)) - 1)
+        for turn in range(max_turns):
+            is_last_turn = (turn == max_turns - 1)
 
             if is_last_turn:
                 messages.append(HumanMessage(content=(
-                    "This is your final reasoning turn. Either output a verdict now, or output no more actions."
+                    "This is your final turn. You must conclude now with a verdict. "
+                    "Based on everything you've seen, output your verdict JSON."
                 )))
                 call_messages = [SystemMessage(content=_INVESTIGATE_CONCLUDE_SYS)] + messages[1:]
             else:
                 call_messages = messages
 
             try:
-                response = reasoning_chat.invoke(call_messages)
-                raw = response.content if hasattr(response, "content") else str(response)
+                response = chat.invoke(call_messages)
+                raw = response.content if hasattr(response, 'content') else str(response)
             except Exception as e:
                 logger.warning("Investigation call failed on turn %d: %s", turn, e)
-                break
+                return None
 
-            transcript_parts.append(f"=== MODEL TURN {turn + 1} ===\n{raw}")
-            parsed = parse_json_output(str(raw).strip())
+            parsed = parse_json_output(raw.strip())
             if not isinstance(parsed, dict):
                 messages.append(AIMessage(content=raw))
                 messages.append(HumanMessage(content="Please output valid JSON only — either actions or a verdict."))
-                transcript_parts.append("=== SYSTEM FEEDBACK ===\nPlease output valid JSON only.")
                 continue
 
             verdict = parsed.get("verdict")
             if isinstance(verdict, dict):
-                proposed_verdict = verdict
-                break
+                return verdict
 
             actions = parsed.get("actions")
             if not isinstance(actions, list) or not actions:
                 messages.append(AIMessage(content=raw))
                 messages.append(HumanMessage(content="Output actions to search/read the codebase, or a verdict to conclude."))
-                transcript_parts.append("=== SYSTEM FEEDBACK ===\nNo valid actions or verdict returned.")
                 continue
 
             results_text = self._execute_actions(actions)
             messages.append(AIMessage(content=raw))
             messages.append(HumanMessage(content=f"Results from your actions:\n\n{results_text}\n\nContinue investigating or conclude with a verdict."))
-            transcript_parts.append(f"=== ACTION RESULTS ===\n{results_text}")
 
-        return self._verify_with_strong(candidate, target_file, target_file_content, "\n\n".join(transcript_parts), proposed_verdict)
+        return None
 
     def _confirm_local_direct(self, candidate, target_file, target_file_content):
         try:
-            confirmer = VulnerabilityConfirmer(self._p, self._vm, self._u, self._cb, max_tokens=self._t)
+            confirmer = VulnerabilityConfirmer(self._p, self._m, self._u, self._cb, max_tokens=self._t)
             verdict = confirmer.confirm_local_candidate(candidate, target_file, target_file_content)
             if isinstance(verdict, dict):
                 return verdict
         except Exception as e:
             logger.warning("Local confirmation failed for %s/%s: %s", target_file, candidate.get("function_name"), e)
         return None
-
-    def _verify_with_strong(self, candidate, target_file, target_file_content, transcript, proposed_verdict):
-        kw = self._u.hooks.chat_model_kwargs()
-        strong_chat = self._p.get_chat_model(model=self._vm, max_tokens=self._t, temperature=0.1, **kw)
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", _INVESTIGATE_VERIFY_SYS),
-            ("user", _INVESTIGATE_VERIFY_USR),
-        ])
-        try:
-            raw = (prompt | strong_chat | StrOutputParser()).invoke({
-                "function_name": str(candidate.get("function_name") or "unknown"),
-                "line": int(candidate.get("line") or 1),
-                "candidate_type": str(candidate.get("type") or "other"),
-                "severity": str(candidate.get("severity") or "medium"),
-                "locality": str(candidate.get("locality") or "cross_file"),
-                "primary": bool(candidate.get("primary")),
-                "cross_file_concern": bool(candidate.get("cross_file_concern")),
-                "description": str(candidate.get("description") or ""),
-                "target_file": target_file,
-                "target_file_code": _number_lines(target_file_content),
-                "transcript": transcript or "(no investigation transcript)",
-                "draft_verdict": json.dumps(proposed_verdict, ensure_ascii=False, indent=2) if isinstance(proposed_verdict, dict) else "(none)",
-            }).strip()
-        except Exception as e:
-            logger.warning("Strong verification failed for %s/%s: %s", target_file, candidate.get("function_name"), e)
-            return proposed_verdict if isinstance(proposed_verdict, dict) else None
-
-        parsed = parse_json_output(raw)
-        if not isinstance(parsed, dict):
-            return proposed_verdict if isinstance(proposed_verdict, dict) else None
-        verdict = parsed.get("verdict")
-        if not isinstance(verdict, dict):
-            return proposed_verdict if isinstance(proposed_verdict, dict) else None
-        return verdict
 
     def _build_initial_prompt(self, candidate, target_file, target_file_content):
         hints = candidate.get("investigation_hints", [])
@@ -1813,68 +1604,6 @@ class FindingInvestigator:
         if not results:
             return "(no valid actions were executed)"
         return "\n\n".join(results)
-
-
-class FinalReviewSelector:
-    def __init__(self, llm_provider, model, usage_runtime, max_tokens=4096):
-        self._p = llm_provider
-        self._m = model
-        self._u = usage_runtime
-        self._t = max_tokens
-
-    def select(self, target_file, target_file_content, verdicts, *, limit=3):
-        if not verdicts:
-            return []
-        limit = max(1, min(int(limit or 3), 3))
-        kw = self._u.hooks.chat_model_kwargs()
-        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
-
-        findings_section_parts = []
-        for i, verdict in enumerate(verdicts):
-            findings_section_parts.append(
-                f"[{i}] type={verdict.get('vulnerability_type')} severity={verdict.get('severity')} "
-                f"confidence={verdict.get('confidence')} function={verdict.get('function_name')} "
-                f"line={verdict.get('line')}\n"
-                f"description={verdict.get('description')}\n"
-                f"root_cause={verdict.get('root_cause')}\n"
-                f"evidence={verdict.get('evidence')}\n"
-                f"reachability_chain={verdict.get('reachability_chain')}\n"
-            )
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", _SELECT_BEST_REVIEWS_SYS),
-            ("user", _SELECT_BEST_REVIEWS_USR),
-        ])
-
-        try:
-            raw = (prompt | chat | StrOutputParser()).invoke({
-                "target_file": target_file,
-                "target_file_code": _number_lines(target_file_content),
-                "findings_section": "\n\n".join(findings_section_parts),
-            }).strip()
-            parsed = parse_json_output(raw)
-            if isinstance(parsed, dict):
-                indices = parsed.get("selected_indices")
-                if isinstance(indices, list):
-                    selected = []
-                    seen = set()
-                    for idx in indices:
-                        try:
-                            i = int(idx)
-                        except:
-                            continue
-                        if i < 0 or i >= len(verdicts) or i in seen:
-                            continue
-                        seen.add(i)
-                        selected.append(verdicts[i])
-                        if len(selected) >= limit:
-                            break
-                    if selected:
-                        return selected
-        except Exception as e:
-            logger.warning("Final selector failed for %s: %s", target_file, e)
-
-        return _fallback_select_best_verdicts(verdicts, limit=limit)
 
 
 
@@ -2046,7 +1775,7 @@ class ReachabilityService:
 
     def review_single_file_from_codebase(self, file_path, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
                                           max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25,
-                                          max_investigation_turns=3, progress_callback=None):
+                                          max_investigation_turns=4, progress_callback=None):
         """Deep file review: Phase 1 (strong model audit) + Phase 2 (multi-turn grep investigation)."""
         abs_target, relative_target = self._normalize_target_file(file_path)
 
@@ -2054,13 +1783,12 @@ class ReachabilityService:
         if not content or not content.strip():
             return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        reasoning_model = extraction_model or "gpt-4.1-mini"
         strong_model = confirmation_model or self._config.llama_query_model
 
         if progress_callback:
             progress_callback({"event": "file_audit_start", "file": relative_target})
 
-        auditor = FileAuditor(self._llm_provider, reasoning_model, self._usage_runtime)
+        auditor = FileAuditor(self._llm_provider, strong_model, self._usage_runtime)
         candidates = auditor.audit(relative_target, content)
 
         if progress_callback:
@@ -2073,7 +1801,7 @@ class ReachabilityService:
             progress_callback({"event": "investigation_start", "total": len(candidates), "file": relative_target})
 
         investigator = FindingInvestigator(
-            self._llm_provider, reasoning_model, strong_model, self._usage_runtime,
+            self._llm_provider, strong_model, self._usage_runtime,
             self._config.codebase_path,
         )
 
@@ -2092,7 +1820,7 @@ class ReachabilityService:
                              relative_target, candidate.get("function_name"), e)
                 return None
 
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(candidates)))) as ex:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(candidates))) as ex:
             futs = {submit_with_current_context(ex, _investigate_one, c): c for c in candidates}
             for fut in as_completed(futs):
                 c = futs[fut]
@@ -2116,23 +1844,15 @@ class ReachabilityService:
         if not confirmed_findings:
             return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        selector = FinalReviewSelector(self._llm_provider, strong_model, self._usage_runtime)
-        selected_findings = selector.select(
-            relative_target,
-            content,
-            confirmed_findings,
-            limit=min(3, max(1, int(max_paths_per_sink or 3))),
-        )
-
-        if not selected_findings:
-            selected_findings = _fallback_select_best_verdicts(
-                confirmed_findings,
-                limit=min(3, max(1, int(max_paths_per_sink or 3))),
-            )
-
         reviews = []
         seen_keys = set()
-        for v in selected_findings:
+        for v in sorted(confirmed_findings, key=lambda item: _candidate_priority_key({
+            "type": str(item.get("vulnerability_type") or "other"),
+            "severity": str(item.get("severity") or "medium").lower(),
+            "line": int(item.get("line") or 1),
+            "primary": True,
+            "locality": "local_direct" if str(item.get("reachability_chain") or "").startswith("Target file") else "cross_file",
+        })):
             fn = str(v.get("function_name") or "unknown")
             vtype = str(v.get("vulnerability_type") or "other")
             line = 1
