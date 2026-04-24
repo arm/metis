@@ -3,6 +3,9 @@
 
 from unittest.mock import Mock
 
+from metis.engine.analysis.static_inventory import build_static_inventory
+from metis.engine.options import ReviewOptions
+
 
 def test_ask_question(engine):
     result = engine.ask_question("What is this?")
@@ -76,6 +79,128 @@ def test_review_file_no_index_skips_query_engine_init(engine, monkeypatch, tmp_p
 
     assert result["reviews"] == []
     engine.vector_backend.get_query_engines.assert_not_called()
+
+
+def test_review_file_static_inventory_uses_packets(engine, monkeypatch, tmp_path):
+    sample = tmp_path / "sample.c"
+    sample.write_text(
+        "int handle_packet(char *dst, const char *src, int len) {\n"
+        "    memcpy(dst, src, len);\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    engine._config.codebase_path = str(tmp_path)
+    captured = {}
+
+    class _DummyReviewGraph:
+        def review(self, req):
+            captured["snippet"] = req["snippet"]
+            captured["relative_file"] = req["relative_file"]
+            captured["review_input_kind"] = req["review_input_kind"]
+            return {"file": "sample.c", "reviews": []}
+
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    result = engine.review.review_file(
+        str(sample),
+        options=ReviewOptions(use_retrieval_context=False),
+    )
+
+    assert result["reviews"] == []
+    assert captured["relative_file"] == "sample.c"
+    assert captured["review_input_kind"] == "static_inventory_packets"
+    assert "STATIC_REVIEW_PACKET" in captured["snippet"]
+    assert "handle_packet" in captured["snippet"]
+    assert "bounds_or_capacity" in captured["snippet"]
+
+
+def test_review_file_static_inventory_skips_low_risk_file(
+    engine, monkeypatch, tmp_path
+):
+    sample = tmp_path / "sample.c"
+    sample.write_text(
+        "int add_one(int value) {\n    return value + 1;\n}",
+        encoding="utf-8",
+    )
+    engine._config.codebase_path = str(tmp_path)
+    review_graph = Mock()
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: review_graph)
+
+    result = engine.review.review_file(
+        str(sample),
+        options=ReviewOptions(use_retrieval_context=False),
+    )
+
+    assert result == {"file": "sample.c", "file_path": str(sample), "reviews": []}
+    review_graph.review.assert_not_called()
+
+
+def test_review_file_stale_static_inventory_rebuilds_and_uses_packets(
+    engine, monkeypatch, tmp_path
+):
+    sample = tmp_path / "sample.c"
+    sample.write_text(
+        "int handle_packet(char *dst, const char *src, int len) {\n"
+        "    memcpy(dst, src, len);\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    engine._config.codebase_path = str(tmp_path)
+    build_static_inventory(
+        engine.repository,
+        output_path=tmp_path / ".metis" / "static_inventory.json",
+    )
+    sample.write_text(
+        "int handle_packet(char *dst, const char *src, int len) {\n"
+        "    helper(len);\n"
+        "    memcpy(dst, src, len);\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class _DummyReviewGraph:
+        def review(self, req):
+            captured["snippet"] = req["snippet"]
+            captured["review_input_kind"] = req["review_input_kind"]
+            return {"file": "sample.c", "reviews": []}
+
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    result = engine.review.review_file(
+        str(sample),
+        options=ReviewOptions(use_retrieval_context=False),
+    )
+
+    assert result["reviews"] == []
+    assert captured["review_input_kind"] == "static_inventory_packets"
+    assert "STATIC_REVIEW_PACKET" in captured["snippet"]
+    assert "helper(len);" in captured["snippet"]
+
+
+def test_review_patch_builds_static_inventory_sidecar(engine, monkeypatch, tmp_path):
+    patch = """--- a/test.py
++++ b/test.py
+@@ -0,0 +1 @@
++print('Hello')
+"""
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_text(patch, encoding="utf-8")
+    engine._config.codebase_path = str(tmp_path)
+
+    class _DummyReviewGraph:
+        def review(self, req):
+            return {"file": "test.py", "reviews": []}
+
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+
+    result = engine.review.review_patch(str(patch_file), use_retrieval_context=False)
+
+    assert isinstance(result["reviews"], list)
+    assert (tmp_path / ".metis" / "static_inventory.json").exists()
 
 
 def test_review_patch_no_index_skips_query_engine_init(engine, monkeypatch, tmp_path):

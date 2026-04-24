@@ -12,6 +12,13 @@ from typing import Any
 
 import unidiff
 
+from metis.engine.analysis.review_packets import (
+    build_review_packets_from_inventory,
+    inventory_file_is_fresh,
+    inventory_schema_supported,
+    load_inventory_for_codebase,
+)
+from metis.engine.analysis.static_inventory import build_static_inventory
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
 
@@ -37,11 +44,53 @@ class ReviewService:
         self._repository = repository
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
+        self._static_inventory_ready = False
 
     def get_code_files(self):
         return self._repository.get_code_files()
 
+    def prepare_static_inventory_for_review(
+        self,
+        *,
+        force: bool = True,
+    ):
+        if self._static_inventory_ready and not force:
+            inventory = load_inventory_for_codebase(self._config.codebase_path)
+            if inventory is not None:
+                return inventory
+        logger.info(
+            "Building static inventory for review under %s",
+            self._config.codebase_path,
+        )
+        inventory, _path = build_static_inventory(self._repository)
+        self._static_inventory_ready = True
+        return inventory
+
+    def clear_static_inventory_preparation(self) -> None:
+        self._static_inventory_ready = False
+
     def review_file(
+        self,
+        file_path,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
+    ):
+        started_session = False
+        try:
+            if not self._static_inventory_ready:
+                self.prepare_static_inventory_for_review(force=True)
+                started_session = True
+            return self._review_file_impl(
+                file_path,
+                options=options,
+                use_retrieval_context=use_retrieval_context,
+            )
+        finally:
+            if started_session:
+                self.clear_static_inventory_preparation()
+
+    def _review_file_impl(
         self,
         file_path,
         options: ReviewOptions | None = None,
@@ -56,9 +105,19 @@ class ReviewService:
         if options.use_retrieval_context:
             qe_code, qe_docs = self._get_query_engines()
         base_path = os.path.abspath(self._config.codebase_path)
+        relative_path = os.path.relpath(file_path, base_path)
         snippet = read_file_content(file_path)
         if not snippet:
             return None
+        packets = self._build_static_review_packets(file_path)
+        if packets is None:
+            review_input_kind = "source_file"
+            pass
+        elif packets:
+            snippet = "\n\n---\n\n".join(packets)
+            review_input_kind = "static_inventory_packets"
+        else:
+            return {"file": relative_path, "file_path": file_path, "reviews": []}
 
         ext = os.path.splitext(file_path)[1].lower()
         plugin = self._repository.get_plugin_for_extension(ext)
@@ -71,7 +130,6 @@ class ReviewService:
         ).get("retrieve_context", "")
 
         formatted_context_prompt = context_prompt_template.format(file_path=file_path)
-        relative_path = os.path.relpath(file_path, base_path)
 
         try:
             req: ReviewRequest = {
@@ -85,11 +143,48 @@ class ReviewService:
                 "relative_file": relative_path,
                 "mode": "file",
                 "use_retrieval_context": options.use_retrieval_context,
+                "review_input_kind": review_input_kind,
             }
             return self._review_graph_factory().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
             return None
+
+    def _build_static_review_packets(self, file_path: str) -> list[str] | None:
+        inventory = load_inventory_for_codebase(self._config.codebase_path)
+        if inventory is None:
+            logger.debug(
+                "Static inventory not found for %s; falling back to full file review.",
+                self._config.codebase_path,
+            )
+            return None
+        if not inventory_schema_supported(inventory):
+            logger.warning(
+                "Static inventory schema is stale or unsupported for %s; falling back to full file review.",
+                self._config.codebase_path,
+            )
+            return None
+        if not inventory_file_is_fresh(
+            inventory,
+            file_path=file_path,
+            codebase_path=self._config.codebase_path,
+        ):
+            logger.warning(
+                "Static inventory is stale for %s; falling back to full file review.",
+                file_path,
+            )
+            return None
+        packets = build_review_packets_from_inventory(
+            inventory,
+            file_path=file_path,
+            codebase_path=self._config.codebase_path,
+        )
+        logger.debug(
+            "Static review selected %d packet(s) for %s",
+            len(packets),
+            file_path,
+        )
+        return packets
 
     def _invoke_review_file(
         self,
@@ -130,37 +225,45 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
     ) -> Iterator[dict | None]:
-        options = coerce_review_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
-        files = (get_code_files_func or self.get_code_files)()
-        if not files:
-            return
-        review_fn = review_file_func or self.review_file
-        with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
-            future_to_path = {
-                submit_with_current_context(
-                    executor,
-                    self._invoke_review_file,
-                    review_fn,
-                    path,
-                    options,
-                ): path
-                for path in files
-            }
-            for future in as_completed(future_to_path):
-                path = future_to_path[future]
-                try:
-                    result = future.result()
-                except Exception as e:
-                    logger.error(f"Error reviewing file {path}: {e}")
-                    yield None
-                    continue
-                if result:
-                    yield result
-                else:
-                    yield None
+        started_session = False
+        try:
+            if not self._static_inventory_ready:
+                self.prepare_static_inventory_for_review(force=True)
+                started_session = True
+            options = coerce_review_options(
+                options,
+                use_retrieval_context=use_retrieval_context,
+            )
+            files = (get_code_files_func or self.get_code_files)()
+            if not files:
+                return
+            review_fn = review_file_func or self.review_file
+            with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
+                future_to_path = {
+                    submit_with_current_context(
+                        executor,
+                        self._invoke_review_file,
+                        review_fn,
+                        path,
+                        options,
+                    ): path
+                    for path in files
+                }
+                for future in as_completed(future_to_path):
+                    path = future_to_path[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        logger.error(f"Error reviewing file {path}: {e}")
+                        yield None
+                        continue
+                    if result:
+                        yield result
+                    else:
+                        yield None
+        finally:
+            if started_session:
+                self.clear_static_inventory_preparation()
 
     def review_patch(
         self,
@@ -169,90 +272,99 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
     ):
-        options = coerce_review_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
-        qe_code = qe_docs = None
-        if options.use_retrieval_context:
-            qe_code, qe_docs = self._get_query_engines()
-        patch_text = read_file_content(patch_file)
+        started_session = False
         try:
-            diff = unidiff.PatchSet.from_string(patch_text)
-            logger.info("Parsed the patch file successfully.")
-        except Exception as e:
-            logger.error(f"Error parsing patch file: {e}")
-            return {"reviews": [], "overall_changes": ""}
-        file_reviews = []
-        overall_summaries = []
-        base_path = os.path.abspath(self._config.codebase_path)
-        metisignore_spec = self._repository.load_metisignore()
-        for file_diff in diff:
-            if file_diff.is_removed_file or file_diff.is_binary_file:
-                continue
-            abs_path = (
-                file_diff.path
-                if os.path.isabs(file_diff.path)
-                else os.path.join(base_path, file_diff.path)
+            if not self._static_inventory_ready:
+                self.prepare_static_inventory_for_review(force=True)
+                started_session = True
+            options = coerce_review_options(
+                options,
+                use_retrieval_context=use_retrieval_context,
             )
-            relative_path = self._repository.normalize_match_path(abs_path)
-            if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
-                continue
-            ext = os.path.splitext(file_diff.path)[1].lower()
-            plugin = self._repository.get_plugin_for_extension(ext)
-            if not plugin:
-                continue
-            snippet = process_diff_file(
-                self._config.codebase_path, file_diff, self._config.max_token_length
-            )
-            if not snippet:
-                continue
-            context_prompt = self._config.plugin_config.get("general_prompts", {}).get(
-                "retrieve_context", ""
-            )
-            formatted_context = context_prompt.format(file_path=file_diff.path)
-
-            language_prompts = plugin.get_prompts()
+            qe_code = qe_docs = None
+            if options.use_retrieval_context:
+                qe_code, qe_docs = self._get_query_engines()
+            patch_text = read_file_content(patch_file)
             try:
-                original_content = read_file_content(abs_path)
-                req: ReviewRequest = {
-                    "file_path": abs_path,
-                    "snippet": snippet,
-                    "retriever_code": qe_code,
-                    "retriever_docs": qe_docs,
-                    "context_prompt": formatted_context,
-                    "language_prompts": language_prompts,
-                    "default_prompt_key": "security_review",
-                    "relative_file": relative_path,
-                    "mode": "patch",
-                    "original_file": original_content or "",
-                    "use_retrieval_context": options.use_retrieval_context,
-                }
-                review_dict = self._review_graph_factory().review(req)
+                diff = unidiff.PatchSet.from_string(patch_text)
+                logger.info("Parsed the patch file successfully.")
             except Exception as e:
-                logger.error(f"Error processing review for {file_diff.path}: {e}")
-                review_dict = None
-            if review_dict:
-                file_reviews.append(review_dict)
-                issues = "\n".join(
-                    issue.get("issue", "") for issue in review_dict.get("reviews", [])
-                )
-                if not issues.strip():
+                logger.error(f"Error parsing patch file: {e}")
+                return {"reviews": [], "overall_changes": ""}
+            file_reviews = []
+            overall_summaries = []
+            base_path = os.path.abspath(self._config.codebase_path)
+            metisignore_spec = self._repository.load_metisignore()
+            for file_diff in diff:
+                if file_diff.is_removed_file or file_diff.is_binary_file:
                     continue
-                summary_prompt = language_prompts["snippet_security_summary"]
-                summary_prompt = apply_custom_guidance(
-                    summary_prompt,
-                    self._config.custom_prompt_text,
-                    self._config.custom_guidance_precedence,
+                abs_path = (
+                    file_diff.path
+                    if os.path.isabs(file_diff.path)
+                    else os.path.join(base_path, file_diff.path)
                 )
-                changes_summary = summarize_changes(
-                    self._config.llm_provider,
-                    file_diff.path,
-                    issues,
-                    summary_prompt,
-                    callbacks=self._config.usage_runtime.hooks.callbacks,
+                relative_path = self._repository.normalize_match_path(abs_path)
+                if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
+                    continue
+                ext = os.path.splitext(file_diff.path)[1].lower()
+                plugin = self._repository.get_plugin_for_extension(ext)
+                if not plugin:
+                    continue
+                snippet = process_diff_file(
+                    self._config.codebase_path, file_diff, self._config.max_token_length
                 )
-                if changes_summary:
-                    overall_summaries.append(changes_summary)
-        overall_changes = "\n\n".join(overall_summaries)
-        return {"reviews": file_reviews, "overall_changes": overall_changes}
+                if not snippet:
+                    continue
+                context_prompt = self._config.plugin_config.get(
+                    "general_prompts", {}
+                ).get("retrieve_context", "")
+                formatted_context = context_prompt.format(file_path=file_diff.path)
+
+                language_prompts = plugin.get_prompts()
+                try:
+                    original_content = read_file_content(abs_path)
+                    req: ReviewRequest = {
+                        "file_path": abs_path,
+                        "snippet": snippet,
+                        "retriever_code": qe_code,
+                        "retriever_docs": qe_docs,
+                        "context_prompt": formatted_context,
+                        "language_prompts": language_prompts,
+                        "default_prompt_key": "security_review",
+                        "relative_file": relative_path,
+                        "mode": "patch",
+                        "original_file": original_content or "",
+                        "use_retrieval_context": options.use_retrieval_context,
+                    }
+                    review_dict = self._review_graph_factory().review(req)
+                except Exception as e:
+                    logger.error(f"Error processing review for {file_diff.path}: {e}")
+                    review_dict = None
+                if review_dict:
+                    file_reviews.append(review_dict)
+                    issues = "\n".join(
+                        issue.get("issue", "")
+                        for issue in review_dict.get("reviews", [])
+                    )
+                    if not issues.strip():
+                        continue
+                    summary_prompt = language_prompts["snippet_security_summary"]
+                    summary_prompt = apply_custom_guidance(
+                        summary_prompt,
+                        self._config.custom_prompt_text,
+                        self._config.custom_guidance_precedence,
+                    )
+                    changes_summary = summarize_changes(
+                        self._config.llm_provider,
+                        file_diff.path,
+                        issues,
+                        summary_prompt,
+                        callbacks=self._config.usage_runtime.hooks.callbacks,
+                    )
+                    if changes_summary:
+                        overall_summaries.append(changes_summary)
+            overall_changes = "\n\n".join(overall_summaries)
+            return {"reviews": file_reviews, "overall_changes": overall_changes}
+        finally:
+            if started_session:
+                self.clear_static_inventory_preparation()

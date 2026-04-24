@@ -205,6 +205,7 @@ Indexes your codebase into a vector database. Must be run before any analysis.
 ### `review_code`
 Performs a full security review of the indexed codebase.
 Use `--ignore-index` to run without retrieval when no index is available.
+Metis now rebuilds the static inventory automatically at the start of every review command. See [docs/static-inventory-review.md](docs/static-inventory-review.md).
 
 ### `review_file <path>`
 Performs a targeted security review of a single file.

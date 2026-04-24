@@ -366,7 +366,6 @@ def main():
         action="store_true",
         help="Allow selected analysis commands to run without an index-backed context.",
     )
-
     args = parser.parse_args()
 
     if args.output_files:

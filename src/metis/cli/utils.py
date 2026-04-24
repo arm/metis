@@ -552,11 +552,14 @@ def check_file_exists(file_path, quiet=False):
 
 
 def pretty_print_reviews(results, quiet=False):
-    if not results or not results.get("reviews"):
+    file_reviews = results.get("reviews") if isinstance(results, dict) else None
+    if not file_reviews or not any(
+        file_review.get("reviews") for file_review in file_reviews
+    ):
         print_console("[bold green]No security issues found![/bold green]", quiet)
         return
 
-    for file_review in results.get("reviews", []):
+    for file_review in file_reviews:
         file = file_review.get("file", "UNKNOWN FILE")
         reviews = file_review.get("reviews", [])
         if reviews:

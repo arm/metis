@@ -6,6 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from metis.cli import commands
+from metis.cli import utils as cli_utils
 from metis.cli.command_runtime import CommandRuntime
 from metis.engine.options import ReviewOptions, TriageOptions
 
@@ -47,6 +48,62 @@ def test_run_review_code_uses_review_domain_surface(monkeypatch):
     commands.run_review_code(engine, args, runtime)
 
     assert calls == ["get_code_files", ("review_code", True)]
+
+
+def test_run_review_code_propagates_no_index_mode(monkeypatch):
+    captured = []
+
+    class _ReviewDomain:
+        def review_code(self, options=None):
+            captured.append(options)
+            yield {"file": "a.py", "reviews": []}
+
+    engine = SimpleNamespace(review=_ReviewDomain())
+    args = SimpleNamespace(
+        verbose=False,
+        quiet=True,
+        triage=False,
+        output_file=None,
+    )
+    runtime = CommandRuntime(
+        command="review_code",
+        command_args=[],
+        use_retrieval_context=False,
+    )
+
+    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        commands,
+        "with_spinner",
+        lambda _message, func, *func_args, **func_kwargs: func(
+            *func_args,
+            **{k: v for k, v in func_kwargs.items() if k != "quiet"},
+        ),
+    )
+    monkeypatch.setattr(
+        commands, "_finalize_review_output", lambda *_args, **_kwargs: None
+    )
+
+    commands.run_review_code(engine, args, runtime)
+
+    assert captured
+    assert captured[0].use_retrieval_context is False
+
+
+def test_pretty_print_reviews_reports_clean_empty_file_entries(monkeypatch):
+    captured = []
+
+    monkeypatch.setattr(
+        cli_utils,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    cli_utils.pretty_print_reviews(
+        {"reviews": [{"file": "a.c", "reviews": []}, {"file": "b.c", "reviews": []}]}
+    )
+
+    assert any("No security issues found" in message for message in captured)
 
 
 def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):

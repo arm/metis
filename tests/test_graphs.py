@@ -149,6 +149,57 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
     assert "CONTEXT:" not in captured["body_text"]
 
 
+def test_review_node_llm_labels_static_inventory_packets():
+    captured = {}
+
+    class _DummyNode:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"reviews": []}
+
+    review_node_llm(
+        {
+            "file_path": "foo.c",
+            "snippet": "STATIC_REVIEW_PACKET\nUNIT: foo.c::copy",
+            "context": "",
+            "mode": "file",
+            "system_prompt": "prompt",
+            "use_retrieval_context": False,
+            "review_input_kind": "static_inventory_packets",
+        },
+        structured_node=_DummyNode(),
+        fallback_node=None,
+    )
+
+    assert "STATIC_REVIEW_PACKETS:" in captured["body_text"]
+    assert "SNIPPET:" not in captured["body_text"]
+    assert "Do not assume the full source file is present" in captured["body_text"]
+
+
+def test_review_node_build_prompt_adds_static_inventory_guidance():
+    language_prompts = {
+        "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
+        "security_review_checks": "Checks...",
+        "validation_review": "Validate...",
+    }
+
+    out = review_node_build_prompt(
+        {
+            "review_input_kind": "static_inventory_packets",
+            "use_retrieval_context": False,
+        },
+        language_prompts=language_prompts,
+        default_prompt_key="security_review_file",
+        report_prompt="",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section='- "issue": desc',
+    )
+
+    assert "Static inventory packet mode" in out["system_prompt"]
+    assert "not a complete source file" in out["system_prompt"]
+
+
 def test_triage_user_prompt_omits_rag_context_in_no_index_mode():
     prompt = _build_user_prompt(
         {

@@ -30,7 +30,9 @@ def coerce_review_options(
         )
     if use_retrieval_context is None:
         return options
-    return ReviewOptions(use_retrieval_context=use_retrieval_context)
+    return ReviewOptions(
+        use_retrieval_context=use_retrieval_context,
+    )
 
 
 def coerce_triage_options(

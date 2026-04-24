@@ -57,8 +57,23 @@ def _build_body_text(state: ReviewState) -> str:
     context = state.get("context", "") or ""
     mode = state.get("mode", "file")
     include_context = bool(state.get("use_retrieval_context", True))
+    review_input_kind = state.get("review_input_kind", "source_file")
 
-    if mode == "file":
+    if mode == "file" and review_input_kind == "static_inventory_packets":
+        file_path = state.get("file_path", "") or ""
+        sections = [
+            f"FILE: {file_path}",
+            "STATIC_REVIEW_PACKETS:",
+            snippet,
+            "",
+            "The packets above are deterministic static-analysis summaries for selected risky or unresolved units from the file.",
+            "Use packet fields such as RISK, XREF, OBLIGATIONS, CALLS, and REFERENCES as evidence.",
+            "Do not assume the full source file is present. Report only issues justified by the packet evidence.",
+            "",
+        ]
+        if include_context:
+            sections.extend(["CONTEXT:", context, ""])
+    elif mode == "file":
         file_path = state.get("file_path", "") or ""
         sections = [
             f"FILE: {file_path}",
@@ -133,6 +148,16 @@ def review_node_build_prompt(
         hardware_cwe_guidance,
         include_relevant_context=include_relevant_context,
     )
+    if state.get("review_input_kind") == "static_inventory_packets":
+        system = (
+            f"{system}\n\n"
+            "Static inventory packet mode:\n"
+            "- The user input contains STATIC_REVIEW_PACKET records, not a complete source file.\n"
+            "- Treat each packet as the review scope for one selected risky or unresolved unit.\n"
+            "- Prefer findings tied to explicit risk reasons, unresolved obligations, unsafe calls, or xref evidence.\n"
+            "- If a packet marks context as unknown, state that as a precondition or limitation instead of inventing missing code.\n"
+            "- Return an empty reviews list when the packets do not justify a real security issue."
+        )
     new_state: ReviewState = dict(state)
     new_state["system_prompt"] = system
     return new_state
@@ -296,6 +321,7 @@ class ReviewGraph:
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
         use_retrieval_context = bool(request.get("use_retrieval_context", True))
+        review_input_kind = request.get("review_input_kind", "source_file")
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
@@ -311,6 +337,7 @@ class ReviewGraph:
                 "mode": mode,
                 "original_file": original_file,
                 "use_retrieval_context": use_retrieval_context,
+                "review_input_kind": review_input_kind,
             }
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []

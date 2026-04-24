@@ -37,7 +37,7 @@ def _print_no_index_warning(args, runtime: CommandRuntime):
     runtime.no_index_warning_emitted = True
 
 
-def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
+def _review_options_for_runtime(args, runtime: CommandRuntime) -> ReviewOptions:
     return ReviewOptions(use_retrieval_context=runtime.use_retrieval_context)
 
 
@@ -46,6 +46,41 @@ def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
         use_retrieval_context=runtime.use_retrieval_context,
         include_triaged=bool(getattr(args, "include_triaged", False)),
     )
+
+
+def _prepare_static_inventory_for_review(engine, args) -> None:
+    review = getattr(engine, "review", None)
+    prepare = getattr(review, "prepare_static_inventory_for_review", None)
+    if not callable(prepare):
+        return
+    if getattr(args, "verbose", False):
+        print_console(
+            "[cyan]Building deterministic static inventory...[/cyan]", args.quiet
+        )
+    inventory = with_spinner(
+        "Building static inventory...",
+        prepare,
+        force=True,
+        quiet=args.quiet,
+    )
+    summary = getattr(inventory, "summary", {}) or {}
+    print_console(
+        "[green]Static inventory built.[/green]\n"
+        f"[cyan]Files:[/cyan] {summary.get('files', len(inventory.files))}  "
+        f"[cyan]Units:[/cyan] {summary.get('units', len(inventory.units))}  "
+        f"[cyan]High risk:[/cyan] {summary.get('high_risk_units', 0)}  "
+        f"[cyan]Medium risk:[/cyan] {summary.get('medium_risk_units', 0)}  "
+        f"[cyan]LLM candidates:[/cyan] {summary.get('llm_candidate_units', 0)}  "
+        f"[cyan]Unknown obligations:[/cyan] {summary.get('unknown_obligations', 0)}",
+        args.quiet,
+    )
+
+
+def _clear_static_inventory_preparation(engine) -> None:
+    review = getattr(engine, "review", None)
+    clear = getattr(review, "clear_static_inventory_preparation", None)
+    if callable(clear):
+        clear()
 
 
 def show_help(args=None):
@@ -89,58 +124,70 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
-    results = with_spinner(
-        "Reviewing patch...",
-        engine.review.review_patch,
-        patch_file=patch_file,
-        options=options,
-        quiet=args.quiet,
-    )
-    _finalize_review_output(engine, results, args, runtime)
+    options = _review_options_for_runtime(args, runtime)
+    _prepare_static_inventory_for_review(engine, args)
+    try:
+        results = with_spinner(
+            "Reviewing patch...",
+            engine.review.review_patch,
+            patch_file=patch_file,
+            options=options,
+            quiet=args.quiet,
+        )
+        _finalize_review_output(engine, results, args, runtime)
+    finally:
+        _clear_static_inventory_preparation(engine)
 
 
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
-    raw_result = with_spinner(
-        f"Reviewing file {file_path}...",
-        engine.review.review_file,
-        file_path=file_path,
-        options=options,
-        quiet=args.quiet,
-    )
+    options = _review_options_for_runtime(args, runtime)
+    _prepare_static_inventory_for_review(engine, args)
+    try:
+        raw_result = with_spinner(
+            f"Reviewing file {file_path}...",
+            engine.review.review_file,
+            file_path=file_path,
+            options=options,
+            quiet=args.quiet,
+        )
 
-    if raw_result and isinstance(raw_result.get("reviews"), list):
-        results = {"reviews": [raw_result]}
-    else:
-        results = {"reviews": []}
+        if raw_result and isinstance(raw_result.get("reviews"), list):
+            results = {"reviews": [raw_result]}
+        else:
+            results = {"reviews": []}
 
-    _finalize_review_output(engine, results, args, runtime)
+        _finalize_review_output(engine, results, args, runtime)
+    finally:
+        _clear_static_inventory_preparation(engine)
 
 
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
-    options = _review_options_for_runtime(runtime)
-    if args.verbose:
-        print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-        total = len(engine.review.get_code_files())
-        file_reviews = iterate_with_progress(
-            total,
-            engine.review.review_code(options=options),
-        )
-        results = {"reviews": file_reviews}
-    else:
-        results = with_spinner(
-            "Reviewing codebase...",
-            collect_reviews,
-            engine,
-            options=options,
-            quiet=args.quiet,
-        )
-    _finalize_review_output(engine, results, args, runtime)
+    options = _review_options_for_runtime(args, runtime)
+    _prepare_static_inventory_for_review(engine, args)
+    try:
+        if args.verbose:
+            print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
+            total = len(engine.review.get_code_files())
+            file_reviews = iterate_with_progress(
+                total,
+                engine.review.review_code(options=options),
+            )
+            results = {"reviews": file_reviews}
+        else:
+            results = with_spinner(
+                "Reviewing codebase...",
+                collect_reviews,
+                engine,
+                options=options,
+                quiet=args.quiet,
+            )
+        _finalize_review_output(engine, results, args, runtime)
+    finally:
+        _clear_static_inventory_preparation(engine)
 
 
 def run_index(engine, verbose=False, quiet=False):

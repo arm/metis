@@ -21,6 +21,7 @@ class ReviewRequest(TypedDict):
     # Optional original file contents for patch mode
     original_file: NotRequired[Optional[str]]
     use_retrieval_context: NotRequired[bool]
+    review_input_kind: NotRequired[str]
     debug_callback: NotRequired[Any]
 
 
@@ -42,6 +43,7 @@ class ReviewState(TypedDict, total=False):
     mode: str
     original_file: Optional[str]
     use_retrieval_context: bool
+    review_input_kind: str
     debug_callback: Any
     # Derived
     context: str

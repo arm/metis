@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 
 from metis.configuration import load_plugin_config
+from metis.engine.analysis.static_inventory import build_static_inventory
 from metis.exceptions import PluginNotFoundError, QueryEngineInitError
 from metis.plugin_loader import discover_supported_language_names, load_plugins
 from metis.usage import UsageRuntime
@@ -275,6 +276,9 @@ class MetisEngine:
             "retriever_docs": qe_docs,
         }
         return self._get_ask_graph().ask(req)
+
+    def init_static_inventory(self, output_path: str | None = None):
+        return build_static_inventory(self.repository, output_path=output_path)
 
     def _normalize_top_k(self, value, default: int) -> int:
         try:
