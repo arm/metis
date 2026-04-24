@@ -80,6 +80,8 @@ class VulnerabilityFinding:
     root_cause: str = ""
     evidence: str = ""
     analysis_type: str = "reachability"
+    mechanism: str = ""
+    mechanism_family: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -90,7 +92,8 @@ class VulnerabilityFinding:
             "sink_file": self.sink_file, "sink_line": self.sink_line,
             "path": self.path, "description": self.description,
             "root_cause": self.root_cause, "evidence": self.evidence,
-            "analysis_type": self.analysis_type,
+            "analysis_type": self.analysis_type, "mechanism": self.mechanism,
+            "mechanism_family": self.mechanism_family,
         }
 
 
@@ -282,40 +285,166 @@ _DRIVER_CONTENT_HINTS = (
     "fence", "scheduler", "soft_reset", "flush_noretain", "gpu_mappings", "alias",
 )
 
+_COMPILER_PATH_HINTS = (
+    "/compiler/", "/cmpbe/", "/llvm/", "/ast2lir/", "/vectorize/", "/texture/",
+    "/gles/", "/bifrost/", "/valhall/",
+)
+
+_COMPILER_CONTENT_HINTS = (
+    "matrix", "vector", "constructor", "column", "row", "expr.u.value", "ast", "lir",
+    "shader", "type_width", "lane", "swizzle", "parse", "token", "builder",
+)
+
+_MECHANISM_TO_VULN_TYPE = {
+    "state_transition": "state_transition_bug",
+    "ordering_gap": "ordering_race",
+    "partial_cleanup": "partial_failure_cleanup",
+    "cleanup_symmetry": "cleanup_asymmetry",
+    "rollback_gap": "rollback_invariant_bug",
+    "stale_after_unlock": "lifetime_invariant_break",
+    "permission_domain_mismatch": "permission_mismatch",
+    "deferred_callback_after_teardown": "deferred_work_uaf",
+    "accounting_drift": "accounting_mismatch",
+    "lock_order": "lock_order_inversion",
+    "info_leak_logging": "information_disclosure",
+    "width_mismatch_second_access": "out_of_bounds",
+    "file_ops_lifecycle_gap": "lifetime_invariant_break",
+    "compiler_shape_mismatch": "out_of_bounds",
+    "generic_memory": "other",
+}
+
+_MECHANISM_FAMILY = {
+    "state_transition": "state_order",
+    "ordering_gap": "state_order",
+    "stale_after_unlock": "state_order",
+    "lock_order": "concurrency",
+    "partial_cleanup": "cleanup_lifecycle",
+    "cleanup_symmetry": "cleanup_lifecycle",
+    "rollback_gap": "cleanup_lifecycle",
+    "deferred_callback_after_teardown": "cleanup_lifecycle",
+    "file_ops_lifecycle_gap": "cleanup_lifecycle",
+    "permission_domain_mismatch": "semantic_validation",
+    "width_mismatch_second_access": "semantic_validation",
+    "accounting_drift": "accounting_lifetime",
+    "info_leak_logging": "info_leak",
+    "compiler_shape_mismatch": "compiler_semantic",
+    "generic_memory": "classic_memory",
+}
+
+_ROOT_CAUSE_FAMILY_ORDER_DRIVER = {
+    "state_order": 0,
+    "cleanup_lifecycle": 1,
+    "semantic_validation": 2,
+    "accounting_lifetime": 3,
+    "concurrency": 4,
+    "info_leak": 5,
+    "compiler_semantic": 6,
+    "classic_memory": 7,
+    "generic": 9,
+}
+
+_ROOT_CAUSE_FAMILY_ORDER_NONDRIVER = {
+    "classic_memory": 0,
+    "semantic_validation": 1,
+    "cleanup_lifecycle": 2,
+    "state_order": 3,
+    "compiler_semantic": 4,
+    "info_leak": 5,
+    "concurrency": 6,
+    "accounting_lifetime": 7,
+    "generic": 9,
+}
+
+_MECHANISM_ORDER = {
+    "state_transition": 0,
+    "ordering_gap": 1,
+    "partial_cleanup": 2,
+    "cleanup_symmetry": 3,
+    "rollback_gap": 4,
+    "stale_after_unlock": 5,
+    "permission_domain_mismatch": 6,
+    "deferred_callback_after_teardown": 7,
+    "accounting_drift": 8,
+    "lock_order": 9,
+    "width_mismatch_second_access": 10,
+    "file_ops_lifecycle_gap": 11,
+    "info_leak_logging": 12,
+    "compiler_shape_mismatch": 13,
+    "generic_memory": 50,
+}
+
 _GPU_TYPE_ORDER = {
     "command_injection": 0,
     "path_traversal": 1,
     "buffer_overflow": 2,
     "format_string": 3,
     "sscanf_overflow": 4,
-    "deferred_work_uaf": 5,
-    "use_after_free": 6,
-    "state_transition_bug": 7,
-    "stale_state": 8,
-    "teardown_race": 9,
-    "ordering_race": 10,
-    "cleanup_asymmetry": 11,
-    "partial_failure_cleanup": 12,
-    "permission_mismatch": 13,
-    "flag_semantic_bug": 14,
-    "accounting_mismatch": 15,
-    "lifetime_invariant_break": 16,
-    "rollback_invariant_bug": 17,
-    "lock_order_inversion": 18,
-    "double_free": 19,
-    "double_close": 20,
-    "boolean_coercion": 21,
-    "wrong_constant": 22,
-    "stale_length": 23,
-    "type_confusion": 24,
-    "out_of_bounds": 25,
-    "integer_overflow": 26,
-    "null_deref": 27,
-    "race_condition": 28,
-    "ignored_return": 29,
-    "fd_leak": 30,
-    "toctou": 31,
+    "information_disclosure": 5,
+    "deferred_work_uaf": 6,
+    "use_after_free": 7,
+    "state_transition_bug": 8,
+    "stale_state": 9,
+    "teardown_race": 10,
+    "ordering_race": 11,
+    "cleanup_asymmetry": 12,
+    "partial_failure_cleanup": 13,
+    "permission_mismatch": 14,
+    "flag_semantic_bug": 15,
+    "accounting_mismatch": 16,
+    "lifetime_invariant_break": 17,
+    "rollback_invariant_bug": 18,
+    "lock_order_inversion": 19,
+    "double_free": 20,
+    "double_close": 21,
+    "boolean_coercion": 22,
+    "wrong_constant": 23,
+    "stale_length": 24,
+    "type_confusion": 25,
+    "out_of_bounds": 26,
+    "integer_overflow": 27,
+    "null_deref": 28,
+    "race_condition": 29,
+    "ignored_return": 30,
+    "fd_leak": 31,
+    "toctou": 32,
     "other": 40,
+}
+
+_VULN_TO_CWE = {
+    "buffer_overflow": "CWE-120", "out_of_bounds": "CWE-787", "use_after_free": "CWE-416",
+    "double_free": "CWE-415", "null_deref": "CWE-476", "command_injection": "CWE-78",
+    "format_string": "CWE-134", "integer_overflow": "CWE-190", "path_traversal": "CWE-22",
+    "race_condition": "CWE-362", "uninitialized_memory": "CWE-457", "type_confusion": "CWE-843",
+    "boolean_coercion": "CWE-253", "wrong_constant": "CWE-697", "wrong_field": "CWE-688",
+    "stale_length": "CWE-131", "double_close": "CWE-675", "callback_uaf": "CWE-416",
+    "stale_pointer": "CWE-825", "refcount_imbalance": "CWE-911",
+    "missing_auth": "CWE-862", "ignored_return": "CWE-252", "sscanf_overflow": "CWE-120",
+    "toctou": "CWE-367", "static_buffer_reuse": "CWE-562", "pool_free_mismatch": "CWE-762",
+    "fd_leak": "CWE-775", "thread_unsafe": "CWE-362", "assignment_in_condition": "CWE-481",
+    "sign_confusion": "CWE-195", "permission_escalation": "CWE-269",
+    "state_transition_bug": "CWE-664", "stale_state": "CWE-664", "ordering_race": "CWE-362",
+    "teardown_race": "CWE-362", "deferred_work_uaf": "CWE-416", "cleanup_asymmetry": "CWE-404",
+    "partial_failure_cleanup": "CWE-404", "lock_order_inversion": "CWE-833",
+    "permission_mismatch": "CWE-285", "flag_semantic_bug": "CWE-697",
+    "accounting_mismatch": "CWE-664", "lifetime_invariant_break": "CWE-664",
+    "rollback_invariant_bug": "CWE-664", "information_disclosure": "CWE-200",
+}
+
+_MECHANISM_TO_CWE = {
+    "state_transition": "CWE-664",
+    "ordering_gap": "CWE-362",
+    "partial_cleanup": "CWE-404",
+    "cleanup_symmetry": "CWE-404",
+    "rollback_gap": "CWE-664",
+    "stale_after_unlock": "CWE-416",
+    "permission_domain_mismatch": "CWE-285",
+    "deferred_callback_after_teardown": "CWE-416",
+    "accounting_drift": "CWE-664",
+    "lock_order": "CWE-833",
+    "info_leak_logging": "CWE-200",
+    "width_mismatch_second_access": "CWE-787",
+    "file_ops_lifecycle_gap": "CWE-664",
+    "compiler_shape_mismatch": "CWE-787",
 }
 
 def _looks_driver_file(file_path, file_content=""):
@@ -326,10 +455,96 @@ def _looks_driver_file(file_path, file_content=""):
     score = sum(1 for token in _DRIVER_CONTENT_HINTS if token in content_text)
     return score >= 2
 
+def _looks_compilerish_file(file_path, file_content=""):
+    path_text = str(file_path or "").lower().replace("\\", "/")
+    if any(token in path_text for token in _COMPILER_PATH_HINTS):
+        return True
+    content_text = str(file_content or "").lower()
+    score = sum(1 for token in _COMPILER_CONTENT_HINTS if token in content_text)
+    return score >= 2
+
+def _normalize_mechanism(value, fallback_type="other"):
+    text = str(value or "").strip().lower()
+    aliases = {
+        "state_transition_bug": "state_transition",
+        "ordering_race": "ordering_gap",
+        "partial_failure_cleanup": "partial_cleanup",
+        "cleanup_asymmetry": "cleanup_symmetry",
+        "rollback_invariant_bug": "rollback_gap",
+        "permission_mismatch": "permission_domain_mismatch",
+        "deferred_work_uaf": "deferred_callback_after_teardown",
+        "accounting_mismatch": "accounting_drift",
+        "lock_order_inversion": "lock_order",
+        "information_disclosure": "info_leak_logging",
+        "stale_state": "state_transition",
+        "lifetime_invariant_break": "stale_after_unlock",
+        "out_of_bounds": "width_mismatch_second_access" if str(fallback_type or "").strip() == "out_of_bounds" else "generic_memory",
+    }
+    if text in aliases:
+        return aliases[text]
+    if text in _MECHANISM_TO_VULN_TYPE:
+        return text
+    if str(fallback_type or "").strip() in {"state_transition_bug", "ordering_race", "partial_failure_cleanup", "cleanup_asymmetry",
+                                            "rollback_invariant_bug", "permission_mismatch", "deferred_work_uaf",
+                                            "accounting_mismatch", "lock_order_inversion", "information_disclosure"}:
+        return aliases.get(str(fallback_type or "").strip(), "generic_memory")
+    return "generic_memory"
+
+def _resolve_vulnerability_type(mechanism, declared_type):
+    declared = str(declared_type or "").strip()
+    mech = _normalize_mechanism(mechanism, declared)
+    mapped = _MECHANISM_TO_VULN_TYPE.get(mech, "other")
+    if not declared:
+        return mapped
+    if declared in {"other", "integer_overflow", "null_deref", "fd_leak", "race_condition"} and mapped not in {"other", declared}:
+        return mapped
+    if mech == "info_leak_logging" and declared != "information_disclosure":
+        return "information_disclosure"
+    return declared
+
+def _mechanism_family(mechanism, fallback_type="other"):
+    mech = _normalize_mechanism(mechanism, fallback_type)
+    if mech in _MECHANISM_FAMILY:
+        return _MECHANISM_FAMILY[mech]
+    if str(fallback_type or "").strip() in {"buffer_overflow", "out_of_bounds", "use_after_free", "double_free", "null_deref",
+                                            "command_injection", "format_string", "integer_overflow", "path_traversal",
+                                            "information_disclosure"}:
+        return "classic_memory" if str(fallback_type or "").strip() != "information_disclosure" else "info_leak"
+    return "generic"
+
+def _family_order(candidate):
+    fam = str(candidate.get("mechanism_family") or _mechanism_family(candidate.get("mechanism"), candidate.get("type"))).strip()
+    if candidate.get("driver_context"):
+        return _ROOT_CAUSE_FAMILY_ORDER_DRIVER.get(fam, 50)
+    return _ROOT_CAUSE_FAMILY_ORDER_NONDRIVER.get(fam, 50)
+
+def _cwe_for(vulnerability_type, mechanism=""):
+    mech = _normalize_mechanism(mechanism, vulnerability_type)
+    if mech in _MECHANISM_TO_CWE:
+        return _MECHANISM_TO_CWE[mech]
+    return _VULN_TO_CWE.get(str(vulnerability_type or "").strip())
+
+def _mechanism_priority(mechanism, fallback_type="other"):
+    mech = _normalize_mechanism(mechanism, fallback_type)
+    return _MECHANISM_ORDER.get(mech, 99)
+
+def _candidate_priority_key(candidate):
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    return (
+        0 if candidate.get("primary") else 1,
+        0 if candidate.get("locality") == "local_direct" else 1,
+        sev_order.get(str(candidate.get("severity") or "medium").lower(), 5),
+        _family_order(candidate),
+        _mechanism_priority(candidate.get("mechanism"), candidate.get("type")),
+        _GPU_TYPE_ORDER.get(str(candidate.get("type") or "other").strip(), 50),
+        int(candidate.get("line") or 0),
+    )
+
 def _default_hints_for_candidate(candidate):
     fn = str(candidate.get("function_name") or "unknown").strip()
     ctype = str(candidate.get("type") or "other").strip()
-    base = [f"{fn}(" ] if fn and fn != "unknown" else []
+    mechanism = _normalize_mechanism(candidate.get("mechanism"), ctype)
+    base = [f"{fn}("] if fn and fn != "unknown" else []
     extra = {
         "command_injection": ["system(", "popen("],
         "buffer_overflow": ["sprintf(", "strcpy(", "strcat("],
@@ -339,7 +554,7 @@ def _default_hints_for_candidate(candidate):
         "use_after_free": ["kfree(", "free(", "put_page("],
         "deferred_work_uaf": ["queue_work(", "schedule_work(", "cancel_work_sync(", "del_timer_sync("],
         "state_transition_bug": ["state", "enabled", "terminated", "override", "doorbell"],
-        "stale_state": ["= NULL", "state", "active_protm_grp", "override", "doorbell"],
+        "stale_state": ["state", "active_protm_grp", "override", "doorbell"],
         "ordering_race": ["pm_runtime_get_sync(", "enable_gpu_power_control(", "flush_noretain", "reset"],
         "teardown_race": ["destroy_workqueue(", "cancel_work_sync(", "del_timer_sync(", "hrtimer_cancel("],
         "cleanup_asymmetry": ["get_user_pages", "put_page(", "mapping_get", "mapping_put", "list_add(", "list_del("],
@@ -350,54 +565,80 @@ def _default_hints_for_candidate(candidate):
         "accounting_mismatch": ["gpu_mappings", "refcount", "alias", "evictable", "dont_need"],
         "lifetime_invariant_break": ["alias", "refcount", "gpu_mappings", "shrink", "free"],
         "rollback_invariant_bug": ["rb_link_node(", "rb_erase(", "list_add(", "list_del(", "goto"],
+        "information_disclosure": ["printk", "dev_err", "pr_err", "%pa", "%px"],
     }.get(ctype, [])
-    return _merge_hint_lists(base, extra)
+    mechanism_extra = {
+        "state_transition": ["state", "enabled", "terminated", "doorbell", "override"],
+        "ordering_gap": ["pm_runtime_get_sync(", "enable_gpu_power_control(", "flush_noretain", "disable", "reset"],
+        "partial_cleanup": ["goto", "err_", "fail:", "put_page(", "mapping_put", "cancel_work_sync("],
+        "cleanup_symmetry": ["setup", "release", "destroy", "cancel_work_sync(", "del_timer_sync("],
+        "rollback_gap": ["rb_link_node(", "rb_erase(", "list_add(", "list_del(", "goto"],
+        "stale_after_unlock": ["unlock", "lock", "relock", "stale", "region", "gpu_alloc"],
+        "permission_domain_mismatch": ["GPU_WR", "CPU_WR", "flags", "permission", "BASE_MEM_"],
+        "deferred_callback_after_teardown": ["queue_work(", "schedule_work(", "cancel_work_sync(", "del_timer_sync("],
+        "accounting_drift": ["gpu_mappings", "alias", "refcount", "shrink", "free"],
+        "lock_order": ["mutex_lock(", "spin_lock(", "callback", "worker", "irq"],
+        "info_leak_logging": ["printk", "dev_err", "pr_err", "%pa", "%px", "fault", "phys"],
+        "width_mismatch_second_access": ["u32", "u64", "32", "64", "error", "value", "mapping_get"],
+        "file_ops_lifecycle_gap": ["struct file_operations", ".release", ".flush", ".poll", ".mmap", ".open"],
+        "compiler_shape_mismatch": ["matrix", "row", "column", "constructor", "vector", "expr.u.value"],
+    }.get(mechanism, [])
+    return _merge_hint_lists(base, extra, mechanism_extra)
 
-def _candidate_priority_key(candidate):
-    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    return (
-        0 if candidate.get("primary") else 1,
-        0 if candidate.get("locality") == "local_direct" else 1,
-        sev_order.get(str(candidate.get("severity") or "medium").lower(), 5),
-        _GPU_TYPE_ORDER.get(str(candidate.get("type") or "other").strip(), 50),
-        int(candidate.get("line") or 0),
+def _normalize_candidate_dict(candidate, *, default_driver_context=False):
+    fn = str(candidate.get("function_name") or "unknown").strip() or "unknown"
+    try:
+        line = max(1, int(candidate.get("line", 1)))
+    except:
+        line = 1
+    mechanism = _normalize_mechanism(candidate.get("mechanism"), candidate.get("type"))
+    vuln_type = _resolve_vulnerability_type(mechanism, candidate.get("type"))
+    driver_context = bool(candidate.get("driver_context", default_driver_context))
+    compiler_context = bool(candidate.get("compiler_context", False))
+    normalized = {
+        "function_name": fn,
+        "line": line,
+        "type": vuln_type,
+        "mechanism": mechanism,
+        "mechanism_family": _mechanism_family(mechanism, vuln_type),
+        "severity": str(candidate.get("severity") or "medium").strip().lower(),
+        "description": str(candidate.get("description") or "").strip(),
+        "locality": str(candidate.get("locality") or "cross_file").strip(),
+        "primary": bool(candidate.get("primary")),
+        "cross_file_concern": bool(candidate.get("cross_file_concern")),
+        "code_snippet": str(candidate.get("code_snippet") or ""),
+        "investigation_hints": [str(h).strip() for h in (candidate.get("investigation_hints") or []) if str(h).strip()],
+        "driver_context": driver_context,
+        "compiler_context": compiler_context,
+    }
+    normalized["investigation_hints"] = _merge_hint_lists(
+        normalized["investigation_hints"],
+        _default_hints_for_candidate(normalized),
     )
+    return normalized
 
-def _parse_candidate_payload(raw):
+def _parse_candidate_payload(raw, *, default_driver_context=False):
     parsed = parse_json_output(raw)
     if not isinstance(parsed, dict):
         return []
     candidates = parsed.get("candidates")
     if not isinstance(candidates, list):
         return []
-    results = []
-    for c in candidates:
-        if not isinstance(c, dict):
-            continue
-        fn = str(c.get("function_name") or "unknown").strip() or "unknown"
-        line = 1
-        try:
-            line = max(1, int(c.get("line", 1)))
-        except:
-            pass
-        normalized = {
-            "function_name": fn,
-            "line": line,
-            "type": str(c.get("type") or "other").strip() or "other",
-            "severity": str(c.get("severity") or "medium").strip().lower(),
-            "description": str(c.get("description") or "").strip(),
-            "locality": str(c.get("locality") or "cross_file").strip(),
-            "primary": bool(c.get("primary")),
-            "cross_file_concern": bool(c.get("cross_file_concern")),
-            "code_snippet": str(c.get("code_snippet") or ""),
-            "investigation_hints": [str(h).strip() for h in (c.get("investigation_hints") or []) if str(h).strip()],
-        }
-        normalized["investigation_hints"] = _merge_hint_lists(
-            normalized["investigation_hints"],
-            _default_hints_for_candidate(normalized),
-        )
-        results.append(normalized)
-    return results
+    return [_normalize_candidate_dict(c, default_driver_context=default_driver_context) for c in candidates if isinstance(c, dict)]
+
+def _parse_verdict_payload(raw):
+    parsed = parse_json_output(raw)
+    if not isinstance(parsed, dict):
+        return None
+    verdict = parsed.get("verdict")
+    if not isinstance(verdict, dict):
+        return None
+    mechanism = _normalize_mechanism(verdict.get("mechanism"), verdict.get("vulnerability_type"))
+    vtype = _resolve_vulnerability_type(mechanism, verdict.get("vulnerability_type"))
+    verdict["mechanism"] = mechanism
+    verdict["mechanism_family"] = _mechanism_family(mechanism, vtype)
+    verdict["vulnerability_type"] = vtype
+    return verdict
 
 def _prune_audit_candidates(candidates, limit=25):
     if not candidates:
@@ -406,26 +647,13 @@ def _prune_audit_candidates(candidates, limit=25):
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        fn = str(candidate.get("function_name") or "unknown").strip() or "unknown"
-        try:
-            line = max(1, int(candidate.get("line", 1)))
-        except:
-            line = 1
-        ctype = str(candidate.get("type") or "other").strip() or "other"
-        key = (fn, line, ctype)
-        normalized = dict(candidate)
-        normalized["function_name"] = fn
-        normalized["line"] = line
-        normalized["type"] = ctype
-        normalized["severity"] = str(normalized.get("severity") or "medium").strip().lower()
-        normalized["description"] = str(normalized.get("description") or "").strip()
-        normalized["locality"] = str(normalized.get("locality") or "cross_file").strip()
-        normalized["primary"] = bool(normalized.get("primary"))
-        normalized["cross_file_concern"] = bool(normalized.get("cross_file_concern"))
-        normalized["code_snippet"] = str(normalized.get("code_snippet") or "")
-        normalized["investigation_hints"] = _merge_hint_lists(
-            normalized.get("investigation_hints") or [],
-            _default_hints_for_candidate(normalized),
+        normalized = _normalize_candidate_dict(candidate, default_driver_context=bool(candidate.get("driver_context")))
+        key = (
+            normalized["function_name"],
+            normalized["line"],
+            normalized["mechanism_family"],
+            normalized["mechanism"],
+            normalized["type"],
         )
         existing = merged.get(key)
         if existing is None:
@@ -447,6 +675,8 @@ def _prune_audit_candidates(candidates, limit=25):
             better["code_snippet"] = str(worse.get("code_snippet") or "")
         better["primary"] = bool(better.get("primary")) or bool(worse.get("primary"))
         better["cross_file_concern"] = bool(better.get("cross_file_concern")) or bool(worse.get("cross_file_concern"))
+        better["driver_context"] = bool(better.get("driver_context")) or bool(worse.get("driver_context"))
+        better["compiler_context"] = bool(better.get("compiler_context")) or bool(worse.get("compiler_context"))
         if better.get("locality") != "local_direct" and worse.get("locality") == "local_direct":
             better["locality"] = "local_direct"
         sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -457,12 +687,12 @@ def _prune_audit_candidates(candidates, limit=25):
     pruned = []
     seen_primary_local = set()
     for candidate in ordered:
-        group_key = (candidate["function_name"], candidate["line"])
+        group_key = (candidate["function_name"], candidate["line"], candidate["mechanism_family"])
         if candidate.get("primary") and candidate.get("locality") == "local_direct":
             seen_primary_local.add(group_key)
             pruned.append(candidate)
             continue
-        if group_key in seen_primary_local and str(candidate.get("type") or "") in {"toctou", "other"}:
+        if group_key in seen_primary_local and str(candidate.get("type") or "") in {"toctou", "other", "integer_overflow", "null_deref"}:
             continue
         pruned.append(candidate)
     return pruned[:limit]
@@ -472,6 +702,73 @@ def _find_first_matching_line(body_lines, tokens):
         if any(token in line for token in tokens):
             return idx
     return 0
+
+def _extract_local_call_relations(file_content):
+    bodies = _collect_function_bodies(file_content)
+    names = [name for name, _, _ in bodies]
+    calls = {name: set() for name in names}
+    reverse = {name: set() for name in names}
+    body_map = {name: (start, lines) for name, start, lines in bodies}
+    for name, _, body_lines in bodies:
+        body_text = "\n".join(body_lines)
+        for other in names:
+            if other == name:
+                continue
+            if re.search(r"\b" + re.escape(other) + r"\s*\(", body_text):
+                calls[name].add(other)
+                reverse[other].add(name)
+    return body_map, calls, reverse
+
+def _function_name_seed_key(name):
+    parts = [p for p in str(name or "").split("_") if p]
+    return "_".join(parts[:2]) if parts else str(name or "")
+
+def _build_same_file_clusters(file_content, seed_functions, *, max_clusters=4, max_functions_per_cluster=6):
+    body_map, calls, reverse = _extract_local_call_relations(file_content)
+    if not body_map:
+        return []
+    results = []
+    seen = set()
+    all_names = list(body_map.keys())
+    for seed in seed_functions:
+        if seed not in body_map or seed in seen:
+            continue
+        seen.add(seed)
+        cluster = [seed]
+        cluster.extend(sorted(calls.get(seed, []))[:2])
+        cluster.extend(sorted(reverse.get(seed, []))[:2])
+        prefix = _function_name_seed_key(seed)
+        for name in all_names:
+            if name in cluster:
+                continue
+            if prefix and _function_name_seed_key(name) == prefix:
+                cluster.append(name)
+            if len(cluster) >= max_functions_per_cluster:
+                break
+        start, body_lines = body_map[seed]
+        body_text = "\n".join(body_lines)
+        helper_keywords = ("worker", "timer", "dump", "flush", "release", "destroy", "close", "poll", "suspend", "prepare")
+        for name in all_names:
+            if name in cluster:
+                continue
+            if any(k in name.lower() for k in helper_keywords) and re.search(r"\b" + re.escape(name) + r"\s*\(", body_text):
+                cluster.append(name)
+            if len(cluster) >= max_functions_per_cluster:
+                break
+        cluster = sorted(dict.fromkeys(cluster), key=lambda n: body_map[n][0])[:max_functions_per_cluster]
+        code_parts = []
+        for name in cluster:
+            start, lines = body_map[name]
+            snippet = "\n".join(f"{start+i}: {line}" for i, line in enumerate(lines))
+            code_parts.append(f"--- {name} (line {start}) ---\n{snippet[:6000]}")
+        results.append({
+            "seed": seed,
+            "functions": cluster,
+            "code": "\n\n".join(code_parts),
+        })
+        if len(results) >= max_clusters:
+            break
+    return results
 
 def _detect_obvious_local_candidates(file_content):
     lines = file_content.splitlines()
@@ -491,6 +788,7 @@ def _detect_obvious_local_candidates(file_content):
                     "function_name": function_name,
                     "line": line_number,
                     "type": "command_injection",
+                    "mechanism": "generic_memory",
                     "severity": "high",
                     "description": "Shell command execution uses variable data in the target file, which is a classic command-injection pattern.",
                     "locality": "local_direct",
@@ -503,6 +801,7 @@ def _detect_obvious_local_candidates(file_content):
                 "function_name": function_name,
                 "line": line_number,
                 "type": "buffer_overflow",
+                "mechanism": "generic_memory",
                 "severity": "high",
                 "description": "The target file contains an unbounded write primitive into a caller-visible buffer or local buffer.",
                 "locality": "local_direct",
@@ -515,6 +814,7 @@ def _detect_obvious_local_candidates(file_content):
                 "function_name": function_name,
                 "line": line_number,
                 "type": "sscanf_overflow",
+                "mechanism": "generic_memory",
                 "severity": "high",
                 "description": "The target file uses scanf-style parsing with %s, which can overflow fixed buffers when width is not constrained.",
                 "locality": "local_direct",
@@ -529,6 +829,7 @@ def _detect_obvious_local_candidates(file_content):
                     "function_name": function_name,
                     "line": max(1, line_number - 1),
                     "type": "path_traversal",
+                    "mechanism": "generic_memory",
                     "severity": "high",
                     "description": "The target file constructs a filesystem path from variable input and then opens it without visible normalization or validation.",
                     "locality": "local_direct",
@@ -541,6 +842,7 @@ def _detect_obvious_local_candidates(file_content):
                 "function_name": function_name,
                 "line": line_number,
                 "type": "integer_overflow",
+                "mechanism": "generic_memory",
                 "severity": "medium",
                 "description": "The target file performs size arithmetic in an allocation expression, which may overflow if inputs are large.",
                 "locality": "local_direct",
@@ -556,19 +858,18 @@ def _detect_driver_specific_candidates(file_path, file_content):
 
     candidates = []
     acquire_release_specs = [
-        (("get_user_pages", "pin_user_pages", "get_page("), ("put_page(", "unpin_user_page", "release_pages"), "partial_failure_cleanup",
+        (("get_user_pages", "pin_user_pages", "get_page("), ("put_page(", "unpin_user_page", "release_pages"), "partial_cleanup",
          "The function acquires page references from user memory but does not show a clearly balanced release path on failure/teardown."),
-        (("dma_buf_get(", "kbase_phy_alloc_mapping_get(", "mapping_get"), ("dma_buf_put(", "kbase_phy_alloc_mapping_put(", "mapping_put"), "cleanup_asymmetry",
+        (("dma_buf_get(", "kbase_phy_alloc_mapping_get(", "mapping_get"), ("dma_buf_put(", "kbase_phy_alloc_mapping_put(", "mapping_put"), "cleanup_symmetry",
          "The function acquires a mapping/resource object and appears to have an error or teardown path without the matching release."),
-        (("alloc_workqueue(", "timer_setup(", "hrtimer_init(", "init_timer("), ("destroy_workqueue(", "cancel_work_sync(", "cancel_delayed_work_sync(", "del_timer_sync(", "timer_shutdown_sync(", "hrtimer_cancel("), "cleanup_asymmetry",
+        (("alloc_workqueue(", "timer_setup(", "hrtimer_init(", "init_timer("), ("destroy_workqueue(", "cancel_work_sync(", "cancel_delayed_work_sync(", "del_timer_sync(", "timer_shutdown_sync(", "hrtimer_cancel("), "cleanup_symmetry",
          "The function creates asynchronous resources but does not show a clearly symmetric teardown path across failure/cleanup."),
-        (("list_add(", "rb_link_node(", "xa_store(", "idr_alloc"), ("list_del(", "rb_erase(", "xa_erase(", "idr_remove"), "rollback_invariant_bug",
+        (("list_add(", "rb_link_node(", "xa_store(", "idr_alloc"), ("list_del(", "rb_erase(", "xa_erase(", "idr_remove"), "rollback_gap",
          "The function inserts state into a tracking structure but does not show a clear rollback/removal path on failure."),
     ]
 
     for function_name, start_line, body_lines in _collect_function_bodies(file_content):
         body = "\n".join(body_lines)
-        code_snippet = _line_context_from_content(file_content, start_line, context=4)
         errorish = any(token in body for token in ("goto", "err_", "fail:", "error:", "return -", "return NULL", "return false", "return 0"))
         schedule_tokens = ("queue_work(", "schedule_work(", "schedule_delayed_work(", "mod_delayed_work(", "add_timer(", "mod_timer(", "hrtimer_start(", "tasklet_schedule(")
         cancel_tokens = ("cancel_work_sync(", "cancel_delayed_work_sync(", "flush_workqueue(", "del_timer_sync(", "timer_shutdown_sync(", "hrtimer_cancel(", "tasklet_kill(")
@@ -580,6 +881,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "function_name": function_name,
                 "line": line,
                 "type": "deferred_work_uaf",
+                "mechanism": "deferred_callback_after_teardown",
                 "severity": "high",
                 "description": "The function schedules deferred work or timers and also tears down or frees related state without an obvious synchronous cancellation path, which can leave asynchronous callbacks dereferencing freed objects.",
                 "locality": "local_direct",
@@ -587,6 +889,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "cross_file_concern": False,
                 "code_snippet": _line_context_from_content(file_content, line, context=4),
                 "investigation_hints": [f"{function_name}(", "queue_work(", "cancel_work_sync(", "del_timer_sync("],
+                "driver_context": True,
             })
 
         if any(token in body for token in ("pm_runtime_get_sync(", "enable_gpu_power_control(", "disable_gpu_power_control(", "flush_noretain", "soft_reset", "GPU_COMMAND_CLEAR_FAULT", "gpu_powered", "kbase_mmu_disable", "kbase_mmu_flush")):
@@ -595,6 +898,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "function_name": function_name,
                 "line": line,
                 "type": "ordering_race",
+                "mechanism": "ordering_gap",
                 "severity": "high",
                 "description": "The function manipulates GPU power, reset, MMU, cache, or fault-handling state in an order that may expose partially transitioned state or race with concurrent teardown/restart paths.",
                 "locality": "local_direct",
@@ -602,6 +906,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "cross_file_concern": False,
                 "code_snippet": _line_context_from_content(file_content, line, context=4),
                 "investigation_hints": [f"{function_name}(", "pm_runtime_get_sync(", "enable_gpu_power_control(", "reset", "flush_noretain"],
+                "driver_context": True,
             })
 
         if any(token in body for token in ("active_protm_grp", "protected_transition_override", "doorbell", "enabled", "dying", "terminated", "gpu_mappings")):
@@ -609,6 +914,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 line = start_line + _find_first_matching_line(body_lines, ("active_protm_grp", "protected_transition_override", "doorbell", "enabled", "dying", "terminated", "gpu_mappings"))
                 desc = "The function updates or relies on lifecycle-critical state but also performs teardown or disable operations in the same flow, which suggests stale state may remain visible after the object is no longer valid."
                 ctype = "stale_state"
+                mechanism = "state_transition"
                 if any(token in body for token in ("enable", "disable", "terminated", "override", "doorbell")):
                     ctype = "state_transition_bug"
                     desc = "The function exposes, enables, or preserves lifecycle state before validation completes or fails to clear it on teardown, which can leave hardware or later code observing an invalid state transition."
@@ -616,6 +922,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "function_name": function_name,
                     "line": line,
                     "type": ctype,
+                    "mechanism": mechanism,
                     "severity": "high",
                     "description": desc,
                     "locality": "local_direct",
@@ -623,6 +930,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "cross_file_concern": False,
                     "code_snippet": _line_context_from_content(file_content, line, context=4),
                     "investigation_hints": [f"{function_name}(", "state", "enabled", "terminated", "doorbell", "override"],
+                    "driver_context": True,
                 })
 
         if any(token in body for token in ("KBASE_REG_GPU_WR", "KBASE_REG_CPU_WR", "KBASE_REG_GPU_RD", "KBASE_REG_CPU_RD", "BASE_MEM_", "VM_", "PROT_", "READ", "WRITE")):
@@ -634,6 +942,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "function_name": function_name,
                     "line": line,
                     "type": ctype,
+                    "mechanism": "permission_domain_mismatch",
                     "severity": "high",
                     "description": desc,
                     "locality": "local_direct",
@@ -641,6 +950,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "cross_file_concern": False,
                     "code_snippet": _line_context_from_content(file_content, line, context=4),
                     "investigation_hints": [f"{function_name}(", "permission", "flags", "GPU_WR", "CPU_WR", "BASE_MEM_"],
+                    "driver_context": True,
                 })
 
         if any(token in body for token in ("gpu_mappings", "refcount", "mapping_count", "alias", "evictable", "DONT_NEED", "NO_USER_FREE", "shrink", "free", "remove")):
@@ -655,6 +965,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "function_name": function_name,
                     "line": line,
                     "type": ctype,
+                    "mechanism": "accounting_drift",
                     "severity": "high",
                     "description": desc,
                     "locality": "local_direct",
@@ -662,6 +973,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                     "cross_file_concern": False,
                     "code_snippet": _line_context_from_content(file_content, line, context=4),
                     "investigation_hints": [f"{function_name}(", "gpu_mappings", "alias", "refcount", "NO_USER_FREE", "DONT_NEED"],
+                    "driver_context": True,
                 })
 
         nested_locks = body.count("mutex_lock(") + body.count("spin_lock(") + body.count("spin_lock_irqsave(") + body.count("mutex_lock_nested(")
@@ -671,6 +983,7 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "function_name": function_name,
                 "line": line,
                 "type": "lock_order_inversion",
+                "mechanism": "lock_order",
                 "severity": "medium",
                 "description": "The function acquires multiple locks in logic that also interacts with callbacks, timers, workers, or IRQ paths, which is a classic setup for lock-order inversion or deadlock across codepaths.",
                 "locality": "cross_file",
@@ -678,16 +991,17 @@ def _detect_driver_specific_candidates(file_path, file_content):
                 "cross_file_concern": True,
                 "code_snippet": _line_context_from_content(file_content, line, context=4),
                 "investigation_hints": [f"{function_name}(", "mutex_lock(", "spin_lock(", "callback", "worker"],
+                "driver_context": True,
             })
 
         if errorish:
-            for acquire_tokens, release_tokens, ctype, description in acquire_release_specs:
+            for acquire_tokens, release_tokens, mechanism, description in acquire_release_specs:
                 if any(token in body for token in acquire_tokens) and not any(token in body for token in release_tokens):
                     line = start_line + _find_first_matching_line(body_lines, acquire_tokens)
                     candidates.append({
                         "function_name": function_name,
                         "line": line,
-                        "type": ctype,
+                        "mechanism": mechanism,
                         "severity": "high",
                         "description": description,
                         "locality": "local_direct",
@@ -695,8 +1009,189 @@ def _detect_driver_specific_candidates(file_path, file_content):
                         "cross_file_concern": False,
                         "code_snippet": _line_context_from_content(file_content, line, context=4),
                         "investigation_hints": _merge_hint_lists([f"{function_name}("], list(acquire_tokens), list(release_tokens)),
+                        "driver_context": True,
                     })
     return _prune_audit_candidates(candidates, limit=25)
+
+def _detect_stale_after_unlock_candidates(file_path, file_content):
+    if not _looks_driver_file(file_path, file_content):
+        return []
+    candidates = []
+    unlock_tokens = ("mutex_unlock(", "spin_unlock(", "spin_unlock_irqrestore(", "up_write(", "up_read(")
+    relock_tokens = ("mutex_lock(", "spin_lock(", "spin_lock_irqsave(", "down_write(", "down_read(")
+    assign_re = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*[^;]*(?:->|\.)")
+    for function_name, start_line, body_lines in _collect_function_bodies(file_content):
+        body = "\n".join(body_lines)
+        if not any(t in body for t in unlock_tokens) or not any(t in body for t in relock_tokens):
+            continue
+        if body.find("unlock") > body.rfind("lock"):
+            continue
+        before_unlock = []
+        found_unlock = False
+        relock_seen = False
+        stale_var = None
+        for line in body_lines:
+            if not found_unlock:
+                for m in assign_re.finditer(line):
+                    before_unlock.append(m.group(1))
+                if any(t in line for t in unlock_tokens):
+                    found_unlock = True
+            else:
+                if any(t in line for t in relock_tokens):
+                    relock_seen = True
+                if relock_seen:
+                    for var in before_unlock[-8:]:
+                        if re.search(r"\b" + re.escape(var) + r"\b", line):
+                            stale_var = var
+                            break
+            if stale_var:
+                break
+        if stale_var:
+            line = start_line + _find_first_matching_line(body_lines, unlock_tokens)
+            candidates.append({
+                "function_name": function_name,
+                "line": line,
+                "type": "lifetime_invariant_break",
+                "mechanism": "stale_after_unlock",
+                "severity": "high",
+                "description": "The function saves pointer- or state-derived locals, drops a lock, later reacquires synchronization, and appears to reuse the stale local without refreshing it, which can make the later access inconsistent with current object lifetime.",
+                "locality": "local_direct",
+                "primary": True,
+                "cross_file_concern": False,
+                "code_snippet": _line_context_from_content(file_content, line, context=5),
+                "investigation_hints": [f"{function_name}(", stale_var, "unlock", "lock"],
+                "driver_context": True,
+            })
+    return _prune_audit_candidates(candidates, limit=10)
+
+def _detect_width_mismatch_candidates(file_path, file_content):
+    candidates = []
+    for function_name, start_line, body_lines in _collect_function_bodies(file_content):
+        body = "\n".join(body_lines)
+        if not any(tok in body for tok in ("u32", "uint32_t", "32-bit", "U32")):
+            continue
+        if not any(tok in body for tok in ("u64", "uint64_t", "64-bit", "U64")):
+            continue
+        if not any(tok in body for tok in ("mapping_get", "phy_alloc", "wait", "set", "error", "value", "addr", "field")):
+            continue
+        line = start_line + _find_first_matching_line(body_lines, ("u32", "uint32_t", "u64", "uint64_t"))
+        candidates.append({
+            "function_name": function_name,
+            "line": line,
+            "type": "out_of_bounds",
+            "mechanism": "width_mismatch_second_access",
+            "severity": "high",
+            "description": "The function mixes 32-bit and 64-bit views of mapped or structured data, which is a classic signal that one checked access may be followed by a stronger or wider second access without proving the object is large enough.",
+            "locality": "local_direct",
+            "primary": True,
+            "cross_file_concern": False,
+            "code_snippet": _line_context_from_content(file_content, line, context=5),
+            "investigation_hints": [f"{function_name}(", "u32", "u64", "error", "value"],
+            "driver_context": _looks_driver_file(file_path, file_content),
+            "compiler_context": _looks_compilerish_file(file_path, file_content),
+        })
+    return _prune_audit_candidates(candidates, limit=10)
+
+def _detect_fileops_candidates(file_path, file_content):
+    if not _looks_driver_file(file_path, file_content):
+        return []
+    candidates = []
+    if "struct file_operations" not in file_content:
+        return []
+    lines = file_content.splitlines()
+    for idx, line in enumerate(lines):
+        if "struct file_operations" not in line:
+            continue
+        window = "\n".join(lines[idx:min(len(lines), idx + 80)])
+        has_release = ".release" in window
+        has_flush = ".flush" in window
+        has_poll = ".poll" in window
+        has_open = ".open" in window
+        if has_release and not has_flush:
+            candidates.append({
+                "function_name": "file_operations",
+                "line": idx + 1,
+                "type": "lifetime_invariant_break",
+                "mechanism": "file_ops_lifecycle_gap",
+                "severity": "high",
+                "description": "The file_operations table defines release-time teardown but omits flush handling, which can leave shared file-descriptor or duplicate-descriptor lifetimes mismatched with object teardown.",
+                "locality": "cross_file",
+                "primary": True,
+                "cross_file_concern": True,
+                "code_snippet": _line_context_from_content(file_content, idx + 1, context=6),
+                "investigation_hints": ["struct file_operations", ".release", ".flush", ".poll"],
+                "driver_context": True,
+            })
+        if has_poll and has_release and has_open:
+            candidates.append({
+                "function_name": "file_operations",
+                "line": idx + 1,
+                "type": "lifetime_invariant_break",
+                "mechanism": "file_ops_lifecycle_gap",
+                "severity": "medium",
+                "description": "The file_operations table exposes open/poll/release style entry points that may race unless the same object lifetime is guarded consistently across flush, poll, and teardown paths.",
+                "locality": "cross_file",
+                "primary": False,
+                "cross_file_concern": True,
+                "code_snippet": _line_context_from_content(file_content, idx + 1, context=6),
+                "investigation_hints": ["struct file_operations", ".poll", ".release", ".open", ".flush"],
+                "driver_context": True,
+            })
+        break
+    return _prune_audit_candidates(candidates, limit=8)
+
+def _detect_logging_candidates(file_path, file_content):
+    candidates = []
+    log_tokens = ("printk(", "dev_err(", "dev_warn(", "pr_err(", "pr_warn(", "trace_", "seq_printf(")
+    leak_tokens = ("%pa", "%pap", "%px", "%pK", "%llx", "phys", "physical", "fault->addr", "bus_fault", "gpu_fault", "addr")
+    lines = file_content.splitlines()
+    for idx, line in enumerate(lines):
+        if any(tok in line for tok in log_tokens) and any(tok in line for tok in leak_tokens):
+            function_name = _function_name_for_line(_collect_function_starts(lines), idx + 1)
+            candidates.append({
+                "function_name": function_name,
+                "line": idx + 1,
+                "type": "information_disclosure",
+                "mechanism": "info_leak_logging",
+                "severity": "medium",
+                "description": "Logging in the target file appears to print raw fault or address information in a way that may disclose sensitive internal or physical-address state.",
+                "locality": "local_direct",
+                "primary": True,
+                "cross_file_concern": False,
+                "code_snippet": _line_context_from_content(file_content, idx + 1, context=4),
+                "investigation_hints": [f"{function_name}(", "printk", "dev_err", "%pa", "%px", "fault"],
+                "driver_context": _looks_driver_file(file_path, file_content),
+            })
+    return _prune_audit_candidates(candidates, limit=8)
+
+def _detect_compiler_semantic_candidates(file_path, file_content):
+    if not _looks_compilerish_file(file_path, file_content):
+        return []
+    candidates = []
+    for function_name, start_line, body_lines in _collect_function_bodies(file_content):
+        body = "\n".join(body_lines)
+        if not any(tok in body.lower() for tok in ("matrix", "vector", "constructor", "column", "row")):
+            continue
+        if not any(tok in body for tok in ("rows", "cols", "columns", "elements", "expr.u.value", "alloc", "malloc", "calloc", "new ")):
+            continue
+        if body.count("for (") == 0 and body.count("while (") == 0:
+            continue
+        line = start_line + _find_first_matching_line(body_lines, ("matrix", "vector", "constructor", "column", "row"))
+        candidates.append({
+            "function_name": function_name,
+            "line": line,
+            "type": "out_of_bounds",
+            "mechanism": "compiler_shape_mismatch",
+            "severity": "high",
+            "description": "The function appears to allocate or synthesize matrix/vector/container storage using one shape or dimension and later iterate or write using a different dimension, which is a common compiler/front-end bounds bug.",
+            "locality": "local_direct",
+            "primary": True,
+            "cross_file_concern": False,
+            "code_snippet": _line_context_from_content(file_content, line, context=5),
+            "investigation_hints": [f"{function_name}(", "matrix", "row", "column", "constructor", "expr.u.value"],
+            "compiler_context": True,
+        })
+    return _prune_audit_candidates(candidates, limit=10)
 
 def _candidate_is_local_direct(candidate):
     if str(candidate.get("locality") or "").strip() == "local_direct":
@@ -707,28 +1202,8 @@ def _candidate_is_local_direct(candidate):
         "state_transition_bug", "stale_state", "ordering_race", "teardown_race",
         "deferred_work_uaf", "cleanup_asymmetry", "partial_failure_cleanup",
         "permission_mismatch", "flag_semantic_bug", "accounting_mismatch",
-        "lifetime_invariant_break", "rollback_invariant_bug",
+        "lifetime_invariant_break", "rollback_invariant_bug", "information_disclosure",
     }
-
-_VULN_TO_CWE = {
-    "buffer_overflow": "CWE-120", "out_of_bounds": "CWE-787", "use_after_free": "CWE-416",
-    "double_free": "CWE-415", "null_deref": "CWE-476", "command_injection": "CWE-78",
-    "format_string": "CWE-134", "integer_overflow": "CWE-190", "path_traversal": "CWE-22",
-    "race_condition": "CWE-362", "uninitialized_memory": "CWE-457", "type_confusion": "CWE-843",
-    "boolean_coercion": "CWE-253", "wrong_constant": "CWE-697", "wrong_field": "CWE-688",
-    "stale_length": "CWE-131", "double_close": "CWE-675", "callback_uaf": "CWE-416",
-    "stale_pointer": "CWE-825", "refcount_imbalance": "CWE-911",
-    "missing_auth": "CWE-862", "ignored_return": "CWE-252", "sscanf_overflow": "CWE-120",
-    "toctou": "CWE-367", "static_buffer_reuse": "CWE-562", "pool_free_mismatch": "CWE-762",
-    "fd_leak": "CWE-775", "thread_unsafe": "CWE-362", "assignment_in_condition": "CWE-481",
-    "sign_confusion": "CWE-195", "permission_escalation": "CWE-269",
-    "state_transition_bug": "CWE-664", "stale_state": "CWE-664", "ordering_race": "CWE-362",
-    "teardown_race": "CWE-362", "deferred_work_uaf": "CWE-416", "cleanup_asymmetry": "CWE-404",
-    "partial_failure_cleanup": "CWE-404", "lock_order_inversion": "CWE-833",
-    "permission_mismatch": "CWE-285", "flag_semantic_bug": "CWE-697",
-    "accounting_mismatch": "CWE-664", "lifetime_invariant_break": "CWE-664",
-    "rollback_invariant_bug": "CWE-664",
-}
 
 
 # Graph builder
@@ -773,10 +1248,10 @@ Do NOT include mere declarations/prototypes (no body).
 DO include static, inline, and helper functions.
 
 Return ONLY valid JSON:
-{{\"functions\": [{{\"name\": \"example\", \"line\": 1, \"calls\": [], \"is_source\": false, \
-\"source_reason\": \"\", \"is_sink\": false, \"sink_type\": \"\", \"sink_reason\": \"\"}}]}}
+{\"functions\": [{\"name\": \"example\", \"line\": 1, \"calls\": [], \"is_source\": false, \
+\"source_reason\": \"\", \"is_sink\": false, \"sink_type\": \"\", \"sink_reason\": \"\"}]}
 
-If the file has no function definitions, return: {{\"functions\": []}}"""
+If the file has no function definitions, return: {\"functions\": []}"""
 
 _EXTRACTION_USER_TEMPLATE = "File: {file_path}\n\nCode:\n{file_content}"
 
@@ -882,11 +1357,14 @@ For EACH path determine if it is a real exploitable vulnerability:
 1. Does attacker input actually propagate through every hop?
 2. Are there sanitization or bounds checks?
 3. Is the sink truly dangerous as called?
+4. Identify the PRIMARY bug mechanism separately from the final vulnerability label. \
+Mechanism examples: state_transition, ordering_gap, partial_cleanup, rollback_gap, stale_after_unlock, \
+permission_domain_mismatch, deferred_callback_after_teardown, accounting_drift, lock_order, \
+info_leak_logging, width_mismatch_second_access, file_ops_lifecycle_gap, generic_memory.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"path_index\": 0, \"is_vulnerable\": true, \"vulnerability_type\": \"buffer_overflow\",
-\"severity\": \"high\", \"confidence\": \"high\", \"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
-integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, other.
+{\"findings\": [{\"path_index\": 0, \"is_vulnerable\": true, \"mechanism\": \"generic_memory\", \
+\"vulnerability_type\": \"buffer_overflow\", \"severity\": \"high\", \"confidence\": \"high\", \
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
 severity: critical, high, medium, low. confidence: high, medium, low. Be conservative."""
 
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
@@ -904,11 +1382,11 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 2. Does the target file contain the missing validation, unsafe state transition, or dangerous sink usage?
 3. Are there checks or lifecycle constraints that make the path non-exploitable?
 4. Is the root cause in the target file rather than merely elsewhere on the path?
+5. Identify the PRIMARY mechanism separately from the final vulnerability label.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"path_index\": 0, \"is_vulnerable\": true, \"vulnerability_type\": \"buffer_overflow\",
-\"severity\": \"high\", \"confidence\": \"high\", \"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
-integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, other.
+{\"findings\": [{\"path_index\": 0, \"is_vulnerable\": true, \"mechanism\": \"state_transition\", \
+\"vulnerability_type\": \"state_transition_bug\", \"severity\": \"high\", \"confidence\": \"high\", \
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
 severity: critical, high, medium, low. confidence: high, medium, low. Be conservative."""
 
 _FILE_CONFIRM_USR = """Target file: {target_file}
@@ -939,17 +1417,15 @@ Report a vulnerability when:
   caller always frees)
 - A function in the FOCUS FILE sanitizes or transforms data but does not update a \
   length/size field, causing callers to use stale metadata
+- A file_operations/vtable shape leaves one lifetime path unimplemented or inconsistent
 
 For each finding, identify both the focus-file function involved AND the caller \
 function in the other file where the misuse occurs.
 
 Return ONLY valid JSON:
-{{\"findings\": [{{\"path_index\": 0, \"is_vulnerable\": true, \"vulnerability_type\": \"boolean_coercion\",
-\"severity\": \"high\", \"confidence\": \"high\",
-\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-
-vulnerability_type: boolean_coercion, double_free, double_close, buffer_overflow, \
-use_after_free, wrong_constant, stale_length, type_confusion, other.
+{\"findings\": [{\"path_index\": 0, \"is_vulnerable\": true, \"mechanism\": \"file_ops_lifecycle_gap\", \
+\"vulnerability_type\": \"lifetime_invariant_break\", \"severity\": \"high\", \"confidence\": \"high\", \
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
 severity: critical, high, medium, low. confidence: high, medium, low."""
 
 _CROSS_FILE_USR = """Focus file: {target_file}
@@ -979,6 +1455,9 @@ direct vulnerability pattern such as:
 - wrong permission/flag validation where the check does not protect the later behavior actually performed
 - invalid state transitions where the code exposes, preserves, or fails to clear lifecycle-critical state
 - unsafe ordering of power/reset/MMU/cache/fault-handling operations that leaves partially transitioned state visible
+- stale locals reused after unlock/relock
+- logging that discloses sensitive fault or physical-address information
+- file_operations tables whose lifetime callbacks are clearly incomplete in the same file
 
 Prefer the PRIMARY direct bug over speculative secondary issues.
 For example, if a function constructs a shell command from variable input and calls system(),
@@ -986,8 +1465,9 @@ prefer command_injection over toctou.
 
 Only reject the candidate if clear mitigation is visible in the shown code.
 Return ONLY valid JSON:
-{{\"verdict\": {{
+{\"verdict\": {
   \"is_vulnerable\": true,
+  \"mechanism\": \"generic_memory\",
   \"vulnerability_type\": \"command_injection\",
   \"severity\": \"high\",
   \"confidence\": \"high\",
@@ -997,11 +1477,12 @@ Return ONLY valid JSON:
   \"root_cause\": \"...\",
   \"evidence\": \"...\",
   \"reachability_chain\": \"Target file local path\"
-}}}}
+}}
 
 Set is_vulnerable to false only if the shown code clearly mitigates the issue."""
 
 _LOCAL_CONFIRM_USR = """Candidate type: {candidate_type}
+Candidate mechanism: {candidate_mechanism}
 Candidate description: {candidate_description}
 Function: {function_name}
 Line: {line}
@@ -1082,13 +1563,16 @@ class VulnerabilityConfirmer:
             idx = int(e.get("path_index", -1))
             if idx < 0 or idx >= len(batch): continue
             rp = batch[idx]; sn = graph.get_node(rp.source); sk = graph.get_node(rp.sink)
+            mechanism = _normalize_mechanism(e.get("mechanism"), e.get("vulnerability_type") or rp.sink_type)
+            vtype = _resolve_vulnerability_type(mechanism, e.get("vulnerability_type") or rp.sink_type or "other")
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or rp.sink_type or "other"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=vtype,
                 severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
                 source_function=rp.source, source_file=sn.file_path if sn else "", source_line=sn.line_number if sn else 0,
                 sink_function=rp.sink, sink_file=sk.file_path if sk else "", sink_line=sk.line_number if sk else 0,
                 path=list(rp.path), description=str(e.get("description") or ""),
-                root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""), analysis_type="reachability"))
+                root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""), analysis_type="reachability",
+                mechanism=mechanism, mechanism_family=_mechanism_family(mechanism, vtype)))
         return results
 
     def confirm_for_file(self, target_file, paths, graph, *, max_workers=4, progress_callback=None):
@@ -1194,15 +1678,17 @@ class VulnerabilityConfirmer:
             sink_file = target_file
             sink_fn = focus_fn.unique_name if focus_fn else rp.sink
             sink_line = focus_fn.line_number if focus_fn else (sk.line_number if sk else 0)
+            mechanism = _normalize_mechanism(e.get("mechanism"), e.get("vulnerability_type"))
+            vtype = _resolve_vulnerability_type(mechanism, e.get("vulnerability_type") or "other")
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or "other"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=vtype,
                 severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
                 source_function=rp.source, source_file=sn.file_path if sn else "",
                 source_line=sn.line_number if sn else 0,
                 sink_function=sink_fn, sink_file=sink_file, sink_line=sink_line,
                 path=list(rp.path), description=str(e.get("description") or ""),
                 root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
-                analysis_type="cross_file"))
+                analysis_type="cross_file", mechanism=mechanism, mechanism_family=_mechanism_family(mechanism, vtype)))
         return results
 
     def confirm_local_candidate(self, candidate, target_file, target_file_content):
@@ -1214,19 +1700,14 @@ class VulnerabilityConfirmer:
         prompt = ChatPromptTemplate.from_messages([("system", _LOCAL_CONFIRM_SYS), ("user", _LOCAL_CONFIRM_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({
             "candidate_type": str(candidate.get("type") or "other"),
+            "candidate_mechanism": str(candidate.get("mechanism") or "generic_memory"),
             "candidate_description": str(candidate.get("description") or ""),
             "function_name": str(candidate.get("function_name") or "unknown"),
             "line": int(candidate.get("line") or 1),
             "target_file_code": _number_lines(target_file_content),
             "local_context": local_context,
         }).strip()
-        parsed = parse_json_output(raw)
-        if not isinstance(parsed, dict):
-            return None
-        verdict = parsed.get("verdict")
-        if not isinstance(verdict, dict):
-            return None
-        return verdict
+        return _parse_verdict_payload(raw)
 
 
 # supplementary analyzer, only for review code for now
@@ -1244,9 +1725,9 @@ Look for:
 4. ARRAY INDEX OUT OF BOUNDS: arr[flags & 0x0F] with arr[4] — mask allows 0-15.
 5. RESOURCE LEAKS on error paths.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"vulnerability_type\": \"double_free\", \"severity\": \"high\", \"confidence\": \"high\", \
-\"function_name\": \"handle_set\", \"line\": 55, \"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-Return {{\"findings\": []}} if none found. Be thorough."""
+{\"findings\": [{\"vulnerability_type\": \"double_free\", \"severity\": \"high\", \"confidence\": \"high\", \
+\"function_name\": \"handle_set\", \"line\": 55, \"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
+Return {\"findings\": []} if none found. Be thorough."""
 
 _INTRA_USR = "File: {file_path}\n\n{functions_code}"
 
@@ -1257,10 +1738,10 @@ Below are ALL functions. Analyze their INTERACTIONS:
 2. DANGLING POINTERS: Pointers in global/shared structures not NULLed when target freed.
 3. LIFETIME MISMATCH: Object A stores pointer to B, but B can be destroyed while A exists.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"vulnerability_type\": \"use_after_free\", \"severity\": \"high\", \"confidence\": \"high\", \
+{\"findings\": [{\"vulnerability_type\": \"use_after_free\", \"severity\": \"high\", \"confidence\": \"high\", \
 \"free_function\": \"session_close\", \"use_function\": \"store_lookup\", \
-\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-Return {{\"findings\": []}} if none found."""
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
+Return {\"findings\": []} if none found."""
 
 _LIFE_USR = "{all_functions_code}"
 
@@ -1272,10 +1753,10 @@ Examine ALL functions below for:
 3. CALLBACK / REGISTRATION LIFECYCLE: Register callback with object as context, free object without unregistering.
 4. REFCOUNT IMBALANCE: store_ref then store_unref called unequally.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"vulnerability_type\": \"double_free\", \"severity\": \"high\", \"confidence\": \"high\", \
+{\"findings\": [{\"vulnerability_type\": \"double_free\", \"severity\": \"high\", \"confidence\": \"high\", \
 \"function_a\": \"proto_parse\", \"function_b\": \"dispatch\", \
-\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-Return {{\"findings\": []}} if none found."""
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
+Return {\"findings\": []} if none found."""
 
 _OWN_USR = "{all_functions_code}"
 
@@ -1292,10 +1773,10 @@ Examine ALL functions below for:
 8. INTEGER OVERFLOW IN ALLOCATION: new_cap * sizeof(large_struct) wraps size_t.
 9. UNINITIALIZED DATA EXPOSURE: malloc + partial init + memcpy entire struct to network.
 Return ONLY valid JSON:
-{{\"findings\": [{{\"vulnerability_type\": \"boolean_coercion\", \"severity\": \"high\", \"confidence\": \"high\", \
+{\"findings\": [{\"vulnerability_type\": \"boolean_coercion\", \"severity\": \"high\", \"confidence\": \"high\", \
 \"function_name\": \"dispatch\", \"related_function\": \"auth_get_level\", \
-\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}}]}}
-Return {{\"findings\": []}} if none found. Be EXTREMELY thorough."""
+\"description\": \"...\", \"root_cause\": \"...\", \"evidence\": \"...\"}]}
+Return {\"findings\": []} if none found. Be EXTREMELY thorough."""
 
 _SEM_USR = "{all_functions_code}"
 
@@ -1370,14 +1851,16 @@ class SupplementaryAnalyzer:
             line = fn.line_number
             try: line = max(1, int(e.get("line", line)))
             except: pass
+            vtype = str(e.get("vulnerability_type") or "other")
+            mechanism = _normalize_mechanism(e.get("mechanism"), vtype)
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or "other"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=_resolve_vulnerability_type(mechanism, vtype),
                 severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
                 source_function=fn.unique_name, source_file=fn.file_path, source_line=line,
                 sink_function=fn.unique_name, sink_file=fn.file_path, sink_line=line,
                 path=[fn.unique_name], description=str(e.get("description") or ""),
                 root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
-                analysis_type="intra_function"))
+                analysis_type="intra_function", mechanism=mechanism, mechanism_family=_mechanism_family(mechanism, vtype)))
         return results
 
     def _pass_lifecycle(self, graph, cb):
@@ -1434,14 +1917,16 @@ class SupplementaryAnalyzer:
             fa = _lookup_fn(str(e.get(key_a) or ""), bn, bu, all_fns)
             fb = _lookup_fn(str(e.get(key_b) or ""), bn, bu, all_fns)
             if not fa or not fb: continue
+            vtype = str(e.get("vulnerability_type") or "use_after_free")
+            mechanism = _normalize_mechanism(e.get("mechanism"), vtype)
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or "use_after_free"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=_resolve_vulnerability_type(mechanism, vtype),
                 severity=str(e.get("severity") or "high"), confidence=str(e.get("confidence") or "medium"),
                 source_function=fa.unique_name, source_file=fa.file_path, source_line=fa.line_number,
                 sink_function=fb.unique_name, sink_file=fb.file_path, sink_line=fb.line_number,
                 path=[fa.unique_name, fb.unique_name], description=str(e.get("description") or ""),
                 root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
-                analysis_type=analysis_type))
+                analysis_type=analysis_type, mechanism=mechanism, mechanism_family=_mechanism_family(mechanism, vtype)))
         return results
 
     def _parse_semantic(self, raw, all_fns):
@@ -1457,14 +1942,17 @@ class SupplementaryAnalyzer:
             rf = _lookup_fn(str(e.get("related_function") or ""), bn, bu, all_fns)
             if not fn: continue
             src_fn = rf or fn
+            vtype = str(e.get("vulnerability_type") or "other")
+            mechanism = _normalize_mechanism(e.get("mechanism"), vtype)
             results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16], vulnerability_type=str(e.get("vulnerability_type") or "other"),
+                id=uuid.uuid4().hex[:16], vulnerability_type=_resolve_vulnerability_type(mechanism, vtype),
                 severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
                 source_function=src_fn.unique_name, source_file=src_fn.file_path, source_line=src_fn.line_number,
                 sink_function=fn.unique_name, sink_file=fn.file_path, sink_line=fn.line_number,
                 path=[src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name],
                 description=str(e.get("description") or ""), root_cause=str(e.get("root_cause") or ""),
-                evidence=str(e.get("evidence") or ""), analysis_type="semantic"))
+                evidence=str(e.get("evidence") or ""), analysis_type="semantic",
+                mechanism=mechanism, mechanism_family=_mechanism_family(mechanism, vtype)))
         return results
 
 
@@ -1475,7 +1963,9 @@ class Deduplicator:
     def deduplicate(findings, *, max_per_sink=3):
         if not findings: return [], 0, 0
         groups = defaultdict(list)
-        for f in findings: groups[(f.sink_function, f.vulnerability_type)].append(f)
+        for f in findings:
+            mechanism_family = getattr(f, "mechanism_family", "") or _mechanism_family(getattr(f, "mechanism", ""), f.vulnerability_type)
+            groups[(f.sink_function, mechanism_family)].append(f)
         selected = []
         for g in groups.values(): selected.extend(_select_diverse(g, max_per_sink))
         return selected, len(findings), len(findings) - len(selected)
@@ -1483,7 +1973,10 @@ class Deduplicator:
 def _select_diverse(findings, limit):
     if len(findings) <= limit: return list(findings)
     sev = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
-    fs = sorted(findings, key=lambda f: (sev.get(f.severity, 5), len(f.path)))
+    fs = sorted(findings, key=lambda f: (
+        sev.get(f.severity, 5),
+        _ROOT_CAUSE_FAMILY_ORDER_DRIVER.get(getattr(f, "mechanism_family", "") or _mechanism_family(getattr(f, "mechanism", ""), f.vulnerability_type), 50),
+        len(f.path)))
     sel, cov = [], set()
     for f in fs:
         if len(sel) >= limit: break
@@ -1506,7 +1999,7 @@ depending on how the rest of the codebase uses this file's functions.
 
 ## Categories to check thoroughly
 
-1. MEMORY SAFETY: buffer overflow, heap/stack overflow (including via sscanf %%s \
+1. MEMORY SAFETY: buffer overflow, heap/stack overflow (including via sscanf %s \
 into fixed buffers), use-after-free, double-free, NULL dereference before check, \
 out-of-bounds read/write, uninitialized memory exposure
 2. RESOURCE MANAGEMENT: file descriptor leaks on error paths, double-close, \
@@ -1517,7 +2010,7 @@ of rich return values (treating enum/level as bool with if(!func())), ignored re
 values from auth/verify functions, any handler that performs a sensitive action \
 without checking the caller's role or auth status
 4. DATA FLOW: user-controlled data passed as printf format string, sscanf with \
-unbounded %%s, sign confusion (int32 vs uint32 vs size_t), integer overflow in \
+unbounded %s, sign confusion (int32 vs uint32 vs size_t), integer overflow in \
 size calculations (count * sizeof(large_struct))
 5. CROSS-FILE HAZARDS — flag these even if you cannot confirm exploitability:
    - Functions that free/close resources (callers may also free/close the same thing)
@@ -1538,6 +2031,10 @@ unsafe ordering of power/reset/MMU/cache/fault handling, deferred work/timer/cal
 after free, cleanup asymmetry on partial failure, rollback bugs after partially inserted \
 state, lock-order inversions, permission/flag semantic mismatches, accounting mismatches \
 between source objects and aliases/mappings
+9. LOGGING / DIAGNOSTICS: fault or trace logging that prints sensitive addresses or \
+hardware/internal identifiers
+10. SAME-FILE MULTI-FUNCTION BUGS: bugs whose root cause spans 2 to 4 functions in this file \
+such as setup/teardown, suspend/cleanup, open/poll/release, or callback/free pairs
 
 ## Output format
 
@@ -1552,16 +2049,26 @@ Important for driver-like code:
 - If the real issue is a stale state transition, rollback bug, cleanup mismatch, or wrong permission \
   domain, report that directly instead of translating it into a nearby overflow/null/leak issue.
 
+For EACH candidate include BOTH:
+- mechanism: the root-cause mechanism
+- type: the final vulnerability label
+
+Preferred mechanisms when applicable:
+state_transition, ordering_gap, partial_cleanup, cleanup_symmetry, rollback_gap, stale_after_unlock, \
+permission_domain_mismatch, deferred_callback_after_teardown, accounting_drift, lock_order, \
+info_leak_logging, width_mismatch_second_access, file_ops_lifecycle_gap, compiler_shape_mismatch, generic_memory
+
 Preferred candidate types when applicable:
 command_injection, buffer_overflow, sscanf_overflow, path_traversal, format_string, integer_overflow, \
 out_of_bounds, use_after_free, double_free, null_deref, state_transition_bug, stale_state, \
 ordering_race, teardown_race, deferred_work_uaf, cleanup_asymmetry, partial_failure_cleanup, \
 lock_order_inversion, permission_mismatch, flag_semantic_bug, accounting_mismatch, \
-lifetime_invariant_break, rollback_invariant_bug, boolean_coercion, wrong_constant, stale_length, other
+lifetime_invariant_break, rollback_invariant_bug, boolean_coercion, wrong_constant, stale_length, \
+information_disclosure, other
 
 For each issue found, classify locality:
 - local_direct: the target file itself shows a classic unsafe sink, missing validation, stale-state bug, \
-  cleanup mismatch, rollback problem, wrong permission/flag semantic, or ordering issue that can be \
+  cleanup mismatch, rollback problem, wrong permission/flag semantic, logging leak, or ordering issue that can be \
   confirmed from this file alone
 - cross_file: the issue likely depends on caller behavior, ownership across files, or wider repo context
 
@@ -1569,16 +2076,16 @@ Return ONLY valid JSON. For each issue found, include investigation_hints — sh
 grep patterns or function names a reviewer should search for in the rest of the \
 codebase to determine reachability and exploitability.
 
-{{\"candidates\": [
-  {{\"function_name\": \"func_name\", \"line\": 42, \"type\": \"double_close\",
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"file_ops_lifecycle_gap\", \"type\": \"lifetime_invariant_break\",
     \"severity\": \"high\", \"description\": \"conn_close closes c->fd but caller may also close the same fd\",
     \"locality\": \"cross_file\", \"primary\": false,
     \"cross_file_concern\": true,
     \"code_snippet\": \"...\",
-    \"investigation_hints\": [\"conn_close(\", \"close(cfd)\"]}}
-]}}
+    \"investigation_hints\": [\"conn_close(\", \"close(cfd)\"]}
+]}
 
-If you find NOTHING, return {{\"candidates\": []}}. But be thorough — err on the side \
+If you find NOTHING, return {\"candidates\": []}. But be thorough — err on the side \
 of flagging suspicious patterns. It is much better to flag a false positive than to \
 miss a real vulnerability."""
 
@@ -1592,25 +2099,37 @@ Focus on these questions:
 2. On EVERY error path, abort path, rollback path, and teardown path, is the inverse operation guaranteed?
 3. Are partially acquired pages, mappings, list/rbtree entries, timers, work items, workqueues, or references leaked or left live?
 4. Can asynchronous work or timers still run after related object teardown?
+5. Extract the acquire/release families and compare them: page pins, mapping refs, rb/list insertions, \
+   workqueue/timer registration, locks, kfree/destroy/unregister helpers.
 
-Prefer these candidate types when appropriate:
-cleanup_asymmetry, partial_failure_cleanup, deferred_work_uaf, rollback_invariant_bug, \
-lifetime_invariant_break, accounting_mismatch, double_free, use_after_free, double_close
+Prefer these mechanisms and types when appropriate:
+partial_cleanup -> partial_failure_cleanup
+cleanup_symmetry -> cleanup_asymmetry
+deferred_callback_after_teardown -> deferred_work_uaf
+rollback_gap -> rollback_invariant_bug
+accounting_drift -> accounting_mismatch
+stale_after_unlock -> lifetime_invariant_break
 
 Return ONLY valid JSON:
-{{\"candidates\": [
-  {{\"function_name\": \"func_name\", \"line\": 42, \"type\": \"partial_failure_cleanup\",
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"partial_cleanup\", \"type\": \"partial_failure_cleanup\",
     \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
     \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
-    \"investigation_hints\": [\"func_name(\", \"put_page(\", \"goto err\"]}}
-]}}
+    \"investigation_hints\": [\"func_name(\", \"put_page(\", \"goto err\"]}
+]}
 
-If none, return {{\"candidates\": []}}."""
+If none, return {\"candidates\": []}."""
 
 _FILE_CLEANUP_USR = "File under review: {file_path}\n\n{file_content}"
 
 _FILE_STATE_SYS = """\
 You are auditing ONE C/C++ source file for driver-style state-machine, teardown, ordering, and deferred-work bugs.
+
+Use subsystem-aware vocabulary when present:
+- MMU / flush / invalidate / disable / fault / power / reset / runtime PM
+- queue / enabled / terminate / doorbell / scheduler / protected mode
+- tracking page / alias / shrink / remap / evictable / dont_need
+- workqueue / timer / callback / async dump / close / destroy
 
 Look specifically for:
 1. field/state set before validation completes
@@ -1620,19 +2139,22 @@ Look specifically for:
 5. lifecycle bits, pointers, or overrides not cleared on all exit paths
 6. lock-order inversions or teardown races across callback/worker/IRQ style code
 
-Prefer these candidate types when appropriate:
-state_transition_bug, stale_state, ordering_race, teardown_race, deferred_work_uaf, \
-lock_order_inversion, use_after_free, callback_uaf, other
+Prefer these mechanisms and types when appropriate:
+state_transition -> state_transition_bug
+ordering_gap -> ordering_race
+deferred_callback_after_teardown -> deferred_work_uaf
+lock_order -> lock_order_inversion
+stale_after_unlock -> lifetime_invariant_break
 
 Return ONLY valid JSON:
-{{\"candidates\": [
-  {{\"function_name\": \"func_name\", \"line\": 42, \"type\": \"state_transition_bug\",
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"state_transition\", \"type\": \"state_transition_bug\",
     \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
     \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
-    \"investigation_hints\": [\"func_name(\", \"state\", \"enable\", \"terminate\"]}}
-]}}
+    \"investigation_hints\": [\"func_name(\", \"state\", \"enable\", \"terminate\"]}
+]}
 
-If none, return {{\"candidates\": []}}."""
+If none, return {\"candidates\": []}."""
 
 _FILE_STATE_USR = "File under review: {file_path}\n\n{file_content}"
 
@@ -1647,21 +2169,173 @@ Look specifically for:
 5. check validates A, but later use depends on B
 6. tracking/accounting fields drifting out of sync with the real object lifecycle
 
-Prefer these candidate types when appropriate:
-permission_mismatch, flag_semantic_bug, accounting_mismatch, lifetime_invariant_break, \
-rollback_invariant_bug, wrong_constant, stale_length, boolean_coercion, out_of_bounds, other
+Prefer these mechanisms and types when appropriate:
+permission_domain_mismatch -> permission_mismatch or flag_semantic_bug
+width_mismatch_second_access -> out_of_bounds
+accounting_drift -> accounting_mismatch or lifetime_invariant_break
+rollback_gap -> rollback_invariant_bug
+file_ops_lifecycle_gap -> lifetime_invariant_break
 
 Return ONLY valid JSON:
-{{\"candidates\": [
-  {{\"function_name\": \"func_name\", \"line\": 42, \"type\": \"permission_mismatch\",
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"permission_domain_mismatch\", \"type\": \"permission_mismatch\",
     \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
     \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
-    \"investigation_hints\": [\"func_name(\", \"flags\", \"permission\", \"GPU_WR\"]}}
-]}}
+    \"investigation_hints\": [\"func_name(\", \"flags\", \"permission\", \"GPU_WR\"]}
+]}
 
-If none, return {{\"candidates\": []}}."""
+If none, return {\"candidates\": []}."""
 
 _FILE_SEMANTIC_USR = "File under review: {file_path}\n\n{file_content}"
+
+_FILE_STALE_UNLOCK_SYS = """\
+You are auditing ONE C/C++ source file for stale-local-after-unlock bugs.
+
+Look for this exact shape:
+1. code reads pointer/size/index/state into a local
+2. code drops a lock or relinquishes exclusive synchronization
+3. code does work or allows state transition
+4. code reacquires lock or resumes protected execution
+5. code uses the stale local without refreshing it
+
+This is common in kernel/driver code and can lead to use-after-free, stale-region access, bad indexing, \
+or state corruption.
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"stale_after_unlock\", \"type\": \"lifetime_invariant_break\",
+    \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
+    \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"func_name(\", \"unlock\", \"lock\", \"stale\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_STALE_UNLOCK_USR = "File under review: {file_path}\n\n{file_content}"
+
+_FILE_WIDTH_SYS = """\
+You are auditing ONE C/C++ source file for secondary-access bugs where the second access is wider or stronger than what was validated.
+
+Look specifically for:
+1. validates one field, then reads/writes adjacent field without proving object size
+2. validates 32-bit view, later uses 64-bit access
+3. validates header, then uses trailing variable-length region as string or array
+4. validates one address class, but second operation assumes stronger guarantees
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"width_mismatch_second_access\", \"type\": \"out_of_bounds\",
+    \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
+    \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"func_name(\", \"u32\", \"u64\", \"field\", \"value\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_WIDTH_USR = "File under review: {file_path}\n\n{file_content}"
+
+_FILE_FILEOPS_SYS = """\
+You are auditing ONE C/C++ source file for file_operations / vtable completeness and lifetime bugs.
+
+Look specifically for:
+1. release exists but flush is missing
+2. poll and flush/release can race on the same object
+3. object teardown exists in one file-op path but not another
+4. duplicated/shared descriptors can keep state alive unexpectedly
+5. open/mmap/ioctl/poll/release combinations assume inconsistent lifetimes
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"file_operations\", \"line\": 42, \"mechanism\": \"file_ops_lifecycle_gap\", \"type\": \"lifetime_invariant_break\",
+    \"severity\": \"high\", \"description\": \"...\", \"locality\": \"cross_file\",
+    \"primary\": true, \"cross_file_concern\": true, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"struct file_operations\", \".release\", \".flush\", \".poll\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_FILEOPS_USR = "File under review: {file_path}\n\n{file_content}"
+
+_FILE_LOGGING_SYS = """\
+You are auditing ONE C/C++ source file for information disclosure through logging, diagnostics, tracing, or fault reporting.
+
+Look specifically for:
+1. printk/dev_err/dev_warn/pr_err/trace logging of physical or kernel addresses
+2. fixed format specifiers that expose internal address state
+3. logs that reveal secrets, handles, tokens, or hardware identifiers
+4. mismatch between logical address class and what is printed
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"info_leak_logging\", \"type\": \"information_disclosure\",
+    \"severity\": \"medium\", \"description\": \"...\", \"locality\": \"local_direct\",
+    \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"func_name(\", \"printk\", \"dev_err\", \"%pa\", \"%px\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_LOGGING_USR = "File under review: {file_path}\n\n{file_content}"
+
+_FILE_CLUSTER_SYS = """\
+You are auditing a SAME-FILE function cluster because the likely bug spans multiple nearby functions in one source file.
+
+The cluster may include:
+- target function
+- direct callees in the same file
+- direct callers in the same file
+- teardown helper
+- callback/timer worker
+- file-ops helper
+- error/rollback helper
+
+Your job is to identify the PRIMARY root-cause mechanism if the bug spans 2 to 4 functions here.
+Prefer mechanisms:
+state_transition, ordering_gap, partial_cleanup, cleanup_symmetry, rollback_gap, stale_after_unlock, \
+permission_domain_mismatch, deferred_callback_after_teardown, accounting_drift, lock_order, \
+width_mismatch_second_access, file_ops_lifecycle_gap, info_leak_logging, compiler_shape_mismatch
+
+Do NOT downgrade the cluster to a nearby generic integer overflow or leak if the real bug is a stronger same-file state/lifecycle/semantic issue.
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"seed_func\", \"line\": 42, \"mechanism\": \"state_transition\", \"type\": \"state_transition_bug\",
+    \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
+    \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"seed_func(\", \"helper_func(\", \"state\", \"terminate\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_CLUSTER_USR = """File under review: {file_path}
+Cluster seed: {seed}
+Cluster functions: {functions}
+
+{cluster_code}
+"""
+
+_FILE_COMPILER_SYS = """\
+You are auditing ONE C/C++ source file for compiler/front-end semantic bugs.
+
+Look specifically for:
+1. dimension mismatch between allocated shape and written shape
+2. synthesized structure or matrix/vector initialization using wrong extent
+3. row/column count mismatch
+4. vector width or lane assumptions inconsistent with allocation
+5. enum/table size mismatch
+6. builder loops that write using destination dimension instead of allocated dimension
+
+Return ONLY valid JSON:
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"compiler_shape_mismatch\", \"type\": \"out_of_bounds\",
+    \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
+    \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
+    \"investigation_hints\": [\"func_name(\", \"matrix\", \"row\", \"column\", \"constructor\"]}
+]}
+
+If none, return {\"candidates\": []}."""
+
+_FILE_COMPILER_USR = "File under review: {file_path}\n\n{file_content}"
 
 _FILE_DEEP_DRIVER_AUDIT_SYS = """\
 You are a world-class auditor performing a second-pass deep review of ONE driver-style C/C++ file because the first-pass results were weak or empty.
@@ -1676,18 +2350,21 @@ Your job is to surface the highest-signal 1 to 8 candidates in these families:
 - permission or flag semantic mismatch
 - accounting / alias lifetime mismatch
 - lock-order inversion
+- stale locals reused after unlock/relock
+- information disclosure through fault logging
+- file_operations lifetime gaps
 
 Do NOT default to nearby generic integer-overflow, NULL, or leak findings if a stronger state/lifecycle/semantic bug is present.
 
 Return ONLY valid JSON:
-{{\"candidates\": [
-  {{\"function_name\": \"func_name\", \"line\": 42, \"type\": \"state_transition_bug\",
+{\"candidates\": [
+  {\"function_name\": \"func_name\", \"line\": 42, \"mechanism\": \"state_transition\", \"type\": \"state_transition_bug\",
     \"severity\": \"high\", \"description\": \"...\", \"locality\": \"local_direct\",
     \"primary\": true, \"cross_file_concern\": false, \"code_snippet\": \"...\",
-    \"investigation_hints\": [\"func_name(\", \"state\", \"terminate\", \"doorbell\"]}}
-]}}
+    \"investigation_hints\": [\"func_name(\", \"state\", \"terminate\", \"doorbell\"]}
+]}
 
-If none, return {{\"candidates\": []}}."""
+If none, return {\"candidates\": []}."""
 
 _FILE_DEEP_DRIVER_AUDIT_USR = "File under review: {file_path}\n\n{file_content}"
 
@@ -1701,7 +2378,7 @@ class FileAuditor:
         self._u = usage_runtime
         self._t = max_tokens
 
-    def _invoke_candidates(self, system_prompt, user_template, file_path, file_content):
+    def _invoke_candidates(self, system_prompt, user_template, file_path, file_content, *, default_driver_context=False):
         kw = self._u.hooks.chat_model_kwargs()
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([
@@ -1712,30 +2389,81 @@ class FileAuditor:
             "file_path": file_path,
             "file_content": _number_lines(file_content),
         }).strip()
-        return _parse_candidate_payload(raw)
+        return _parse_candidate_payload(raw, default_driver_context=default_driver_context)
+
+    def _invoke_cluster_candidates(self, file_path, cluster, *, default_driver_context=False):
+        kw = self._u.hooks.chat_model_kwargs()
+        chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", _FILE_CLUSTER_SYS),
+            ("user", _FILE_CLUSTER_USR),
+        ])
+        raw = (prompt | chat | StrOutputParser()).invoke({
+            "file_path": file_path,
+            "seed": cluster["seed"],
+            "functions": ", ".join(cluster["functions"]),
+            "cluster_code": cluster["code"],
+        }).strip()
+        return _parse_candidate_payload(raw, default_driver_context=default_driver_context)
 
     def audit(self, file_path, file_content):
-        result = self._invoke_candidates(_FILE_AUDIT_SYS, _FILE_AUDIT_USR, file_path, file_content)
+        is_driver = _looks_driver_file(file_path, file_content)
+        is_compilerish = _looks_compilerish_file(file_path, file_content)
+
+        result = self._invoke_candidates(_FILE_AUDIT_SYS, _FILE_AUDIT_USR, file_path, file_content, default_driver_context=is_driver)
 
         static_candidates = _detect_obvious_local_candidates(file_content)
         driver_static_candidates = _detect_driver_specific_candidates(file_path, file_content)
+        stale_unlock_candidates = _detect_stale_after_unlock_candidates(file_path, file_content)
+        width_candidates = _detect_width_mismatch_candidates(file_path, file_content)
+        fileops_candidates = _detect_fileops_candidates(file_path, file_content)
+        logging_candidates = _detect_logging_candidates(file_path, file_content)
+        compiler_static_candidates = _detect_compiler_semantic_candidates(file_path, file_content)
 
-        is_driver = _looks_driver_file(file_path, file_content)
         targeted_candidates = []
 
         if is_driver or not result:
-            targeted_candidates.extend(self._invoke_candidates(_FILE_CLEANUP_SYS, _FILE_CLEANUP_USR, file_path, file_content))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_STATE_SYS, _FILE_STATE_USR, file_path, file_content))
-            targeted_candidates.extend(self._invoke_candidates(_FILE_SEMANTIC_SYS, _FILE_SEMANTIC_USR, file_path, file_content))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_CLEANUP_SYS, _FILE_CLEANUP_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_STATE_SYS, _FILE_STATE_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_SEMANTIC_SYS, _FILE_SEMANTIC_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_STALE_UNLOCK_SYS, _FILE_STALE_UNLOCK_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_WIDTH_SYS, _FILE_WIDTH_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_FILEOPS_SYS, _FILE_FILEOPS_USR, file_path, file_content, default_driver_context=is_driver))
+            targeted_candidates.extend(self._invoke_candidates(_FILE_LOGGING_SYS, _FILE_LOGGING_USR, file_path, file_content, default_driver_context=is_driver))
 
-        combined = result + targeted_candidates + static_candidates + driver_static_candidates
+        if is_compilerish:
+            targeted_candidates.extend(self._invoke_candidates(_FILE_COMPILER_SYS, _FILE_COMPILER_USR, file_path, file_content, default_driver_context=is_driver))
 
-        if is_driver and len(combined) < 4:
-            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content))
+        combined = result + targeted_candidates + static_candidates + driver_static_candidates + stale_unlock_candidates + width_candidates + fileops_candidates + logging_candidates + compiler_static_candidates
+        combined = _prune_audit_candidates([
+            dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
+            for c in combined
+        ], limit=40)
+
+        seed_functions = []
+        for c in combined[:8]:
+            fn = str(c.get("function_name") or "").strip()
+            if fn and fn != "unknown" and fn != "file_operations":
+                seed_functions.append(fn)
+        if not seed_functions:
+            seed_functions = [name for name, _, _ in _collect_function_bodies(file_content)[:4]]
+
+        cluster_candidates = []
+        for cluster in _build_same_file_clusters(file_content, seed_functions, max_clusters=4 if is_driver else 2):
+            cluster_candidates.extend(self._invoke_cluster_candidates(file_path, cluster, default_driver_context=is_driver))
+
+        combined.extend(cluster_candidates)
+
+        family_coverage = {c.get("mechanism_family") for c in combined}
+        if is_driver and (len(combined) < 5 or len(family_coverage) < 2):
+            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content, default_driver_context=True))
         elif not combined:
-            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content))
+            combined.extend(self._invoke_candidates(_FILE_DEEP_DRIVER_AUDIT_SYS, _FILE_DEEP_DRIVER_AUDIT_USR, file_path, file_content, default_driver_context=is_driver))
 
-        return _prune_audit_candidates(combined, limit=25)
+        return _prune_audit_candidates([
+            dict(c, driver_context=bool(c.get("driver_context")) or is_driver, compiler_context=bool(c.get("compiler_context")) or is_compilerish)
+            for c in combined
+        ], limit=25)
 
 
 # file investigation
@@ -1754,21 +2482,22 @@ You are given:
 Output ONLY valid JSON with one of these formats:
 
 ### 1. Search the codebase (grep)
-{{\"actions\": [
-  {{\"type\": \"search\", \"pattern\": \"function_name\\\\(\"}},
-  {{\"type\": \"search\", \"pattern\": \"close\\\\(cfd\\\\)\"}}
-]}}
+{\"actions\": [
+  {\"type\": \"search\", \"pattern\": \"function_name\\\\(\"},
+  {\"type\": \"search\", \"pattern\": \"close\\\\(cfd\\\\)\"}
+]}
 Maximum 5 search actions per turn. Use specific patterns to avoid huge results.
 
 ### 2. Read lines from a file
-{{\"actions\": [
-  {{\"type\": \"read\", \"path\": \"src/main.c\", \"start_line\": 28, \"end_line\": 60}}
-]}}
+{\"actions\": [
+  {\"type\": \"read\", \"path\": \"src/main.c\", \"start_line\": 28, \"end_line\": 60}
+]}
 Maximum 3 read actions per turn. Max 80 lines per read.
 
 ### 3. Conclude your investigation
-{{\"verdict\": {{
+{\"verdict\": {
   \"is_vulnerable\": true,
+  \"mechanism\": \"file_ops_lifecycle_gap\",
   \"vulnerability_type\": \"double_close\",
   \"severity\": \"high\",
   \"confidence\": \"high\",
@@ -1778,7 +2507,7 @@ Maximum 3 read actions per turn. Max 80 lines per read.
   \"root_cause\": \"Ambiguous fd ownership: conn_close takes ownership and closes c->fd, but handle_client still holds cfd and closes it after conn_close returns\",
   \"evidence\": \"src/connection.c:72 close(c->fd); src/main.c:46 close(cfd); cfd == c->fd from conn_create\",
   \"reachability_chain\": \"main -> handle_client -> conn_close -> close(c->fd) ... handle_client -> close(cfd)\"
-}}}}
+}}
 
 ## Investigation strategy
 
@@ -1796,6 +2525,10 @@ For driver-like bugs, also investigate:
 - unsafe power/reset/MMU/cache/fault ordering
 - wrong permission/flag semantic checks
 - alias/accounting/lifetime mismatches
+- stale locals reused after unlock/relock
+- width mismatches where a second access is stronger than the checked one
+- file_operations/vtable completeness and poll/flush/release symmetry
+- logging that may leak physical or internal addresses
 Use grep mainly for ambiguous, cross-file, ownership, lifecycle, and caller-dependent issues.
 Prefer the PRIMARY direct bug over speculative side issues.
 
@@ -1814,11 +2547,16 @@ The same applies to clear driver-style file-local bugs such as:
 - stale lifecycle state not cleared on teardown
 - wrong permission/flag semantic checks in the same file
 - unsafe ordering of power/reset/MMU/cache/fault state transitions
+- stale locals reused after unlock/relock
+- width mismatch where a second mapped access is stronger than the validated one
+- logging that discloses sensitive addresses
+- file_operations lifetime gaps visible in the same file
 Prefer the PRIMARY direct bug over speculative secondary issues.
 
 Output ONLY valid JSON:
-{{\"verdict\": {{
+{\"verdict\": {
   \"is_vulnerable\": true,
+  \"mechanism\": \"ordering_gap\",
   \"vulnerability_type\": \"...\",
   \"severity\": \"high\",
   \"confidence\": \"high\",
@@ -1828,7 +2566,7 @@ Output ONLY valid JSON:
   \"root_cause\": \"...\",
   \"evidence\": \"...\",
   \"reachability_chain\": \"func_a -> func_b -> func_c\"
-}}}}
+}}
 
 Set is_vulnerable to false if there is insufficient evidence of exploitability."""
 
@@ -1878,6 +2616,47 @@ def _read_file_lines(codebase_path, rel_path, start_line, end_line, max_lines=80
         return "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
     except Exception as e:
         return f"(read error: {e})"
+
+def _structured_investigation_patterns(candidate):
+    patterns = []
+    mechanism = _normalize_mechanism(candidate.get("mechanism"), candidate.get("type"))
+    ctype = str(candidate.get("type") or "").strip()
+
+    if mechanism in {"deferred_callback_after_teardown", "cleanup_symmetry", "partial_cleanup"} or ctype in {"deferred_work_uaf", "cleanup_asymmetry", "partial_failure_cleanup"}:
+        patterns.extend(["queue_work\\(", "schedule_work\\(", "cancel_work_sync\\(", "destroy_workqueue\\(", "del_timer_sync\\("])
+    if mechanism in {"lock_order", "stale_after_unlock"}:
+        patterns.extend(["mutex_lock\\(", "mutex_unlock\\(", "spin_lock\\(", "spin_unlock\\("])
+    if mechanism == "permission_domain_mismatch":
+        patterns.extend(["GPU_WR", "CPU_WR", "BASE_MEM_", "permission", "flags"])
+    if mechanism == "accounting_drift":
+        patterns.extend(["gpu_mappings", "alias", "refcount", "shrink", "NO_USER_FREE"])
+    if mechanism == "file_ops_lifecycle_gap":
+        patterns.extend(["struct file_operations", "\\.release", "\\.flush", "\\.poll", "\\.open"])
+    if mechanism == "info_leak_logging":
+        patterns.extend(["printk\\(", "dev_err\\(", "pr_err\\(", "%pa", "%px"])
+    if mechanism == "width_mismatch_second_access":
+        patterns.extend(["u32", "u64", "uint32_t", "uint64_t", "mapping_get"])
+    if mechanism == "state_transition" or mechanism == "ordering_gap":
+        patterns.extend(["enabled", "terminated", "doorbell", "pm_runtime_get_sync\\(", "reset", "flush_noretain"])
+    if mechanism == "compiler_shape_mismatch":
+        patterns.extend(["matrix", "row", "column", "constructor", "expr\\.u\\.value"])
+    return patterns
+
+def _structured_read_requests(candidate, target_file, target_file_content):
+    fn = str(candidate.get("function_name") or "").strip()
+    if not fn or fn in {"unknown", "file_operations"}:
+        return []
+    clusters = _build_same_file_clusters(target_file_content, [fn], max_clusters=1, max_functions_per_cluster=5)
+    if not clusters:
+        return []
+    requests = []
+    body_map, _, _ = _extract_local_call_relations(target_file_content)
+    for name in clusters[0]["functions"][:3]:
+        if name not in body_map:
+            continue
+        start, lines = body_map[name]
+        requests.append({"path": target_file, "start_line": start, "end_line": start + min(80, len(lines) + 5)})
+    return requests[:3]
 
 
 class FindingInvestigator:
@@ -1935,7 +2714,7 @@ class FindingInvestigator:
 
             verdict = parsed.get("verdict")
             if isinstance(verdict, dict):
-                return verdict
+                return _parse_verdict_payload(json.dumps({"verdict": verdict}))
 
             actions = parsed.get("actions")
             if not isinstance(actions, list) or not actions:
@@ -1966,10 +2745,22 @@ class FindingInvestigator:
             hints_text = f"\nSuggested search patterns to start with: {', '.join(hints)}"
 
         auto_results = []
-        if not _candidate_is_local_direct(candidate):
-            for hint in hints[:3]:
+        expanded = _merge_hint_lists(hints[:3], _structured_investigation_patterns(candidate)[:5])
+        if not _candidate_is_local_direct(candidate) or candidate.get("cross_file_concern"):
+            for hint in expanded[:5]:
                 result = _run_grep(hint, self._cb)
                 auto_results.append(f"grep '{hint}':\n{result}")
+        for req in _structured_read_requests(candidate, target_file, target_file_content):
+            output = _read_file_lines(self._cb, req["path"], req["start_line"], req["end_line"])
+            auto_results.append(f"read {req['path']}:{req['start_line']}-{req['end_line']}:\n{output}")
+
+        cluster_section = ""
+        fn = str(candidate.get("function_name") or "").strip()
+        if fn and fn not in {"unknown", "file_operations"}:
+            clusters = _build_same_file_clusters(target_file_content, [fn], max_clusters=1, max_functions_per_cluster=5)
+            if clusters:
+                cluster_section = "\n\n== SAME-FILE FUNCTION CLUSTER ==\n" + clusters[0]["code"]
+
         auto_section = ""
         if auto_results:
             auto_section = "\n\n== INITIAL SEARCH RESULTS (auto-run from investigation hints) ==\n" + "\n\n".join(auto_results)
@@ -1978,6 +2769,7 @@ class FindingInvestigator:
             f"== CANDIDATE VULNERABILITY ==\n"
             f"Function: {candidate['function_name']}\n"
             f"Line: {candidate['line']}\n"
+            f"Mechanism: {candidate.get('mechanism', 'generic_memory')}\n"
             f"Type: {candidate['type']}\n"
             f"Severity: {candidate['severity']}\n"
             f"Locality: {candidate.get('locality', 'cross_file')}\n"
@@ -1987,6 +2779,7 @@ class FindingInvestigator:
             f"{hints_text}\n\n"
             f"== TARGET FILE: {target_file} ==\n"
             f"{_number_lines(target_file_content)}"
+            f"{cluster_section}"
             f"{auto_section}\n\n"
             f"Investigate whether this vulnerability is reachable and exploitable. "
             f"Search for callers, check data flow from external input, look for mitigations. "
@@ -2276,22 +3069,36 @@ class ReachabilityService:
 
         reviews = []
         seen_keys = set()
-        for v in sorted(confirmed_findings, key=lambda item: _candidate_priority_key({
+        normalized_verdicts = []
+        for item in confirmed_findings:
+            mechanism = _normalize_mechanism(item.get("mechanism"), item.get("vulnerability_type"))
+            vtype = _resolve_vulnerability_type(mechanism, item.get("vulnerability_type") or "other")
+            item["mechanism"] = mechanism
+            item["mechanism_family"] = _mechanism_family(mechanism, vtype)
+            item["vulnerability_type"] = vtype
+            normalized_verdicts.append(item)
+
+        for v in sorted(normalized_verdicts, key=lambda item: _candidate_priority_key({
             "type": str(item.get("vulnerability_type") or "other"),
+            "mechanism": str(item.get("mechanism") or "generic_memory"),
+            "mechanism_family": str(item.get("mechanism_family") or ""),
             "severity": str(item.get("severity") or "medium").lower(),
             "line": int(item.get("line") or 1),
             "primary": True,
             "locality": "local_direct" if str(item.get("reachability_chain") or "").startswith("Target file") else "cross_file",
+            "driver_context": _looks_driver_file(relative_target, content),
         })):
             fn = str(v.get("function_name") or "unknown")
             vtype = str(v.get("vulnerability_type") or "other")
+            mechanism = str(v.get("mechanism") or "generic_memory")
+            mechanism_family = str(v.get("mechanism_family") or _mechanism_family(mechanism, vtype))
             line = 1
             try:
                 line = max(1, int(v.get("line", 1)))
             except:
                 pass
 
-            dedup_key = (fn, vtype)
+            dedup_key = (fn, mechanism_family)
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
@@ -2303,7 +3110,7 @@ class ReachabilityService:
             root_cause = str(v.get("root_cause") or "")
             description = str(v.get("description") or f"{vtype.replace('_', ' ')} in {fn}")
 
-            reasoning_parts = []
+            reasoning_parts = [f"Mechanism: {mechanism}"]
             if evidence:
                 reasoning_parts.append(evidence)
             if chain:
@@ -2315,7 +3122,7 @@ class ReachabilityService:
                 "issue": description,
                 "line_number": line,
                 "code_snippet": code_snippet,
-                "cwe": _VULN_TO_CWE.get(vtype),
+                "cwe": _cwe_for(vtype, mechanism),
                 "severity": _severity_title(v.get("severity"), "Medium"),
                 "confidence": _severity_title(v.get("confidence"), "Medium"),
                 "reasoning": "\n".join(reasoning_parts),
@@ -2338,7 +3145,7 @@ class ReachabilityService:
     def _finding_to_review(self, finding):
         line_number = int(finding.sink_line or finding.source_line or 1)
         issue = str(finding.description).strip() if str(finding.description or "").strip() else f"{finding.vulnerability_type.replace('_', ' ')} in {finding.sink_function}"
-        reasoning_parts = []
+        reasoning_parts = [f"Mechanism: {getattr(finding, 'mechanism', '') or _normalize_mechanism('', finding.vulnerability_type)}"]
         if str(finding.evidence or "").strip(): reasoning_parts.append(str(finding.evidence).strip())
         if finding.path: reasoning_parts.append(f"Reachability path: {' -> '.join(finding.path)}")
         if str(finding.root_cause or "").strip(): reasoning_parts.append(f"Root cause: {str(finding.root_cause).strip()}")
@@ -2347,7 +3154,7 @@ class ReachabilityService:
         if target_file: code_snippet = _read_line_context(self._config.codebase_path, target_file, line_number, context=2)
         return {
             "issue": issue, "line_number": line_number, "code_snippet": code_snippet,
-            "cwe": _VULN_TO_CWE.get(str(finding.vulnerability_type or "").strip()),
+            "cwe": _cwe_for(str(finding.vulnerability_type or "").strip(), getattr(finding, "mechanism", "")),
             "severity": _severity_title(finding.severity, "Medium"),
             "confidence": _severity_title(finding.confidence, "Medium"),
             "reasoning": "\n".join(reasoning_parts),
