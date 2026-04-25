@@ -10,7 +10,7 @@ import threading
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.output_parsers import StrOutputParser
@@ -219,6 +219,16 @@ class SymbolDef:
 
 
 @dataclass
+class SymbolMeta:
+    has_security_api: bool = False
+    has_lifecycle_words: bool = False
+    has_callback_words: bool = False
+    is_source_like: bool = False
+    is_sink_like: bool = False
+    sink_type_hint: str = ""
+
+
+@dataclass
 class CallSite:
     caller_name: str
     caller_file: str
@@ -244,6 +254,14 @@ class SymbolIndex:
     field_uses: dict[str, list[FieldUse]]
     globals: list[GlobalConstruct]
     files_indexed: int = 0
+    defs_by_file: dict[str, list[SymbolDef]] = field(default_factory=dict)
+    defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = field(default_factory=dict)
+    calls_by_caller: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    field_uses_by_file: dict[str, list[FieldUse]] = field(default_factory=dict)
+    meta_by_symbol: dict[str, SymbolMeta] = field(default_factory=dict)
+    lifecycle_symbols: list[SymbolDef] = field(default_factory=list)
+    callback_symbols: list[SymbolDef] = field(default_factory=list)
+    security_symbols: list[SymbolDef] = field(default_factory=list)
 
 
 @dataclass
@@ -350,9 +368,17 @@ def _find_body_end(text: str, open_brace_index: int) -> tuple[int, int]:
 
 def _body_lines(content: str, sym: SymbolDef) -> list[str]:
     lines = content.splitlines()
+    return _body_lines_from_lines(lines, sym)
+
+
+def _body_lines_from_lines(lines: list[str], sym: SymbolDef) -> list[str]:
     start = max(0, sym.body_start - 1)
     end = min(len(lines), max(sym.body_end, sym.body_start))
     return lines[start:end]
+
+
+def _symbol_unique_name(sym: SymbolDef) -> str:
+    return f"{sym.file_path}::{sym.name}"
 
 
 def _tokens(name: str) -> list[str]:
@@ -458,11 +484,162 @@ def _partial_note_tokens(text: str) -> set[str]:
     }
 
 
+class PartialAnalysisCache:
+    """Shared per-review cache for partial single-file analysis."""
+
+    def __init__(self, codebase_path: str, index: SymbolIndex | None = None):
+        self._cb = os.path.abspath(codebase_path)
+        self._index = index
+        self._lock = threading.RLock()
+        self._content_by_file: dict[str, str] = {}
+        self._lines_by_file: dict[str, list[str]] = {}
+        self._body_by_symbol: dict[tuple[str, int, bool], str] = {}
+        self._node_by_symbol: dict[str, FunctionNode] = {}
+        self._fallback_body_by_node: dict[tuple[str, int], str] = {}
+
+    def bind_index(self, index: SymbolIndex | None):
+        if index is not None:
+            with self._lock:
+                if self._index is None:
+                    self._index = index
+
+    def content(self, rel_file: str) -> str:
+        rel = self._normalise_rel(rel_file)
+        with self._lock:
+            cached = self._content_by_file.get(rel)
+        if cached is not None:
+            return cached
+        content = read_file_content(_abs_path(rel, self._cb)) or ""
+        with self._lock:
+            return self._content_by_file.setdefault(rel, content)
+
+    def file_lines(self, rel_file: str) -> list[str]:
+        rel = self._normalise_rel(rel_file)
+        with self._lock:
+            cached = self._lines_by_file.get(rel)
+        if cached is not None:
+            return cached
+        lines = self.content(rel).splitlines()
+        with self._lock:
+            return self._lines_by_file.setdefault(rel, lines)
+
+    def symbol_lines(self, sym: SymbolDef) -> list[tuple[int, str]]:
+        lines = self.file_lines(sym.file_path)
+        if sym.body_start > 0 and sym.body_end >= sym.body_start:
+            start = max(0, sym.body_start - 1)
+            end = min(len(lines), max(sym.body_end, sym.body_start))
+            return [(start + offset + 1, line) for offset, line in enumerate(lines[start:end])]
+        body = self.symbol_body(sym, max_chars=12000, numbered=False)
+        return [(sym.line_number + offset, line) for offset, line in enumerate(body.splitlines())]
+
+    def symbol_body(self, sym: SymbolDef, max_chars: int | None = None, *, numbered: bool = False) -> str:
+        unique = _symbol_unique_name(sym)
+        limit = -1 if max_chars is None else int(max_chars)
+        key = (unique, limit, numbered)
+        with self._lock:
+            cached = self._body_by_symbol.get(key)
+        if cached is not None:
+            return cached
+
+        if sym.body_start > 0 and sym.body_end >= sym.body_start:
+            pairs = self.symbol_lines(sym)
+            if numbered:
+                body = "\n".join(f"{line_no}: {line}" for line_no, line in pairs)
+            else:
+                body = "\n".join(line for _, line in pairs)
+            if max_chars is not None and len(body) > max_chars:
+                body = body[:max_chars] + "\n"
+        else:
+            node = FunctionNode(
+                unique_name=unique,
+                file_path=sym.file_path,
+                name=sym.name,
+                line_number=sym.line_number,
+                is_source=False,
+                is_sink=False,
+            )
+            body = _read_function_body(self._cb, node, max_chars=max_chars or 3000)
+            if not numbered:
+                body = re.sub(r"(?m)^\s*\d+:\s?", "", body)
+
+        with self._lock:
+            return self._body_by_symbol.setdefault(key, body)
+
+    def symbol_for_node(self, index: SymbolIndex | None, node: FunctionNode) -> SymbolDef | None:
+        index = index or self._index
+        if index is None:
+            return None
+        return _lookup_symbol(index, self._normalise_rel(node.file_path), node.name)
+
+    def node_body(self, node: FunctionNode, *, max_chars: int = 3000) -> str:
+        sym = self.symbol_for_node(self._index, node)
+        if sym:
+            return self.symbol_body(sym, max_chars=max_chars, numbered=True)
+        unique = node.unique_name or f"{node.file_path}::{node.name}"
+        key = (unique, int(max_chars))
+        with self._lock:
+            cached = self._fallback_body_by_node.get(key)
+        if cached is not None:
+            return cached
+        body = _read_function_body(self._cb, node, max_chars=max_chars)
+        with self._lock:
+            return self._fallback_body_by_node.setdefault(key, body)
+
+    def node_for_symbol(self, index: SymbolIndex | None, sym: SymbolDef) -> FunctionNode:
+        index = index or self._index
+        unique = _symbol_unique_name(sym)
+        with self._lock:
+            cached = self._node_by_symbol.get(unique)
+        if cached is not None:
+            return cached
+
+        calls = _symbol_calls(index, sym) if index else []
+        meta = index.meta_by_symbol.get(unique) if index else None
+        if meta:
+            is_source = meta.is_source_like
+            is_sink = meta.is_sink_like
+            sink_type = meta.sink_type_hint if is_sink else ""
+        else:
+            body = self.symbol_body(sym, max_chars=8000, numbered=False)
+            match_text = f"{sym.name} {' '.join(calls)} {body}"
+            is_source = bool(_SOURCE_RE.search(match_text))
+            is_sink = bool(_SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text))
+            sink_type = _sink_type_for_text(match_text) if is_sink else ""
+        node = FunctionNode(
+            unique_name=unique,
+            file_path=sym.file_path,
+            name=sym.name,
+            line_number=sym.line_number,
+            is_source=is_source,
+            is_sink=is_sink,
+            calls=calls,
+            source_reason="deterministic source-like entry or external input use" if is_source else "",
+            sink_type=sink_type,
+            sink_reason="deterministic sink-like API/state/lifecycle use" if is_sink else "",
+        )
+        with self._lock:
+            return self._node_by_symbol.setdefault(unique, node)
+
+    def _normalise_rel(self, rel_file: str) -> str:
+        rel = str(rel_file or "").replace("\\", "/")
+        if os.path.isabs(rel):
+            return _rel_path(rel, self._cb)
+        return rel
+
+
 class SymbolIndexBuilder:
     def build(self, files, codebase_path) -> SymbolIndex:
         definitions: dict[str, list[SymbolDef]] = defaultdict(list)
         callsites: dict[str, list[CallSite]] = defaultdict(list)
         field_uses: dict[str, list[FieldUse]] = defaultdict(list)
+        field_uses_by_file: dict[str, list[FieldUse]] = defaultdict(list)
+        defs_by_file: dict[str, list[SymbolDef]] = defaultdict(list)
+        defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = {}
+        calls_by_caller: dict[tuple[str, str], list[str]] = {}
+        meta_by_symbol: dict[str, SymbolMeta] = {}
+        lifecycle_symbols: list[SymbolDef] = []
+        callback_symbols: list[SymbolDef] = []
+        security_symbols: list[SymbolDef] = []
         globals_: list[GlobalConstruct] = []
         files_indexed = 0
 
@@ -474,10 +651,27 @@ class SymbolIndexBuilder:
             if not content:
                 continue
             files_indexed += 1
+            file_lines = content.splitlines()
             defs = self._extract_definitions(content, rel)
             for sym in defs:
                 definitions[sym.name].append(sym)
-                self._extract_function_uses(content, sym, callsites, field_uses)
+                defs_by_file[sym.file_path].append(sym)
+                defs_by_file_and_name.setdefault((sym.file_path, sym.name), sym)
+                body_lines = _body_lines_from_lines(file_lines, sym)
+                calls = self._extract_function_uses(body_lines, sym, callsites, field_uses, field_uses_by_file)
+                caller_key = (sym.file_path, sym.name)
+                calls_by_caller[caller_key] = list(dict.fromkeys(
+                    calls_by_caller.get(caller_key, []) + calls
+                ))
+                meta = self._symbol_meta(sym, calls, "\n".join(body_lines))
+                unique = _symbol_unique_name(sym)
+                meta_by_symbol[unique] = meta
+                if meta.has_lifecycle_words:
+                    lifecycle_symbols.append(sym)
+                if meta.has_callback_words:
+                    callback_symbols.append(sym)
+                if meta.has_security_api:
+                    security_symbols.append(sym)
             globals_.extend(self._extract_globals(content, rel))
 
         return SymbolIndex(
@@ -486,6 +680,14 @@ class SymbolIndexBuilder:
             field_uses=dict(field_uses),
             globals=globals_,
             files_indexed=files_indexed,
+            defs_by_file=dict(defs_by_file),
+            defs_by_file_and_name=defs_by_file_and_name,
+            calls_by_caller=calls_by_caller,
+            field_uses_by_file=dict(field_uses_by_file),
+            meta_by_symbol=meta_by_symbol,
+            lifecycle_symbols=lifecycle_symbols,
+            callback_symbols=callback_symbols,
+            security_symbols=security_symbols,
         )
 
     def _extract_definitions(self, content: str, rel_file: str) -> list[SymbolDef]:
@@ -511,8 +713,8 @@ class SymbolIndexBuilder:
             ))
         return defs
 
-    def _extract_function_uses(self, content, sym, callsites, field_uses):
-        lines = _body_lines(content, sym)
+    def _extract_function_uses(self, lines, sym, callsites, field_uses, field_uses_by_file):
+        calls = []
         for offset, line_text in enumerate(lines):
             line_number = sym.body_start + offset
             for call in _CALL_RE.findall(line_text):
@@ -520,6 +722,7 @@ class SymbolIndexBuilder:
                     continue
                 if line_number == sym.body_start and call == sym.name:
                     continue
+                calls.append(call)
                 callsites[call].append(CallSite(
                     caller_name=sym.name,
                     caller_file=sym.file_path,
@@ -529,13 +732,39 @@ class SymbolIndexBuilder:
                     line_text=line_text.strip(),
                 ))
             for field in _FIELD_RE.findall(line_text):
-                field_uses[field].append(FieldUse(
+                use = FieldUse(
                     field=field,
                     file_path=sym.file_path,
                     function_name=sym.name,
                     line_number=line_number,
                     line_text=line_text.strip(),
-                ))
+                )
+                field_uses[field].append(use)
+                field_uses_by_file[sym.file_path].append(use)
+        return list(dict.fromkeys(calls))
+
+    def _symbol_meta(self, sym: SymbolDef, calls: list[str], body: str) -> SymbolMeta:
+        match_text = f"{sym.name} {' '.join(calls)} {body}"
+        call_text = " ".join(calls)
+        has_security_api = bool(_SECURITY_API_RE.search(match_text))
+        has_lifecycle_words = (
+            _name_has_any(sym.name, _LIFECYCLE_WORDS)
+            or _name_has_any(call_text, _LIFECYCLE_WORDS)
+        )
+        has_callback_words = (
+            _name_has_any(sym.name, _CALLBACK_WORDS)
+            or _name_has_any(call_text, _CALLBACK_WORDS)
+        )
+        is_source_like = bool(_SOURCE_RE.search(match_text))
+        is_sink_like = bool(_SINK_KIND_RE.search(match_text) or has_security_api)
+        return SymbolMeta(
+            has_security_api=has_security_api,
+            has_lifecycle_words=has_lifecycle_words,
+            has_callback_words=has_callback_words,
+            is_source_like=is_source_like,
+            is_sink_like=is_sink_like,
+            sink_type_hint=_sink_type_for_text(match_text) if is_sink_like else "",
+        )
 
     def _extract_globals(self, content: str, rel_file: str) -> list[GlobalConstruct]:
         lines = content.splitlines()
@@ -586,6 +815,10 @@ class SymbolIndexBuilder:
 
 
 def _symbol_calls(index: SymbolIndex, sym: SymbolDef) -> list[str]:
+    if not index:
+        return []
+    if index.calls_by_caller:
+        return list(index.calls_by_caller.get((sym.file_path, sym.name), []))
     calls = []
     for callee, sites in index.callsites.items():
         for site in sites:
@@ -593,6 +826,66 @@ def _symbol_calls(index: SymbolIndex, sym: SymbolDef) -> list[str]:
                 calls.append(callee)
                 break
     return list(dict.fromkeys(calls))
+
+
+def _symbols_for_file(index: SymbolIndex, file_path: str) -> list[SymbolDef]:
+    file_path = file_path.replace("\\", "/")
+    if index.defs_by_file:
+        return list(index.defs_by_file.get(file_path, []))
+    return [
+        sym for defs in index.definitions.values()
+        for sym in defs if sym.file_path == file_path
+    ]
+
+
+def _lookup_symbol(index: SymbolIndex, file_path: str, name: str) -> SymbolDef | None:
+    file_path = file_path.replace("\\", "/")
+    sym = index.defs_by_file_and_name.get((file_path, name))
+    if sym:
+        return sym
+    if index.defs_by_file:
+        for candidate in index.defs_by_file.get(file_path, []):
+            if candidate.name == name:
+                return candidate
+        return None
+    for candidate in index.definitions.get(name, []):
+        if candidate.file_path == file_path:
+            return candidate
+    return None
+
+
+def _field_uses_for_file(index: SymbolIndex, file_path: str) -> list[FieldUse]:
+    file_path = file_path.replace("\\", "/")
+    if index.field_uses_by_file:
+        return list(index.field_uses_by_file.get(file_path, []))
+    return [
+        use for uses in index.field_uses.values()
+        for use in uses if use.file_path == file_path
+    ]
+
+
+def _all_symbols(index: SymbolIndex) -> list[SymbolDef]:
+    if index.defs_by_file:
+        return [sym for symbols in index.defs_by_file.values() for sym in symbols]
+    return [sym for defs in index.definitions.values() for sym in defs]
+
+
+def _lifecycle_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
+    if index.lifecycle_symbols or index.meta_by_symbol:
+        return list(index.lifecycle_symbols)
+    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _LIFECYCLE_WORDS)]
+
+
+def _callback_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
+    if index.callback_symbols or index.meta_by_symbol:
+        return list(index.callback_symbols)
+    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _CALLBACK_WORDS)]
+
+
+def _security_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
+    if index.security_symbols or index.meta_by_symbol:
+        return list(index.security_symbols)
+    return _all_symbols(index)
 
 
 def _sink_type_for_text(text: str) -> str:
@@ -614,14 +907,28 @@ def _sink_type_for_text(text: str) -> str:
     return "other"
 
 
-def _symbol_to_node(index: SymbolIndex, codebase_path: str, sym: SymbolDef) -> FunctionNode:
-    body = _function_body_from_symbol(codebase_path, sym, max_chars=8000)
+def _symbol_to_node(
+    index: SymbolIndex,
+    codebase_path: str,
+    sym: SymbolDef,
+    cache: PartialAnalysisCache | None = None,
+) -> FunctionNode:
+    if cache is not None:
+        return cache.node_for_symbol(index, sym)
     calls = _symbol_calls(index, sym)
-    match_text = f"{sym.name} {' '.join(calls)} {body}"
-    is_source = bool(_SOURCE_RE.search(match_text))
-    is_sink = bool(_SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text))
+    meta = index.meta_by_symbol.get(_symbol_unique_name(sym)) if index else None
+    if meta:
+        is_source = meta.is_source_like
+        is_sink = meta.is_sink_like
+        sink_type = meta.sink_type_hint if is_sink else ""
+    else:
+        body = _function_body_from_symbol(codebase_path, sym, max_chars=8000)
+        match_text = f"{sym.name} {' '.join(calls)} {body}"
+        is_source = bool(_SOURCE_RE.search(match_text))
+        is_sink = bool(_SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text))
+        sink_type = _sink_type_for_text(match_text) if is_sink else ""
     return FunctionNode(
-        unique_name=f"{sym.file_path}::{sym.name}",
+        unique_name=_symbol_unique_name(sym),
         file_path=sym.file_path,
         name=sym.name,
         line_number=sym.line_number,
@@ -629,15 +936,21 @@ def _symbol_to_node(index: SymbolIndex, codebase_path: str, sym: SymbolDef) -> F
         is_sink=is_sink,
         calls=calls,
         source_reason="deterministic source-like entry or external input use" if is_source else "",
-        sink_type=_sink_type_for_text(match_text) if is_sink else "",
+        sink_type=sink_type,
         sink_reason="deterministic sink-like API/state/lifecycle use" if is_sink else "",
     )
 
 
 class PartialContextBuilder:
-    def __init__(self, codebase_path: str, caps: PartialContextCaps | None = None):
+    def __init__(
+        self,
+        codebase_path: str,
+        caps: PartialContextCaps | None = None,
+        cache: PartialAnalysisCache | None = None,
+    ):
         self._cb = os.path.abspath(codebase_path)
         self._caps = caps or PartialContextCaps()
+        self._cache = cache or PartialAnalysisCache(codebase_path)
 
     def build_for_file(
         self,
@@ -646,12 +959,10 @@ class PartialContextBuilder:
         symbol_index: SymbolIndex,
     ) -> PartialReviewContext:
         target_file = target_file.replace("\\", "/")
-        target_symbols = [
-            sym for defs in symbol_index.definitions.values()
-            for sym in defs if sym.file_path == target_file
-        ]
+        self._cache.bind_index(symbol_index)
+        target_symbols = _symbols_for_file(symbol_index, target_file)
         if not target_nodes:
-            target_nodes = [_symbol_to_node(symbol_index, self._cb, sym) for sym in target_symbols]
+            target_nodes = [self._node_for_symbol(symbol_index, sym) for sym in target_symbols]
 
         target_names = {node.name for node in target_nodes}
         target_calls = self._target_calls(target_nodes, symbol_index, target_symbols)
@@ -659,19 +970,33 @@ class PartialContextBuilder:
         target_prefixes = {_module_stem(name) for name in target_names if name}
         target_dir = str(Path(target_file).parent).replace("\\", "/")
 
-        outbound = self._outbound_callees(target_calls, symbol_index, target_file, target_dir, target_prefixes)
-        inbound = self._inbound_callers(target_names, symbol_index, target_file, target_dir, target_prefixes)
-        shared = self._shared_state_nodes(target_fields, symbol_index, target_file, target_dir, target_prefixes)
-        lifecycle = self._lifecycle_pair_nodes(target_names, symbol_index, target_file, target_dir, target_prefixes)
-        callbacks, globals_ = self._callback_context(target_file, target_names, symbol_index, target_dir, target_prefixes)
+        outbound_syms = self._cap_ranked_symbols(
+            self._outbound_callees(target_calls, symbol_index, target_file, target_dir, target_prefixes),
+            self._caps.max_outbound,
+        )
+        inbound_syms = self._cap_ranked_symbols(
+            self._inbound_callers(target_names, symbol_index, target_file, target_dir, target_prefixes),
+            self._caps.max_inbound,
+        )
+        shared_syms = self._cap_ranked_symbols(
+            self._shared_state_nodes(target_fields, symbol_index, target_file, target_dir, target_prefixes),
+            self._caps.max_shared,
+        )
+        lifecycle_syms = self._cap_ranked_symbols(
+            self._lifecycle_pair_nodes(target_names, symbol_index, target_file, target_dir, target_prefixes),
+            self._caps.max_lifecycle,
+        )
+        callback_ranked, globals_ = self._callback_context(
+            target_file, target_names, symbol_index, target_dir, target_prefixes)
+        callback_syms = self._cap_ranked_symbols(callback_ranked, self._caps.max_callbacks)
+        inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms = self._cap_total_symbols(
+            inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms)
 
-        inbound = self._cap_nodes(inbound, self._caps.max_inbound)
-        outbound = self._cap_nodes(outbound, self._caps.max_outbound)
-        shared = self._cap_nodes(shared, self._caps.max_shared)
-        lifecycle = self._cap_nodes(lifecycle, self._caps.max_lifecycle)
-        callbacks = self._cap_nodes(callbacks, self._caps.max_callbacks)
-        inbound, outbound, shared, lifecycle, callbacks = self._cap_total(
-            inbound, outbound, shared, lifecycle, callbacks)
+        inbound = self._materialize_symbols(symbol_index, inbound_syms)
+        outbound = self._materialize_symbols(symbol_index, outbound_syms)
+        shared = self._materialize_symbols(symbol_index, shared_syms)
+        lifecycle = self._materialize_symbols(symbol_index, lifecycle_syms)
+        callbacks = self._materialize_symbols(symbol_index, callback_syms)
 
         paths = self._candidate_paths(target_nodes, inbound, outbound, shared, lifecycle, callbacks)
         return PartialReviewContext(
@@ -695,93 +1020,104 @@ class PartialContextBuilder:
         return list(dict.fromkeys(c for c in calls if c not in _CONTROL_CALLS))
 
     def _target_fields(self, target_file, index):
-        fields = {
-            use.field for uses in index.field_uses.values()
-            for use in uses if use.file_path == target_file
-        }
-        return fields
+        return {use.field for use in _field_uses_for_file(index, target_file)}
 
-    def _rank_node(self, node, target_file, target_dir, target_prefixes, bonus=0):
+    def _rank_symbol(self, index: SymbolIndex, sym: SymbolDef, target_file, target_dir, target_prefixes, bonus=0):
         score = bonus
-        if node.file_path == target_file:
+        if sym.file_path == target_file:
             score += 100
-        if str(Path(node.file_path).parent).replace("\\", "/") == target_dir:
+        if str(Path(sym.file_path).parent).replace("\\", "/") == target_dir:
             score += 45
-        stem = _module_stem(node.name)
+        stem = _module_stem(sym.name)
         if stem in target_prefixes or any(stem.startswith(p) or p.startswith(stem) for p in target_prefixes if p):
             score += 30
-        if any(_SECURITY_API_RE.search(f"{call}(") or call in _COMMON_LIBC_CALLS for call in node.calls):
+        calls = _symbol_calls(index, sym)
+        meta = index.meta_by_symbol.get(_symbol_unique_name(sym))
+        if (meta and meta.has_security_api) or any(
+            _SECURITY_API_RE.search(f"{call}(") or call in _COMMON_LIBC_CALLS for call in calls
+        ):
             score += 12
-        if _name_has_any(node.name, _LIFECYCLE_WORDS):
+        if (meta and meta.has_lifecycle_words) or _name_has_any(sym.name, _LIFECYCLE_WORDS):
             score += 8
-        if _name_has_any(node.name, _CALLBACK_WORDS):
+        if (meta and meta.has_callback_words) or _name_has_any(sym.name, _CALLBACK_WORDS):
             score += 10
-        if "\\test\\" in node.file_path.lower() or "/test/" in node.file_path.lower():
+        if "\\test\\" in sym.file_path.lower() or "/test/" in sym.file_path.lower():
             score -= 15
-        return (-score, node.file_path, int(node.line_number or 0), node.name)
+        return (-score, sym.file_path, int(sym.line_number or 0), sym.name)
 
-    def _cap_nodes(self, nodes, limit):
+    def _cap_ranked_symbols(self, ranked, limit):
         seen = set()
         result = []
-        for node in nodes:
-            if node.unique_name in seen:
+        for _, sym in sorted(ranked):
+            unique = _symbol_unique_name(sym)
+            if unique in seen:
                 continue
-            seen.add(node.unique_name)
-            result.append(node)
+            seen.add(unique)
+            result.append(sym)
             if len(result) >= limit:
                 break
         return result
 
-    def _cap_total(self, *groups):
+    def _cap_total_symbols(self, *groups):
         cap = self._caps.max_total_context_functions
         selected = []
         seen = set()
         output = []
         for group in groups:
             kept = []
-            for node in group:
-                if node.unique_name in seen:
+            for sym in group:
+                unique = _symbol_unique_name(sym)
+                if unique in seen:
                     continue
                 if len(selected) >= cap:
                     break
-                seen.add(node.unique_name)
-                selected.append(node)
-                kept.append(node)
+                seen.add(unique)
+                selected.append(sym)
+                kept.append(sym)
             output.append(kept)
         return output
 
+    def _materialize_symbols(self, index: SymbolIndex, symbols: list[SymbolDef]) -> list[FunctionNode]:
+        return [self._node_for_symbol(index, sym) for sym in symbols]
+
+    def _node_for_symbol(self, index: SymbolIndex, sym: SymbolDef) -> FunctionNode:
+        return _symbol_to_node(index, self._cb, sym, self._cache)
+
+    def _remember_ranked_symbol(self, ranked_by_unique, rank, sym: SymbolDef):
+        unique = _symbol_unique_name(sym)
+        current = ranked_by_unique.get(unique)
+        if current is None or rank < current[0]:
+            ranked_by_unique[unique] = (rank, sym)
+
     def _outbound_callees(self, calls, index, target_file, target_dir, target_prefixes):
-        nodes = []
+        ranked = {}
         for call in calls:
             if call in _COMMON_LIBC_CALLS:
                 continue
             for sym in index.definitions.get(call, []):
-                node = _symbol_to_node(index, self._cb, sym)
-                nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=20), node))
-        return [node for _, node in sorted(nodes)]
+                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=20)
+                self._remember_ranked_symbol(ranked, rank, sym)
+        return list(ranked.values())
 
     def _caller_symbol_for_site(self, site: CallSite, index: SymbolIndex) -> SymbolDef | None:
-        for sym in index.definitions.get(site.caller_name, []):
-            if sym.file_path != site.caller_file:
-                continue
-            if sym.body_start <= site.line_number <= sym.body_end:
+        for sym in _symbols_for_file(index, site.caller_file):
+            if sym.name == site.caller_name and sym.body_start <= site.line_number <= sym.body_end:
                 return sym
-        matches = [sym for sym in index.definitions.get(site.caller_name, []) if sym.file_path == site.caller_file]
-        return matches[0] if matches else None
+        return _lookup_symbol(index, site.caller_file, site.caller_name)
 
     def _inbound_callers(self, target_names, index, target_file, target_dir, target_prefixes):
-        nodes = []
+        ranked = {}
         for name in target_names:
             for site in index.callsites.get(name, []):
                 sym = self._caller_symbol_for_site(site, index)
                 if not sym:
                     continue
-                node = _symbol_to_node(index, self._cb, sym)
-                nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=35), node))
-        return [node for _, node in sorted(nodes)]
+                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=35)
+                self._remember_ranked_symbol(ranked, rank, sym)
+        return list(ranked.values())
 
     def _shared_state_nodes(self, fields, index, target_file, target_dir, target_prefixes):
-        nodes = []
+        ranked = {}
         for field_name in fields:
             if field_name in _GENERIC_FIELDS and field_name not in _IMPORTANT_FIELDS:
                 continue
@@ -794,15 +1130,12 @@ class PartialContextBuilder:
                 sym = self._symbol_for_function(index, use.file_path, use.function_name)
                 if not sym:
                     continue
-                node = _symbol_to_node(index, self._cb, sym)
-                nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=rarity_bonus), node))
-        return [node for _, node in sorted(nodes)]
+                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=rarity_bonus)
+                self._remember_ranked_symbol(ranked, rank, sym)
+        return list(ranked.values())
 
     def _symbol_for_function(self, index, file_path, name):
-        for sym in index.definitions.get(name, []):
-            if sym.file_path == file_path:
-                return sym
-        return None
+        return _lookup_symbol(index, file_path, name)
 
     def _lifecycle_pair_nodes(self, target_names, index, target_file, target_dir, target_prefixes):
         wanted = set()
@@ -813,19 +1146,18 @@ class PartialContextBuilder:
                 if action in parts or name.lower().endswith("_" + action):
                     for pair in self._paired_actions(action):
                         wanted.add((stem, pair))
-        nodes = []
+        ranked = {}
         if not wanted:
             return []
-        for defs in index.definitions.values():
-            for sym in defs:
-                sym_l = sym.name.lower()
-                sym_stem = _module_stem(sym.name)
-                for stem, action in wanted:
-                    if action in sym_l and (sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem)):
-                        node = _symbol_to_node(index, self._cb, sym)
-                        nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=28), node))
-                        break
-        return [node for _, node in sorted(nodes)]
+        for sym in _lifecycle_symbol_candidates(index):
+            sym_l = sym.name.lower()
+            sym_stem = _module_stem(sym.name)
+            for stem, action in wanted:
+                if action in sym_l and (sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem)):
+                    rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=28)
+                    self._remember_ranked_symbol(ranked, rank, sym)
+                    break
+        return list(ranked.values())
 
     def _paired_actions(self, action):
         pairs = {
@@ -871,7 +1203,7 @@ class PartialContextBuilder:
         return pairs.get(action, ())
 
     def _callback_context(self, target_file, target_names, index, target_dir, target_prefixes):
-        nodes = []
+        ranked = {}
         globals_ = []
         selected_names = set(target_names)
         for g in index.globals:
@@ -884,17 +1216,14 @@ class PartialContextBuilder:
                     selected_names.update(g.referenced_functions)
         for name in selected_names:
             for sym in index.definitions.get(name, []):
-                node = _symbol_to_node(index, self._cb, sym)
-                nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=30), node))
-        for defs in index.definitions.values():
-            for sym in defs:
-                if not _name_has_any(sym.name, _CALLBACK_WORDS | _LIFECYCLE_WORDS):
-                    continue
-                if str(Path(sym.file_path).parent).replace("\\", "/") != target_dir and sym.file_path != target_file:
-                    continue
-                node = _symbol_to_node(index, self._cb, sym)
-                nodes.append((self._rank_node(node, target_file, target_dir, target_prefixes, bonus=18), node))
-        return [node for _, node in sorted(nodes)], globals_[:40]
+                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=30)
+                self._remember_ranked_symbol(ranked, rank, sym)
+        for sym in _callback_symbol_candidates(index) + _lifecycle_symbol_candidates(index):
+            if str(Path(sym.file_path).parent).replace("\\", "/") != target_dir and sym.file_path != target_file:
+                continue
+            rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=18)
+            self._remember_ranked_symbol(ranked, rank, sym)
+        return list(ranked.values()), globals_[:40]
 
     def _candidate_paths(self, target_nodes, inbound, outbound, shared, lifecycle, callbacks):
         target_by_name = {n.name: n for n in target_nodes}
@@ -947,9 +1276,9 @@ class PartialGraphBuilder:
 
 
 class PartialCandidateDetector:
-    def __init__(self, codebase_path: str):
+    def __init__(self, codebase_path: str, cache: PartialAnalysisCache | None = None):
         self._cb = os.path.abspath(codebase_path)
-        self._content_cache: dict[str, str] = {}
+        self._cache = cache or PartialAnalysisCache(codebase_path)
 
     def detect(
         self,
@@ -958,12 +1287,10 @@ class PartialCandidateDetector:
         target_nodes: list[FunctionNode],
         context: PartialReviewContext,
     ) -> PartialDetectorResult:
+        self._cache.bind_index(index)
         result = PartialDetectorResult()
         target_names = {node.name for node in target_nodes}
-        target_syms = [
-            sym for defs in index.definitions.values()
-            for sym in defs if sym.file_path == target_file
-        ]
+        target_syms = _symbols_for_file(index, target_file)
         target_prefixes = {_module_stem(name) for name in target_names if name}
         context_syms = self._context_symbols(index, context, target_syms)
 
@@ -982,22 +1309,14 @@ class PartialCandidateDetector:
         result.globals = list({g.unique_name: g for g in result.globals}.values())
         return result
 
-    def _content(self, rel_file: str) -> str:
-        rel_file = rel_file.replace("\\", "/")
-        if rel_file not in self._content_cache:
-            self._content_cache[rel_file] = read_file_content(_abs_path(rel_file, self._cb)) or ""
-        return self._content_cache[rel_file]
-
     def _lines(self, sym: SymbolDef) -> list[tuple[int, str]]:
-        content = self._content(sym.file_path)
-        lines = _body_lines(content, sym)
-        return [(sym.body_start + offset, line) for offset, line in enumerate(lines)]
+        return self._cache.symbol_lines(sym)
 
     def _body_text(self, sym: SymbolDef) -> str:
-        return "\n".join(line for _, line in self._lines(sym))
+        return self._cache.symbol_body(sym, numbered=False)
 
     def _node(self, index: SymbolIndex, sym: SymbolDef) -> FunctionNode:
-        return _symbol_to_node(index, self._cb, sym)
+        return _symbol_to_node(index, self._cb, sym, self._cache)
 
     def _add_node(self, index: SymbolIndex, result: PartialDetectorResult, sym: SymbolDef | None):
         if sym:
@@ -1013,10 +1332,7 @@ class PartialCandidateDetector:
         return out
 
     def _symbol_for_function(self, index: SymbolIndex, file_path: str, name: str) -> SymbolDef | None:
-        for sym in index.definitions.get(name, []):
-            if sym.file_path == file_path:
-                return sym
-        return None
+        return _lookup_symbol(index, file_path, name)
 
     def _context_symbols(self, index, context, target_syms):
         syms = {f"{sym.file_path}::{sym.name}": sym for sym in target_syms}
@@ -1118,28 +1434,27 @@ class PartialCandidateDetector:
     def _detect_format_wrappers(self, index, result, target_syms, target_prefixes):
         wrappers: dict[str, SymbolDef] = {}
         target_dir = str(Path(target_syms[0].file_path).parent).replace("\\", "/") if target_syms else ""
-        for defs in index.definitions.values():
-            for sym in defs:
-                same_module = (
-                    sym.file_path == (target_syms[0].file_path if target_syms else "")
-                    or str(Path(sym.file_path).parent).replace("\\", "/") == target_dir
-                    or _module_stem(sym.name) in target_prefixes
-                )
-                if not same_module and not _name_has_any(sym.name, {"log", "debug", "trace"}):
-                    continue
-                signature = sym.signature.lower()
-                body = self._body_text(sym)
-                if not re.search(r"(const\s+char\s*\*\s*(?:fmt|format|msg)|char\s*\*\s*(?:fmt|format|msg))", signature):
-                    continue
-                if not _VARIADIC_WRAPPER_RE.search(body):
-                    continue
-                if not re.search(r"\b(?:fmt|format|msg)\b", body):
-                    continue
-                wrappers[sym.name] = sym
-                result.format_notes.append(
-                    f"{sym.file_path}::{sym.name} wraps a variable format parameter and calls printf-family output."
-                )
-                self._add_node(index, result, sym)
+        for sym in _security_symbol_candidates(index):
+            same_module = (
+                sym.file_path == (target_syms[0].file_path if target_syms else "")
+                or str(Path(sym.file_path).parent).replace("\\", "/") == target_dir
+                or _module_stem(sym.name) in target_prefixes
+            )
+            if not same_module and not _name_has_any(sym.name, {"log", "debug", "trace"}):
+                continue
+            signature = sym.signature.lower()
+            if not re.search(r"(const\s+char\s*\*\s*(?:fmt|format|msg)|char\s*\*\s*(?:fmt|format|msg))", signature):
+                continue
+            body = self._body_text(sym)
+            if not _VARIADIC_WRAPPER_RE.search(body):
+                continue
+            if not re.search(r"\b(?:fmt|format|msg)\b", body):
+                continue
+            wrappers[sym.name] = sym
+            result.format_notes.append(
+                f"{sym.file_path}::{sym.name} wraps a variable format parameter and calls printf-family output."
+            )
+            self._add_node(index, result, sym)
         return wrappers
 
     def _detect_target_calls_wrappers(self, index, result, target_syms, wrappers):
@@ -1293,14 +1608,13 @@ class PartialCandidateDetector:
 
     def _paired_lifecycle_symbols(self, index, name, target_prefixes, wanted_actions):
         stem = _module_stem(name)
-        for defs in index.definitions.values():
-            for sym in defs:
-                sym_l = sym.name.lower()
-                if not any(action in sym_l for action in wanted_actions):
-                    continue
-                sym_stem = _module_stem(sym.name)
-                if sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem) or sym_stem in target_prefixes:
-                    yield sym
+        for sym in _lifecycle_symbol_candidates(index):
+            sym_l = sym.name.lower()
+            if not any(action in sym_l for action in wanted_actions):
+                continue
+            sym_stem = _module_stem(sym.name)
+            if sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem) or sym_stem in target_prefixes:
+                yield sym
 
 
 _PARTIAL_REVIEW_SYS = """\
@@ -1403,12 +1717,23 @@ _PASS_FOCI = {
 
 
 class TargetedFileReviewer:
-    def __init__(self, llm_provider, model, usage_runtime, codebase_path: str, max_tokens: int = 8192):
+    def __init__(
+        self,
+        llm_provider,
+        model,
+        usage_runtime,
+        codebase_path: str,
+        max_tokens: int = 8192,
+        cache: PartialAnalysisCache | None = None,
+        symbol_index: SymbolIndex | None = None,
+    ):
         self._p = llm_provider
         self._m = model
         self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path)
         self._t = max_tokens
+        self._cache = cache or PartialAnalysisCache(codebase_path, symbol_index)
+        self._cache.bind_index(symbol_index)
 
     def review(self, context: PartialReviewContext, partial_graph: ReachabilityGraph, *,
                detector_result: PartialDetectorResult | None = None,
@@ -1493,7 +1818,7 @@ class TargetedFileReviewer:
             if node.unique_name in seen:
                 continue
             seen.add(node.unique_name)
-            body = _read_function_body(self._cb, node, max_chars=per_fn_chars)
+            body = self._cache.node_body(node, max_chars=per_fn_chars)
             if not body:
                 continue
             entry = f"--- {node.unique_name} (line {node.line_number} in {node.file_path}) ---\n{body}"
@@ -1850,17 +2175,19 @@ class PartialReachabilityFileService:
             return None
 
         index = self._ensure_symbol_index(progress_callback=progress_callback)
-        target_nodes, target_globals = self._extract_target(abs_target, rel_target, extraction_model, max_workers, progress_callback)
+        cache = PartialAnalysisCache(self._config.codebase_path, index)
+        target_nodes, target_globals = self._extract_target(
+            abs_target, rel_target, extraction_model, max_workers, progress_callback, cache)
 
         caps = PartialContextCaps(max_total_context_functions=max(25, int(context_budget or 250)))
         if progress_callback:
             progress_callback({"event": "partial_context_start", "file": rel_target})
-        context = PartialContextBuilder(self._config.codebase_path, caps).build_for_file(
+        context = PartialContextBuilder(self._config.codebase_path, caps, cache).build_for_file(
             rel_target, target_nodes, index)
         if target_globals:
             context.globals = self._merge_globals(context.globals, target_globals)
 
-        detector_result = PartialCandidateDetector(self._config.codebase_path).detect(
+        detector_result = PartialCandidateDetector(self._config.codebase_path, cache).detect(
             index, rel_target, context.target_nodes, context)
         self._merge_detector_context(context, detector_result)
         if progress_callback:
@@ -1902,7 +2229,8 @@ class PartialReachabilityFileService:
 
         model = review_model or self._config.llama_query_model
         reviewer = TargetedFileReviewer(
-            self._llm_provider, model, self._usage_runtime, self._config.codebase_path)
+            self._llm_provider, model, self._usage_runtime, self._config.codebase_path,
+            cache=cache, symbol_index=index)
         findings = reviewer.review(
             context, partial_graph, detector_result=detector_result,
             max_workers=max_workers, progress_callback=progress_callback)
@@ -1947,7 +2275,7 @@ class PartialReachabilityFileService:
                 })
             return self._symbol_index
 
-    def _extract_target(self, abs_target, rel_target, extraction_model, max_workers, progress_callback):
+    def _extract_target(self, abs_target, rel_target, extraction_model, max_workers, progress_callback, cache):
         if progress_callback:
             progress_callback({"event": "partial_target_extract_start", "file": rel_target})
         try:
@@ -1966,11 +2294,8 @@ class PartialReachabilityFileService:
             logger.warning("Partial target extraction failed for %s: %s", rel_target, exc)
             nodes, globals_ = [], []
         if not nodes and self._symbol_index is not None:
-            defs = [
-                sym for values in self._symbol_index.definitions.values()
-                for sym in values if sym.file_path == rel_target
-            ]
-            nodes = [_symbol_to_node(self._symbol_index, self._config.codebase_path, sym) for sym in defs]
+            defs = _symbols_for_file(self._symbol_index, rel_target)
+            nodes = [_symbol_to_node(self._symbol_index, self._config.codebase_path, sym, cache) for sym in defs]
             globals_ = [g for g in self._symbol_index.globals if g.file_path == rel_target]
         if progress_callback:
             progress_callback({
