@@ -112,6 +112,8 @@ _VULN_TYPES = (
     "path_traversal, toctou, missing_auth, permission_mismatch, wrong_constant, "
     "wrong_flag_semantic, type_confusion, stale_length, width_mismatch, info_leak, uninitialized_memory, "
     "copy_contract, arithmetic_chain_mismatch, resource_binding_order, policy_gate_before_sink, "
+    "resource_validation_order, cleanup_ledger, async_event_order, size_propagation, stale_tracker_state, "
+    "pm_runtime_sequence, secondary_element_omission, protected_mmu_protocol, sentinel_misuse, "
     "state_transition_protocol, "
     "stale_after_unlock, missing_lock, lock_order, state_order, ordering_gap, "
     "teardown_race, deferred_uaf, callback_lifecycle, refcount_imbalance, "
@@ -256,6 +258,35 @@ _UPDATE_FACT_RE = re.compile(
 _ARITH_EXPR_RE = re.compile(r"(\*|<<|>>|\bPAGE_SHIFT\b|\bsizeof\s*\()", re.IGNORECASE)
 _ERROR_OR_EXIT_RE = re.compile(r"\b(?:return|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE)
 _NULL_CLEAR_RE = re.compile(r"\b(?:NULL|nullptr|0|false|FALSE|INVALID|invalid)\b")
+_QUEUE_LIVENESS_WORDS = frozenset({
+    "enabled", "enable", "alive", "terminated", "terminating", "active",
+    "drain_queue", "drain", "suspend", "suspended", "group_suspend", "stopped",
+})
+_TRACKER_WORDS = frozenset({"tracker", "tracking", "rbtree", "rb", "tree", "list", "node", "start_pfn", "inserted"})
+_PM_WORDS = frozenset({"pm", "runtime", "power", "clock", "clk", "regulator", "register", "gpu_power"})
+_SLOT_WORDS = frozenset({"slot", "slots", "atom", "atoms", "prio", "priority", "job", "jobs"})
+_METADATA_SOURCE_RE = re.compile(r"\b(?:page_private|folio_get_private|private|metadata|opaque|pfn|phys|addr)\b", re.IGNORECASE)
+_STRUCT_CAST_RE = re.compile(
+    r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"\((?P<type>(?:const\s+)?struct\s+[A-Za-z_][A-Za-z0-9_]*\s*\*)\)\s*(?P<src>[^;]+)"
+)
+_SENTINEL_COMPARE_RE = re.compile(
+    r"\b(?P<expr>[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?)\s*"
+    r"(?P<op>==|!=)\s*(?P<value>0|NULL|nullptr)\b"
+)
+_PAGE_ROUND_RE = re.compile(r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|PAGE_ALIGN|round_up|round_down)\s*\(", re.IGNORECASE)
+_PM_RUNTIME_API_RE = re.compile(r"\b(?:pm_runtime_get_sync|pm_runtime_resume_and_get|pm_runtime_get_if_in_use|pm_runtime_get)\s*\(", re.IGNORECASE)
+_PM_SENSITIVE_API_RE = re.compile(
+    r"\b(?:enable_gpu_power_control|clk_prepare_enable|clk_enable|regulator_enable|readl|writel|"
+    r"regmap_read|regmap_write|kbase_reg_read|kbase_reg_write|reset_control_deassert)\s*\(",
+    re.IGNORECASE,
+)
+_ASYNC_SCHEDULE_RE = re.compile(
+    r"\b(?:queue_work|schedule_work|irq_work_queue|tasklet_schedule|kthread_queue_work|wake_up|complete|notify)\w*\s*\(",
+    re.IGNORECASE,
+)
+_ASYNC_CLEAR_RE = re.compile(r"\b(?:clear|ack|reset|handled|complete)\w*\s*\(", re.IGNORECASE)
+_PROTECTED_ACTIVE_RE = re.compile(r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b", re.IGNORECASE)
 _PARTIAL_VULN_ALIASES = {
     "wrong_flag_semantic": "wrong_constant",
     "callback_lifecycle": "teardown_race",
@@ -267,6 +298,15 @@ _PARTIAL_VULN_ALIASES = {
     "policy_gate_before_sink": "policy_gate_before_sink",
     "cross_file_lock_cycle": "cross_file_lock_cycle",
     "state_transition_protocol": "state_transition_protocol",
+    "resource_validation_order": "resource_validation_order",
+    "cleanup_ledger": "cleanup_ledger",
+    "async_event_order": "async_event_order",
+    "size_propagation": "size_propagation",
+    "stale_tracker_state": "stale_tracker_state",
+    "pm_runtime_sequence": "pm_runtime_sequence",
+    "secondary_element_omission": "secondary_element_omission",
+    "protected_mmu_protocol": "protected_mmu_protocol",
+    "sentinel_misuse": "wrong_constant",
 }
 _PARTIAL_CWE_OVERRIDES = {
     "width_mismatch": "CWE-681",
@@ -278,6 +318,14 @@ _PARTIAL_CWE_OVERRIDES = {
     "arithmetic_chain_mismatch": "CWE-190",
     "resource_binding_order": "CWE-696",
     "policy_gate_before_sink": "CWE-284",
+    "resource_validation_order": "CWE-696",
+    "cleanup_ledger": "CWE-459",
+    "async_event_order": "CWE-362",
+    "size_propagation": "CWE-131",
+    "stale_tracker_state": "CWE-664",
+    "pm_runtime_sequence": "CWE-696",
+    "secondary_element_omission": "CWE-670",
+    "protected_mmu_protocol": "CWE-696",
     "accounting_drift": "CWE-682",
     "missing_lock": "CWE-820",
     "state_order": "CWE-696",
@@ -302,20 +350,30 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_copy_contract": 3,
     "partial_cleanup_symmetry": 4,
     "partial_accounting_drift": 5,
-    "partial_arithmetic_chain_mismatch": 6,
-    "partial_resource_binding_order": 7,
-    "partial_policy_gate_before_sink": 8,
-    "partial_allocation_arithmetic": 9,
-    "partial_fops_lifecycle": 10,
-    "partial_cross_file_lock_cycle": 11,
-    "partial_state_transition_protocol": 12,
-    "partial_lock_and_stale": 13,
-    "partial_lifecycle": 14,
-    "partial_shared_state": 15,
-    "partial_inbound_contract": 16,
-    "partial_outbound_misuse": 17,
-    "partial_target_intra": 18,
-    "partial_concurrency": 19,
+    "partial_cleanup_ledger": 6,
+    "partial_resource_validation_order": 7,
+    "partial_arithmetic_chain_mismatch": 8,
+    "partial_size_propagation": 9,
+    "partial_resource_binding_order": 10,
+    "partial_async_event_order": 11,
+    "partial_stale_tracker_state": 12,
+    "partial_metadata_type_confusion": 13,
+    "partial_pm_runtime_sequence": 14,
+    "partial_secondary_element_omission": 15,
+    "partial_policy_gate_before_sink": 16,
+    "partial_sentinel_misuse": 17,
+    "partial_protected_mmu_protocol": 18,
+    "partial_allocation_arithmetic": 19,
+    "partial_fops_lifecycle": 20,
+    "partial_cross_file_lock_cycle": 21,
+    "partial_state_transition_protocol": 22,
+    "partial_lock_and_stale": 23,
+    "partial_lifecycle": 24,
+    "partial_shared_state": 25,
+    "partial_inbound_contract": 26,
+    "partial_outbound_misuse": 27,
+    "partial_target_intra": 28,
+    "partial_concurrency": 29,
 }
 
 
@@ -419,6 +477,44 @@ class SinkFact:
     line_text: str = ""
 
 
+@dataclass(frozen=True)
+class EventFact:
+    kind: str
+    token: str
+    line_number: int
+    line_text: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class FormulaFact:
+    target: str
+    expr: str
+    normalized: str
+    tokens: tuple[str, ...]
+    operators: tuple[str, ...]
+    line_number: int
+    line_text: str = ""
+
+
+@dataclass(frozen=True)
+class CastFact:
+    target: str
+    target_type: str
+    source: str
+    line_number: int
+    line_text: str = ""
+
+
+@dataclass(frozen=True)
+class SentinelFact:
+    expr: str
+    value: str
+    token: str
+    line_number: int
+    line_text: str = ""
+
+
 @dataclass
 class SymbolIndex:
     definitions: dict[str, list[SymbolDef]]
@@ -440,8 +536,13 @@ class SymbolIndex:
     assignments_by_symbol: dict[str, list[AssignmentFact]] = field(default_factory=dict)
     cleanup_facts_by_symbol: dict[str, list[CleanupFact]] = field(default_factory=dict)
     sink_facts_by_symbol: dict[str, list[SinkFact]] = field(default_factory=dict)
+    event_facts_by_symbol: dict[str, list[EventFact]] = field(default_factory=dict)
+    formula_facts_by_symbol: dict[str, list[FormulaFact]] = field(default_factory=dict)
+    cast_facts_by_symbol: dict[str, list[CastFact]] = field(default_factory=dict)
+    sentinel_facts_by_symbol: dict[str, list[SentinelFact]] = field(default_factory=dict)
     symbols_by_guard_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     symbols_by_sink_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
+    symbols_by_event_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     meta_by_symbol: dict[str, SymbolMeta] = field(default_factory=dict)
     lifecycle_symbols: list[SymbolDef] = field(default_factory=list)
     callback_symbols: list[SymbolDef] = field(default_factory=list)
@@ -483,6 +584,16 @@ class PartialDetectorResult:
     arithmetic_chain_notes: list[str] = None
     resource_binding_notes: list[str] = None
     policy_gate_notes: list[str] = None
+    resource_validation_notes: list[str] = None
+    cleanup_ledger_notes: list[str] = None
+    async_order_notes: list[str] = None
+    size_propagation_notes: list[str] = None
+    stale_tracker_notes: list[str] = None
+    metadata_type_confusion_notes: list[str] = None
+    pm_sequence_notes: list[str] = None
+    secondary_omission_notes: list[str] = None
+    protected_mmu_notes: list[str] = None
+    sentinel_misuse_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -495,7 +606,11 @@ class PartialDetectorResult:
             "cross_file_lock_notes", "protocol_notes", "copy_contract_notes",
             "cleanup_symmetry_notes", "accounting_drift_notes",
             "arithmetic_chain_notes", "resource_binding_notes",
-            "policy_gate_notes", "nodes", "globals",
+            "policy_gate_notes", "resource_validation_notes",
+            "cleanup_ledger_notes", "async_order_notes", "size_propagation_notes",
+            "stale_tracker_notes", "metadata_type_confusion_notes", "pm_sequence_notes",
+            "secondary_omission_notes", "protected_mmu_notes", "sentinel_misuse_notes",
+            "nodes", "globals",
         ):
             if getattr(self, name) is None:
                 setattr(self, name, [])
@@ -634,6 +749,34 @@ def _has_any_fact_token(text: str, words: frozenset[str] | set[str]) -> bool:
 
 def _short_expr(expr: str, limit: int = 90) -> str:
     return " ".join(str(expr or "").split())[:limit]
+
+
+def _formula_operators(expr: str) -> tuple[str, ...]:
+    text = str(expr or "")
+    ops = []
+    if "*" in text:
+        ops.append("mul")
+    if "<<" in text or ">>" in text or "PAGE_SHIFT" in text:
+        ops.append("shift")
+    if _PAGE_ROUND_RE.search(text):
+        ops.append("round")
+    if re.search(r"\bsizeof\s*\(", text):
+        ops.append("sizeof")
+    if "+" in text or "-" in text:
+        ops.append("add")
+    return tuple(dict.fromkeys(ops))
+
+
+def _normalise_formula_expr(expr: str) -> str:
+    text = str(expr or "").lower()
+    text = re.sub(r"/\*.*?\*/", "", text)
+    text = re.sub(r"\bsizeof\s*\([^)]*\)", "sizeof", text)
+    text = re.sub(r"\b(?:pfn_up|pfn_down|div_round_up|page_align|round_up|round_down)\s*\(", "round(", text)
+    text = re.sub(r"\bpage_shift\b", "page_shift", text)
+    text = re.sub(r"0x[0-9a-f]+|\b\d+\b", "num", text)
+    text = text.replace("->", ".")
+    text = re.sub(r"\s+", "", text)
+    return text[:180]
 
 
 def _function_body_from_symbol(codebase_path: str, sym: SymbolDef, max_chars: int = 5000) -> str:
@@ -885,8 +1028,13 @@ class SymbolIndexBuilder:
         assignments_by_symbol: dict[str, list[AssignmentFact]] = {}
         cleanup_facts_by_symbol: dict[str, list[CleanupFact]] = {}
         sink_facts_by_symbol: dict[str, list[SinkFact]] = {}
+        event_facts_by_symbol: dict[str, list[EventFact]] = {}
+        formula_facts_by_symbol: dict[str, list[FormulaFact]] = {}
+        cast_facts_by_symbol: dict[str, list[CastFact]] = {}
+        sentinel_facts_by_symbol: dict[str, list[SentinelFact]] = {}
         symbols_by_guard_token: dict[str, list[SymbolDef]] = defaultdict(list)
         symbols_by_sink_token: dict[str, list[SymbolDef]] = defaultdict(list)
+        symbols_by_event_token: dict[str, list[SymbolDef]] = defaultdict(list)
         meta_by_symbol: dict[str, SymbolMeta] = {}
         lifecycle_symbols: list[SymbolDef] = []
         callback_symbols: list[SymbolDef] = []
@@ -924,16 +1072,25 @@ class SymbolIndexBuilder:
                     symbols_by_lock[lock].append(sym)
                 for token in state_tokens:
                     symbols_by_state_token[token].append(sym)
-                copy_uses, guards, assignments, cleanup_facts, sinks = self._extract_semantic_facts(sym, body_lines)
+                (
+                    copy_uses, guards, assignments, cleanup_facts, sinks,
+                    event_facts, formula_facts, cast_facts, sentinel_facts,
+                ) = self._extract_semantic_facts(sym, body_lines)
                 copy_uses_by_symbol[unique] = copy_uses
                 guards_by_symbol[unique] = guards
                 assignments_by_symbol[unique] = assignments
                 cleanup_facts_by_symbol[unique] = cleanup_facts
                 sink_facts_by_symbol[unique] = sinks
+                event_facts_by_symbol[unique] = event_facts
+                formula_facts_by_symbol[unique] = formula_facts
+                cast_facts_by_symbol[unique] = cast_facts
+                sentinel_facts_by_symbol[unique] = sentinel_facts
                 for guard in guards:
                     symbols_by_guard_token[guard.token].append(sym)
                 for sink in sinks:
                     symbols_by_sink_token[sink.token].append(sym)
+                for event in event_facts:
+                    symbols_by_event_token[event.token].append(sym)
                 body_text = "\n".join(body_lines)
                 meta = self._symbol_meta(sym, calls, body_text, locks, state_tokens)
                 meta_by_symbol[unique] = meta
@@ -967,8 +1124,13 @@ class SymbolIndexBuilder:
             assignments_by_symbol=assignments_by_symbol,
             cleanup_facts_by_symbol=cleanup_facts_by_symbol,
             sink_facts_by_symbol=sink_facts_by_symbol,
+            event_facts_by_symbol=event_facts_by_symbol,
+            formula_facts_by_symbol=formula_facts_by_symbol,
+            cast_facts_by_symbol=cast_facts_by_symbol,
+            sentinel_facts_by_symbol=sentinel_facts_by_symbol,
             symbols_by_guard_token=dict(symbols_by_guard_token),
             symbols_by_sink_token=dict(symbols_by_sink_token),
+            symbols_by_event_token=dict(symbols_by_event_token),
             meta_by_symbol=meta_by_symbol,
             lifecycle_symbols=lifecycle_symbols,
             callback_symbols=callback_symbols,
@@ -1065,12 +1227,19 @@ class SymbolIndexBuilder:
         self,
         sym: SymbolDef,
         lines: list[str],
-    ) -> tuple[list[CopyUse], list[GuardFact], list[AssignmentFact], list[CleanupFact], list[SinkFact]]:
+    ) -> tuple[
+        list[CopyUse], list[GuardFact], list[AssignmentFact], list[CleanupFact], list[SinkFact],
+        list[EventFact], list[FormulaFact], list[CastFact], list[SentinelFact],
+    ]:
         copy_uses: list[CopyUse] = []
         guards: list[GuardFact] = []
         assignments: list[AssignmentFact] = []
         cleanup_facts: list[CleanupFact] = []
         sinks: list[SinkFact] = []
+        event_facts: list[EventFact] = []
+        formula_facts: list[FormulaFact] = []
+        cast_facts: list[CastFact] = []
+        sentinel_facts: list[SentinelFact] = []
 
         for offset, line_text in enumerate(lines):
             line_number = sym.body_start + offset
@@ -1084,6 +1253,10 @@ class SymbolIndexBuilder:
             assignments.extend(self._assignments_from_line(stripped, line_number))
             cleanup_facts.extend(self._cleanup_facts_from_line(stripped, line_number))
             sinks.extend(self._sink_facts_from_line(stripped, line_number))
+            event_facts.extend(self._event_facts_from_line(stripped, line_number))
+            formula_facts.extend(self._formula_facts_from_line(stripped, line_number))
+            cast_facts.extend(self._cast_facts_from_line(stripped, line_number))
+            sentinel_facts.extend(self._sentinel_facts_from_line(stripped, line_number))
             if "return" in lower or "goto" in lower:
                 cleanup_facts.append(CleanupFact(
                     action="exit",
@@ -1092,7 +1265,7 @@ class SymbolIndexBuilder:
                     line_number=line_number,
                     line_text=stripped,
                 ))
-        return copy_uses, guards, assignments, cleanup_facts, sinks
+        return copy_uses, guards, assignments, cleanup_facts, sinks, event_facts, formula_facts, cast_facts, sentinel_facts
 
     def _copy_uses_from_line(self, line: str, line_number: int) -> list[CopyUse]:
         uses = []
@@ -1248,6 +1421,127 @@ class SymbolIndexBuilder:
             tokens = _fact_tokens(f"{api_l} {line}") & (_POLICY_GUARD_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)
             token = sorted(tokens)[0] if tokens else api_l
             facts.append(SinkFact(api=api_l, token=token, line_number=line_number, line_text=line))
+        return facts
+
+    def _event_facts_from_line(self, line: str, line_number: int) -> list[EventFact]:
+        facts: list[EventFact] = []
+        lower = line.lower()
+        tokens = _fact_tokens(line)
+        resource_tokens = sorted(tokens & (_RESOURCE_WORDS | _QUEUE_LIVENESS_WORDS | _TRACKER_WORDS | _PM_WORDS | _SLOT_WORDS))
+
+        if re.search(r"\bif\s*\(|\bWARN_ON\b|\bBUG_ON\b|\breturn\s+-", line) and resource_tokens:
+            for token in resource_tokens[:4]:
+                facts.append(EventFact("validation", token, line_number, line, "guard"))
+
+        if tokens & _RESOURCE_WORDS:
+            if _ASSIGN_FACT_RE.search(line) and not _NULL_CLEAR_RE.search(line):
+                for token in sorted(tokens & _RESOURCE_WORDS)[:4]:
+                    facts.append(EventFact("resource_bind", token, line_number, line, "assignment"))
+            if _NULL_CLEAR_RE.search(line) or re.search(r"\b(?:clear|reset|invalidate|unmap|unbind)\w*\s*\(", lower):
+                for token in sorted(tokens & _RESOURCE_WORDS)[:4]:
+                    facts.append(EventFact("resource_clear", token, line_number, line, "clear"))
+
+        if _ASYNC_SCHEDULE_RE.search(line) and tokens & {"fault", "irq", "interrupt", "event", "work", "worker"}:
+            token = sorted(tokens & {"fault", "irq", "interrupt", "event", "work", "worker"})[0]
+            facts.append(EventFact("async_schedule", token, line_number, line, "schedule"))
+        if _ASYNC_CLEAR_RE.search(line) and tokens & {"fault", "irq", "interrupt", "event", "state"}:
+            token = sorted(tokens & {"fault", "irq", "interrupt", "event", "state"})[0]
+            facts.append(EventFact("async_clear", token, line_number, line, "clear"))
+
+        if _PM_RUNTIME_API_RE.search(line):
+            facts.append(EventFact("pm_runtime_get", "pm", line_number, line, "runtime"))
+        if _PM_SENSITIVE_API_RE.search(line):
+            token = "register" if re.search(r"\b(?:readl|writel|regmap_|kbase_reg_)", lower) else "power"
+            facts.append(EventFact("pm_sensitive_action", token, line_number, line, "pm_sensitive"))
+        if re.search(r"\b(?:pm_runtime_put|pm_runtime_put_sync|disable_gpu_power_control|clk_disable|regulator_disable)\w*\s*\(", lower):
+            facts.append(EventFact("pm_runtime_put", "pm", line_number, line, "runtime"))
+
+        if tokens & _TRACKER_WORDS:
+            if re.search(r"\b(?:rb_erase|list_del|delete|remove|erase|del)\w*\s*\(", lower):
+                facts.append(EventFact("tracker_remove", sorted(tokens & _TRACKER_WORDS)[0], line_number, line, "remove"))
+            if _NULL_CLEAR_RE.search(line) or re.search(r"\b(?:invalid|clear|reset)\b", lower):
+                facts.append(EventFact("tracker_invalidate", sorted(tokens & _TRACKER_WORDS)[0], line_number, line, "invalidate"))
+
+        if tokens & _SLOT_WORDS:
+            if re.search(r"\[\s*0\s*\]|\bfirst\b", lower):
+                facts.append(EventFact("slot_first", "slot", line_number, line, "first"))
+            if re.search(r"\[\s*1\s*\]|\bsecond\b", lower):
+                facts.append(EventFact("slot_second", "slot", line_number, line, "second"))
+            if re.search(r"\b(?:return|continue|break)\b", lower) and {"prio", "priority"} & tokens:
+                facts.append(EventFact("slot_skip", "slot", line_number, line, "priority_skip"))
+
+        if {"protected", "protm"} & tokens:
+            if tokens & _WAIT_ACK_TOKENS:
+                facts.append(EventFact("protected_wait", "protected", line_number, line, "wait"))
+            if _PROTECTED_ACTIVE_RE.search(line) or re.search(r"\b(?:active|entered|enabled)\b", lower):
+                facts.append(EventFact("protected_verify", "protected", line_number, line, "verify"))
+        if "mmu" in tokens and _LOCK_CALL_RE.search(line):
+            facts.append(EventFact("mmu_lock", "mmu", line_number, line, "lock"))
+
+        return facts
+
+    def _formula_facts_from_line(self, line: str, line_number: int) -> list[FormulaFact]:
+        facts = []
+        for match in _ASSIGN_FACT_RE.finditer(line):
+            lhs = _short_expr(match.group("lhs"))
+            rhs = _short_expr(match.group("rhs"), limit=160)
+            operators = _formula_operators(rhs)
+            if not operators:
+                continue
+            tokens = tuple(sorted(_fact_tokens(f"{lhs} {rhs}") & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)))
+            facts.append(FormulaFact(
+                target=lhs,
+                expr=rhs,
+                normalized=_normalise_formula_expr(rhs),
+                tokens=tokens,
+                operators=operators,
+                line_number=line_number,
+                line_text=line,
+            ))
+        return facts
+
+    def _cast_facts_from_line(self, line: str, line_number: int) -> list[CastFact]:
+        facts = []
+        for match in _STRUCT_CAST_RE.finditer(line):
+            src = _short_expr(match.group("src"), limit=160)
+            if not _METADATA_SOURCE_RE.search(src):
+                continue
+            facts.append(CastFact(
+                target=match.group("target"),
+                target_type=" ".join(match.group("type").split()),
+                source=src,
+                line_number=line_number,
+                line_text=line,
+            ))
+        if "container_of" in line and _METADATA_SOURCE_RE.search(line):
+            args = _first_call_args(line, "container_of")
+            if len(args) >= 2:
+                target = re.split(r"\s*=\s*", line, maxsplit=1)[0].strip().split()[-1]
+                facts.append(CastFact(
+                    target=target,
+                    target_type=_short_expr(args[1]),
+                    source=_short_expr(args[0], limit=160),
+                    line_number=line_number,
+                    line_text=line,
+                ))
+        return facts
+
+    def _sentinel_facts_from_line(self, line: str, line_number: int) -> list[SentinelFact]:
+        facts = []
+        tokens = _fact_tokens(line)
+        if not tokens & {"phys", "phys_addr", "pfn", "addr", "address", "dma", "pa"}:
+            return facts
+        for match in _SENTINEL_COMPARE_RE.finditer(line):
+            expr = _short_expr(match.group("expr"))
+            expr_tokens = _fact_tokens(expr)
+            token = sorted((expr_tokens | tokens) & {"phys", "phys_addr", "pfn", "addr", "address", "dma", "pa"})[0]
+            facts.append(SentinelFact(
+                expr=expr,
+                value=match.group("value"),
+                token=token,
+                line_number=line_number,
+                line_text=line,
+            ))
         return facts
 
     def _symbol_meta(
@@ -1447,6 +1741,22 @@ def _symbol_sink_facts(index: SymbolIndex, sym: SymbolDef) -> list[SinkFact]:
     return list(index.sink_facts_by_symbol.get(_symbol_unique_name(sym), []))
 
 
+def _symbol_event_facts(index: SymbolIndex, sym: SymbolDef) -> list[EventFact]:
+    return list(index.event_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_formula_facts(index: SymbolIndex, sym: SymbolDef) -> list[FormulaFact]:
+    return list(index.formula_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_cast_facts(index: SymbolIndex, sym: SymbolDef) -> list[CastFact]:
+    return list(index.cast_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_sentinel_facts(index: SymbolIndex, sym: SymbolDef) -> list[SentinelFact]:
+    return list(index.sentinel_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
 def _sink_type_for_text(text: str) -> str:
     tl = text.lower()
     if re.search(r"\b(system|popen|exec)", tl):
@@ -1589,6 +1899,7 @@ class PartialContextBuilder:
                 "event": "partial_companion_expansion_start",
                 "locks": len(signal["locks"]),
                 "state_tokens": len(signal["state_tokens"]),
+                "event_tokens": len(signal.get("event_tokens", set())),
                 "callback_or_notifier": bool(signal["callback_or_notifier"]),
             })
         ranked = self._companion_candidates(index, context, signal)
@@ -1633,17 +1944,30 @@ class PartialContextBuilder:
     def _companion_signal(self, index: SymbolIndex, context: PartialReviewContext, symbols: list[SymbolDef]) -> dict:
         locks: set[str] = set()
         state_tokens: set[str] = set()
+        event_tokens: set[str] = set()
         has_lock_edges = False
         callback_or_notifier = False
         lifecycle_concurrency = False
+        exact_ordering = False
         for sym in symbols:
             unique = _symbol_unique_name(sym)
             meta = index.meta_by_symbol.get(unique)
             sym_locks = _symbol_locks(index, sym)
             sym_tokens = _symbol_state_tokens(index, sym)
+            sym_events = _symbol_event_facts(index, sym)
             locks.update(sym_locks)
             state_tokens.update(sym_tokens)
+            event_tokens.update(
+                event.token for event in sym_events
+                if event.kind in {
+                    "resource_bind", "resource_clear", "async_schedule", "async_clear",
+                    "pm_sensitive_action", "pm_runtime_get", "tracker_remove",
+                    "tracker_invalidate", "slot_first", "slot_second", "protected_wait",
+                }
+                and event.token not in {"register", "power", "pm", "slot"}
+            )
             has_lock_edges = has_lock_edges or bool(_symbol_lock_edges(index, sym))
+            exact_ordering = exact_ordering or bool(sym_events)
             callback_or_notifier = callback_or_notifier or bool(
                 meta and (meta.has_callback_words or meta.has_notifier_words)
             )
@@ -1651,14 +1975,16 @@ class PartialContextBuilder:
                 meta and meta.has_lifecycle_words and (sym_locks or (sym_tokens & _TRANSITION_TOKENS))
             )
         strong_protocol = bool(state_tokens & (_WAIT_ACK_TOKENS | _STATE_VERIFY_TOKENS | _SUBSYSTEM_TOKENS))
-        enabled = bool(has_lock_edges or callback_or_notifier or strong_protocol or lifecycle_concurrency)
+        enabled = bool(has_lock_edges or callback_or_notifier or strong_protocol or lifecycle_concurrency or exact_ordering)
         return {
             "enabled": enabled,
             "locks": locks,
             "state_tokens": state_tokens,
+            "event_tokens": event_tokens,
             "has_lock_edges": has_lock_edges,
             "callback_or_notifier": callback_or_notifier,
             "lifecycle_concurrency": lifecycle_concurrency,
+            "exact_ordering": exact_ordering,
         }
 
     def _companion_candidates(self, index: SymbolIndex, context: PartialReviewContext, signal: dict) -> list:
@@ -1680,6 +2006,12 @@ class PartialContextBuilder:
                 self._remember_companion_candidate(
                     ranked, index, sym, target_file, target_dir, target_prefixes,
                     signal, existing, bonus=32,
+                )
+        for token in signal.get("event_tokens", set()):
+            for sym in index.symbols_by_event_token.get(token, [])[:140]:
+                self._remember_companion_candidate(
+                    ranked, index, sym, target_file, target_dir, target_prefixes,
+                    signal, existing, bonus=36,
                 )
         if signal["callback_or_notifier"]:
             for sym in (_callback_symbol_candidates(index) + _notifier_symbol_candidates(index))[:220]:
@@ -1715,9 +2047,10 @@ class PartialContextBuilder:
         sym_stem = _module_stem(sym.name)
         lock_overlap = len(_symbol_locks(index, sym) & signal["locks"])
         token_overlap = len(_symbol_state_tokens(index, sym) & signal["state_tokens"])
-        if not lock_overlap and not token_overlap and sym_dir != target_dir and sym_stem not in target_prefixes:
+        event_overlap = len({event.token for event in _symbol_event_facts(index, sym)} & signal.get("event_tokens", set()))
+        if not lock_overlap and not token_overlap and not event_overlap and sym_dir != target_dir and sym_stem not in target_prefixes:
             return
-        score_bonus = bonus + min(30, lock_overlap * 12) + min(24, token_overlap * 8)
+        score_bonus = bonus + min(30, lock_overlap * 12) + min(24, token_overlap * 8) + min(24, event_overlap * 8)
         if sym_dir == target_dir:
             score_bonus += 28
         elif sym_dir.startswith(target_dir) or target_dir.startswith(sym_dir):
@@ -2055,10 +2388,18 @@ class PartialCandidateDetector:
         self._detect_publish_rollback(index, result, target_syms)
         self._detect_allocation_arithmetic(index, result, target_syms)
         self._detect_arithmetic_chain_mismatch(index, result, target_syms)
+        self._detect_size_propagation(index, result, target_syms, context)
         self._detect_copy_contracts(index, result, target_syms)
         self._detect_cleanup_symmetry(index, result, target_syms)
+        self._detect_interprocedural_cleanup_ledger(index, result, target_syms, context)
         self._detect_accounting_drift(index, result, target_syms)
         self._detect_resource_binding_order(index, result, target_syms)
+        self._detect_resource_validation_order(index, result, target_syms)
+        self._detect_async_event_order(index, result, target_syms)
+        self._detect_stale_tracker_state(index, result, target_syms)
+        self._detect_metadata_type_confusion(index, result, target_syms)
+        self._detect_pm_runtime_sequence(index, result, target_syms)
+        self._detect_secondary_element_omission(index, result, target_syms)
         wrappers = self._detect_format_wrappers(index, result, target_syms, target_prefixes)
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
@@ -2068,7 +2409,10 @@ class PartialCandidateDetector:
         self._detect_disable_stale(index, result, target_syms)
         self._detect_callback_lifetime(index, result, target_syms, target_prefixes)
         self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
+        self._detect_protected_mmu_protocol(index, result, target_syms, context)
         self._detect_policy_gate_before_sink(index, result, target_syms, context)
+        self._detect_imported_same_va_fault_policy(index, result, target_syms, context)
+        self._detect_sentinel_misuse(index, result, target_syms)
         self._detect_target_calls_wrappers(index, result, target_syms, wrappers)
         result.nodes = self._dedupe_nodes(result.nodes)
         result.globals = list({g.unique_name: g for g in result.globals}.values())
@@ -2191,6 +2535,16 @@ class PartialCandidateDetector:
                 size_tokens = _fact_tokens(use.size_expr)
                 if not size_tokens & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS) and not self._copy_size_is_fixed(use.size_expr):
                     continue
+                if self._copy_result_ignored(use) and (self._copy_size_is_fixed(use.size_expr) or size_tokens & _COUNT_SIZE_WORDS):
+                    result.copy_contract_notes.append(
+                        f"{sym.file_path}::{sym.name} line {use.line_number} calls {use.api} "
+                        f"with size/count `{_short_expr(use.size_expr)}` but ignores short-copy/short-transfer result: "
+                        f"`{_line_excerpt(use.line_text)}`."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.copy_contract_notes) >= 20:
+                        return
+                    continue
                 if self._copy_has_nearby_guard(guards, use, count_tokens):
                     continue
                 if use.api in {"read", "write"} and not (size_tokens & _COUNT_SIZE_WORDS):
@@ -2221,9 +2575,15 @@ class PartialCandidateDetector:
                 continue
             if use.line_number - guard.line_number > 18:
                 continue
-            if guard.token in wanted:
-                return True
             guard_text = f"{guard.lhs} {guard.rhs}"
+            if guard.token in wanted:
+                if self._copy_size_is_fixed(use.size_expr):
+                    if re.search(r"\bsizeof\s*\(|\bmin\s*\(|\bclamp\b", guard.line_text, re.IGNORECASE):
+                        return True
+                    if use.size_expr and _short_expr(use.size_expr) in guard_text:
+                        return True
+                    continue
+                return True
             if use.size_expr and _short_expr(use.size_expr) in guard_text:
                 return True
         return False
@@ -2238,6 +2598,16 @@ class PartialCandidateDetector:
         if _fact_tokens(use.size_expr) & _COUNT_SIZE_WORDS:
             return "no nearby upper-bound/short-transfer guard constrains the requested count"
         return "no nearby contract guard is visible"
+
+    def _copy_result_ignored(self, use: CopyUse) -> bool:
+        if use.api not in {"copy_to_user", "copy_from_user", "copy_in_user", "read", "write", "kernel_read", "kernel_write"}:
+            return False
+        prefix = use.line_text.split(use.api, 1)[0]
+        if re.search(r"\b(?:if|return|ret|err|rc|res|copied|remaining)\b", prefix):
+            return False
+        if "=" in prefix and "==" not in prefix and "!=" not in prefix:
+            return False
+        return True
 
     def _detect_cleanup_symmetry(self, index, result, target_syms):
         for sym in target_syms:
@@ -2319,7 +2689,8 @@ class PartialCandidateDetector:
     def _detect_arithmetic_chain_mismatch(self, index, result, target_syms):
         for sym in target_syms:
             assigns = [assign for assign in _symbol_assignments(index, sym) if assign.is_arithmetic]
-            if len(assigns) < 1:
+            formulas = _symbol_formula_facts(index, sym)
+            if len(assigns) < 1 and len(formulas) < 1:
                 continue
             copy_uses = _symbol_copy_uses(index, sym)
             sinks = _symbol_sink_facts(index, sym)
@@ -2358,6 +2729,32 @@ class PartialCandidateDetector:
                     if len(result.arithmetic_chain_notes) >= 16:
                         return
                     break
+            for producer in formulas[:20]:
+                producer_tokens = set(producer.tokens)
+                if not producer_tokens or not {"mul", "shift", "round"} & set(producer.operators):
+                    continue
+                for consumer in formulas[:30]:
+                    if consumer.line_number <= producer.line_number:
+                        continue
+                    overlap = producer_tokens & set(consumer.tokens)
+                    if not overlap:
+                        continue
+                    if producer.normalized == consumer.normalized:
+                        continue
+                    if set(producer.operators) == set(consumer.operators) and "sizeof" in producer.operators:
+                        continue
+                    if self._has_formula_consistency_guard(guards, producer, consumer.line_number):
+                        continue
+                    result.arithmetic_chain_notes.append(
+                        f"{sym.file_path}::{sym.name} line {producer.line_number} derives `{producer.target} = {_short_expr(producer.expr)}` "
+                        f"with operators {','.join(producer.operators)}, but line {consumer.line_number} derives "
+                        f"`{consumer.target} = {_short_expr(consumer.expr)}` with operators {','.join(consumer.operators)} over "
+                        f"shared token(s) {', '.join(sorted(overlap)[:3])} and no consistency/overflow guard."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.arithmetic_chain_notes) >= 16:
+                        return
+                    break
 
     def _same_arithmetic_expr(self, a: str, b: str) -> bool:
         ta = _fact_tokens(a)
@@ -2370,6 +2767,15 @@ class PartialCandidateDetector:
             if guard.line_number < assign.line_number or guard.line_number > consumer_line:
                 continue
             if guard.token in assign_tokens:
+                return True
+        return False
+
+    def _has_formula_consistency_guard(self, guards: list[GuardFact], formula: FormulaFact, consumer_line: int) -> bool:
+        tokens = set(formula.tokens) | _fact_tokens(formula.target) | _fact_tokens(formula.expr)
+        for guard in guards:
+            if guard.line_number < formula.line_number or guard.line_number > consumer_line:
+                continue
+            if guard.token in tokens and guard.op in {"<", "<=", ">", ">=", "=="}:
                 return True
         return False
 
@@ -2424,6 +2830,265 @@ class PartialCandidateDetector:
             f"{resources or 'resource'} without a visible NULL/invalid reset."
         )
         self._add_node(index, result, sym)
+
+    def _detect_resource_validation_order(self, index, result, target_syms):
+        for sym in target_syms:
+            events = _symbol_event_facts(index, sym)
+            binds = [
+                event for event in events
+                if event.kind == "resource_bind" and event.token in {"doorbell", "mapping", "mappings", "queue", "ctx", "gpu_va"}
+            ]
+            validations = [
+                event for event in events
+                if event.kind == "validation" and event.token in _QUEUE_LIVENESS_WORDS
+            ]
+            if not binds:
+                continue
+            for bind in binds[:10]:
+                later_validation = next((event for event in validations if event.line_number > bind.line_number), None)
+                prior_validation = any(0 <= bind.line_number - event.line_number <= 12 for event in validations)
+                if not later_validation and prior_validation:
+                    continue
+                if not later_validation and not _name_has_any(sym.name, {"doorbell", "queue", "assign", "bind", "map"}):
+                    continue
+                validation_text = (
+                    f"before final liveness validation line {later_validation.line_number} "
+                    f"`{_line_excerpt(later_validation.line_text)}`"
+                    if later_validation else "without a nearby queue enabled/alive/not-terminated validation"
+                )
+                result.resource_validation_notes.append(
+                    f"{sym.file_path}::{sym.name} line {bind.line_number} binds real resource `{_line_excerpt(bind.line_text)}` "
+                    f"{validation_text}."
+                )
+                self._add_node(index, result, sym)
+                if len(result.resource_validation_notes) >= 12:
+                    return
+
+    def _detect_async_event_order(self, index, result, target_syms):
+        for sym in target_syms:
+            events = _symbol_event_facts(index, sym)
+            clears = [event for event in events if event.kind == "async_clear"]
+            schedules = [event for event in events if event.kind == "async_schedule"]
+            if not clears or not schedules:
+                continue
+            locks = _symbol_locks(index, sym)
+            for schedule in schedules[:8]:
+                nearby_clears = [
+                    clear for clear in clears
+                    if abs(clear.line_number - schedule.line_number) <= 16
+                    and (clear.token == schedule.token or {clear.token, schedule.token} & {"fault", "irq", "interrupt", "event"})
+                ]
+                for clear in nearby_clears:
+                    start, end = sorted((clear.line_number, schedule.line_number))
+                    window = "\n".join(
+                        line for line_no, line in self._lines(sym)
+                        if start <= line_no <= end + 10
+                    )
+                    if re.search(r"\b(?:handled|complete|done|processed|synchronize_irq|flush_work|cancel_work_sync)\b", window, re.IGNORECASE):
+                        continue
+                    if locks and re.search(r"\b(?:mutex_lock|spin_lock)", window):
+                        continue
+                    result.async_order_notes.append(
+                        f"{sym.file_path}::{sym.name} schedules async handling at line {schedule.line_number} "
+                        f"`{_line_excerpt(schedule.line_text)}` but clears/acks {clear.token} state at line {clear.line_number} "
+                        f"`{_line_excerpt(clear.line_text)}` without visible serialization or handled confirmation."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.async_order_notes) >= 12:
+                        return
+
+    def _detect_stale_tracker_state(self, index, result, target_syms):
+        for sym in target_syms:
+            events = _symbol_event_facts(index, sym)
+            removes = [event for event in events if event.kind == "tracker_remove"]
+            invalidates = [event for event in events if event.kind == "tracker_invalidate"]
+            if not removes:
+                continue
+            lines = self._lines(sym)
+            for remove in removes[:8]:
+                later_invalidate = any(
+                    0 < inv.line_number - remove.line_number <= 12 for inv in invalidates
+                )
+                later_remove = next((event for event in removes if event.line_number > remove.line_number), None)
+                if later_invalidate:
+                    continue
+                stale_state_line = next((
+                    (line_no, line) for line_no, line in lines
+                    if line_no > remove.line_number
+                    and line_no - remove.line_number <= 18
+                    and re.search(r"\b(?:start_pfn|inserted|tracker|node|rbtree|rb_node)\b", line, re.IGNORECASE)
+                ), None)
+                if not stale_state_line and not later_remove:
+                    continue
+                result.stale_tracker_notes.append(
+                    f"{sym.file_path}::{sym.name} line {remove.line_number} removes tracker/tree state "
+                    f"`{_line_excerpt(remove.line_text)}` but does not invalidate the inserted/start_pfn marker before "
+                    f"{'second remove line ' + str(later_remove.line_number) if later_remove else 'later tracker-state use line ' + str(stale_state_line[0])}."
+                )
+                self._add_node(index, result, sym)
+                if len(result.stale_tracker_notes) >= 12:
+                    return
+
+    def _detect_metadata_type_confusion(self, index, result, target_syms):
+        for sym in target_syms:
+            casts = _symbol_cast_facts(index, sym)
+            if not casts:
+                continue
+            lines = self._lines(sym)
+            for cast in casts[:8]:
+                deref = next((
+                    (line_no, line) for line_no, line in lines
+                    if 0 < line_no - cast.line_number <= 10
+                    and re.search(r"\b" + re.escape(cast.target) + r"\s*(?:->|\.)", line)
+                ), None)
+                if not deref:
+                    continue
+                result.metadata_type_confusion_notes.append(
+                    f"{sym.file_path}::{sym.name} line {cast.line_number} reinterprets opaque metadata "
+                    f"`{_short_expr(cast.source)}` as {cast.target_type}, then dereferences `{cast.target}` at line "
+                    f"{deref[0]} `{_line_excerpt(deref[1])}`."
+                )
+                self._add_node(index, result, sym)
+                if len(result.metadata_type_confusion_notes) >= 10:
+                    return
+
+    def _detect_pm_runtime_sequence(self, index, result, target_syms):
+        for sym in target_syms:
+            events = _symbol_event_facts(index, sym)
+            sensitive = [event for event in events if event.kind == "pm_sensitive_action"]
+            runtime_gets = [event for event in events if event.kind == "pm_runtime_get"]
+            if not sensitive:
+                continue
+            first_get = min((event.line_number for event in runtime_gets), default=0)
+            pm_name = _name_has_any(sym.name, {"pm", "power", "runtime", "clock", "clk", "resume", "gpu"})
+            for action in sensitive[:8]:
+                if first_get and first_get < action.line_number:
+                    continue
+                if not pm_name:
+                    continue
+                result.pm_sequence_notes.append(
+                    f"{sym.file_path}::{sym.name} line {action.line_number} performs runtime-PM-sensitive action "
+                    f"`{_line_excerpt(action.line_text)}` before a visible successful pm_runtime_get/resume ownership point."
+                )
+                self._add_node(index, result, sym)
+                if len(result.pm_sequence_notes) >= 12:
+                    return
+
+    def _detect_secondary_element_omission(self, index, result, target_syms):
+        for sym in target_syms:
+            if not _name_has_any(sym.name, {"slot", "atom", "job", "sched", "queue"}):
+                continue
+            events = _symbol_event_facts(index, sym)
+            firsts = [event for event in events if event.kind == "slot_first"]
+            seconds = [event for event in events if event.kind == "slot_second"]
+            skips = [event for event in events if event.kind == "slot_skip"]
+            if not firsts or not skips:
+                continue
+            for first in firsts[:6]:
+                skip = next((event for event in skips if 0 < event.line_number - first.line_number <= 24), None)
+                if not skip:
+                    continue
+                has_second_before_skip = any(first.line_number < event.line_number < skip.line_number for event in seconds)
+                has_second_after = any(0 < event.line_number - skip.line_number <= 24 for event in seconds)
+                if has_second_before_skip or not has_second_after:
+                    continue
+                result.secondary_omission_notes.append(
+                    f"{sym.file_path}::{sym.name} processes first slot/atom at line {first.line_number}, then priority branch "
+                    f"line {skip.line_number} `{_line_excerpt(skip.line_text)}` can leave before second slot/atom handling."
+                )
+                self._add_node(index, result, sym)
+                if len(result.secondary_omission_notes) >= 8:
+                    return
+
+    def _detect_interprocedural_cleanup_ledger(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        related = [
+            sym for sym in context_syms
+            if _name_has_any(sym.name, {"suspend", "drain", "delete", "cleanup", "release", "queue", "group"})
+        ][:80]
+        acquire_tokens: set[str] = set()
+        for sym in related:
+            for fact in _symbol_cleanup_facts(index, sym):
+                if fact.kind == "acquire":
+                    acquire_tokens.update(_fact_tokens(fact.resource) & (_RESOURCE_WORDS | {"pages", "mapping", "refcount", "groups"}))
+        if not acquire_tokens:
+            return
+        for sym in target_syms:
+            if not _name_has_any(sym.name, {"suspend", "drain", "delete", "cleanup", "release", "queue", "group"}):
+                continue
+            facts = _symbol_cleanup_facts(index, sym)
+            releases = [fact for fact in facts if fact.kind == "release"]
+            exits = [fact for fact in facts if fact.kind == "exit"]
+            branch_tokens = _fact_tokens(self._body_text(sym)[:12000]) & {"drain_queue", "drain", "suspend", "groups", "pages", "mapping"}
+            if not exits or not branch_tokens:
+                continue
+            for token in sorted(acquire_tokens & (branch_tokens | {"pages", "mapping", "groups"}))[:6]:
+                matching_release = any(token in _fact_tokens(rel.resource + " " + rel.line_text) for rel in releases)
+                if matching_release:
+                    continue
+                exit_fact = exits[0]
+                result.cleanup_ledger_notes.append(
+                    f"{sym.file_path}::{sym.name} participates in {token}/suspend cleanup but exit line "
+                    f"{exit_fact.line_number} `{_line_excerpt(exit_fact.line_text)}` has no visible release/rollback "
+                    f"for related {token} resources acquired in selected companion paths."
+                )
+                self._add_node(index, result, sym)
+                for companion in related[:20]:
+                    if companion.file_path != sym.file_path and token in _fact_tokens(companion.name + ' ' + companion.signature):
+                        self._add_node(index, result, companion)
+                        break
+                if len(result.cleanup_ledger_notes) >= 10:
+                    return
+
+    def _detect_size_propagation(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        consumers = []
+        for sym in context_syms:
+            if sym in target_syms:
+                continue
+            for use in _symbol_copy_uses(index, sym):
+                tokens = _fact_tokens(use.size_expr + " " + use.line_text)
+                if tokens & {"size", "pages", "nr", "count", "len"}:
+                    consumers.append((sym, use.line_number, use.size_expr, use.line_text))
+            for formula in _symbol_formula_facts(index, sym):
+                if set(formula.tokens) & {"size", "pages", "nr", "count", "len"}:
+                    consumers.append((sym, formula.line_number, formula.expr, formula.line_text))
+        if not consumers:
+            return
+        for sym in target_syms:
+            assignments = _symbol_assignments(index, sym)
+            guards = _symbol_guards(index, sym)
+            for assign in assignments[:60]:
+                tokens = set(assign.tokens) | _fact_tokens(assign.target + " " + assign.value)
+                if not (tokens & {"size", "pages", "nr", "count", "len"} and tokens & {"sus", "suspend", "buffer", "buf", "pages"}):
+                    continue
+                if self._has_size_upper_bound_guard(guards, assign.line_number, tokens):
+                    continue
+                companion = next((item for item in consumers if tokens & _fact_tokens(item[2] + " " + item[3])), None)
+                if not companion:
+                    continue
+                comp_sym, line_no, expr, line_text = companion
+                result.size_propagation_notes.append(
+                    f"{sym.file_path}::{sym.name} line {assign.line_number} propagates user-controlled size/page state "
+                    f"`{_line_excerpt(assign.line_text)}` without an upper-bound/consistency check; companion "
+                    f"{comp_sym.file_path}::{comp_sym.name} later consumes `{_short_expr(expr)}` at line {line_no} "
+                    f"`{_line_excerpt(line_text)}`."
+                )
+                self._add_node(index, result, sym)
+                self._add_node(index, result, comp_sym)
+                if len(result.size_propagation_notes) >= 10:
+                    return
+
+    def _has_size_upper_bound_guard(self, guards: list[GuardFact], line_number: int, tokens: set[str]) -> bool:
+        wanted = tokens & (_COUNT_SIZE_WORDS | {"pages", "size", "len", "count", "nr"})
+        for guard in guards:
+            if guard.line_number > line_number:
+                continue
+            if line_number - guard.line_number > 24:
+                continue
+            if guard.token in wanted and guard.op in {"<", "<=", ">", ">="}:
+                return True
+        return False
 
     def _detect_info_leaks(self, index, result, target_syms):
         for sym in target_syms:
@@ -2552,8 +3217,12 @@ class PartialCandidateDetector:
         edge_map: dict[tuple[str, str], list[LockOrderEdge]] = defaultdict(list)
         for sym in syms:
             for edge in _symbol_lock_edges(index, sym):
+                if not self._lock_edge_is_specific(edge):
+                    continue
                 edge_map[(edge.first_lock, edge.second_lock)].append(edge)
         for edge in self._interprocedural_lock_edges(index, syms):
+            if not self._lock_edge_is_specific(edge):
+                continue
             edge_map[(edge.first_lock, edge.second_lock)].append(edge)
         if not edge_map:
             return
@@ -2563,6 +3232,8 @@ class PartialCandidateDetector:
             for e1 in forward_edges:
                 for e2 in reverse_edges:
                     if not self._cross_file_cycle_is_relevant(e1, e2, target_file):
+                        continue
+                    if not self._lock_cycle_has_async_or_named_path(index, [e1, e2]):
                         continue
                     key = tuple(sorted((
                         f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
@@ -2590,6 +3261,8 @@ class PartialCandidateDetector:
                             for e3 in edge_map[(c, a)]:
                                 if not self._cross_file_cycle_is_relevant(e1, e2, target_file, extra=e3):
                                     continue
+                                if not self._lock_cycle_has_async_or_named_path(index, [e1, e2, e3]):
+                                    continue
                                 key = tuple(sorted((
                                     f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
                                     f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
@@ -2609,6 +3282,30 @@ class PartialCandidateDetector:
         if target_file not in files or len(files) < 2:
             return False
         return any(edge.file_path == target_file for edge in edges)
+
+    def _lock_edge_is_specific(self, edge: LockOrderEdge) -> bool:
+        generic = {"lock", "mutex", "spinlock", "ctx.lock", "queue.lock"}
+        return (
+            edge.first_lock
+            and edge.second_lock
+            and edge.first_lock != edge.second_lock
+            and edge.first_lock not in generic
+            and edge.second_lock not in generic
+        )
+
+    def _lock_cycle_has_async_or_named_path(self, index: SymbolIndex, edges: list[LockOrderEdge]) -> bool:
+        text = " ".join(
+            f"{edge.file_path} {edge.function_name} {edge.line_text} {edge.first_lock} {edge.second_lock}"
+            for edge in edges
+        ).lower()
+        if re.search(r"\b(?:callback|notifier|notify|clock|clk|hwcnt|counter|backend|irq|interrupt|work)\b", text):
+            return True
+        for edge in edges:
+            sym = _lookup_symbol(index, edge.file_path, edge.function_name)
+            meta = index.meta_by_symbol.get(_symbol_unique_name(sym)) if sym else None
+            if meta and (meta.has_callback_words or meta.has_notifier_words):
+                return True
+        return False
 
     def _lock_cycle_note(self, index: SymbolIndex, edges: list[LockOrderEdge], target_file: str) -> str:
         parts = []
@@ -2846,6 +3543,43 @@ class PartialCandidateDetector:
         stem_b = _module_stem(b.name)
         return bool(stem_a and stem_b and (stem_a.startswith(stem_b) or stem_b.startswith(stem_a)))
 
+    def _detect_protected_mmu_protocol(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companion_mmu = [
+            sym for sym in context_syms
+            if sym.file_path not in {target.file_path for target in target_syms}
+            and "mmu" in _symbol_state_tokens(index, sym)
+            and _symbol_locks(index, sym)
+        ][:40]
+        if not companion_mmu:
+            return
+        for sym in target_syms:
+            tokens = _symbol_state_tokens(index, sym)
+            if not ({"protected", "protm"} & tokens and tokens & _WAIT_ACK_TOKENS):
+                continue
+            events = _symbol_event_facts(index, sym)
+            waits = [event for event in events if event.kind == "protected_wait"]
+            if not waits:
+                continue
+            verifies = [event for event in events if event.kind == "protected_verify"]
+            sym_locks = _symbol_locks(index, sym)
+            companion = self._best_protocol_companion(index, sym, companion_mmu) or companion_mmu[0]
+            companion_locks = _symbol_locks(index, companion)
+            missing_mmu_lock = bool(companion_locks and not (sym_locks & companion_locks))
+            missing_verify = not any(0 < verify.line_number - waits[0].line_number <= 24 for verify in verifies)
+            if not (missing_mmu_lock or missing_verify):
+                continue
+            result.protected_mmu_notes.append(
+                f"{sym.file_path}::{sym.name} line {waits[0].line_number} enters/waits for protected mode "
+                f"`{_line_excerpt(waits[0].line_text)}` while companion MMU path {companion.file_path}::{companion.name} "
+                f"uses lock(s) {', '.join(sorted(companion_locks)[:3])}; target lock coverage "
+                f"{sorted(sym_locks)[:3] or ['(none)']} and final protected-active verification are insufficient."
+            )
+            self._add_node(index, result, sym)
+            self._add_node(index, result, companion)
+            if len(result.protected_mmu_notes) >= 8:
+                return
+
     def _detect_policy_gate_before_sink(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
         companion_guards = self._companion_policy_guards(index, context_syms, {sym.file_path for sym in target_syms})
@@ -2910,6 +3644,56 @@ class PartialCandidateDetector:
             if guard.token in required:
                 return True
         return False
+
+    def _detect_imported_same_va_fault_policy(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companion_guards = self._companion_policy_guards(index, context_syms, {sym.file_path for sym in target_syms})
+        if not ({"imported", "same_va"} <= set(companion_guards)):
+            return
+        for sym in target_syms:
+            sinks = [
+                sink for sink in _symbol_sink_facts(index, sym)
+                if sink.api in {"vm_fault", "vm_insert_pfn", "vmf_insert_pfn", "insert_pfn", "remap_pfn_range", "io_remap_pfn_range", "mmap"}
+                or re.search(r"\b(?:fault|pfn|mmap)\b", sink.line_text, re.IGNORECASE)
+            ]
+            if not sinks:
+                continue
+            guards = _symbol_guards(index, sym)
+            for sink in sinks[:8]:
+                if self._has_policy_guard_before(guards, sink.line_number, {"imported", "same_va"}):
+                    continue
+                result.policy_gate_notes.append(
+                    f"{sym.file_path}::{sym.name} line {sink.line_number} reaches CPU fault/PFN mapping sink "
+                    f"`{_line_excerpt(sink.line_text)}` without rejecting imported UMM SAME_VA provenance first."
+                )
+                self._add_node(index, result, sym)
+                self._add_node(index, result, companion_guards["imported"])
+                self._add_node(index, result, companion_guards["same_va"])
+                if len(result.policy_gate_notes) >= 16:
+                    return
+
+    def _detect_sentinel_misuse(self, index, result, target_syms):
+        for sym in target_syms:
+            sentinels = _symbol_sentinel_facts(index, sym)
+            if not sentinels:
+                continue
+            lines = self._lines(sym)
+            for sentinel in sentinels[:8]:
+                downstream = next((
+                    (line_no, line) for line_no, line in lines
+                    if 0 < line_no - sentinel.line_number <= 18
+                    and re.search(r"\b(?:sync|free|cache|pool|release|remove|skip|present|valid|page)\b", line, re.IGNORECASE)
+                ), None)
+                if not downstream:
+                    continue
+                result.sentinel_misuse_notes.append(
+                    f"{sym.file_path}::{sym.name} line {sentinel.line_number} treats `{sentinel.expr} {sentinel.value}` "
+                    f"as a not-present sentinel for physical/PFN state, controlling line {downstream[0]} "
+                    f"`{_line_excerpt(downstream[1])}` where physical address/PFN zero may be valid."
+                )
+                self._add_node(index, result, sym)
+                if len(result.sentinel_misuse_notes) >= 8:
+                    return
 
     def _paired_lifecycle_symbols(self, index, name, target_prefixes, wanted_actions):
         stem = _module_stem(name)
@@ -3029,6 +3813,46 @@ _PASS_FOCI = {
         "Resource binding and state ordering bugs: enable/ready/active/doorbell state published before binding or validation, "
         "stale mapping/token/pages after disable/reset, and logical queue/context state diverging from actual mapped resources."
     ),
+    "resource_validation_order": (
+        "Exact predicate/use ordering bugs: real doorbell/mapping/queue resource binding before final enabled/alive/not-terminated "
+        "validation. Report the exact bind statement and the missing or late liveness predicate."
+    ),
+    "cleanup_ledger": (
+        "Interprocedural cleanup ledger bugs across selected queue/suspend/drain/delete functions: later exploit-relevant cleanup "
+        "paths skip page/mapping/ref releases that companion paths acquired. Prefer later cleanup omission over shallow local unwind."
+    ),
+    "async_event_order": (
+        "Async clear-before-handle bugs: fault/interrupt/event state is cleared or acked around queued work without serialization, "
+        "flush, handled confirmation, or final safe-consume evidence."
+    ),
+    "size_propagation": (
+        "User-controlled size propagation bugs: size/count/page state is stored into a resource object and later consumed by "
+        "copy/iteration/page-count logic without an upper-bound or formula consistency check."
+    ),
+    "stale_tracker_state": (
+        "Stale tracker/double-remove bugs: tracker/rbtree/list removal without invalidating inserted/start_pfn/ownership state, "
+        "allowing later second removal or stale cleanup."
+    ),
+    "metadata_type_confusion": (
+        "Opaque metadata reinterpretation bugs: page_private/private integer-ish metadata cast to a struct pointer and immediately "
+        "dereferenced or mutated without concrete type validation."
+    ),
+    "pm_runtime_sequence": (
+        "Runtime PM sequencing bugs: power-control, clock, regulator, or register-sensitive action before pm_runtime_get/resume "
+        "ownership is established, or unbalanced power-control sequencing around runtime on/off."
+    ),
+    "secondary_element_omission": (
+        "Paired-slot/atom omission bugs: first slot/atom is processed, then a priority/branch exit skips required second slot/atom "
+        "handling. Report only concrete first/second/skip evidence."
+    ),
+    "protected_mmu_protocol": (
+        "Protected-mode/MMU protocol bugs: protected-mode enter/wait lacks the companion MMU serialization lock or final "
+        "protected-active verification. Report the exact wait/enter statement and missing lock/verification."
+    ),
+    "sentinel_misuse": (
+        "Wrong sentinel/constant bugs: physical address, PFN, DMA, or translated address compared with 0/NULL as not-present, "
+        "then used to control sync/free/cache/pool behavior where zero may be valid."
+    ),
     "policy_gate_before_sink": (
         "Policy/provenance gate-before-sink bugs in the target file: mmap/fault/PFN/usercopy/import/export sinks reached "
         "without the required imported/same_va/protected/permission/owner guard. Companion files may show the expected guard."
@@ -3109,6 +3933,16 @@ class TargetedFileReviewer:
         arithmetic_nodes = self._nodes_for_notes(detector_nodes, detector_result.arithmetic_chain_notes)
         resource_nodes = self._nodes_for_notes(detector_nodes, detector_result.resource_binding_notes)
         policy_nodes = self._nodes_for_notes(detector_nodes, detector_result.policy_gate_notes)
+        resource_validation_nodes = self._nodes_for_notes(detector_nodes, detector_result.resource_validation_notes)
+        cleanup_ledger_nodes = self._nodes_for_notes(detector_nodes, detector_result.cleanup_ledger_notes)
+        async_nodes = self._nodes_for_notes(detector_nodes, detector_result.async_order_notes)
+        size_nodes = self._nodes_for_notes(detector_nodes, detector_result.size_propagation_notes)
+        tracker_nodes = self._nodes_for_notes(detector_nodes, detector_result.stale_tracker_notes)
+        type_nodes = self._nodes_for_notes(detector_nodes, detector_result.metadata_type_confusion_notes)
+        pm_nodes = self._nodes_for_notes(detector_nodes, detector_result.pm_sequence_notes)
+        secondary_nodes = self._nodes_for_notes(detector_nodes, detector_result.secondary_omission_notes)
+        protected_nodes = self._nodes_for_notes(detector_nodes, detector_result.protected_mmu_notes, cap=40)
+        sentinel_nodes = self._nodes_for_notes(detector_nodes, detector_result.sentinel_misuse_notes)
         lock_cycle_nodes = self._nodes_for_notes(detector_nodes, detector_result.cross_file_lock_notes, cap=48)
         protocol_nodes = self._nodes_for_notes(detector_nodes, detector_result.protocol_notes, cap=48)
         passes = [
@@ -3132,18 +3966,36 @@ class TargetedFileReviewer:
             passes.append(("cleanup_symmetry", context.target_nodes, context.lifecycle_pair_nodes + cleanup_nodes))
         if detector_result.accounting_drift_notes:
             passes.append(("accounting_drift", context.target_nodes, context.shared_state_nodes + accounting_nodes))
+        if detector_result.cleanup_ledger_notes:
+            passes.append(("cleanup_ledger", context.target_nodes, context.lifecycle_pair_nodes + context.companion_nodes + cleanup_ledger_nodes))
+        if detector_result.resource_validation_notes:
+            passes.append(("resource_validation_order", context.target_nodes, context.shared_state_nodes + context.companion_nodes + resource_validation_nodes))
         if detector_result.arithmetic_chain_notes:
             passes.append(("arithmetic_chain_mismatch", context.target_nodes, context.outbound_callees + arithmetic_nodes))
+        if detector_result.size_propagation_notes:
+            passes.append(("size_propagation", context.target_nodes, context.outbound_callees + context.companion_nodes + size_nodes))
         if detector_result.resource_binding_notes:
             passes.append((
                 "resource_binding_order", context.target_nodes,
                 context.shared_state_nodes + context.lifecycle_pair_nodes + context.companion_nodes + resource_nodes,
             ))
+        if detector_result.async_order_notes:
+            passes.append(("async_event_order", context.target_nodes, context.callback_nodes + context.companion_nodes + async_nodes))
+        if detector_result.stale_tracker_notes:
+            passes.append(("stale_tracker_state", context.target_nodes, context.shared_state_nodes + tracker_nodes))
+        if detector_result.metadata_type_confusion_notes:
+            passes.append(("metadata_type_confusion", context.target_nodes, type_nodes))
+        if detector_result.pm_sequence_notes:
+            passes.append(("pm_runtime_sequence", context.target_nodes, context.companion_nodes + pm_nodes))
+        if detector_result.secondary_omission_notes:
+            passes.append(("secondary_element_omission", context.target_nodes, secondary_nodes))
         if detector_result.policy_gate_notes:
             passes.append((
                 "policy_gate_before_sink", context.target_nodes,
                 context.companion_nodes + context.outbound_callees + policy_nodes,
             ))
+        if detector_result.sentinel_misuse_notes:
+            passes.append(("sentinel_misuse", context.target_nodes, sentinel_nodes))
         if detector_result.allocation_arithmetic_notes:
             passes.append(("allocation_arithmetic", context.target_nodes, context.outbound_callees + detector_nodes))
         if detector_result.format_notes or detector_result.info_leak_notes:
@@ -3163,6 +4015,11 @@ class TargetedFileReviewer:
                 "state_transition_protocol", context.target_nodes,
                 context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes
                 + context.shared_state_nodes + protocol_nodes,
+            ))
+        if detector_result.protected_mmu_notes:
+            passes.append((
+                "protected_mmu_protocol", context.target_nodes,
+                context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes + protected_nodes,
             ))
         return passes
 
@@ -3225,7 +4082,10 @@ class TargetedFileReviewer:
         if pass_name in {
             "copy_contract", "cleanup_symmetry", "accounting_drift",
             "arithmetic_chain_mismatch", "resource_binding_order",
-            "policy_gate_before_sink",
+            "policy_gate_before_sink", "resource_validation_order",
+            "cleanup_ledger", "async_event_order", "size_propagation",
+            "stale_tracker_state", "metadata_type_confusion", "pm_runtime_sequence",
+            "secondary_element_omission", "protected_mmu_protocol", "sentinel_misuse",
         }:
             return 2600, 36000
         return 3000, 52000
@@ -3240,12 +4100,16 @@ class TargetedFileReviewer:
         if pass_name in {
             "copy_contract", "cleanup_symmetry", "accounting_drift",
             "arithmetic_chain_mismatch", "resource_binding_order",
-            "policy_gate_before_sink",
+            "policy_gate_before_sink", "resource_validation_order",
+            "cleanup_ledger", "async_event_order", "size_propagation",
+            "stale_tracker_state", "metadata_type_confusion", "pm_runtime_sequence",
+            "secondary_element_omission", "protected_mmu_protocol", "sentinel_misuse",
         }:
             return (
                 f"Findings must use primary_file={target_file} and identify the exact target-file statement plus the exact "
-                "missing check, missing rollback, mismatched formula, stale binding, or missing policy gate. Do not report "
-                "adjacent generic lifecycle/race/null issues unless they are necessary to explain the same root cause."
+                "missing check, missing rollback, mismatched formula, stale binding, missing serialization, wrong sentinel, "
+                "bad cast, skipped second element, or missing policy gate. Do not report adjacent generic lifecycle/race/null/"
+                "overflow/info-leak issues unless they are necessary to explain the same root cause."
             )
         return "Findings must be rooted in the target file. Other files are evidence/context only."
 
@@ -3293,15 +4157,32 @@ class TargetedFileReviewer:
             "copy_contract": (("COPY_CONTRACT", detector_result.copy_contract_notes),),
             "cleanup_symmetry": (("CLEANUP_SYMMETRY", detector_result.cleanup_symmetry_notes),),
             "accounting_drift": (("ACCOUNTING_DRIFT", detector_result.accounting_drift_notes),),
+            "cleanup_ledger": (("CLEANUP_LEDGER", detector_result.cleanup_ledger_notes),),
+            "resource_validation_order": (("RESOURCE_VALIDATION_ORDER", detector_result.resource_validation_notes),),
             "arithmetic_chain_mismatch": (
                 ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes),
                 ("ALLOCATION_ARITHMETIC", detector_result.allocation_arithmetic_notes[:12]),
             ),
+            "size_propagation": (
+                ("SIZE_PROPAGATION", detector_result.size_propagation_notes),
+                ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes[:12]),
+            ),
             "resource_binding_order": (
                 ("RESOURCE_BINDING_ORDER", detector_result.resource_binding_notes),
+                ("RESOURCE_VALIDATION_ORDER", detector_result.resource_validation_notes[:12]),
                 ("STATE_PUBLICATION", detector_result.state_publication_notes[:12]),
                 ("DISABLE_STALE", detector_result.disable_stale_notes[:12]),
             ),
+            "async_event_order": (("ASYNC_EVENT_ORDER", detector_result.async_order_notes),),
+            "stale_tracker_state": (("STALE_TRACKER_STATE", detector_result.stale_tracker_notes),),
+            "metadata_type_confusion": (("METADATA_TYPE_CONFUSION", detector_result.metadata_type_confusion_notes),),
+            "pm_runtime_sequence": (("PM_RUNTIME_SEQUENCE", detector_result.pm_sequence_notes),),
+            "secondary_element_omission": (("SECONDARY_ELEMENT_OMISSION", detector_result.secondary_omission_notes),),
+            "protected_mmu_protocol": (
+                ("PROTECTED_MMU_PROTOCOL", detector_result.protected_mmu_notes),
+                ("STATE_TRANSITION_PROTOCOL", detector_result.protocol_notes[:12]),
+            ),
+            "sentinel_misuse": (("SENTINEL_MISUSE", detector_result.sentinel_misuse_notes),),
             "policy_gate_before_sink": (("POLICY_GATE_BEFORE_SINK", detector_result.policy_gate_notes),),
             "format_and_info_leak": (
                 ("FORMAT_WRAPPER", detector_result.format_notes),
@@ -3445,6 +4326,16 @@ def _partial_duplicate_family(vtype: str) -> str:
         "policy_gate_before_sink": "policy_gate",
         "cross_file_lock_cycle": "lock_cycle",
         "state_transition_protocol": "state_order",
+        "resource_validation_order": "resource_binding",
+        "cleanup_ledger": "cleanup",
+        "async_event_order": "state_order",
+        "size_propagation": "arithmetic_chain",
+        "stale_tracker_state": "resource_binding",
+        "metadata_type_confusion": "type_confusion",
+        "pm_runtime_sequence": "state_order",
+        "secondary_element_omission": "logic_omission",
+        "protected_mmu_protocol": "state_order",
+        "sentinel_misuse": "semantic_mismatch",
     }
     return aliases.get(normal, normal)
 
@@ -3590,10 +4481,21 @@ _EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
     "partial_policy_gate_before_sink",
     "partial_cross_file_lock_cycle",
     "partial_state_transition_protocol",
+    "partial_resource_validation_order",
+    "partial_cleanup_ledger",
+    "partial_async_event_order",
+    "partial_size_propagation",
+    "partial_stale_tracker_state",
+    "partial_metadata_type_confusion",
+    "partial_pm_runtime_sequence",
+    "partial_secondary_element_omission",
+    "partial_protected_mmu_protocol",
+    "partial_sentinel_misuse",
 })
 _WEAK_GENERIC_VTYPES = frozenset({
     "null_deref", "missing_lock", "teardown_race", "callback_lifecycle",
-    "deferred_uaf", "integer_overflow", "buffer_overflow", "other",
+    "deferred_uaf", "integer_overflow", "buffer_overflow", "lock_order",
+    "state_order", "ordering_gap", "info_leak", "format_string", "other",
 })
 
 
@@ -3604,11 +4506,40 @@ def _prefer_exact_partial_findings(findings: list[VulnerabilityFinding]) -> list
     kept = []
     for finding in findings:
         if finding.analysis_type in _EXACT_PARTIAL_ANALYSIS_TYPES:
+            if _is_weaker_exact_adjacent_to_stronger(finding, exact):
+                continue
             kept.append(finding)
             continue
         if not _is_weaker_adjacent_to_exact(finding, exact):
             kept.append(finding)
     return kept
+
+
+def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]) -> bool:
+    weaker = {
+        "partial_cross_file_lock_cycle", "partial_state_transition_protocol",
+        "partial_resource_binding_order", "partial_allocation_arithmetic",
+    }
+    if finding.analysis_type not in weaker:
+        return False
+    own_priority = _PARTIAL_PASS_PRIORITY.get(finding.analysis_type, 50)
+    fn = finding.primary_function or finding.sink_function or finding.source_function
+    line = _safe_int(finding.primary_line or finding.sink_line or finding.source_line, 0)
+    text = _partial_finding_text(finding).lower()
+    for exact in exact_findings:
+        if exact is finding:
+            continue
+        if _PARTIAL_PASS_PRIORITY.get(exact.analysis_type, 50) >= own_priority:
+            continue
+        exact_fn = exact.primary_function or exact.sink_function or exact.source_function
+        exact_line = _safe_int(exact.primary_line or exact.sink_line or exact.source_line, 0)
+        exact_text = _partial_finding_text(exact).lower()
+        if fn and exact_fn and fn == exact_fn and (not line or not exact_line or abs(line - exact_line) <= 24):
+            return True
+        if _partial_note_tokens(text) & _partial_note_tokens(exact_text):
+            if re.search(r"\b(doorbell|queue|pm|power|slot|tracker|protected|mmu|same_va|imported|size|pages)\b", exact_text):
+                return True
+    return False
 
 
 def _is_weaker_adjacent_to_exact(finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]) -> bool:
@@ -3625,6 +4556,17 @@ def _is_weaker_adjacent_to_exact(finding: VulnerabilityFinding, exact_findings: 
                 return True
         if exact.sink_line and finding.sink_line and abs(exact.sink_line - finding.sink_line) <= 12:
             return True
+        exact_file = exact.primary_file or exact.sink_file or exact.source_file
+        finding_file = finding.primary_file or finding.sink_file or finding.source_file
+        if exact_file and finding_file and exact_file == finding_file:
+            exact_text = _partial_finding_text(exact).lower()
+            weak_text = _partial_finding_text(finding).lower()
+            if _partial_note_tokens(exact_text) & _partial_note_tokens(weak_text):
+                return True
+            if re.search(r"\b(pm|power|clock|clk|runtime)\b", exact_text) and vtype in {"info_leak", "format_string"}:
+                return True
+            if re.search(r"\b(doorbell|queue|tracker|slot|protected|mmu|same_va|imported)\b", exact_text) and vtype in _WEAK_GENERIC_VTYPES:
+                return True
     return False
 
 
@@ -3714,9 +4656,19 @@ class PartialReachabilityFileService:
                 "allocation_arithmetic": len(detector_result.allocation_arithmetic_notes),
                 "copy_contracts": len(detector_result.copy_contract_notes),
                 "cleanup_symmetry": len(detector_result.cleanup_symmetry_notes),
+                "cleanup_ledger": len(detector_result.cleanup_ledger_notes),
                 "accounting_drift": len(detector_result.accounting_drift_notes),
                 "arithmetic_chain": len(detector_result.arithmetic_chain_notes),
+                "size_propagation": len(detector_result.size_propagation_notes),
                 "resource_binding": len(detector_result.resource_binding_notes),
+                "resource_validation": len(detector_result.resource_validation_notes),
+                "async_order": len(detector_result.async_order_notes),
+                "stale_tracker": len(detector_result.stale_tracker_notes),
+                "metadata_type_confusion": len(detector_result.metadata_type_confusion_notes),
+                "pm_sequence": len(detector_result.pm_sequence_notes),
+                "secondary_omission": len(detector_result.secondary_omission_notes),
+                "protected_mmu": len(detector_result.protected_mmu_notes),
+                "sentinel_misuse": len(detector_result.sentinel_misuse_notes),
                 "policy_gates": len(detector_result.policy_gate_notes),
                 "format_wrappers": len(detector_result.format_notes),
                 "info_leaks": len(detector_result.info_leak_notes),
@@ -3741,9 +4693,19 @@ class PartialReachabilityFileService:
             exact_count = (
                 len(detector_result.copy_contract_notes)
                 + len(detector_result.cleanup_symmetry_notes)
+                + len(detector_result.cleanup_ledger_notes)
                 + len(detector_result.accounting_drift_notes)
                 + len(detector_result.arithmetic_chain_notes)
+                + len(detector_result.size_propagation_notes)
                 + len(detector_result.resource_binding_notes)
+                + len(detector_result.resource_validation_notes)
+                + len(detector_result.async_order_notes)
+                + len(detector_result.stale_tracker_notes)
+                + len(detector_result.metadata_type_confusion_notes)
+                + len(detector_result.pm_sequence_notes)
+                + len(detector_result.secondary_omission_notes)
+                + len(detector_result.protected_mmu_notes)
+                + len(detector_result.sentinel_misuse_notes)
                 + len(detector_result.policy_gate_notes)
             )
             if exact_count:
@@ -3821,6 +4783,7 @@ class PartialReachabilityFileService:
                     "fields": len(self._symbol_index.field_uses),
                     "locks": len(self._symbol_index.symbols_by_lock),
                     "state_tokens": len(self._symbol_index.symbols_by_state_token),
+                    "event_tokens": len(self._symbol_index.symbols_by_event_token),
                     "globals": len(self._symbol_index.globals),
                 })
             return self._symbol_index
