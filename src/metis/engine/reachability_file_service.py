@@ -114,7 +114,9 @@ _VULN_TYPES = (
     "copy_contract, arithmetic_chain_mismatch, resource_binding_order, policy_gate_before_sink, "
     "resource_validation_order, cleanup_ledger, async_event_order, size_propagation, stale_tracker_state, "
     "pm_runtime_sequence, secondary_element_omission, protected_mmu_protocol, sentinel_misuse, "
-    "mmu_recovery_rollback, "
+    "mmu_recovery_rollback, suspend_cleanup_ledger, suspend_size_sink, fault_clear_order, "
+    "pm_callback_order, region_replace_erase, imported_mapping_policy, alias_extent_mismatch, "
+    "named_lock_inversion, active_singleton_stale, zero_count_underflow, "
     "state_transition_protocol, "
     "stale_after_unlock, missing_lock, lock_order, state_order, ordering_gap, "
     "teardown_race, deferred_uaf, callback_lifecycle, refcount_imbalance, "
@@ -266,6 +268,14 @@ _QUEUE_LIVENESS_WORDS = frozenset({
 _TRACKER_WORDS = frozenset({"tracker", "tracking", "rbtree", "rb", "tree", "list", "node", "start_pfn", "inserted"})
 _PM_WORDS = frozenset({"pm", "runtime", "power", "clock", "clk", "regulator", "register", "gpu_power"})
 _SLOT_WORDS = frozenset({"slot", "slots", "atom", "atoms", "prio", "priority", "job", "jobs"})
+_SUSPEND_WORDS = frozenset({
+    "suspend", "suspended", "sus", "buf", "buffer", "pages", "nr_pages",
+    "normal", "group", "queue", "drain", "wait", "cqs", "same_va",
+})
+_MAPPING_POLICY_WORDS = frozenset({
+    "imported", "same_va", "dma_buf", "umm", "protected", "native",
+    "vmap", "vmap_prot", "mmap", "fault", "pfn", "softjob", "kcpu",
+})
 _METADATA_SOURCE_RE = re.compile(r"\b(?:page_private|folio_get_private|private|metadata|opaque|pfn|phys|addr)\b", re.IGNORECASE)
 _STRUCT_CAST_RE = re.compile(
     r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
@@ -289,12 +299,45 @@ _ASYNC_SCHEDULE_RE = re.compile(
 )
 _ASYNC_CLEAR_RE = re.compile(r"\b(?:clear|ack|reset)\w*\s*\(", re.IGNORECASE)
 _PROTECTED_ACTIVE_RE = re.compile(r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b", re.IGNORECASE)
+_FAULT_CLEAR_RE = re.compile(
+    r"\b(?:GPU_COMMAND_CLEAR_FAULT|CLEAR_FAULT|clear[_\s-]*fault|fault[_\s-]*clear|ack[_\s-]*fault|"
+    r"reset[_\s-]*fault|FAULT_CLEAR)\b|"
+    r"\b(?:writel|kbase_reg_write|regmap_write)\s*\([^;\n]*(?:FAULT|IRQ|INTERRUPT)[^;\n]*(?:CLEAR|ACK|RESET)",
+    re.IGNORECASE,
+)
+_SUSPEND_RELEASE_RE = re.compile(
+    r"\b(?:put_page|unpin_user_pages|release_pages|kbase_mem_phy_alloc_put|"
+    r"kbase_mem_phy_alloc_kernel_unmapped|free_pages|vunmap|unmap)\w*\s*\(",
+    re.IGNORECASE,
+)
+_SUSPEND_SOURCE_RE = re.compile(
+    r"\b(?:get_user_pages|pin_user_pages|normal_suspend_buf|sus_buf|suspend_buf|"
+    r"nr_pages|PFN_UP|GROUP_SUSPEND|CQS_WAIT|drain_queue)\b",
+    re.IGNORECASE,
+)
+_REGION_REPLACE_RE = re.compile(
+    r"\b(?:replace|replacement|exact|merge|split|ENOMEM|rblink|rb_node|rb_erase|"
+    r"region_refcnt_free|start_pfn)\b",
+    re.IGNORECASE,
+)
+_ACTIVE_SINGLETON_RE = re.compile(
+    r"\b(?:active_(?:protm|protected)?_?grp|active_(?:protm|protected)?_?group|"
+    r"active_protm_grp|active_group)\b",
+    re.IGNORECASE,
+)
+_ZERO_COUNT_UNDERFLOW_RE = re.compile(
+    r"\b(?:count|nr|num|n)\s*-\s*1\b|--\s*(?:i|idx|index)|"
+    r"\b(?:for|while)\s*\([^)]*(?:>=\s*0|--)[^)]*\)",
+    re.IGNORECASE,
+)
 _DOMAIN_ROOT_TOKENS = frozenset({
     "doorbell", "queue", "fault", "irq", "interrupt", "slot", "atom", "pm",
     "runtime", "power", "clock", "clk", "same_va", "imported", "umm",
     "dma_buf", "protected", "protm", "mmu", "page_private", "start_pfn", "tracker",
     "hwaccess", "hwcnt", "backend", "suspend", "drain_queue", "group_suspend",
     "cqs_wait", "alias", "nents", "stride", "pfn", "phys", "dma",
+    "sus_buf", "normal_suspend_buf", "clear_fault", "native", "vmap_prot",
+    "active_protm_grp", "zero_count",
 })
 _MMU_RECOVERY_WORDS = frozenset({"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"})
 _MMU_RECOVERY_LOOP_RE = re.compile(r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)", re.IGNORECASE)
@@ -319,6 +362,16 @@ _PARTIAL_VULN_ALIASES = {
     "secondary_element_omission": "secondary_element_omission",
     "protected_mmu_protocol": "protected_mmu_protocol",
     "mmu_recovery_rollback": "mmu_recovery_rollback",
+    "suspend_cleanup_ledger": "suspend_cleanup_ledger",
+    "suspend_size_sink": "suspend_size_sink",
+    "fault_clear_order": "fault_clear_order",
+    "pm_callback_order": "pm_callback_order",
+    "region_replace_erase": "region_replace_erase",
+    "imported_mapping_policy": "imported_mapping_policy",
+    "alias_extent_mismatch": "alias_extent_mismatch",
+    "named_lock_inversion": "named_lock_inversion",
+    "active_singleton_stale": "active_singleton_stale",
+    "zero_count_underflow": "zero_count_underflow",
     "sentinel_misuse": "wrong_constant",
 }
 _PARTIAL_CWE_OVERRIDES = {
@@ -340,6 +393,16 @@ _PARTIAL_CWE_OVERRIDES = {
     "secondary_element_omission": "CWE-670",
     "protected_mmu_protocol": "CWE-696",
     "mmu_recovery_rollback": "CWE-193",
+    "suspend_cleanup_ledger": "CWE-459",
+    "suspend_size_sink": "CWE-131",
+    "fault_clear_order": "CWE-362",
+    "pm_callback_order": "CWE-696",
+    "region_replace_erase": "CWE-664",
+    "imported_mapping_policy": "CWE-284",
+    "alias_extent_mismatch": "CWE-190",
+    "named_lock_inversion": "CWE-833",
+    "active_singleton_stale": "CWE-416",
+    "zero_count_underflow": "CWE-191",
     "accounting_drift": "CWE-682",
     "missing_lock": "CWE-820",
     "state_order": "CWE-696",
@@ -363,33 +426,43 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_publish_rollback": 2,
     "partial_copy_contract": 3,
     "partial_cleanup_symmetry": 4,
-    "partial_accounting_drift": 5,
-    "partial_cleanup_ledger": 6,
-    "partial_resource_validation_order": 7,
-    "partial_arithmetic_chain_mismatch": 8,
-    "partial_size_propagation": 9,
-    "partial_resource_binding_order": 10,
-    "partial_async_event_order": 11,
-    "partial_stale_tracker_state": 12,
-    "partial_metadata_type_confusion": 13,
-    "partial_pm_runtime_sequence": 14,
-    "partial_secondary_element_omission": 15,
-    "partial_policy_gate_before_sink": 16,
-    "partial_sentinel_misuse": 17,
-    "partial_protected_mmu_protocol": 18,
-    "partial_mmu_recovery_rollback": 19,
-    "partial_allocation_arithmetic": 20,
-    "partial_fops_lifecycle": 21,
-    "partial_cross_file_lock_cycle": 22,
-    "partial_state_transition_protocol": 23,
-    "partial_partial_exact_fallback": 24,
-    "partial_lock_and_stale": 25,
-    "partial_lifecycle": 26,
-    "partial_shared_state": 27,
-    "partial_inbound_contract": 28,
-    "partial_outbound_misuse": 29,
-    "partial_target_intra": 30,
-    "partial_concurrency": 31,
+    "partial_suspend_cleanup_ledger": 5,
+    "partial_accounting_drift": 6,
+    "partial_cleanup_ledger": 7,
+    "partial_suspend_size_sink": 8,
+    "partial_alias_extent_mismatch": 9,
+    "partial_resource_validation_order": 10,
+    "partial_arithmetic_chain_mismatch": 11,
+    "partial_size_propagation": 12,
+    "partial_fault_clear_order": 13,
+    "partial_pm_callback_order": 14,
+    "partial_resource_binding_order": 15,
+    "partial_async_event_order": 16,
+    "partial_stale_tracker_state": 17,
+    "partial_region_replace_erase": 18,
+    "partial_metadata_type_confusion": 19,
+    "partial_pm_runtime_sequence": 20,
+    "partial_secondary_element_omission": 21,
+    "partial_zero_count_underflow": 22,
+    "partial_policy_gate_before_sink": 23,
+    "partial_imported_mapping_policy": 24,
+    "partial_sentinel_misuse": 25,
+    "partial_active_singleton_stale": 26,
+    "partial_protected_mmu_protocol": 27,
+    "partial_named_lock_inversion": 28,
+    "partial_mmu_recovery_rollback": 29,
+    "partial_allocation_arithmetic": 30,
+    "partial_fops_lifecycle": 31,
+    "partial_cross_file_lock_cycle": 32,
+    "partial_state_transition_protocol": 33,
+    "partial_partial_exact_fallback": 34,
+    "partial_lock_and_stale": 35,
+    "partial_lifecycle": 36,
+    "partial_shared_state": 37,
+    "partial_inbound_contract": 38,
+    "partial_outbound_misuse": 39,
+    "partial_target_intra": 40,
+    "partial_concurrency": 41,
 }
 
 
@@ -611,6 +684,16 @@ class PartialDetectorResult:
     protected_mmu_notes: list[str] = None
     mmu_recovery_notes: list[str] = None
     sentinel_misuse_notes: list[str] = None
+    suspend_cleanup_ledger_notes: list[str] = None
+    suspend_size_sink_notes: list[str] = None
+    fault_clear_order_notes: list[str] = None
+    pm_callback_order_notes: list[str] = None
+    region_replace_erase_notes: list[str] = None
+    imported_mapping_policy_notes: list[str] = None
+    alias_extent_mismatch_notes: list[str] = None
+    named_lock_inversion_notes: list[str] = None
+    active_singleton_stale_notes: list[str] = None
+    zero_count_underflow_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -628,6 +711,11 @@ class PartialDetectorResult:
             "stale_tracker_notes", "metadata_type_confusion_notes", "pm_sequence_notes",
             "secondary_omission_notes", "protected_mmu_notes", "mmu_recovery_notes",
             "sentinel_misuse_notes",
+            "suspend_cleanup_ledger_notes", "suspend_size_sink_notes",
+            "fault_clear_order_notes", "pm_callback_order_notes",
+            "region_replace_erase_notes", "imported_mapping_policy_notes",
+            "alias_extent_mismatch_notes", "named_lock_inversion_notes",
+            "active_singleton_stale_notes", "zero_count_underflow_notes",
             "nodes", "globals",
         ):
             if getattr(self, name) is None:
@@ -869,7 +957,11 @@ def _normalise_lock_expr(expr: str) -> str:
     expr = expr.replace("->", ".").strip("&()")
     if not expr:
         return ""
-    for stable in ("hwaccess_lock", "scheduler_lock", "ctx.lock", "queue.lock", "pm.lock", "mmu.lock"):
+    for stable in (
+        "hwaccess_lock", "scheduler_lock", "clk_rtm.lock", "hwcnt.lock",
+        "backend.lock", "state_lock", "state.lock", "ctx.lock", "queue.lock",
+        "pm.lock", "mmu.lock", "mmu_hw_mutex",
+    ):
         if stable in expr:
             return stable
     if expr.endswith(".lock"):
@@ -896,6 +988,18 @@ def _domain_root_tokens(text: str) -> set[str]:
         tokens.add("group_suspend")
     if "cqs" in tokens and "wait" in tokens:
         tokens.add("cqs_wait")
+    if "sus" in tokens and "buf" in tokens:
+        tokens.add("sus_buf")
+    if "normal" in tokens and "suspend" in tokens and "buf" in tokens:
+        tokens.add("normal_suspend_buf")
+    if "clear" in tokens and "fault" in tokens:
+        tokens.add("clear_fault")
+    if "vmap" in tokens and "prot" in tokens:
+        tokens.add("vmap_prot")
+    if "active" in tokens and ("protm" in tokens or "protected" in tokens) and ("grp" in tokens or "group" in tokens):
+        tokens.add("active_protm_grp")
+    if "zero" in tokens and "count" in tokens:
+        tokens.add("zero_count")
     return tokens & _DOMAIN_ROOT_TOKENS
 
 
@@ -1480,6 +1584,12 @@ class SymbolIndexBuilder:
         if _ASYNC_CLEAR_RE.search(line) and tokens & {"fault", "irq", "interrupt", "event", "state"}:
             token = sorted(tokens & {"fault", "irq", "interrupt", "event", "state"})[0]
             facts.append(EventFact("async_clear", token, line_number, line, "clear"))
+        if _FAULT_CLEAR_RE.search(line):
+            facts.append(EventFact("fault_clear", "fault", line_number, line, "clear_fault"))
+
+        if _SUSPEND_SOURCE_RE.search(line):
+            for token in sorted(tokens & (_SUSPEND_WORDS | {"size", "pages", "nr"}))[:4]:
+                facts.append(EventFact("suspend_resource", token, line_number, line, "suspend"))
 
         if _PM_RUNTIME_API_RE.search(line):
             facts.append(EventFact("pm_runtime_get", "pm", line_number, line, "runtime"))
@@ -1510,6 +1620,8 @@ class SymbolIndexBuilder:
                 facts.append(EventFact("protected_verify", "protected", line_number, line, "verify"))
         if "mmu" in tokens and _LOCK_CALL_RE.search(line):
             facts.append(EventFact("mmu_lock", "mmu", line_number, line, "lock"))
+        if _ACTIVE_SINGLETON_RE.search(line):
+            facts.append(EventFact("active_singleton", "active_protm_grp", line_number, line, "active_singleton"))
 
         return facts
 
@@ -1996,6 +2108,7 @@ class PartialContextBuilder:
                     "resource_bind", "resource_clear", "async_schedule", "async_clear",
                     "pm_sensitive_action", "pm_runtime_get", "tracker_remove",
                     "tracker_invalidate", "slot_first", "slot_second", "protected_wait",
+                    "fault_clear", "suspend_resource", "active_singleton",
                 }
                 and event.token not in {"register", "power", "pm", "slot"}
             )
@@ -2423,30 +2536,40 @@ class PartialCandidateDetector:
         self._detect_arithmetic_chain_mismatch(index, result, target_syms)
         self._detect_size_propagation(index, result, target_syms, context)
         self._detect_alias_size_chain(index, result, target_syms, context)
+        self._detect_alias_extent_mismatch(index, result, target_syms, context)
         self._detect_copy_contracts(index, result, target_syms)
         self._detect_cleanup_symmetry(index, result, target_syms)
         self._detect_interprocedural_cleanup_ledger(index, result, target_syms, context)
+        self._detect_suspend_cleanup_ledger(index, result, target_syms, context)
+        self._detect_suspend_size_sink(index, result, target_syms, context)
         self._detect_accounting_drift(index, result, target_syms)
         self._detect_resource_binding_order(index, result, target_syms)
         self._detect_resource_validation_order(index, result, target_syms)
         self._detect_async_event_order(index, result, target_syms)
+        self._detect_fault_clear_order(index, result, target_syms, context)
         self._detect_stale_tracker_state(index, result, target_syms)
+        self._detect_region_replace_erase(index, result, target_syms, context)
         self._detect_metadata_type_confusion(index, result, target_syms)
         self._detect_pm_runtime_sequence(index, result, target_syms)
+        self._detect_pm_callback_order(index, result, target_syms)
         self._detect_secondary_element_omission(index, result, target_syms)
+        self._detect_zero_count_underflow(index, result, target_syms)
         wrappers = self._detect_format_wrappers(index, result, target_syms, target_prefixes)
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
         self._detect_lock_order(index, result, context_syms, target_file)
         self._detect_cross_file_lock_cycles(index, result, context, target_file)
+        self._detect_named_lock_inversion(index, result, context, target_file)
         self._detect_stale_after_unlock(index, result, target_syms)
         self._detect_disable_stale(index, result, target_syms)
         self._detect_callback_lifetime(index, result, target_syms, target_prefixes)
         self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
         self._detect_protected_mmu_protocol(index, result, target_syms, context)
+        self._detect_active_singleton_stale(index, result, target_syms, context)
         self._detect_mmu_recovery_rollback(index, result, target_syms)
         self._detect_policy_gate_before_sink(index, result, target_syms, context)
         self._detect_imported_same_va_fault_policy(index, result, target_syms, context)
+        self._detect_imported_mapping_policy(index, result, target_syms, context)
         self._detect_sentinel_misuse(index, result, target_syms)
         self._detect_target_calls_wrappers(index, result, target_syms, wrappers)
         result.nodes = self._dedupe_nodes(result.nodes)
@@ -2947,6 +3070,51 @@ class PartialCandidateDetector:
                     if len(result.async_order_notes) >= 12:
                         return
 
+    def _detect_fault_clear_order(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        workers = [
+            sym for sym in context_syms
+            if _fact_tokens(sym.name) & {"fault", "work", "worker", "handler", "irq", "interrupt"}
+            and "fault" in _fact_tokens(self._body_text(sym)[:8000])
+        ][:32]
+        for sym in target_syms:
+            sym_text = f"{sym.name} {self._body_text(sym)[:16000]}"
+            if not (_fact_tokens(sym_text) & {"fault", "irq", "interrupt"}):
+                continue
+            lines = self._lines(sym)
+            clear_line = next(((line_no, line) for line_no, line in lines if _FAULT_CLEAR_RE.search(line)), None)
+            if not clear_line:
+                continue
+            schedule_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no >= clear_line[0] - 12
+                and line_no <= clear_line[0] + 24
+                and _ASYNC_SCHEDULE_RE.search(line)
+                and re.search(r"\b(?:fault|irq|interrupt|work|worker)\b", line, re.IGNORECASE)
+            ), None)
+            worker = next((candidate for candidate in workers if candidate.file_path != sym.file_path), None)
+            if not schedule_line and not worker:
+                continue
+            window = "\n".join(
+                line for line_no, line in lines
+                if clear_line[0] <= line_no <= min(clear_line[0] + 24, sym.body_end or clear_line[0] + 24)
+            )
+            if re.search(r"\b(?:fault_handled|handled|processed|complete|flush_work|cancel_work_sync|synchronize_irq)\b", window, re.IGNORECASE):
+                continue
+            note_tail = (
+                f"scheduled async consumer line {schedule_line[0]} `{_line_excerpt(schedule_line[1])}`"
+                if schedule_line else f"selected async consumer {worker.file_path}::{worker.name}"
+            )
+            result.fault_clear_order_notes.append(
+                f"{sym.file_path}::{sym.name} line {clear_line[0]} clears/acks fault state "
+                f"`{_line_excerpt(clear_line[1])}` before {note_tail} has visible handled confirmation or serialization."
+            )
+            self._add_node(index, result, sym)
+            if worker:
+                self._add_node(index, result, worker)
+            if len(result.fault_clear_order_notes) >= 8:
+                return
+
     def _detect_stale_tracker_state(self, index, result, target_syms):
         for sym in target_syms:
             events = _symbol_event_facts(index, sym)
@@ -2978,6 +3146,49 @@ class PartialCandidateDetector:
                 self._add_node(index, result, sym)
                 if len(result.stale_tracker_notes) >= 12:
                     return
+
+    def _detect_region_replace_erase(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        free_companion = next((
+            sym for sym in context_syms
+            if sym.file_path not in {target.file_path for target in target_syms}
+            and re.search(r"\b(?:region_refcnt_free|free|release)\b", f"{sym.name} {self._body_text(sym)[:8000]}", re.IGNORECASE)
+            and "region" in _fact_tokens(f"{sym.name} {self._body_text(sym)[:4000]}")
+        ), None)
+        for sym in target_syms:
+            body = self._body_text(sym)[:18000]
+            if not (_REGION_REPLACE_RE.search(body) and _name_has_any(sym.name, {"region", "remove", "replace", "merge", "insert"})):
+                continue
+            if not re.search(r"\b(?:ENOMEM|alloc|new|replace|exact|merge|split)\b", body, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            failure = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:ENOMEM|ERR_PTR|return\s+-ENOMEM|goto\s+(?:err|fail|out))\b", line, re.IGNORECASE)
+            ), None)
+            free_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:region_refcnt_free|kbase_free_alloced_region|free|kfree)\w*\s*\(", line, re.IGNORECASE)
+            ), None)
+            if not failure or not free_line:
+                continue
+            prior_erase = any(
+                line_no < free_line[0] and re.search(r"\b(?:rb_erase|list_del|start_pfn\s*=\s*0|rblink.*NULL|RB_CLEAR)\b", line, re.IGNORECASE)
+                for line_no, line in lines
+            )
+            if prior_erase:
+                continue
+            result.region_replace_erase_notes.append(
+                f"{sym.file_path}::{sym.name} line {failure[0]} enters replacement/failure path "
+                f"`{_line_excerpt(failure[1])}`, then line {free_line[0]} frees/removes the region "
+                f"`{_line_excerpt(free_line[1])}` without visible rbtree/rblink/start_pfn invalidation on that exact path"
+                f"{' before companion free context ' + free_companion.file_path + '::' + free_companion.name if free_companion else ''}."
+            )
+            self._add_node(index, result, sym)
+            if free_companion:
+                self._add_node(index, result, free_companion)
+            if len(result.region_replace_erase_notes) >= 8:
+                return
 
     def _detect_metadata_type_confusion(self, index, result, target_syms):
         for sym in target_syms:
@@ -3065,6 +3276,51 @@ class PartialCandidateDetector:
                 if len(result.pm_sequence_notes) >= 12:
                     return
 
+    def _detect_pm_callback_order(self, index, result, target_syms):
+        for sym in target_syms:
+            name_l = sym.name.lower()
+            if not (
+                "pm_callback" in name_l
+                or ("runtime" in name_l and ("on" in name_l or "off" in name_l or "resume" in name_l or "suspend" in name_l))
+                or ("power" in name_l and ("on" in name_l or "off" in name_l))
+            ):
+                continue
+            lines = self._lines(sym)
+            runtime_get = next(((line_no, line) for line_no, line in lines if _PM_RUNTIME_API_RE.search(line)), None)
+            runtime_put = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:pm_runtime_put|pm_runtime_put_sync|pm_runtime_put_autosuspend)\w*\s*\(", line)
+            ), None)
+            power_lines = [
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(", line)
+            ]
+            if not power_lines:
+                continue
+            first_power = power_lines[0]
+            if "enable_gpu_power_control" in first_power[1] and (not runtime_get or first_power[0] < runtime_get[0]):
+                result.pm_callback_order_notes.append(
+                    f"{sym.file_path}::{sym.name} line {first_power[0]} enables GPU power control "
+                    f"`{_line_excerpt(first_power[1])}` before a visible successful runtime-PM ownership point"
+                    f"{' line ' + str(runtime_get[0]) + ' `' + _line_excerpt(runtime_get[1]) + '`' if runtime_get else ''}."
+                )
+                self._add_node(index, result, sym)
+                if len(result.pm_callback_order_notes) >= 8:
+                    return
+                continue
+            if "runtime" in name_l and ("off" in name_l or "suspend" in name_l):
+                disable_count = sum(1 for _, line in power_lines if "disable_gpu_power_control" in line)
+                enable_count = sum(1 for _, line in power_lines if "enable_gpu_power_control" in line)
+                if enable_count or (disable_count > 1 and not _symbol_locks(index, sym)):
+                    result.pm_callback_order_notes.append(
+                        f"{sym.file_path}::{sym.name} has runtime-off power-control sequence "
+                        f"`{_line_excerpt(first_power[1])}` without a balanced serialized runtime ownership pair"
+                        f"{' around line ' + str(runtime_put[0]) if runtime_put else ''}."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.pm_callback_order_notes) >= 8:
+                        return
+
     def _detect_secondary_element_omission(self, index, result, target_syms):
         for sym in target_syms:
             if not _name_has_any(sym.name, {"slot", "atom", "job", "sched", "queue"}):
@@ -3089,6 +3345,29 @@ class PartialCandidateDetector:
                 )
                 self._add_node(index, result, sym)
                 if len(result.secondary_omission_notes) >= 8:
+                    return
+
+    def _detect_zero_count_underflow(self, index, result, target_syms):
+        for sym in target_syms:
+            body_tokens = _fact_tokens(f"{sym.name} {sym.signature} {self._body_text(sym)[:12000]}")
+            if not (body_tokens & {"count", "nr", "num"} and body_tokens & {"jit", "id", "dup", "alloc", "scan"}):
+                continue
+            lines = self._lines(sym)
+            for idx, (line_no, line) in enumerate(lines):
+                if not _ZERO_COUNT_UNDERFLOW_RE.search(line):
+                    continue
+                line_tokens = _fact_tokens(line)
+                if not (line_tokens & {"count", "nr", "num", "id", "dup", "duplicate"}):
+                    continue
+                prior = "\n".join(txt for _, txt in lines[max(0, idx - 12):idx])
+                if re.search(r"\b(?:count|nr|num)\s*(?:==|<=)\s*0\b|\b!\s*(?:count|nr|num)\b", prior):
+                    continue
+                result.zero_count_underflow_notes.append(
+                    f"{sym.file_path}::{sym.name} line {line_no} uses reverse/count-derived index "
+                    f"`{_line_excerpt(line)}` without a nearby zero-count guard, so count==0 can underflow the scan."
+                )
+                self._add_node(index, result, sym)
+                if len(result.zero_count_underflow_notes) >= 8:
                     return
 
     def _detect_interprocedural_cleanup_ledger(self, index, result, target_syms, context):
@@ -3143,6 +3422,109 @@ class PartialCandidateDetector:
                     self._add_node(index, result, acquire_sites[token])
                 if len(result.cleanup_ledger_notes) >= 10:
                     return
+
+    def _detect_suspend_cleanup_ledger(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        target_files = {sym.file_path for sym in target_syms}
+        sources = []
+        sinks = []
+        for sym in context_syms:
+            body = self._body_text(sym)[:16000]
+            text = f"{sym.name} {sym.signature} {body}"
+            tokens = _fact_tokens(text)
+            if (
+                {"suspend", "queue", "group"} & tokens
+                and _SUSPEND_SOURCE_RE.search(text)
+                and re.search(r"\b(?:get_user_pages|pin_user_pages|normal_suspend_buf|sus_buf|nr_pages|PFN_UP)\b", text)
+            ):
+                sources.append(sym)
+            if (
+                {"suspend", "queue", "group", "drain"} & tokens
+                and re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete|cleanup|release|kcpu|wait)\b", text, re.IGNORECASE)
+            ):
+                sinks.append(sym)
+        if not sources or not sinks:
+            return
+        for sink in sinks[:24]:
+            sink_body = self._body_text(sink)[:16000]
+            branch_line = next((
+                (line_no, line) for line_no, line in self._lines(sink)
+                if re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete|cleanup|release|wait)\b", line)
+            ), None)
+            if not branch_line:
+                continue
+            if _SUSPEND_RELEASE_RE.search(sink_body):
+                continue
+            for source in sources[:24]:
+                if _symbol_unique_name(source) == _symbol_unique_name(sink):
+                    continue
+                source_tokens = _fact_tokens(f"{source.name} {self._body_text(source)[:6000]}")
+                sink_tokens = _fact_tokens(f"{sink.name} {sink_body}")
+                if not (source_tokens & sink_tokens & {"suspend", "queue", "group", "pages", "buf"}):
+                    continue
+                if source.file_path not in target_files and sink.file_path not in target_files:
+                    continue
+                result.suspend_cleanup_ledger_notes.append(
+                    f"{sink.file_path}::{sink.name} line {branch_line[0]} owns branch-specific suspend cleanup "
+                    f"`{_line_excerpt(branch_line[1])}` for resources prepared in "
+                    f"{source.file_path}::{source.name}, but this cleanup path has no visible put_page/"
+                    "unpin_user_pages/kbase_mem_phy_alloc_put/kbase_mem_phy_alloc_kernel_unmapped release."
+                )
+                self._add_node(index, result, sink)
+                self._add_node(index, result, source)
+                if len(result.suspend_cleanup_ledger_notes) >= 10:
+                    return
+                break
+
+    def _detect_suspend_size_sink(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        target_files = {sym.file_path for sym in target_syms}
+        consumers = []
+        for sym in context_syms:
+            for line_no, line in self._lines(sym):
+                if not re.search(
+                    r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|normal_suspend_buf|sus_buf|nr_pages|phy\s*\[|copy)\b",
+                    line,
+                    re.IGNORECASE,
+                ):
+                    continue
+                tokens = _fact_tokens(f"{sym.name} {line}")
+                if tokens & {"suspend", "buf", "pages", "size", "queue", "group"}:
+                    consumers.append((sym, line_no, line))
+        if not consumers:
+            return
+        for producer in context_syms:
+            if producer.file_path not in target_files and not _name_has_any(producer.name, {"suspend", "queue", "group"}):
+                continue
+            assigns = _symbol_assignments(index, producer)
+            guards = _symbol_guards(index, producer)
+            for assign in assigns[:80]:
+                assign_text = f"{assign.target} {assign.value} {assign.line_text}"
+                assign_tokens = _fact_tokens(assign_text)
+                if not (
+                    assign_tokens & {"suspend", "sus", "buf", "size", "nr", "pages"}
+                    and re.search(r"\b(?:sus_buf|suspend_buf|normal_suspend_buf|nr_pages|size|end_addr)\b", assign_text)
+                ):
+                    continue
+                if self._has_size_upper_bound_guard(guards, assign.line_number, assign_tokens):
+                    continue
+                for consumer, consumer_line, consumer_text in consumers[:40]:
+                    consumer_tokens = _fact_tokens(f"{consumer.name} {consumer_text}")
+                    if not (assign_tokens & consumer_tokens & {"suspend", "buf", "size", "pages", "nr", "group"}):
+                        continue
+                    if producer.file_path not in target_files and consumer.file_path not in target_files:
+                        continue
+                    result.suspend_size_sink_notes.append(
+                        f"{producer.file_path}::{producer.name} line {assign.line_number} propagates suspend size/page "
+                        f"state `{_line_excerpt(assign.line_text)}` without a visible upper bound; "
+                        f"{consumer.file_path}::{consumer.name} later consumes the derived suspend extent at line "
+                        f"{consumer_line} `{_line_excerpt(consumer_text)}`."
+                    )
+                    self._add_node(index, result, producer)
+                    self._add_node(index, result, consumer)
+                    if len(result.suspend_size_sink_notes) >= 10:
+                        return
+                    break
 
     def _detect_size_propagation(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
@@ -3238,6 +3620,59 @@ class PartialCandidateDetector:
             self._add_node(index, result, sym)
             self._add_node(index, result, consumer_sym)
             if len(result.arithmetic_chain_notes) >= 16:
+                return
+
+    def _detect_alias_extent_mismatch(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        consumers = []
+        for sym in context_syms:
+            for line_no, line in self._lines(sym):
+                if not re.search(r"\b(?:alias|gpu_va|region|num_pages|nr_pages|va_pages|map|mmap|insert)\b", line, re.IGNORECASE):
+                    continue
+                tokens = _fact_tokens(f"{sym.name} {line}")
+                if tokens & {"alias", "region", "pages", "gpu_va"}:
+                    consumers.append((sym, line_no, line))
+        if not consumers:
+            return
+        for sym in target_syms:
+            sym_text = f"{sym.name} {sym.signature} {self._body_text(sym)[:16000]}"
+            if "alias" not in _fact_tokens(sym_text):
+                continue
+            formulas = _symbol_formula_facts(index, sym)
+            guards = _symbol_guards(index, sym)
+            extent = next((
+                formula for formula in formulas
+                if "mul" in formula.operators
+                and {"nents", "stride"} <= (_fact_tokens(formula.expr) | set(formula.tokens))
+            ), None)
+            if not extent:
+                continue
+            if self._has_formula_consistency_guard(guards, extent, extent.line_number + 24):
+                continue
+            reservation = next((
+                formula for formula in formulas
+                if formula.line_number > extent.line_number
+                and {"pages", "region", "gpu_va"} & (set(formula.tokens) | _fact_tokens(formula.target))
+                and formula.normalized != extent.normalized
+            ), None)
+            consumer = next((
+                item for item in consumers
+                if item[0].file_path == sym.file_path or _module_stem(item[0].name) == _module_stem(sym.name)
+            ), None) or (consumers[0] if consumers else None)
+            if not consumer:
+                continue
+            consumer_sym, consumer_line, consumer_text = consumer
+            result.alias_extent_mismatch_notes.append(
+                f"{sym.file_path}::{sym.name} line {extent.line_number} derives alias extent "
+                f"`{extent.target} = {_short_expr(extent.expr)}` from nents*stride without a visible overflow/"
+                f"consistency guard; "
+                f"{'reservation line ' + str(reservation.line_number) + ' `' + _line_excerpt(reservation.line_text) + '` and ' if reservation else ''}"
+                f"{consumer_sym.file_path}::{consumer_sym.name} consumes alias region/page extent at line "
+                f"{consumer_line} `{_line_excerpt(consumer_text)}`."
+            )
+            self._add_node(index, result, sym)
+            self._add_node(index, result, consumer_sym)
+            if len(result.alias_extent_mismatch_notes) >= 8:
                 return
 
     def _detect_info_leaks(self, index, result, target_syms):
@@ -3426,6 +3861,50 @@ class PartialCandidateDetector:
                                 if len(result.cross_file_lock_notes) >= 16:
                                     return
 
+    def _detect_named_lock_inversion(self, index, result, context, target_file):
+        syms = self._context_symbols(index, context, _symbols_for_file(index, target_file))
+        edge_map: dict[tuple[str, str], list[LockOrderEdge]] = defaultdict(list)
+        for sym in syms:
+            for edge in _symbol_lock_edges(index, sym):
+                if not self._lock_edge_is_specific(edge):
+                    continue
+                if not self._named_lock_edge(edge):
+                    continue
+                edge_map[(edge.first_lock, edge.second_lock)].append(edge)
+        for edge in self._interprocedural_lock_edges(index, syms[:120]):
+            if not self._lock_edge_is_specific(edge):
+                continue
+            if not self._named_lock_edge(edge):
+                continue
+            edge_map[(edge.first_lock, edge.second_lock)].append(edge)
+        seen = set()
+        for (first, second), forward in edge_map.items():
+            reverse = edge_map.get((second, first), [])
+            if not reverse:
+                continue
+            for e1 in forward[:8]:
+                for e2 in reverse[:8]:
+                    if not self._cross_file_cycle_is_relevant(e1, e2, target_file):
+                        continue
+                    if not self._lock_cycle_has_async_or_named_path(index, [e1, e2]):
+                        continue
+                    key = tuple(sorted((
+                        f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                        f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                    )))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.named_lock_inversion_notes.append(
+                        f"Named lock inversion: target/companion paths acquire {e1.first_lock}->{e1.second_lock} "
+                        f"in {e1.file_path}::{e1.function_name} line {e1.line_number} and "
+                        f"{e2.first_lock}->{e2.second_lock} in {e2.file_path}::{e2.function_name} line {e2.line_number}; "
+                        "callback/notifier/backend context is present in the selected lock path."
+                    )
+                    self._add_edge_nodes(index, result, [e1, e2])
+                    if len(result.named_lock_inversion_notes) >= 8:
+                        return
+
     def _cross_file_cycle_is_relevant(self, first: LockOrderEdge, second: LockOrderEdge, target_file: str, *, extra: LockOrderEdge | None = None) -> bool:
         edges = [first, second] + ([extra] if extra else [])
         files = {edge.file_path for edge in edges}
@@ -3442,6 +3921,10 @@ class PartialCandidateDetector:
             and edge.first_lock not in generic
             and edge.second_lock not in generic
         )
+
+    def _named_lock_edge(self, edge: LockOrderEdge) -> bool:
+        text = f"{edge.first_lock} {edge.second_lock} {edge.function_name} {edge.line_text}".lower()
+        return bool(re.search(r"\b(?:hwaccess|clk|clock|rtm|hwcnt|backend|state|fw|mmu|scheduler)\b", text))
 
     def _lock_cycle_has_async_or_named_path(self, index: SymbolIndex, edges: list[LockOrderEdge]) -> bool:
         text = " ".join(
@@ -3743,6 +4226,47 @@ class PartialCandidateDetector:
             if len(result.protected_mmu_notes) >= 8:
                 return
 
+    def _detect_active_singleton_stale(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        fault_companion = next((
+            sym for sym in context_syms
+            if sym.file_path not in {target.file_path for target in target_syms}
+            and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}") & {"protected", "fault", "protm"}
+        ), None)
+        for sym in target_syms:
+            body = self._body_text(sym)[:16000]
+            if not _ACTIVE_SINGLETON_RE.search(body):
+                continue
+            if not re.search(r"\b(?:remove|free|release|timeout|stop|teardown|destroy|fault|runnable)\b", f"{sym.name} {body}", re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            singleton_line = next(((line_no, line) for line_no, line in lines if _ACTIVE_SINGLETON_RE.search(line)), None)
+            if not singleton_line:
+                continue
+            clears_singleton = any(
+                _ACTIVE_SINGLETON_RE.search(line)
+                and re.search(r"=\s*(?:NULL|nullptr|0)\b|clear|reset", line, re.IGNORECASE)
+                for _, line in lines
+            )
+            if clears_singleton:
+                continue
+            teardown_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no >= singleton_line[0]
+                and re.search(r"\b(?:remove|free|release|timeout|stop|destroy|fault)\w*\b", line, re.IGNORECASE)
+            ), singleton_line)
+            result.active_singleton_stale_notes.append(
+                f"{sym.file_path}::{sym.name} line {singleton_line[0]} references active protected singleton "
+                f"`{_line_excerpt(singleton_line[1])}`, but teardown/removal path line {teardown_line[0]} "
+                f"`{_line_excerpt(teardown_line[1])}` does not visibly clear it before later protected/fault use"
+                f"{' in ' + fault_companion.file_path + '::' + fault_companion.name if fault_companion else ''}."
+            )
+            self._add_node(index, result, sym)
+            if fault_companion:
+                self._add_node(index, result, fault_companion)
+            if len(result.active_singleton_stale_notes) >= 8:
+                return
+
     def _is_mmu_serialization_lock(self, lock: str) -> bool:
         lock_l = str(lock or "").lower()
         return bool(re.search(r"\bmmu\b|mmu_.*mutex|hw_mutex|mmu\.lock|mmu_lock", lock_l))
@@ -3882,6 +4406,47 @@ class PartialCandidateDetector:
                     self._add_node(index, result, companion_guards["same_va"])
                 if len(result.policy_gate_notes) >= 16:
                     return
+
+    def _detect_imported_mapping_policy(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companion = next((
+            sym for sym in context_syms
+            if sym.file_path not in {target.file_path for target in target_syms}
+            and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}") & {"imported", "same_va", "dma", "umm", "native"}
+        ), None)
+        for sym in target_syms:
+            body = self._body_text(sym)[:18000]
+            text = f"{sym.name} {sym.signature} {body}"
+            tokens = _fact_tokens(text)
+            provenance = tokens & (_MAPPING_POLICY_WORDS | {"same", "va", "dma", "buf", "type"})
+            if not ({"imported", "protected"} & provenance or {"dma", "buf"} <= provenance or {"same", "va"} <= provenance):
+                continue
+            if not (provenance & {"native", "imported", "protected", "umm", "dma", "buf", "same", "va"}):
+                continue
+            sink_line = next((
+                (line_no, line) for line_no, line in self._lines(sym)
+                if re.search(
+                    r"\b(?:vmap_prot|vmap|kmap|mmap|vm_fault|vm_insert_pfn|vmf_insert_pfn|"
+                    r"remap_pfn_range|copy_to_user|copy_from_user|softjob|kcpu)\b",
+                    line,
+                    re.IGNORECASE,
+                )
+            ), None)
+            if not sink_line:
+                continue
+            prior = "\n".join(line for line_no, line in self._lines(sym) if line_no <= sink_line[0])
+            if re.search(r"\b(?:KBASE_MEM_TYPE_NATIVE|MEM_TYPE_NATIVE|native)\b", prior, re.IGNORECASE):
+                continue
+            result.imported_mapping_policy_notes.append(
+                f"{sym.file_path}::{sym.name} line {sink_line[0]} reaches CPU mapping/access sink "
+                f"`{_line_excerpt(sink_line[1])}` with imported/protected/SAME_VA-style provenance in scope, "
+                "but no prior native-only provenance gate is visible on the target path."
+            )
+            self._add_node(index, result, sym)
+            if companion:
+                self._add_node(index, result, companion)
+            if len(result.imported_mapping_policy_notes) >= 8:
+                return
 
     def _detect_sentinel_misuse(self, index, result, target_syms):
         for sym in target_syms:
@@ -4032,17 +4597,37 @@ _PASS_FOCI = {
         "Interprocedural cleanup ledger bugs across selected queue/suspend/drain/delete functions: later exploit-relevant cleanup "
         "paths skip page/mapping/ref releases that companion paths acquired. Prefer later cleanup omission over shallow local unwind."
     ),
+    "suspend_cleanup_ledger": (
+        "Suspend-buffer cleanup bugs across prepare and later drain/delete/wait paths: report the exact later cleanup branch "
+        "that omits page, mapping, or allocation-ref release for suspend resources prepared in related context."
+    ),
+    "suspend_size_sink": (
+        "Suspend-buffer size sink bugs: unbounded suspend size/page state is stored in a resource object and later consumed "
+        "by PFN/page-array/copy/iteration logic. Report both the producer and exact downstream consumer."
+    ),
     "async_event_order": (
         "Async clear-before-handle bugs: fault/interrupt/event state is cleared or acked around queued work without serialization, "
         "flush, handled confirmation, or final safe-consume evidence."
+    ),
+    "fault_clear_order": (
+        "Fault-specific clear-before-handle bugs: fault clear/ack register or command writes occur before queued/deferred "
+        "fault handling has visibly completed or been serialized. Report the exact clear statement and async consumer."
     ),
     "size_propagation": (
         "User-controlled size propagation bugs: size/count/page state is stored into a resource object and later consumed by "
         "copy/iteration/page-count logic without an upper-bound or formula consistency check."
     ),
+    "alias_extent_mismatch": (
+        "Alias extent mismatch bugs: nents*stride or equivalent alias extent arithmetic is not tied to region reservation "
+        "and later mapping consumption by an overflow or consistency check. Report exact producer and consumer."
+    ),
     "stale_tracker_state": (
         "Stale tracker/double-remove bugs: tracker/rbtree/list removal without invalidating inserted/start_pfn/ownership state, "
         "allowing later second removal or stale cleanup."
+    ),
+    "region_replace_erase": (
+        "Region replacement failure bugs: replacement/merge/allocation-failure paths free or replace a region without erasing "
+        "or invalidating its rbtree/rblink/start_pfn linkage on that exact path."
     ),
     "metadata_type_confusion": (
         "Opaque metadata reinterpretation bugs: page_private/private integer-ish metadata cast to a struct pointer and immediately "
@@ -4052,13 +4637,25 @@ _PASS_FOCI = {
         "Runtime PM sequencing bugs: power-control, clock, regulator, or register-sensitive action before pm_runtime_get/resume "
         "ownership is established, or unbalanced power-control sequencing around runtime on/off."
     ),
+    "pm_callback_order": (
+        "PM callback order bugs: callback-local GPU power-control enable/disable is ordered before runtime-PM ownership or "
+        "is unbalanced across runtime on/off callbacks. Report the exact power-control call and missing ownership point."
+    ),
     "secondary_element_omission": (
         "Paired-slot/atom omission bugs: first slot/atom is processed, then a priority/branch exit skips required second slot/atom "
         "handling. Report only concrete first/second/skip evidence."
     ),
+    "zero_count_underflow": (
+        "Zero-count underflow bugs: count/nr/num is used in count-1 or reverse scan logic without a nearby nonzero guard. "
+        "Report the exact loop/index expression and missing zero-count validation."
+    ),
     "protected_mmu_protocol": (
         "Protected-mode/MMU protocol bugs: protected-mode enter/wait lacks the companion MMU serialization lock or final "
         "protected-active verification. Report the exact wait/enter statement and missing lock/verification."
+    ),
+    "active_singleton_stale": (
+        "Active protected singleton stale-state bugs: active group/singleton pointers survive remove/free/timeout paths and "
+        "can be reused by protected fault or scheduler handling. Report the exact singleton and teardown path."
     ),
     "mmu_recovery_rollback": (
         "MMU failure-recovery rollback bugs: recovery loop bounds, page counts, or phys/PFN base adjustment diverge from "
@@ -4071,6 +4668,10 @@ _PASS_FOCI = {
     "policy_gate_before_sink": (
         "Policy/provenance gate-before-sink bugs in the target file: mmap/fault/PFN/usercopy/import/export sinks reached "
         "without the required imported/same_va/protected/permission/owner guard. Companion files may show the expected guard."
+    ),
+    "imported_mapping_policy": (
+        "Imported/protected CPU-mapping policy bugs: imported, SAME_VA, DMA-BUF, or protected resources reach vmap/mmap/"
+        "fault/softjob/KCPU access sinks without a visible native/provenance gate on the target path."
     ),
     "format_and_info_leak": (
         "Variadic logger wrappers, non-literal format arguments into printf-family wrappers, and debug/log output of "
@@ -4088,13 +4689,17 @@ _PASS_FOCI = {
         "Cross-file deadlock cycles and callback/notifier-induced lock inversions. Report only when the target file contributes "
         "a concrete lock-order edge or unsafe callback participation; use companion files only to prove the other edge(s)."
     ),
+    "named_lock_inversion": (
+        "Named lock inversions: target and callback/notifier/backend companion paths acquire stable named locks in opposite "
+        "orders. Report the exact lock names and the two concrete order edges."
+    ),
     "state_transition_protocol": (
         "Distributed protocol/state transition bugs: wait/ack without final active/protected verification, protected-mode/MMU/"
         "scheduler/firmware transitions without the companion serialization lock, and split enter/exit or enable/disable "
         "protocols where the target file owns the unsafe participation."
     ),
     "partial_exact_fallback": (
-        "Bounded recall fallback for benchmark-relevant root causes only: concrete target-file ordering/race, cleanup/unwind, "
+        "Bounded recall fallback for high-signal root causes only: concrete target-file ordering/race, cleanup/unwind, "
         "branch-specific resource release, size propagation/arithmetic mismatch, metadata reinterpretation, imported/SAME_VA "
         "policy omission, sentinel misuse, or protected/MMU sequencing. Be conservative and exact."
     ),
@@ -4164,6 +4769,16 @@ class TargetedFileReviewer:
         protected_nodes = self._nodes_for_notes(detector_nodes, detector_result.protected_mmu_notes, cap=40)
         mmu_recovery_nodes = self._nodes_for_notes(detector_nodes, detector_result.mmu_recovery_notes, cap=32)
         sentinel_nodes = self._nodes_for_notes(detector_nodes, detector_result.sentinel_misuse_notes)
+        suspend_cleanup_nodes = self._nodes_for_notes(detector_nodes, detector_result.suspend_cleanup_ledger_notes, cap=40)
+        suspend_size_nodes = self._nodes_for_notes(detector_nodes, detector_result.suspend_size_sink_notes, cap=40)
+        fault_clear_nodes = self._nodes_for_notes(detector_nodes, detector_result.fault_clear_order_notes, cap=40)
+        pm_callback_nodes = self._nodes_for_notes(detector_nodes, detector_result.pm_callback_order_notes, cap=32)
+        region_replace_nodes = self._nodes_for_notes(detector_nodes, detector_result.region_replace_erase_notes, cap=32)
+        imported_mapping_nodes = self._nodes_for_notes(detector_nodes, detector_result.imported_mapping_policy_notes, cap=40)
+        alias_extent_nodes = self._nodes_for_notes(detector_nodes, detector_result.alias_extent_mismatch_notes, cap=40)
+        named_lock_nodes = self._nodes_for_notes(detector_nodes, detector_result.named_lock_inversion_notes, cap=48)
+        active_singleton_nodes = self._nodes_for_notes(detector_nodes, detector_result.active_singleton_stale_notes, cap=40)
+        zero_count_nodes = self._nodes_for_notes(detector_nodes, detector_result.zero_count_underflow_notes, cap=24)
         lock_cycle_nodes = self._nodes_for_notes(detector_nodes, detector_result.cross_file_lock_notes, cap=48)
         protocol_nodes = self._nodes_for_notes(detector_nodes, detector_result.protocol_notes, cap=48)
         passes = [
@@ -4189,8 +4804,14 @@ class TargetedFileReviewer:
             passes.append(("accounting_drift", context.target_nodes, context.shared_state_nodes + accounting_nodes))
         if detector_result.cleanup_ledger_notes:
             passes.append(("cleanup_ledger", context.target_nodes, context.lifecycle_pair_nodes + context.companion_nodes + cleanup_ledger_nodes))
+        if detector_result.suspend_cleanup_ledger_notes:
+            passes.append(("suspend_cleanup_ledger", context.target_nodes, context.companion_nodes + suspend_cleanup_nodes))
+        if detector_result.suspend_size_sink_notes:
+            passes.append(("suspend_size_sink", context.target_nodes, context.outbound_callees + context.companion_nodes + suspend_size_nodes))
         if detector_result.resource_validation_notes:
             passes.append(("resource_validation_order", context.target_nodes, context.shared_state_nodes + context.companion_nodes + resource_validation_nodes))
+        if detector_result.alias_extent_mismatch_notes:
+            passes.append(("alias_extent_mismatch", context.target_nodes, context.outbound_callees + context.companion_nodes + alias_extent_nodes))
         if detector_result.arithmetic_chain_notes:
             passes.append(("arithmetic_chain_mismatch", context.target_nodes, context.outbound_callees + arithmetic_nodes))
         if detector_result.size_propagation_notes:
@@ -4202,18 +4823,31 @@ class TargetedFileReviewer:
             ))
         if detector_result.async_order_notes:
             passes.append(("async_event_order", context.target_nodes, context.callback_nodes + context.companion_nodes + async_nodes))
+        if detector_result.fault_clear_order_notes:
+            passes.append(("fault_clear_order", context.target_nodes, context.callback_nodes + context.companion_nodes + fault_clear_nodes))
         if detector_result.stale_tracker_notes:
             passes.append(("stale_tracker_state", context.target_nodes, context.shared_state_nodes + tracker_nodes))
+        if detector_result.region_replace_erase_notes:
+            passes.append(("region_replace_erase", context.target_nodes, context.shared_state_nodes + context.companion_nodes + region_replace_nodes))
         if detector_result.metadata_type_confusion_notes:
             passes.append(("metadata_type_confusion", context.target_nodes, type_nodes))
         if detector_result.pm_sequence_notes:
             passes.append(("pm_runtime_sequence", context.target_nodes, context.companion_nodes + pm_nodes))
+        if detector_result.pm_callback_order_notes:
+            passes.append(("pm_callback_order", context.target_nodes, context.companion_nodes + pm_callback_nodes))
         if detector_result.secondary_omission_notes:
             passes.append(("secondary_element_omission", context.target_nodes, secondary_nodes))
+        if detector_result.zero_count_underflow_notes:
+            passes.append(("zero_count_underflow", context.target_nodes, zero_count_nodes))
         if detector_result.policy_gate_notes:
             passes.append((
                 "policy_gate_before_sink", context.target_nodes,
                 context.companion_nodes + context.outbound_callees + policy_nodes,
+            ))
+        if detector_result.imported_mapping_policy_notes:
+            passes.append((
+                "imported_mapping_policy", context.target_nodes,
+                context.companion_nodes + context.outbound_callees + imported_mapping_nodes,
             ))
         if detector_result.sentinel_misuse_notes:
             passes.append(("sentinel_misuse", context.target_nodes, sentinel_nodes))
@@ -4233,6 +4867,11 @@ class TargetedFileReviewer:
                 context.companion_nodes + context.callback_nodes + context.lifecycle_pair_nodes
                 + context.shared_state_nodes + lock_cycle_nodes,
             ))
+        if detector_result.named_lock_inversion_notes:
+            passes.append((
+                "named_lock_inversion", context.target_nodes,
+                context.companion_nodes + context.callback_nodes + context.shared_state_nodes + named_lock_nodes,
+            ))
         if detector_result.protocol_notes:
             passes.append((
                 "state_transition_protocol", context.target_nodes,
@@ -4243,6 +4882,11 @@ class TargetedFileReviewer:
             passes.append((
                 "protected_mmu_protocol", context.target_nodes,
                 context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes + protected_nodes,
+            ))
+        if detector_result.active_singleton_stale_notes:
+            passes.append((
+                "active_singleton_stale", context.target_nodes,
+                context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes + active_singleton_nodes,
             ))
         if self._should_add_partial_exact_fallback(detector_result):
             fallback_nodes = (
@@ -4257,21 +4901,31 @@ class TargetedFileReviewer:
             detector_result.copy_contract_notes
             or detector_result.cleanup_symmetry_notes
             or detector_result.cleanup_ledger_notes
+            or detector_result.suspend_cleanup_ledger_notes
             or detector_result.accounting_drift_notes
             or detector_result.arithmetic_chain_notes
+            or detector_result.alias_extent_mismatch_notes
             or detector_result.size_propagation_notes
+            or detector_result.suspend_size_sink_notes
             or detector_result.resource_binding_notes
             or detector_result.resource_validation_notes
             or detector_result.async_order_notes
+            or detector_result.fault_clear_order_notes
             or detector_result.stale_tracker_notes
+            or detector_result.region_replace_erase_notes
             or detector_result.metadata_type_confusion_notes
             or detector_result.pm_sequence_notes
+            or detector_result.pm_callback_order_notes
             or detector_result.secondary_omission_notes
+            or detector_result.zero_count_underflow_notes
             or detector_result.policy_gate_notes
+            or detector_result.imported_mapping_policy_notes
             or detector_result.sentinel_misuse_notes
             or detector_result.cross_file_lock_notes
+            or detector_result.named_lock_inversion_notes
             or detector_result.protocol_notes
             or detector_result.protected_mmu_notes
+            or detector_result.active_singleton_stale_notes
             or detector_result.mmu_recovery_notes
         )
         return not bool(strong)
@@ -4293,7 +4947,13 @@ class TargetedFileReviewer:
             if len(selected) >= cap:
                 break
         if selected:
-            return selected
+            return sorted(
+                selected,
+                key=lambda node: min(
+                    (text.find(key) for key in (node.unique_name, f"{node.file_path}::{node.name}", node.name) if key and text.find(key) >= 0),
+                    default=len(text),
+                ),
+            )
         return self._dedupe_nodes(nodes)[:cap]
 
     def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
@@ -4339,7 +4999,10 @@ class TargetedFileReviewer:
             "cleanup_ledger", "async_event_order", "size_propagation",
             "stale_tracker_state", "metadata_type_confusion", "pm_runtime_sequence",
             "secondary_element_omission", "protected_mmu_protocol", "mmu_recovery_rollback",
-            "sentinel_misuse",
+            "sentinel_misuse", "suspend_cleanup_ledger", "suspend_size_sink",
+            "fault_clear_order", "pm_callback_order", "region_replace_erase",
+            "imported_mapping_policy", "alias_extent_mismatch", "named_lock_inversion",
+            "active_singleton_stale", "zero_count_underflow",
         }:
             return 2600, 36000
         if pass_name == "partial_exact_fallback":
@@ -4360,7 +5023,10 @@ class TargetedFileReviewer:
             "cleanup_ledger", "async_event_order", "size_propagation",
             "stale_tracker_state", "metadata_type_confusion", "pm_runtime_sequence",
             "secondary_element_omission", "protected_mmu_protocol", "mmu_recovery_rollback",
-            "sentinel_misuse",
+            "sentinel_misuse", "suspend_cleanup_ledger", "suspend_size_sink",
+            "fault_clear_order", "pm_callback_order", "region_replace_erase",
+            "imported_mapping_policy", "alias_extent_mismatch", "named_lock_inversion",
+            "active_singleton_stale", "zero_count_underflow",
         }:
             return (
                 f"Findings must use primary_file={target_file} and identify the exact target-file statement plus the exact "
@@ -4422,10 +5088,22 @@ class TargetedFileReviewer:
             "cleanup_symmetry": (("CLEANUP_SYMMETRY", detector_result.cleanup_symmetry_notes),),
             "accounting_drift": (("ACCOUNTING_DRIFT", detector_result.accounting_drift_notes),),
             "cleanup_ledger": (("CLEANUP_LEDGER", detector_result.cleanup_ledger_notes),),
+            "suspend_cleanup_ledger": (
+                ("SUSPEND_CLEANUP_LEDGER", detector_result.suspend_cleanup_ledger_notes),
+                ("CLEANUP_LEDGER", detector_result.cleanup_ledger_notes[:8]),
+            ),
+            "suspend_size_sink": (
+                ("SUSPEND_SIZE_SINK", detector_result.suspend_size_sink_notes),
+                ("SIZE_PROPAGATION", detector_result.size_propagation_notes[:8]),
+            ),
             "resource_validation_order": (("RESOURCE_VALIDATION_ORDER", detector_result.resource_validation_notes),),
             "arithmetic_chain_mismatch": (
                 ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes),
                 ("ALLOCATION_ARITHMETIC", detector_result.allocation_arithmetic_notes[:12]),
+            ),
+            "alias_extent_mismatch": (
+                ("ALIAS_EXTENT_MISMATCH", detector_result.alias_extent_mismatch_notes),
+                ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes[:8]),
             ),
             "size_propagation": (
                 ("SIZE_PROPAGATION", detector_result.size_propagation_notes),
@@ -4438,17 +5116,38 @@ class TargetedFileReviewer:
                 ("DISABLE_STALE", detector_result.disable_stale_notes[:12]),
             ),
             "async_event_order": (("ASYNC_EVENT_ORDER", detector_result.async_order_notes),),
+            "fault_clear_order": (
+                ("FAULT_CLEAR_ORDER", detector_result.fault_clear_order_notes),
+                ("ASYNC_EVENT_ORDER", detector_result.async_order_notes[:8]),
+            ),
             "stale_tracker_state": (("STALE_TRACKER_STATE", detector_result.stale_tracker_notes),),
+            "region_replace_erase": (
+                ("REGION_REPLACE_ERASE", detector_result.region_replace_erase_notes),
+                ("STALE_TRACKER_STATE", detector_result.stale_tracker_notes[:8]),
+            ),
             "metadata_type_confusion": (("METADATA_TYPE_CONFUSION", detector_result.metadata_type_confusion_notes),),
             "pm_runtime_sequence": (("PM_RUNTIME_SEQUENCE", detector_result.pm_sequence_notes),),
+            "pm_callback_order": (
+                ("PM_CALLBACK_ORDER", detector_result.pm_callback_order_notes),
+                ("PM_RUNTIME_SEQUENCE", detector_result.pm_sequence_notes[:8]),
+            ),
             "secondary_element_omission": (("SECONDARY_ELEMENT_OMISSION", detector_result.secondary_omission_notes),),
+            "zero_count_underflow": (("ZERO_COUNT_UNDERFLOW", detector_result.zero_count_underflow_notes),),
             "protected_mmu_protocol": (
                 ("PROTECTED_MMU_PROTOCOL", detector_result.protected_mmu_notes),
                 ("STATE_TRANSITION_PROTOCOL", detector_result.protocol_notes[:12]),
             ),
+            "active_singleton_stale": (
+                ("ACTIVE_SINGLETON_STALE", detector_result.active_singleton_stale_notes),
+                ("PROTECTED_MMU_PROTOCOL", detector_result.protected_mmu_notes[:8]),
+            ),
             "mmu_recovery_rollback": (("MMU_RECOVERY_ROLLBACK", detector_result.mmu_recovery_notes),),
             "sentinel_misuse": (("SENTINEL_MISUSE", detector_result.sentinel_misuse_notes),),
             "policy_gate_before_sink": (("POLICY_GATE_BEFORE_SINK", detector_result.policy_gate_notes),),
+            "imported_mapping_policy": (
+                ("IMPORTED_MAPPING_POLICY", detector_result.imported_mapping_policy_notes),
+                ("POLICY_GATE_BEFORE_SINK", detector_result.policy_gate_notes[:8]),
+            ),
             "format_and_info_leak": (
                 ("FORMAT_WRAPPER", detector_result.format_notes),
                 ("INFO_LEAK", detector_result.info_leak_notes),
@@ -4464,6 +5163,10 @@ class TargetedFileReviewer:
             "cross_file_lock_cycle": (
                 ("CROSS_FILE_LOCK_CYCLE", detector_result.cross_file_lock_notes),
                 ("LOCK_ORDER", detector_result.lock_order_notes[:20]),
+            ),
+            "named_lock_inversion": (
+                ("NAMED_LOCK_INVERSION", detector_result.named_lock_inversion_notes),
+                ("CROSS_FILE_LOCK_CYCLE", detector_result.cross_file_lock_notes[:8]),
             ),
             "state_transition_protocol": (
                 ("STATE_TRANSITION_PROTOCOL", detector_result.protocol_notes),
@@ -4599,15 +5302,25 @@ def _partial_duplicate_family(vtype: str) -> str:
         "state_transition_protocol": "state_order",
         "resource_validation_order": "resource_binding",
         "cleanup_ledger": "cleanup",
+        "suspend_cleanup_ledger": "cleanup",
+        "suspend_size_sink": "arithmetic_chain",
         "async_event_order": "state_order",
+        "fault_clear_order": "state_order",
         "size_propagation": "arithmetic_chain",
+        "alias_extent_mismatch": "arithmetic_chain",
         "stale_tracker_state": "resource_binding",
+        "region_replace_erase": "resource_binding",
         "metadata_type_confusion": "type_confusion",
         "pm_runtime_sequence": "state_order",
+        "pm_callback_order": "state_order",
         "secondary_element_omission": "logic_omission",
+        "zero_count_underflow": "integer_underflow",
         "protected_mmu_protocol": "state_order",
+        "active_singleton_stale": "lifetime",
         "mmu_recovery_rollback": "mmu_recovery",
         "sentinel_misuse": "semantic_mismatch",
+        "imported_mapping_policy": "policy_gate",
+        "named_lock_inversion": "lock_cycle",
     }
     return aliases.get(normal, normal)
 
@@ -4755,15 +5468,25 @@ _EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
     "partial_state_transition_protocol",
     "partial_resource_validation_order",
     "partial_cleanup_ledger",
+    "partial_suspend_cleanup_ledger",
+    "partial_suspend_size_sink",
     "partial_async_event_order",
+    "partial_fault_clear_order",
     "partial_size_propagation",
+    "partial_alias_extent_mismatch",
     "partial_stale_tracker_state",
+    "partial_region_replace_erase",
     "partial_metadata_type_confusion",
     "partial_pm_runtime_sequence",
+    "partial_pm_callback_order",
     "partial_secondary_element_omission",
+    "partial_zero_count_underflow",
     "partial_protected_mmu_protocol",
+    "partial_active_singleton_stale",
     "partial_mmu_recovery_rollback",
     "partial_sentinel_misuse",
+    "partial_imported_mapping_policy",
+    "partial_named_lock_inversion",
 })
 _WEAK_GENERIC_VTYPES = frozenset({
     "null_deref", "missing_lock", "teardown_race", "callback_lifecycle",
@@ -4938,20 +5661,29 @@ class PartialReachabilityFileService:
                 "copy_contracts": len(detector_result.copy_contract_notes),
                 "cleanup_symmetry": len(detector_result.cleanup_symmetry_notes),
                 "cleanup_ledger": len(detector_result.cleanup_ledger_notes),
+                "suspend_cleanup_ledger": len(detector_result.suspend_cleanup_ledger_notes),
                 "accounting_drift": len(detector_result.accounting_drift_notes),
                 "arithmetic_chain": len(detector_result.arithmetic_chain_notes),
+                "alias_extent_mismatch": len(detector_result.alias_extent_mismatch_notes),
                 "size_propagation": len(detector_result.size_propagation_notes),
+                "suspend_size_sink": len(detector_result.suspend_size_sink_notes),
                 "resource_binding": len(detector_result.resource_binding_notes),
                 "resource_validation": len(detector_result.resource_validation_notes),
                 "async_order": len(detector_result.async_order_notes),
+                "fault_clear_order": len(detector_result.fault_clear_order_notes),
                 "stale_tracker": len(detector_result.stale_tracker_notes),
+                "region_replace_erase": len(detector_result.region_replace_erase_notes),
                 "metadata_type_confusion": len(detector_result.metadata_type_confusion_notes),
                 "pm_sequence": len(detector_result.pm_sequence_notes),
+                "pm_callback_order": len(detector_result.pm_callback_order_notes),
                 "secondary_omission": len(detector_result.secondary_omission_notes),
+                "zero_count_underflow": len(detector_result.zero_count_underflow_notes),
                 "protected_mmu": len(detector_result.protected_mmu_notes),
+                "active_singleton_stale": len(detector_result.active_singleton_stale_notes),
                 "mmu_recovery": len(detector_result.mmu_recovery_notes),
                 "sentinel_misuse": len(detector_result.sentinel_misuse_notes),
                 "policy_gates": len(detector_result.policy_gate_notes),
+                "imported_mapping_policy": len(detector_result.imported_mapping_policy_notes),
                 "format_wrappers": len(detector_result.format_notes),
                 "info_leaks": len(detector_result.info_leak_notes),
                 "fops": len(detector_result.fops_notes),
@@ -4960,6 +5692,7 @@ class PartialReachabilityFileService:
                 "disable_stale": len(detector_result.disable_stale_notes),
                 "callback_lifetime": len(detector_result.callback_lifetime_notes),
                 "cross_file_lock_cycles": len(detector_result.cross_file_lock_notes),
+                "named_lock_inversion": len(detector_result.named_lock_inversion_notes),
                 "protocol_candidates": len(detector_result.protocol_notes),
             })
             if detector_result.cross_file_lock_notes:
@@ -4976,20 +5709,30 @@ class PartialReachabilityFileService:
                 len(detector_result.copy_contract_notes)
                 + len(detector_result.cleanup_symmetry_notes)
                 + len(detector_result.cleanup_ledger_notes)
+                + len(detector_result.suspend_cleanup_ledger_notes)
                 + len(detector_result.accounting_drift_notes)
                 + len(detector_result.arithmetic_chain_notes)
+                + len(detector_result.alias_extent_mismatch_notes)
                 + len(detector_result.size_propagation_notes)
+                + len(detector_result.suspend_size_sink_notes)
                 + len(detector_result.resource_binding_notes)
                 + len(detector_result.resource_validation_notes)
                 + len(detector_result.async_order_notes)
+                + len(detector_result.fault_clear_order_notes)
                 + len(detector_result.stale_tracker_notes)
+                + len(detector_result.region_replace_erase_notes)
                 + len(detector_result.metadata_type_confusion_notes)
                 + len(detector_result.pm_sequence_notes)
+                + len(detector_result.pm_callback_order_notes)
                 + len(detector_result.secondary_omission_notes)
+                + len(detector_result.zero_count_underflow_notes)
                 + len(detector_result.protected_mmu_notes)
+                + len(detector_result.active_singleton_stale_notes)
                 + len(detector_result.mmu_recovery_notes)
                 + len(detector_result.sentinel_misuse_notes)
                 + len(detector_result.policy_gate_notes)
+                + len(detector_result.imported_mapping_policy_notes)
+                + len(detector_result.named_lock_inversion_notes)
             )
             if exact_count:
                 progress_callback({
