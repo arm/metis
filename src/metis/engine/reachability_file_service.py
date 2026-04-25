@@ -166,6 +166,49 @@ _CALLBACK_STORE_RE = re.compile(
     re.IGNORECASE,
 )
 _CANCEL_OR_REF_RE = re.compile(r"\b(?:cancel|flush|drain|unregister|del_timer|destroy_workqueue|refcount|kref|get|put|pin|unpin|clear|NULL)\b", re.IGNORECASE)
+_PROTOCOL_TOKEN_WORDS = frozenset({
+    "protected", "protm", "active", "enable", "enabled", "disable", "disabled",
+    "enter", "entered", "exit", "ack", "wait", "flush", "ready", "pending",
+    "state", "resume", "suspend", "start", "stop", "mmu", "scheduler", "sched",
+    "firmware", "fw", "hwcnt", "counter", "clock", "clk", "power", "reset",
+    "doorbell", "gpu", "fault", "irq", "interrupt", "completion", "event",
+    "fence", "serialize", "serialise", "sync", "transition",
+})
+_PROTOCOL_TOKEN_ALIASES = {
+    "enabled": "enable",
+    "disabled": "disable",
+    "entered": "enter",
+    "sched": "scheduler",
+    "fw": "firmware",
+    "clk": "clock",
+    "serialise": "serialize",
+    "sync": "serialize",
+}
+_WAIT_ACK_TOKENS = frozenset({"wait", "ack", "completion", "event", "fence"})
+_STATE_VERIFY_TOKENS = frozenset({"active", "protected", "protm", "ready", "state", "enter", "enable"})
+_TRANSITION_TOKENS = frozenset({
+    "protected", "protm", "active", "enable", "disable", "enter", "exit",
+    "ready", "pending", "state", "resume", "suspend", "start", "stop",
+})
+_SUBSYSTEM_TOKENS = frozenset({
+    "mmu", "scheduler", "firmware", "hwcnt", "counter", "clock", "power",
+    "doorbell", "gpu", "irq", "interrupt",
+})
+_NOTIFIER_WORDS = frozenset({
+    "notifier", "notify", "notification", "event", "completion", "wait",
+    "ack", "irq", "interrupt", "workqueue", "work", "callback",
+})
+_PROTOCOL_TOKEN_RE = re.compile(
+    r"\b(?:protected|protm|active|enabled?|disabled?|enter(?:ed)?|exit|ack|wait|"
+    r"flush|ready|pending|state|resume|suspend|start|stop|mmu|sched(?:uler)?|"
+    r"firmware|fw|hwcnt|counter|clock|clk|power|reset|doorbell|gpu|fault|irq|"
+    r"interrupt|completion|event|fence|seriali[sz]e|sync|transition)\w*\b",
+    re.IGNORECASE,
+)
+_NOTIFIER_RE = re.compile(
+    r"\b(?:notifier|notify|notification|event|completion|wait|ack|irq|interrupt|workqueue)\w*\b",
+    re.IGNORECASE,
+)
 _PARTIAL_VULN_ALIASES = {
     "wrong_flag_semantic": "wrong_constant",
     "callback_lifecycle": "teardown_race",
@@ -198,13 +241,15 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_publish_rollback": 2,
     "partial_allocation_arithmetic": 3,
     "partial_fops_lifecycle": 4,
-    "partial_lock_and_stale": 5,
-    "partial_lifecycle": 6,
-    "partial_shared_state": 7,
-    "partial_inbound_contract": 8,
-    "partial_outbound_misuse": 9,
-    "partial_target_intra": 10,
-    "partial_concurrency": 11,
+    "partial_cross_file_lock_cycle": 5,
+    "partial_state_transition_protocol": 6,
+    "partial_lock_and_stale": 7,
+    "partial_lifecycle": 8,
+    "partial_shared_state": 9,
+    "partial_inbound_contract": 10,
+    "partial_outbound_misuse": 11,
+    "partial_target_intra": 12,
+    "partial_concurrency": 13,
 }
 
 
@@ -223,6 +268,9 @@ class SymbolMeta:
     has_security_api: bool = False
     has_lifecycle_words: bool = False
     has_callback_words: bool = False
+    has_lock_api: bool = False
+    has_protocol_words: bool = False
+    has_notifier_words: bool = False
     is_source_like: bool = False
     is_sink_like: bool = False
     sink_type_hint: str = ""
@@ -247,6 +295,16 @@ class FieldUse:
     line_text: str = ""
 
 
+@dataclass(frozen=True)
+class LockOrderEdge:
+    first_lock: str
+    second_lock: str
+    file_path: str
+    function_name: str
+    line_number: int
+    line_text: str = ""
+
+
 @dataclass
 class SymbolIndex:
     definitions: dict[str, list[SymbolDef]]
@@ -258,9 +316,15 @@ class SymbolIndex:
     defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = field(default_factory=dict)
     calls_by_caller: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     field_uses_by_file: dict[str, list[FieldUse]] = field(default_factory=dict)
+    locks_by_symbol: dict[str, list[str]] = field(default_factory=dict)
+    lock_edges_by_symbol: dict[str, list[LockOrderEdge]] = field(default_factory=dict)
+    symbols_by_lock: dict[str, list[SymbolDef]] = field(default_factory=dict)
+    state_tokens_by_symbol: dict[str, list[str]] = field(default_factory=dict)
+    symbols_by_state_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     meta_by_symbol: dict[str, SymbolMeta] = field(default_factory=dict)
     lifecycle_symbols: list[SymbolDef] = field(default_factory=list)
     callback_symbols: list[SymbolDef] = field(default_factory=list)
+    notifier_related_symbols: list[SymbolDef] = field(default_factory=list)
     security_symbols: list[SymbolDef] = field(default_factory=list)
 
 
@@ -273,6 +337,7 @@ class PartialReviewContext:
     shared_state_nodes: list[FunctionNode]
     lifecycle_pair_nodes: list[FunctionNode]
     callback_nodes: list[FunctionNode]
+    companion_nodes: list[FunctionNode]
     globals: list[GlobalConstruct]
     candidate_paths: list[ReachabilityPath]
 
@@ -289,6 +354,8 @@ class PartialDetectorResult:
     stale_after_unlock_notes: list[str] = None
     disable_stale_notes: list[str] = None
     callback_lifetime_notes: list[str] = None
+    cross_file_lock_notes: list[str] = None
+    protocol_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -297,7 +364,8 @@ class PartialDetectorResult:
             "state_publication_notes", "publish_rollback_notes",
             "allocation_arithmetic_notes", "format_notes", "info_leak_notes",
             "fops_notes", "lock_order_notes", "stale_after_unlock_notes",
-            "disable_stale_notes", "callback_lifetime_notes", "nodes", "globals",
+            "disable_stale_notes", "callback_lifetime_notes",
+            "cross_file_lock_notes", "protocol_notes", "nodes", "globals",
         ):
             if getattr(self, name) is None:
                 setattr(self, name, [])
@@ -321,6 +389,7 @@ class PartialContextCaps:
     max_shared: int = 120
     max_lifecycle: int = 80
     max_callbacks: int = 80
+    max_companions: int = 48
     max_total_context_functions: int = 250
 
 
@@ -395,6 +464,30 @@ def _module_stem(name: str) -> str:
 def _name_has_any(name: str, words: set[str] | frozenset[str]) -> bool:
     lowered = str(name or "").lower()
     return any(word in lowered for word in words)
+
+
+def _canonical_protocol_token(token: str) -> str:
+    token = str(token or "").lower()
+    if token.endswith("ing") and token[:-3] in _PROTOCOL_TOKEN_WORDS:
+        token = token[:-3]
+    elif token.endswith("ed") and token[:-2] in _PROTOCOL_TOKEN_WORDS:
+        token = token[:-2]
+    return _PROTOCOL_TOKEN_ALIASES.get(token, token)
+
+
+def _protocol_tokens_from_text(text: str) -> list[str]:
+    tokens = []
+    for match in _PROTOCOL_TOKEN_RE.finditer(str(text or "")):
+        raw = match.group(0).lower()
+        for token in _tokens(raw):
+            canonical = _canonical_protocol_token(token)
+            if canonical in _PROTOCOL_TOKEN_WORDS:
+                tokens.append(canonical)
+    return list(dict.fromkeys(tokens))
+
+
+def _notifier_related_text(text: str) -> bool:
+    return bool(_NOTIFIER_RE.search(str(text or "")))
 
 
 def _function_body_from_symbol(codebase_path: str, sym: SymbolDef, max_chars: int = 5000) -> str:
@@ -636,9 +729,15 @@ class SymbolIndexBuilder:
         defs_by_file: dict[str, list[SymbolDef]] = defaultdict(list)
         defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = {}
         calls_by_caller: dict[tuple[str, str], list[str]] = {}
+        locks_by_symbol: dict[str, list[str]] = {}
+        lock_edges_by_symbol: dict[str, list[LockOrderEdge]] = {}
+        symbols_by_lock: dict[str, list[SymbolDef]] = defaultdict(list)
+        state_tokens_by_symbol: dict[str, list[str]] = {}
+        symbols_by_state_token: dict[str, list[SymbolDef]] = defaultdict(list)
         meta_by_symbol: dict[str, SymbolMeta] = {}
         lifecycle_symbols: list[SymbolDef] = []
         callback_symbols: list[SymbolDef] = []
+        notifier_related_symbols: list[SymbolDef] = []
         security_symbols: list[SymbolDef] = []
         globals_: list[GlobalConstruct] = []
         files_indexed = 0
@@ -663,13 +762,24 @@ class SymbolIndexBuilder:
                 calls_by_caller[caller_key] = list(dict.fromkeys(
                     calls_by_caller.get(caller_key, []) + calls
                 ))
-                meta = self._symbol_meta(sym, calls, "\n".join(body_lines))
+                locks, lock_edges, state_tokens = self._symbol_lock_and_protocol_metadata(sym, body_lines)
                 unique = _symbol_unique_name(sym)
+                locks_by_symbol[unique] = locks
+                lock_edges_by_symbol[unique] = lock_edges
+                state_tokens_by_symbol[unique] = state_tokens
+                for lock in locks:
+                    symbols_by_lock[lock].append(sym)
+                for token in state_tokens:
+                    symbols_by_state_token[token].append(sym)
+                body_text = "\n".join(body_lines)
+                meta = self._symbol_meta(sym, calls, body_text, locks, state_tokens)
                 meta_by_symbol[unique] = meta
                 if meta.has_lifecycle_words:
                     lifecycle_symbols.append(sym)
                 if meta.has_callback_words:
                     callback_symbols.append(sym)
+                if meta.has_notifier_words:
+                    notifier_related_symbols.append(sym)
                 if meta.has_security_api:
                     security_symbols.append(sym)
             globals_.extend(self._extract_globals(content, rel))
@@ -684,9 +794,15 @@ class SymbolIndexBuilder:
             defs_by_file_and_name=defs_by_file_and_name,
             calls_by_caller=calls_by_caller,
             field_uses_by_file=dict(field_uses_by_file),
+            locks_by_symbol=locks_by_symbol,
+            lock_edges_by_symbol=lock_edges_by_symbol,
+            symbols_by_lock=dict(symbols_by_lock),
+            state_tokens_by_symbol=state_tokens_by_symbol,
+            symbols_by_state_token=dict(symbols_by_state_token),
             meta_by_symbol=meta_by_symbol,
             lifecycle_symbols=lifecycle_symbols,
             callback_symbols=callback_symbols,
+            notifier_related_symbols=notifier_related_symbols,
             security_symbols=security_symbols,
         )
 
@@ -743,7 +859,46 @@ class SymbolIndexBuilder:
                 field_uses_by_file[sym.file_path].append(use)
         return list(dict.fromkeys(calls))
 
-    def _symbol_meta(self, sym: SymbolDef, calls: list[str], body: str) -> SymbolMeta:
+    def _symbol_lock_and_protocol_metadata(self, sym: SymbolDef, lines: list[str]) -> tuple[list[str], list[LockOrderEdge], list[str]]:
+        locks = []
+        edges: list[LockOrderEdge] = []
+        held: list[str] = []
+        for offset, line_text in enumerate(lines):
+            line_number = sym.body_start + offset
+            for match in _LOCK_CALL_RE.finditer(line_text):
+                lock = _normalise_lock_expr(match.group("arg"))
+                if not lock:
+                    continue
+                locks.append(lock)
+                if _UNLOCK_WORD_RE.search(match.group("fn")):
+                    if lock in held:
+                        held.remove(lock)
+                    continue
+                for prior in held:
+                    if prior == lock:
+                        continue
+                    edges.append(LockOrderEdge(
+                        first_lock=prior,
+                        second_lock=lock,
+                        file_path=sym.file_path,
+                        function_name=sym.name,
+                        line_number=line_number,
+                        line_text=line_text.strip(),
+                    ))
+                if lock not in held:
+                    held.append(lock)
+        text = f"{sym.name}\n{sym.signature}\n" + "\n".join(lines)
+        state_tokens = _protocol_tokens_from_text(text)
+        return list(dict.fromkeys(locks)), list(dict.fromkeys(edges)), state_tokens
+
+    def _symbol_meta(
+        self,
+        sym: SymbolDef,
+        calls: list[str],
+        body: str,
+        locks: list[str],
+        state_tokens: list[str],
+    ) -> SymbolMeta:
         match_text = f"{sym.name} {' '.join(calls)} {body}"
         call_text = " ".join(calls)
         has_security_api = bool(_SECURITY_API_RE.search(match_text))
@@ -754,13 +909,20 @@ class SymbolIndexBuilder:
         has_callback_words = (
             _name_has_any(sym.name, _CALLBACK_WORDS)
             or _name_has_any(call_text, _CALLBACK_WORDS)
+            or _name_has_any(body, _CALLBACK_WORDS)
         )
+        has_lock_api = bool(locks)
+        has_protocol_words = bool(state_tokens)
+        has_notifier_words = _name_has_any(sym.name, _NOTIFIER_WORDS) or _notifier_related_text(match_text)
         is_source_like = bool(_SOURCE_RE.search(match_text))
         is_sink_like = bool(_SINK_KIND_RE.search(match_text) or has_security_api)
         return SymbolMeta(
             has_security_api=has_security_api,
             has_lifecycle_words=has_lifecycle_words,
             has_callback_words=has_callback_words,
+            has_lock_api=has_lock_api,
+            has_protocol_words=has_protocol_words,
+            has_notifier_words=has_notifier_words,
             is_source_like=is_source_like,
             is_sink_like=is_sink_like,
             sink_type_hint=_sink_type_for_text(match_text) if is_sink_like else "",
@@ -882,10 +1044,28 @@ def _callback_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
     return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _CALLBACK_WORDS)]
 
 
+def _notifier_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
+    if index.notifier_related_symbols or index.meta_by_symbol:
+        return list(index.notifier_related_symbols)
+    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _NOTIFIER_WORDS)]
+
+
 def _security_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
     if index.security_symbols or index.meta_by_symbol:
         return list(index.security_symbols)
     return _all_symbols(index)
+
+
+def _symbol_locks(index: SymbolIndex, sym: SymbolDef) -> set[str]:
+    return set(index.locks_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_state_tokens(index: SymbolIndex, sym: SymbolDef) -> set[str]:
+    return set(index.state_tokens_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_lock_edges(index: SymbolIndex, sym: SymbolDef) -> list[LockOrderEdge]:
+    return list(index.lock_edges_by_symbol.get(_symbol_unique_name(sym), []))
 
 
 def _sink_type_for_text(text: str) -> str:
@@ -1007,9 +1187,205 @@ class PartialContextBuilder:
             shared_state_nodes=shared,
             lifecycle_pair_nodes=lifecycle,
             callback_nodes=callbacks,
+            companion_nodes=[],
             globals=globals_,
             candidate_paths=paths,
         )
+
+    def expand_companions(
+        self,
+        context: PartialReviewContext,
+        index: SymbolIndex,
+        *,
+        progress_callback=None,
+    ) -> int:
+        selected = {_symbol_unique_name(sym): sym for sym in _symbols_for_file(index, context.target_file)}
+        selected.update({_symbol_unique_name(sym): sym for sym in self._context_symbols(index, context)})
+        selected_syms = list(selected.values())
+        signal = self._companion_signal(index, context, selected_syms)
+        if not signal["enabled"]:
+            return 0
+        if progress_callback:
+            progress_callback({
+                "event": "partial_companion_expansion_start",
+                "locks": len(signal["locks"]),
+                "state_tokens": len(signal["state_tokens"]),
+                "callback_or_notifier": bool(signal["callback_or_notifier"]),
+            })
+        ranked = self._companion_candidates(index, context, signal)
+        limit = max(0, int(self._caps.max_companions or 0))
+        companions = self._cap_ranked_symbols(ranked, limit)
+        existing = {node.unique_name for node in self._all_context_nodes(context)}
+        companions = [sym for sym in companions if _symbol_unique_name(sym) not in existing]
+        context.companion_nodes = self._dedupe_nodes(
+            list(context.companion_nodes or []) + self._materialize_symbols(index, companions)
+        )
+        context.candidate_paths = _dedupe_paths(
+            list(context.candidate_paths or []) + self._companion_paths(index, context)
+        )
+        if progress_callback:
+            progress_callback({
+                "event": "partial_companion_expansion_done",
+                "companions": len(context.companion_nodes),
+                "candidate_symbols": len(ranked),
+            })
+        return len(context.companion_nodes)
+
+    def _context_symbols(self, index: SymbolIndex, context: PartialReviewContext) -> list[SymbolDef]:
+        symbols = {}
+        for node in self._all_context_nodes(context):
+            sym = _lookup_symbol(index, node.file_path, node.name)
+            if sym:
+                symbols[_symbol_unique_name(sym)] = sym
+        return list(symbols.values())
+
+    def _all_context_nodes(self, context: PartialReviewContext) -> list[FunctionNode]:
+        nodes = {}
+        for group in (
+            context.target_nodes, context.inbound_callers, context.outbound_callees,
+            context.shared_state_nodes, context.lifecycle_pair_nodes,
+            context.callback_nodes, context.companion_nodes,
+        ):
+            for node in group or []:
+                nodes[node.unique_name] = node
+        return list(nodes.values())
+
+    def _companion_signal(self, index: SymbolIndex, context: PartialReviewContext, symbols: list[SymbolDef]) -> dict:
+        locks: set[str] = set()
+        state_tokens: set[str] = set()
+        has_lock_edges = False
+        callback_or_notifier = False
+        lifecycle_concurrency = False
+        for sym in symbols:
+            unique = _symbol_unique_name(sym)
+            meta = index.meta_by_symbol.get(unique)
+            sym_locks = _symbol_locks(index, sym)
+            sym_tokens = _symbol_state_tokens(index, sym)
+            locks.update(sym_locks)
+            state_tokens.update(sym_tokens)
+            has_lock_edges = has_lock_edges or bool(_symbol_lock_edges(index, sym))
+            callback_or_notifier = callback_or_notifier or bool(
+                meta and (meta.has_callback_words or meta.has_notifier_words)
+            )
+            lifecycle_concurrency = lifecycle_concurrency or bool(
+                meta and meta.has_lifecycle_words and (sym_locks or (sym_tokens & _TRANSITION_TOKENS))
+            )
+        strong_protocol = bool(state_tokens & (_WAIT_ACK_TOKENS | _STATE_VERIFY_TOKENS | _SUBSYSTEM_TOKENS))
+        enabled = bool(has_lock_edges or callback_or_notifier or strong_protocol or lifecycle_concurrency)
+        return {
+            "enabled": enabled,
+            "locks": locks,
+            "state_tokens": state_tokens,
+            "has_lock_edges": has_lock_edges,
+            "callback_or_notifier": callback_or_notifier,
+            "lifecycle_concurrency": lifecycle_concurrency,
+        }
+
+    def _companion_candidates(self, index: SymbolIndex, context: PartialReviewContext, signal: dict) -> list:
+        target_file = context.target_file
+        target_dir = str(Path(target_file).parent).replace("\\", "/")
+        target_names = {node.name for node in context.target_nodes}
+        target_prefixes = {_module_stem(name) for name in target_names if name}
+        existing = {node.unique_name for node in self._all_context_nodes(context)}
+        ranked = {}
+
+        for lock in signal["locks"]:
+            for sym in index.symbols_by_lock.get(lock, [])[:160]:
+                self._remember_companion_candidate(
+                    ranked, index, sym, target_file, target_dir, target_prefixes,
+                    signal, existing, bonus=42,
+                )
+        for token in signal["state_tokens"]:
+            for sym in index.symbols_by_state_token.get(token, [])[:180]:
+                self._remember_companion_candidate(
+                    ranked, index, sym, target_file, target_dir, target_prefixes,
+                    signal, existing, bonus=32,
+                )
+        if signal["callback_or_notifier"]:
+            for sym in (_callback_symbol_candidates(index) + _notifier_symbol_candidates(index))[:220]:
+                self._remember_companion_candidate(
+                    ranked, index, sym, target_file, target_dir, target_prefixes,
+                    signal, existing, bonus=26,
+                )
+        if signal["lifecycle_concurrency"]:
+            for sym in _lifecycle_symbol_candidates(index)[:220]:
+                self._remember_companion_candidate(
+                    ranked, index, sym, target_file, target_dir, target_prefixes,
+                    signal, existing, bonus=18,
+                )
+        return list(ranked.values())
+
+    def _remember_companion_candidate(
+        self,
+        ranked_by_unique,
+        index: SymbolIndex,
+        sym: SymbolDef,
+        target_file: str,
+        target_dir: str,
+        target_prefixes: set[str],
+        signal: dict,
+        existing: set[str],
+        *,
+        bonus: int,
+    ):
+        unique = _symbol_unique_name(sym)
+        if unique in existing:
+            return
+        sym_dir = str(Path(sym.file_path).parent).replace("\\", "/")
+        sym_stem = _module_stem(sym.name)
+        lock_overlap = len(_symbol_locks(index, sym) & signal["locks"])
+        token_overlap = len(_symbol_state_tokens(index, sym) & signal["state_tokens"])
+        if not lock_overlap and not token_overlap and sym_dir != target_dir and sym_stem not in target_prefixes:
+            return
+        score_bonus = bonus + min(30, lock_overlap * 12) + min(24, token_overlap * 8)
+        if sym_dir == target_dir:
+            score_bonus += 28
+        elif sym_dir.startswith(target_dir) or target_dir.startswith(sym_dir):
+            score_bonus += 14
+        if sym_stem in target_prefixes or any(
+            sym_stem.startswith(prefix) or prefix.startswith(sym_stem)
+            for prefix in target_prefixes if prefix
+        ):
+            score_bonus += 18
+        meta = index.meta_by_symbol.get(unique)
+        if meta and (meta.has_callback_words or meta.has_notifier_words):
+            score_bonus += 10
+        rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=score_bonus)
+        self._remember_ranked_symbol(ranked_by_unique, rank, sym)
+
+    def _companion_paths(self, index: SymbolIndex, context: PartialReviewContext) -> list[ReachabilityPath]:
+        paths = []
+        for target_node in context.target_nodes:
+            target_sym = _lookup_symbol(index, target_node.file_path, target_node.name)
+            target_locks = _symbol_locks(index, target_sym) if target_sym else set()
+            target_tokens = _symbol_state_tokens(index, target_sym) if target_sym else set()
+            for node in context.companion_nodes:
+                sym = _lookup_symbol(index, node.file_path, node.name)
+                if not sym:
+                    continue
+                if (
+                    target_node.name in node.calls
+                    or node.name in target_node.calls
+                    or target_locks & _symbol_locks(index, sym)
+                    or target_tokens & _symbol_state_tokens(index, sym)
+                    or _module_stem(target_node.name) == _module_stem(node.name)
+                ):
+                    paths.append(ReachabilityPath(
+                        target_node.unique_name,
+                        node.unique_name,
+                        [target_node.unique_name, node.unique_name],
+                        node.sink_type,
+                    ))
+        return paths
+
+    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
+        seen, out = set(), []
+        for node in nodes:
+            if node.unique_name in seen:
+                continue
+            seen.add(node.unique_name)
+            out.append(node)
+        return out
 
     def _target_calls(self, target_nodes, index, target_symbols):
         calls = []
@@ -1048,7 +1424,7 @@ class PartialContextBuilder:
     def _cap_ranked_symbols(self, ranked, limit):
         seen = set()
         result = []
-        for _, sym in sorted(ranked):
+        for _, sym in sorted(ranked, key=lambda item: item[0]):
             unique = _symbol_unique_name(sym)
             if unique in seen:
                 continue
@@ -1268,7 +1644,8 @@ class PartialGraphBuilder:
         nodes = {}
         for group in (
             context.target_nodes, context.inbound_callers, context.outbound_callees,
-            context.shared_state_nodes, context.lifecycle_pair_nodes, context.callback_nodes,
+            context.shared_state_nodes, context.lifecycle_pair_nodes,
+            context.callback_nodes, context.companion_nodes,
         ):
             for node in group:
                 nodes[node.unique_name] = node
@@ -1301,9 +1678,11 @@ class PartialCandidateDetector:
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
         self._detect_lock_order(index, result, context_syms, target_file)
+        self._detect_cross_file_lock_cycles(index, result, context, target_file)
         self._detect_stale_after_unlock(index, result, target_syms)
         self._detect_disable_stale(index, result, target_syms)
         self._detect_callback_lifetime(index, result, target_syms, target_prefixes)
+        self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
         self._detect_target_calls_wrappers(index, result, target_syms, wrappers)
         result.nodes = self._dedupe_nodes(result.nodes)
         result.globals = list({g.unique_name: g for g in result.globals}.values())
@@ -1338,7 +1717,8 @@ class PartialCandidateDetector:
         syms = {f"{sym.file_path}::{sym.name}": sym for sym in target_syms}
         for node in (
             context.target_nodes + context.inbound_callers + context.outbound_callees
-            + context.shared_state_nodes + context.lifecycle_pair_nodes + context.callback_nodes
+            + context.shared_state_nodes + context.lifecycle_pair_nodes
+            + context.callback_nodes + context.companion_nodes
         ):
             sym = self._symbol_for_function(index, node.file_path, node.name)
             if sym:
@@ -1539,6 +1919,86 @@ class PartialCandidateDetector:
                     if len(result.lock_order_notes) >= 20:
                         return
 
+    def _detect_cross_file_lock_cycles(self, index, result, context, target_file):
+        syms = self._context_symbols(index, context, _symbols_for_file(index, target_file))
+        edge_map: dict[tuple[str, str], list[LockOrderEdge]] = defaultdict(list)
+        for sym in syms:
+            for edge in _symbol_lock_edges(index, sym):
+                edge_map[(edge.first_lock, edge.second_lock)].append(edge)
+        if not edge_map:
+            return
+        seen = set()
+        for (a, b), forward_edges in edge_map.items():
+            reverse_edges = edge_map.get((b, a), [])
+            for e1 in forward_edges:
+                for e2 in reverse_edges:
+                    if not self._cross_file_cycle_is_relevant(e1, e2, target_file):
+                        continue
+                    key = tuple(sorted((
+                        f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                        f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                    )))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.cross_file_lock_notes.append(self._lock_cycle_note(index, [e1, e2], target_file))
+                    self._add_edge_nodes(index, result, [e1, e2])
+                    if len(result.cross_file_lock_notes) >= 16:
+                        return
+        locks = sorted({lock for edge in edge_map for lock in edge})[:24]
+        for a in locks:
+            for b in locks:
+                if b == a:
+                    continue
+                for c in locks:
+                    if c in {a, b}:
+                        continue
+                    if not (edge_map.get((a, b)) and edge_map.get((b, c)) and edge_map.get((c, a))):
+                        continue
+                    for e1 in edge_map[(a, b)]:
+                        for e2 in edge_map[(b, c)]:
+                            for e3 in edge_map[(c, a)]:
+                                if not self._cross_file_cycle_is_relevant(e1, e2, target_file, extra=e3):
+                                    continue
+                                key = tuple(sorted((
+                                    f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                                    f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                                    f"{e3.file_path}:{e3.function_name}:{e3.first_lock}>{e3.second_lock}",
+                                )))
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                result.cross_file_lock_notes.append(self._lock_cycle_note(index, [e1, e2, e3], target_file))
+                                self._add_edge_nodes(index, result, [e1, e2, e3])
+                                if len(result.cross_file_lock_notes) >= 16:
+                                    return
+
+    def _cross_file_cycle_is_relevant(self, first: LockOrderEdge, second: LockOrderEdge, target_file: str, *, extra: LockOrderEdge | None = None) -> bool:
+        edges = [first, second] + ([extra] if extra else [])
+        files = {edge.file_path for edge in edges}
+        if target_file not in files or len(files) < 2:
+            return False
+        return any(edge.file_path == target_file for edge in edges)
+
+    def _lock_cycle_note(self, index: SymbolIndex, edges: list[LockOrderEdge], target_file: str) -> str:
+        parts = []
+        async_hint = False
+        for edge in edges:
+            sym = _lookup_symbol(index, edge.file_path, edge.function_name)
+            meta = index.meta_by_symbol.get(_symbol_unique_name(sym)) if sym else None
+            async_hint = async_hint or bool(meta and (meta.has_callback_words or meta.has_notifier_words))
+            role = "target" if edge.file_path == target_file else "companion"
+            parts.append(
+                f"{edge.first_lock}->{edge.second_lock} in {role} "
+                f"{edge.file_path}::{edge.function_name} line {edge.line_number}"
+            )
+        suffix = " Callback/notifier/asynchronous linkage is present." if async_hint else ""
+        return "Cross-file lock cycle candidate: " + "; ".join(parts) + "." + suffix
+
+    def _add_edge_nodes(self, index: SymbolIndex, result: PartialDetectorResult, edges: list[LockOrderEdge]):
+        for edge in edges:
+            self._add_node(index, result, _lookup_symbol(index, edge.file_path, edge.function_name))
+
     def _detect_stale_after_unlock(self, index, result, target_syms):
         for sym in target_syms:
             held = False
@@ -1606,6 +2066,105 @@ class PartialCandidateDetector:
             for candidate in self._paired_lifecycle_symbols(index, sym.name, target_prefixes, {"destroy", "release", "term", "shutdown", "disable"}):
                 self._add_node(index, result, candidate)
 
+    def _detect_state_transition_protocol(self, index, result, target_syms, context, target_file):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companions = [sym for sym in context_syms if sym.file_path != target_file]
+        companion_by_token: dict[str, list[SymbolDef]] = defaultdict(list)
+        for sym in companions:
+            for token in _symbol_state_tokens(index, sym):
+                companion_by_token[token].append(sym)
+
+        for sym in target_syms:
+            tokens = _symbol_state_tokens(index, sym)
+            if not tokens & (_WAIT_ACK_TOKENS | _TRANSITION_TOKENS | _SUBSYSTEM_TOKENS):
+                continue
+            self._detect_wait_ack_without_verify(index, result, sym, companions)
+            self._detect_protocol_lock_mismatch(index, result, sym, companion_by_token)
+            if len(result.protocol_notes) >= 24:
+                return
+
+    def _detect_wait_ack_without_verify(self, index, result, sym: SymbolDef, companions: list[SymbolDef]):
+        tokens = _symbol_state_tokens(index, sym)
+        if not (tokens & _WAIT_ACK_TOKENS):
+            return
+        if not (tokens & (_STATE_VERIFY_TOKENS | _SUBSYSTEM_TOKENS)):
+            return
+        lines = self._lines(sym)
+        for idx, (line_no, line) in enumerate(lines):
+            lower = line.lower()
+            if not any(token in lower for token in _WAIT_ACK_TOKENS):
+                continue
+            later = "\n".join(txt for _, txt in lines[idx + 1:idx + 16])
+            later_tokens = set(_protocol_tokens_from_text(later))
+            if later_tokens and (_STATE_VERIFY_TOKENS & later_tokens):
+                continue
+            companion = self._best_protocol_companion(index, sym, companions)
+            note = (
+                f"{sym.file_path}::{sym.name} line {line_no} waits for ack/event `{_line_excerpt(line)}` "
+                "without a nearby final active/protected/ready state verification."
+            )
+            if companion:
+                note += f" Companion transition context: {companion.file_path}::{companion.name}."
+                self._add_node(index, result, companion)
+            result.protocol_notes.append(note)
+            self._add_node(index, result, sym)
+            return
+
+    def _detect_protocol_lock_mismatch(self, index, result, sym: SymbolDef, companion_by_token: dict[str, list[SymbolDef]]):
+        tokens = _symbol_state_tokens(index, sym)
+        if not (tokens & (_TRANSITION_TOKENS | _SUBSYSTEM_TOKENS)):
+            return
+        target_locks = _symbol_locks(index, sym)
+        checked = 0
+        for token in sorted(tokens & (_TRANSITION_TOKENS | _SUBSYSTEM_TOKENS)):
+            for companion in companion_by_token.get(token, [])[:10]:
+                if companion.file_path == sym.file_path:
+                    continue
+                companion_locks = _symbol_locks(index, companion)
+                if not companion_locks:
+                    continue
+                if target_locks & companion_locks:
+                    continue
+                if not self._same_protocol_area(sym, companion):
+                    continue
+                missing = ", ".join(sorted(companion_locks)[:3])
+                result.protocol_notes.append(
+                    f"{sym.file_path}::{sym.name} shares `{token}` transition/protocol state with "
+                    f"{companion.file_path}::{companion.name}, but target-side lock coverage "
+                    f"{sorted(target_locks)[:3] or ['(none)']} does not match companion lock(s) {missing}."
+                )
+                self._add_node(index, result, sym)
+                self._add_node(index, result, companion)
+                checked += 1
+                if checked >= 4:
+                    return
+
+    def _best_protocol_companion(self, index, sym: SymbolDef, companions: list[SymbolDef]) -> SymbolDef | None:
+        sym_tokens = _symbol_state_tokens(index, sym)
+        candidates = []
+        for companion in companions:
+            overlap = len(sym_tokens & _symbol_state_tokens(index, companion))
+            if not overlap:
+                continue
+            score = overlap
+            if str(Path(companion.file_path).parent) == str(Path(sym.file_path).parent):
+                score += 3
+            if _module_stem(companion.name) == _module_stem(sym.name):
+                score += 2
+            if _symbol_locks(index, companion):
+                score += 2
+            candidates.append((-score, companion.file_path, companion.line_number, companion.name, companion))
+        return sorted(candidates, key=lambda item: item[:-1])[0][-1] if candidates else None
+
+    def _same_protocol_area(self, a: SymbolDef, b: SymbolDef) -> bool:
+        dir_a = str(Path(a.file_path).parent).replace("\\", "/")
+        dir_b = str(Path(b.file_path).parent).replace("\\", "/")
+        if dir_a == dir_b or dir_a.startswith(dir_b) or dir_b.startswith(dir_a):
+            return True
+        stem_a = _module_stem(a.name)
+        stem_b = _module_stem(b.name)
+        return bool(stem_a and stem_b and (stem_a.startswith(stem_b) or stem_b.startswith(stem_a)))
+
     def _paired_lifecycle_symbols(self, index, name, target_prefixes, wanted_actions):
         stem = _module_stem(name)
         for sym in _lifecycle_symbol_candidates(index):
@@ -1646,6 +2205,9 @@ Pass: {pass_name}
 
 Review focus:
 {focus}
+
+Scope rule:
+{scope_rule}
 
 Candidate paths and relationships:
 {paths_section}
@@ -1712,6 +2274,15 @@ _PASS_FOCI = {
     "lock_and_stale": (
         "Deterministic lock-order candidates and stale local/cached pointer or state after unlock/relock. Report missing locks "
         "only when a concrete protected field, teardown race, or corruption path is shown."
+    ),
+    "cross_file_lock_cycle": (
+        "Cross-file deadlock cycles and callback/notifier-induced lock inversions. Report only when the target file contributes "
+        "a concrete lock-order edge or unsafe callback participation; use companion files only to prove the other edge(s)."
+    ),
+    "state_transition_protocol": (
+        "Distributed protocol/state transition bugs: wait/ack without final active/protected verification, protected-mode/MMU/"
+        "scheduler/firmware transitions without the companion serialization lock, and split enter/exit or enable/disable "
+        "protocols where the target file owns the unsafe participation."
     ),
 }
 
@@ -1785,6 +2356,18 @@ class TargetedFileReviewer:
             passes.append(("fops_lifecycle", context.target_nodes, context.callback_nodes + context.lifecycle_pair_nodes + detector_nodes))
         if detector_result.lock_order_notes or detector_result.stale_after_unlock_notes:
             passes.append(("lock_and_stale", context.target_nodes, context.shared_state_nodes + context.lifecycle_pair_nodes + detector_nodes))
+        if detector_result.cross_file_lock_notes:
+            passes.append((
+                "cross_file_lock_cycle", context.target_nodes,
+                context.companion_nodes + context.callback_nodes + context.lifecycle_pair_nodes
+                + context.shared_state_nodes + detector_nodes,
+            ))
+        if detector_result.protocol_notes:
+            passes.append((
+                "state_transition_protocol", context.target_nodes,
+                context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes
+                + context.shared_state_nodes + detector_nodes,
+            ))
         return passes
 
     def _run_pass(self, context, graph, pass_item, detector_result):
@@ -1803,6 +2386,7 @@ class TargetedFileReviewer:
             "target_file": context.target_file,
             "pass_name": pass_name,
             "focus": _PASS_FOCI[pass_name],
+            "scope_rule": self._scope_rule_for_pass(pass_name, context.target_file),
             "paths_section": self._paths_section(context.candidate_paths, graph),
             "candidate_notes": self._candidate_notes_for_pass(pass_name, detector_result),
             "globals_section": self._globals_section(context.globals),
@@ -1810,6 +2394,15 @@ class TargetedFileReviewer:
             "context_code": context_code,
         }).strip()
         return self._parse_findings(raw, context, graph, analysis_type=f"partial_{pass_name}")
+
+    def _scope_rule_for_pass(self, pass_name: str, target_file: str) -> str:
+        if pass_name in {"cross_file_lock_cycle", "state_transition_protocol"}:
+            return (
+                f"Findings must still use primary_file={target_file}. Companion files may prove the other half of the "
+                "deadlock/protocol failure, but the target file must contain the concrete defective edge, unsafe transition, "
+                "missing verification, or unsafe participation."
+            )
+        return "Findings must be rooted in the target file. Other files are evidence/context only."
 
     def _build_code(self, nodes, *, per_fn_chars, max_total_chars):
         parts, total = [], 0
@@ -1863,6 +2456,15 @@ class TargetedFileReviewer:
             "lock_and_stale": (
                 ("LOCK_ORDER", detector_result.lock_order_notes),
                 ("STALE_AFTER_UNLOCK", detector_result.stale_after_unlock_notes),
+            ),
+            "cross_file_lock_cycle": (
+                ("CROSS_FILE_LOCK_CYCLE", detector_result.cross_file_lock_notes),
+                ("LOCK_ORDER", detector_result.lock_order_notes[:20]),
+            ),
+            "state_transition_protocol": (
+                ("STATE_TRANSITION_PROTOCOL", detector_result.protocol_notes),
+                ("STATE_PUBLICATION", detector_result.state_publication_notes[:20]),
+                ("DISABLE_STALE", detector_result.disable_stale_notes[:20]),
             ),
             "lifecycle": (
                 ("CALLBACK_LIFETIME", detector_result.callback_lifetime_notes[:20]),
@@ -2182,10 +2784,11 @@ class PartialReachabilityFileService:
         caps = PartialContextCaps(max_total_context_functions=max(25, int(context_budget or 250)))
         if progress_callback:
             progress_callback({"event": "partial_context_start", "file": rel_target})
-        context = PartialContextBuilder(self._config.codebase_path, caps, cache).build_for_file(
-            rel_target, target_nodes, index)
+        context_builder = PartialContextBuilder(self._config.codebase_path, caps, cache)
+        context = context_builder.build_for_file(rel_target, target_nodes, index)
         if target_globals:
             context.globals = self._merge_globals(context.globals, target_globals)
+        context_builder.expand_companions(context, index, progress_callback=progress_callback)
 
         detector_result = PartialCandidateDetector(self._config.codebase_path, cache).detect(
             index, rel_target, context.target_nodes, context)
@@ -2203,7 +2806,19 @@ class PartialReachabilityFileService:
                 "stale_after_unlock": len(detector_result.stale_after_unlock_notes),
                 "disable_stale": len(detector_result.disable_stale_notes),
                 "callback_lifetime": len(detector_result.callback_lifetime_notes),
+                "cross_file_lock_cycles": len(detector_result.cross_file_lock_notes),
+                "protocol_candidates": len(detector_result.protocol_notes),
             })
+            if detector_result.cross_file_lock_notes:
+                progress_callback({
+                    "event": "partial_lock_cycle_candidates",
+                    "candidates": len(detector_result.cross_file_lock_notes),
+                })
+            if detector_result.protocol_notes:
+                progress_callback({
+                    "event": "partial_protocol_candidates",
+                    "candidates": len(detector_result.protocol_notes),
+                })
         if progress_callback:
             progress_callback({
                 "event": "partial_context_done",
@@ -2213,6 +2828,7 @@ class PartialReachabilityFileService:
                 "shared": len(context.shared_state_nodes),
                 "lifecycle": len(context.lifecycle_pair_nodes),
                 "callbacks": len(context.callback_nodes),
+                "companions": len(context.companion_nodes),
                 "total_selected": len(self._all_context_nodes(context)),
             })
 
@@ -2271,6 +2887,8 @@ class PartialReachabilityFileService:
                     "definitions": sum(len(v) for v in self._symbol_index.definitions.values()),
                     "callsites": sum(len(v) for v in self._symbol_index.callsites.values()),
                     "fields": len(self._symbol_index.field_uses),
+                    "locks": len(self._symbol_index.symbols_by_lock),
+                    "state_tokens": len(self._symbol_index.symbols_by_state_token),
                     "globals": len(self._symbol_index.globals),
                 })
             return self._symbol_index
@@ -2356,7 +2974,8 @@ class PartialReachabilityFileService:
         seen = {}
         for group in (
             context.target_nodes, context.inbound_callers, context.outbound_callees,
-            context.shared_state_nodes, context.lifecycle_pair_nodes, context.callback_nodes,
+            context.shared_state_nodes, context.lifecycle_pair_nodes,
+            context.callback_nodes, context.companion_nodes,
         ):
             for node in group:
                 seen[node.unique_name] = node
