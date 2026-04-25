@@ -34,6 +34,7 @@ class ReviewService:
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
         reachability_service=None,
+        partial_reachability_file_service=None,
         use_reachability_for_review: bool = False,
         reachability_settings: dict[str, Any] | None = None,
     ):
@@ -42,6 +43,7 @@ class ReviewService:
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
         self._reachability_service = reachability_service
+        self._partial_reachability_file_service = partial_reachability_file_service
         self._use_reachability_for_review = use_reachability_for_review
         self._reachability_settings = dict(reachability_settings or {})
         self._reachability_cache = None
@@ -76,11 +78,38 @@ class ReviewService:
         options: ReviewOptions | None = None,
         *,
         use_retrieval_context: bool | None = None,
+        mode: str = "partial",
+        context_budget: int | None = None,
+        progress_callback=None,
     ):
         options = coerce_review_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
+        mode = str(mode or "partial").lower()
+        if mode == "full":
+            if (
+                self._use_reachability_for_review
+                and self._reachability_service is not None
+            ):
+                return self._find_reachability_review_for_file(file_path)
+        elif mode == "partial":
+            if self._partial_reachability_file_service is not None:
+                result = self._partial_reachability_file_service.review_file(
+                    file_path,
+                    extraction_model=self._reachability_settings.get(
+                        "extraction_model", "gpt-4.1-mini"
+                    ),
+                    review_model=self._reachability_settings.get("confirmation_model"),
+                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                    context_budget=context_budget or 250,
+                    max_paths_per_sink=int(
+                        self._reachability_settings.get("max_paths_per_sink", 3)
+                    ),
+                    progress_callback=progress_callback,
+                )
+                if result is not None:
+                    return result
         if (
             self._use_reachability_for_review
             and self._reachability_service is not None
@@ -186,7 +215,11 @@ class ReviewService:
         )
         if not files:
             return
-        review_fn = review_file_func or self.review_file
+        if review_file_func is None:
+            def review_fn(path, *, options=None):
+                return self.review_file(path, options=options, mode="classic")
+        else:
+            review_fn = review_file_func
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(

@@ -49,6 +49,38 @@ def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
     )
 
 
+def _parse_review_file_options(runtime: CommandRuntime):
+    mode = "partial"
+    context_budget = None
+    extra = list(runtime.command_args[1:])
+    i = 0
+    while i < len(extra):
+        arg = extra[i]
+        if arg == "--full":
+            mode = "full"
+            i += 1
+            continue
+        if arg == "--partial":
+            mode = "partial"
+            i += 1
+            continue
+        if arg == "--mode" and i + 1 < len(extra):
+            mode = str(extra[i + 1]).lower()
+            i += 2
+            continue
+        if arg == "--context-budget" and i + 1 < len(extra):
+            try:
+                context_budget = int(extra[i + 1])
+            except ValueError:
+                context_budget = None
+            i += 2
+            continue
+        i += 1
+    if mode not in {"partial", "full"}:
+        mode = "partial"
+    return mode, context_budget
+
+
 def show_help(args=None):
     print_console(
         """
@@ -59,6 +91,7 @@ Type one of the following commands (with arguments):
 - [cyan]index[/cyan]
 - [cyan]review_patch mypatch.diff[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
+  - default uses partial C/C++ reachability; add [cyan]--mode full[/cyan] for the old full-graph path.
 - [cyan]review_code[/cyan]
 - [cyan]triage findings.sarif[/cyan]
 - [cyan]update patch.diff[/cyan]
@@ -83,6 +116,7 @@ Options:
     --reachability-max-paths-per-sink N      Max diverse paths per root-cause sink (default: 3)
     --reachability-workers N                 Parallel workers (default: 8)
     --reachability-max-path N                Max paths to analyze, 0=all (default: 0)
+    review_file options: --mode partial|full, --full, --context-budget N
 """
     )
 
@@ -112,11 +146,51 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
+    mode, context_budget = _parse_review_file_options(runtime)
+
+    def _progress(event):
+        if not args.verbose:
+            return
+        ev = event.get("event", "")
+        if ev == "partial_symbol_index_start":
+            print_console(f"[cyan]Building symbol index for {event.get('files', 0)} C/C++ files...[/cyan]", args.quiet)
+        elif ev == "partial_symbol_index_done":
+            print_console(
+                f"[green]Symbol index: {event.get('definitions', 0)} functions, "
+                f"{event.get('callsites', 0)} callsites[/green]",
+                args.quiet,
+            )
+        elif ev == "partial_target_extract_start":
+            print_console(f"[cyan]Extracting target anchors from {escape(str(event.get('file', '')))}...[/cyan]", args.quiet)
+        elif ev == "partial_context_done":
+            print_console(
+                f"[green]Partial context: target={event.get('target_nodes', 0)}, "
+                f"inbound={event.get('inbound', 0)}, outbound={event.get('outbound', 0)}, "
+                f"shared={event.get('shared', 0)}, lifecycle={event.get('lifecycle', 0)}, "
+                f"callbacks={event.get('callbacks', 0)}[/green]",
+                args.quiet,
+            )
+        elif ev == "partial_graph_done":
+            print_console(
+                f"[green]Partial graph: {event.get('nodes', 0)} nodes, "
+                f"{event.get('edges', 0)} edges, {event.get('paths', 0)} paths[/green]",
+                args.quiet,
+            )
+        elif ev == "partial_review_done" and "deduped_findings" in event:
+            print_console(
+                f"[green]Partial review: {event.get('deduped_findings', 0)} findings "
+                f"after filtering[/green]",
+                args.quiet,
+            )
+
     raw_result = with_spinner(
-        f"Reviewing file {file_path}...",
+        f"Reviewing file {file_path} ({mode} mode)...",
         engine.review.review_file,
         file_path=file_path,
         options=options,
+        mode=mode,
+        context_budget=context_budget,
+        progress_callback=_progress,
         quiet=args.quiet,
     )
 
