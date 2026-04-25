@@ -111,9 +111,11 @@ _VULN_TYPES = (
     "double_free, double_close, null_deref, command_injection, format_string, "
     "path_traversal, toctou, missing_auth, permission_mismatch, wrong_constant, "
     "wrong_flag_semantic, type_confusion, stale_length, width_mismatch, info_leak, uninitialized_memory, "
+    "copy_contract, arithmetic_chain_mismatch, resource_binding_order, policy_gate_before_sink, "
+    "state_transition_protocol, "
     "stale_after_unlock, missing_lock, lock_order, state_order, ordering_gap, "
     "teardown_race, deferred_uaf, callback_lifecycle, refcount_imbalance, "
-    "accounting_drift, partial_cleanup, rollback_gap, cleanup_symmetry, "
+    "accounting_drift, partial_cleanup, rollback_gap, cleanup_symmetry, cross_file_lock_cycle, "
     "file_ops_lifecycle_gap, stale_pointer, other"
 )
 _STATE_FIELD_RE = re.compile(
@@ -209,11 +211,62 @@ _NOTIFIER_RE = re.compile(
     r"\b(?:notifier|notify|notification|event|completion|wait|ack|irq|interrupt|workqueue)\w*\b",
     re.IGNORECASE,
 )
+_COPY_CONTRACT_APIS = frozenset({
+    "memcpy", "memmove", "copy_to_user", "copy_from_user", "copy_in_user",
+    "read", "write", "kernel_read", "kernel_write", "simple_read_from_buffer",
+    "simple_write_to_buffer",
+})
+_COPY_API_RE = re.compile(
+    r"\b(?:memcpy|memmove|copy_to_user|copy_from_user|copy_in_user|read|write|"
+    r"kernel_read|kernel_write|simple_read_from_buffer|simple_write_to_buffer)\s*\(",
+    re.IGNORECASE,
+)
+_COUNT_SIZE_WORDS = frozenset({
+    "count", "len", "length", "size", "bytes", "nbytes", "nr", "num", "nents",
+    "stride", "pages", "page_count", "groups", "offset",
+})
+_RESOURCE_WORDS = frozenset({
+    "doorbell", "mapping", "mappings", "map", "pages", "page", "token", "ctx",
+    "context", "session", "queue", "alias", "region", "gpu_va", "same_va",
+    "imported", "dma_buf", "exporter", "pfn", "mmu", "protected", "protm",
+})
+_POLICY_GUARD_WORDS = frozenset({
+    "imported", "same_va", "protected", "protm", "permission", "permissions",
+    "owner", "owned", "capable", "access", "allowed", "trusted", "exporter",
+    "importer", "dma_buf", "privileged", "user", "readonly", "writable",
+})
+_POLICY_SINK_APIS = frozenset({
+    "mmap", "vm_fault", "remap_pfn_range", "vm_insert_pfn", "vmf_insert_pfn",
+    "vm_insert_page", "copy_to_user", "copy_from_user", "dma_buf_mmap",
+    "dma_buf_map_attachment", "dma_buf_begin_cpu_access", "kbase_gpu_mmap",
+    "insert_pfn", "io_remap_pfn_range", "map", "import", "export",
+})
+_GUARD_COMPARE_RE = re.compile(
+    r"\b(?P<lhs>[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?)\s*"
+    r"(?P<op><=|>=|<|>|==|!=)\s*(?P<rhs>[^;&|)]+)"
+)
+_ASSIGN_FACT_RE = re.compile(
+    r"\b(?P<lhs>[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?)\s*"
+    r"(?<![=!<>])=(?!=)\s*(?P<rhs>[^;]+)"
+)
+_UPDATE_FACT_RE = re.compile(
+    r"(?P<target>[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?)\s*"
+    r"(?P<op>\+\+|--|\+=|-=)"
+)
+_ARITH_EXPR_RE = re.compile(r"(\*|<<|>>|\bPAGE_SHIFT\b|\bsizeof\s*\()", re.IGNORECASE)
+_ERROR_OR_EXIT_RE = re.compile(r"\b(?:return|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE)
+_NULL_CLEAR_RE = re.compile(r"\b(?:NULL|nullptr|0|false|FALSE|INVALID|invalid)\b")
 _PARTIAL_VULN_ALIASES = {
     "wrong_flag_semantic": "wrong_constant",
     "callback_lifecycle": "teardown_race",
     "file_ops_lifecycle_gap": "file_ops_lifecycle_gap",
     "allocation_overflow": "integer_overflow",
+    "copy_contract": "copy_contract",
+    "arithmetic_chain_mismatch": "arithmetic_chain_mismatch",
+    "resource_binding_order": "resource_binding_order",
+    "policy_gate_before_sink": "policy_gate_before_sink",
+    "cross_file_lock_cycle": "cross_file_lock_cycle",
+    "state_transition_protocol": "state_transition_protocol",
 }
 _PARTIAL_CWE_OVERRIDES = {
     "width_mismatch": "CWE-681",
@@ -221,9 +274,16 @@ _PARTIAL_CWE_OVERRIDES = {
     "info_leak": "CWE-532",
     "wrong_constant": "CWE-697",
     "wrong_flag_semantic": "CWE-697",
+    "copy_contract": "CWE-120",
+    "arithmetic_chain_mismatch": "CWE-190",
+    "resource_binding_order": "CWE-696",
+    "policy_gate_before_sink": "CWE-284",
+    "accounting_drift": "CWE-682",
     "missing_lock": "CWE-820",
     "state_order": "CWE-696",
     "ordering_gap": "CWE-696",
+    "cross_file_lock_cycle": "CWE-833",
+    "state_transition_protocol": "CWE-696",
     "teardown_race": "CWE-362",
     "callback_lifecycle": "CWE-362",
     "deferred_uaf": "CWE-416",
@@ -239,17 +299,23 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_format_and_info_leak": 0,
     "partial_state_publication": 1,
     "partial_publish_rollback": 2,
-    "partial_allocation_arithmetic": 3,
-    "partial_fops_lifecycle": 4,
-    "partial_cross_file_lock_cycle": 5,
-    "partial_state_transition_protocol": 6,
-    "partial_lock_and_stale": 7,
-    "partial_lifecycle": 8,
-    "partial_shared_state": 9,
-    "partial_inbound_contract": 10,
-    "partial_outbound_misuse": 11,
-    "partial_target_intra": 12,
-    "partial_concurrency": 13,
+    "partial_copy_contract": 3,
+    "partial_cleanup_symmetry": 4,
+    "partial_accounting_drift": 5,
+    "partial_arithmetic_chain_mismatch": 6,
+    "partial_resource_binding_order": 7,
+    "partial_policy_gate_before_sink": 8,
+    "partial_allocation_arithmetic": 9,
+    "partial_fops_lifecycle": 10,
+    "partial_cross_file_lock_cycle": 11,
+    "partial_state_transition_protocol": 12,
+    "partial_lock_and_stale": 13,
+    "partial_lifecycle": 14,
+    "partial_shared_state": 15,
+    "partial_inbound_contract": 16,
+    "partial_outbound_misuse": 17,
+    "partial_target_intra": 18,
+    "partial_concurrency": 19,
 }
 
 
@@ -305,6 +371,54 @@ class LockOrderEdge:
     line_text: str = ""
 
 
+@dataclass(frozen=True)
+class CopyUse:
+    api: str
+    line_number: int
+    dst_expr: str = ""
+    src_expr: str = ""
+    size_expr: str = ""
+    line_text: str = ""
+
+
+@dataclass(frozen=True)
+class GuardFact:
+    token: str
+    lhs: str
+    op: str
+    rhs: str
+    line_number: int
+    line_text: str = ""
+
+
+@dataclass(frozen=True)
+class AssignmentFact:
+    target: str
+    value: str
+    tokens: tuple[str, ...]
+    line_number: int
+    line_text: str = ""
+    is_field: bool = False
+    is_arithmetic: bool = False
+
+
+@dataclass(frozen=True)
+class CleanupFact:
+    action: str
+    kind: str
+    resource: str
+    line_number: int
+    line_text: str = ""
+
+
+@dataclass(frozen=True)
+class SinkFact:
+    api: str
+    token: str
+    line_number: int
+    line_text: str = ""
+
+
 @dataclass
 class SymbolIndex:
     definitions: dict[str, list[SymbolDef]]
@@ -321,6 +435,13 @@ class SymbolIndex:
     symbols_by_lock: dict[str, list[SymbolDef]] = field(default_factory=dict)
     state_tokens_by_symbol: dict[str, list[str]] = field(default_factory=dict)
     symbols_by_state_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
+    copy_uses_by_symbol: dict[str, list[CopyUse]] = field(default_factory=dict)
+    guards_by_symbol: dict[str, list[GuardFact]] = field(default_factory=dict)
+    assignments_by_symbol: dict[str, list[AssignmentFact]] = field(default_factory=dict)
+    cleanup_facts_by_symbol: dict[str, list[CleanupFact]] = field(default_factory=dict)
+    sink_facts_by_symbol: dict[str, list[SinkFact]] = field(default_factory=dict)
+    symbols_by_guard_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
+    symbols_by_sink_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     meta_by_symbol: dict[str, SymbolMeta] = field(default_factory=dict)
     lifecycle_symbols: list[SymbolDef] = field(default_factory=list)
     callback_symbols: list[SymbolDef] = field(default_factory=list)
@@ -356,6 +477,12 @@ class PartialDetectorResult:
     callback_lifetime_notes: list[str] = None
     cross_file_lock_notes: list[str] = None
     protocol_notes: list[str] = None
+    copy_contract_notes: list[str] = None
+    cleanup_symmetry_notes: list[str] = None
+    accounting_drift_notes: list[str] = None
+    arithmetic_chain_notes: list[str] = None
+    resource_binding_notes: list[str] = None
+    policy_gate_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -365,7 +492,10 @@ class PartialDetectorResult:
             "allocation_arithmetic_notes", "format_notes", "info_leak_notes",
             "fops_notes", "lock_order_notes", "stale_after_unlock_notes",
             "disable_stale_notes", "callback_lifetime_notes",
-            "cross_file_lock_notes", "protocol_notes", "nodes", "globals",
+            "cross_file_lock_notes", "protocol_notes", "copy_contract_notes",
+            "cleanup_symmetry_notes", "accounting_drift_notes",
+            "arithmetic_chain_notes", "resource_binding_notes",
+            "policy_gate_notes", "nodes", "globals",
         ):
             if getattr(self, name) is None:
                 setattr(self, name, [])
@@ -488,6 +618,22 @@ def _protocol_tokens_from_text(text: str) -> list[str]:
 
 def _notifier_related_text(text: str) -> bool:
     return bool(_NOTIFIER_RE.search(str(text or "")))
+
+
+def _fact_tokens(text: str) -> set[str]:
+    return {
+        _canonical_protocol_token(t)
+        for t in _tokens(text)
+        if len(t) > 1
+    }
+
+
+def _has_any_fact_token(text: str, words: frozenset[str] | set[str]) -> bool:
+    return bool(_fact_tokens(text) & set(words))
+
+
+def _short_expr(expr: str, limit: int = 90) -> str:
+    return " ".join(str(expr or "").split())[:limit]
 
 
 def _function_body_from_symbol(codebase_path: str, sym: SymbolDef, max_chars: int = 5000) -> str:
@@ -734,6 +880,13 @@ class SymbolIndexBuilder:
         symbols_by_lock: dict[str, list[SymbolDef]] = defaultdict(list)
         state_tokens_by_symbol: dict[str, list[str]] = {}
         symbols_by_state_token: dict[str, list[SymbolDef]] = defaultdict(list)
+        copy_uses_by_symbol: dict[str, list[CopyUse]] = {}
+        guards_by_symbol: dict[str, list[GuardFact]] = {}
+        assignments_by_symbol: dict[str, list[AssignmentFact]] = {}
+        cleanup_facts_by_symbol: dict[str, list[CleanupFact]] = {}
+        sink_facts_by_symbol: dict[str, list[SinkFact]] = {}
+        symbols_by_guard_token: dict[str, list[SymbolDef]] = defaultdict(list)
+        symbols_by_sink_token: dict[str, list[SymbolDef]] = defaultdict(list)
         meta_by_symbol: dict[str, SymbolMeta] = {}
         lifecycle_symbols: list[SymbolDef] = []
         callback_symbols: list[SymbolDef] = []
@@ -771,6 +924,16 @@ class SymbolIndexBuilder:
                     symbols_by_lock[lock].append(sym)
                 for token in state_tokens:
                     symbols_by_state_token[token].append(sym)
+                copy_uses, guards, assignments, cleanup_facts, sinks = self._extract_semantic_facts(sym, body_lines)
+                copy_uses_by_symbol[unique] = copy_uses
+                guards_by_symbol[unique] = guards
+                assignments_by_symbol[unique] = assignments
+                cleanup_facts_by_symbol[unique] = cleanup_facts
+                sink_facts_by_symbol[unique] = sinks
+                for guard in guards:
+                    symbols_by_guard_token[guard.token].append(sym)
+                for sink in sinks:
+                    symbols_by_sink_token[sink.token].append(sym)
                 body_text = "\n".join(body_lines)
                 meta = self._symbol_meta(sym, calls, body_text, locks, state_tokens)
                 meta_by_symbol[unique] = meta
@@ -799,6 +962,13 @@ class SymbolIndexBuilder:
             symbols_by_lock=dict(symbols_by_lock),
             state_tokens_by_symbol=state_tokens_by_symbol,
             symbols_by_state_token=dict(symbols_by_state_token),
+            copy_uses_by_symbol=copy_uses_by_symbol,
+            guards_by_symbol=guards_by_symbol,
+            assignments_by_symbol=assignments_by_symbol,
+            cleanup_facts_by_symbol=cleanup_facts_by_symbol,
+            sink_facts_by_symbol=sink_facts_by_symbol,
+            symbols_by_guard_token=dict(symbols_by_guard_token),
+            symbols_by_sink_token=dict(symbols_by_sink_token),
             meta_by_symbol=meta_by_symbol,
             lifecycle_symbols=lifecycle_symbols,
             callback_symbols=callback_symbols,
@@ -890,6 +1060,195 @@ class SymbolIndexBuilder:
         text = f"{sym.name}\n{sym.signature}\n" + "\n".join(lines)
         state_tokens = _protocol_tokens_from_text(text)
         return list(dict.fromkeys(locks)), list(dict.fromkeys(edges)), state_tokens
+
+    def _extract_semantic_facts(
+        self,
+        sym: SymbolDef,
+        lines: list[str],
+    ) -> tuple[list[CopyUse], list[GuardFact], list[AssignmentFact], list[CleanupFact], list[SinkFact]]:
+        copy_uses: list[CopyUse] = []
+        guards: list[GuardFact] = []
+        assignments: list[AssignmentFact] = []
+        cleanup_facts: list[CleanupFact] = []
+        sinks: list[SinkFact] = []
+
+        for offset, line_text in enumerate(lines):
+            line_number = sym.body_start + offset
+            stripped = line_text.strip()
+            lower = stripped.lower()
+            if not stripped or stripped.startswith(("//", "/*", "*")):
+                continue
+            if _COPY_API_RE.search(stripped):
+                copy_uses.extend(self._copy_uses_from_line(stripped, line_number))
+            guards.extend(self._guards_from_line(stripped, line_number))
+            assignments.extend(self._assignments_from_line(stripped, line_number))
+            cleanup_facts.extend(self._cleanup_facts_from_line(stripped, line_number))
+            sinks.extend(self._sink_facts_from_line(stripped, line_number))
+            if "return" in lower or "goto" in lower:
+                cleanup_facts.append(CleanupFact(
+                    action="exit",
+                    kind="exit",
+                    resource="return" if "return" in lower else "goto",
+                    line_number=line_number,
+                    line_text=stripped,
+                ))
+        return copy_uses, guards, assignments, cleanup_facts, sinks
+
+    def _copy_uses_from_line(self, line: str, line_number: int) -> list[CopyUse]:
+        uses = []
+        for api in _CALL_RE.findall(line):
+            api_l = api.lower()
+            if api_l not in _COPY_CONTRACT_APIS:
+                continue
+            args = _first_call_args(line, api)
+            if not args:
+                continue
+            dst = args[0] if len(args) > 0 else ""
+            src = args[1] if len(args) > 1 else ""
+            size = args[2] if len(args) > 2 else ""
+            if api_l in {"simple_read_from_buffer", "simple_write_to_buffer"}:
+                size = args[1] if len(args) > 1 else size
+                src = args[3] if len(args) > 3 else src
+            uses.append(CopyUse(
+                api=api_l,
+                line_number=line_number,
+                dst_expr=_short_expr(dst),
+                src_expr=_short_expr(src),
+                size_expr=_short_expr(size),
+                line_text=line,
+            ))
+        return uses
+
+    def _guards_from_line(self, line: str, line_number: int) -> list[GuardFact]:
+        guards = []
+        for match in _GUARD_COMPARE_RE.finditer(line):
+            lhs = _short_expr(match.group("lhs"))
+            rhs = _short_expr(match.group("rhs"))
+            op = match.group("op")
+            tokens = _fact_tokens(f"{lhs} {rhs}")
+            interesting = tokens & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _POLICY_GUARD_WORDS | _PROTOCOL_TOKEN_WORDS)
+            for token in sorted(interesting):
+                guards.append(GuardFact(
+                    token=token,
+                    lhs=lhs,
+                    op=op,
+                    rhs=rhs,
+                    line_number=line_number,
+                    line_text=line,
+                ))
+        return guards
+
+    def _assignments_from_line(self, line: str, line_number: int) -> list[AssignmentFact]:
+        facts = []
+        for match in _ASSIGN_FACT_RE.finditer(line):
+            lhs = _short_expr(match.group("lhs"))
+            rhs = _short_expr(match.group("rhs"))
+            tokens = tuple(sorted(_fact_tokens(f"{lhs} {rhs}") & (
+                _COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS | _POLICY_GUARD_WORDS
+            )))
+            if not tokens and not _ARITH_EXPR_RE.search(rhs):
+                continue
+            facts.append(AssignmentFact(
+                target=lhs,
+                value=rhs,
+                tokens=tokens,
+                line_number=line_number,
+                line_text=line,
+                is_field=("->" in lhs or "." in lhs),
+                is_arithmetic=bool(_ARITH_EXPR_RE.search(rhs)),
+            ))
+        for match in _UPDATE_FACT_RE.finditer(line):
+            target = _short_expr(match.group("target"))
+            op = match.group("op")
+            tokens = tuple(sorted(_fact_tokens(target) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)))
+            if not tokens:
+                continue
+            facts.append(AssignmentFact(
+                target=target,
+                value=op,
+                tokens=tokens,
+                line_number=line_number,
+                line_text=line,
+                is_field=("->" in target or "." in target),
+                is_arithmetic=False,
+            ))
+        return facts
+
+    def _cleanup_facts_from_line(self, line: str, line_number: int) -> list[CleanupFact]:
+        facts = []
+        for api in _CALL_RE.findall(line):
+            api_l = api.lower()
+            args = _first_call_args(line, api)
+            resource = _short_expr(args[0] if args else "")
+            action, kind = self._cleanup_action(api_l)
+            if action:
+                facts.append(CleanupFact(
+                    action=action,
+                    kind=kind,
+                    resource=resource or api_l,
+                    line_number=line_number,
+                    line_text=line,
+                ))
+        for match in _UPDATE_FACT_RE.finditer(line):
+            op = match.group("op")
+            target = _short_expr(match.group("target"))
+            tokens = _fact_tokens(target)
+            if not tokens & (_COUNT_SIZE_WORDS | {"refcount", "mappings", "pages", "groups"}):
+                continue
+            facts.append(CleanupFact(
+                action="inc" if op in {"++", "+="} else "dec",
+                kind="acquire" if op in {"++", "+="} else "release",
+                resource=target,
+                line_number=line_number,
+                line_text=line,
+            ))
+        return facts
+
+    def _cleanup_action(self, api: str) -> tuple[str, str]:
+        if re.search(r"(?:alloc|malloc|calloc|get|map|register|list_add|hash_add|insert|link_node|idr_alloc|xa_insert|enable)", api):
+            if re.search(r"(?:free|unmap|unregister|remove|erase|delete|del|disable)", api):
+                return "", ""
+            if "get" in api and api in {"forget", "target"}:
+                return "", ""
+            if "map" in api and api.startswith("un"):
+                return "unmap", "release"
+            if "register" in api and api.startswith("un"):
+                return "unregister", "release"
+            if "enable" in api:
+                return "enable", "acquire"
+            if "map" in api:
+                return "map", "acquire"
+            if "register" in api:
+                return "register", "acquire"
+            if "get" in api:
+                return "get", "acquire"
+            if "insert" in api or "add" in api or "link_node" in api or "idr_alloc" in api:
+                return "insert", "acquire"
+            return "alloc", "acquire"
+        if re.search(r"(?:free|put|unmap|unregister|list_del|hash_del|erase|remove|delete|del|idr_remove|xa_erase|disable)", api):
+            if "disable" in api:
+                return "disable", "release"
+            if "unmap" in api:
+                return "unmap", "release"
+            if "unregister" in api:
+                return "unregister", "release"
+            if "put" in api:
+                return "put", "release"
+            if re.search(r"(?:erase|remove|delete|del|xa_erase)", api):
+                return "erase", "release"
+            return "free", "release"
+        return "", ""
+
+    def _sink_facts_from_line(self, line: str, line_number: int) -> list[SinkFact]:
+        facts = []
+        for api in _CALL_RE.findall(line):
+            api_l = api.lower()
+            if api_l not in _POLICY_SINK_APIS and not any(token in api_l for token in _POLICY_SINK_APIS):
+                continue
+            tokens = _fact_tokens(f"{api_l} {line}") & (_POLICY_GUARD_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)
+            token = sorted(tokens)[0] if tokens else api_l
+            facts.append(SinkFact(api=api_l, token=token, line_number=line_number, line_text=line))
+        return facts
 
     def _symbol_meta(
         self,
@@ -1068,6 +1427,26 @@ def _symbol_lock_edges(index: SymbolIndex, sym: SymbolDef) -> list[LockOrderEdge
     return list(index.lock_edges_by_symbol.get(_symbol_unique_name(sym), []))
 
 
+def _symbol_copy_uses(index: SymbolIndex, sym: SymbolDef) -> list[CopyUse]:
+    return list(index.copy_uses_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_guards(index: SymbolIndex, sym: SymbolDef) -> list[GuardFact]:
+    return list(index.guards_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_assignments(index: SymbolIndex, sym: SymbolDef) -> list[AssignmentFact]:
+    return list(index.assignments_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_cleanup_facts(index: SymbolIndex, sym: SymbolDef) -> list[CleanupFact]:
+    return list(index.cleanup_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
+def _symbol_sink_facts(index: SymbolIndex, sym: SymbolDef) -> list[SinkFact]:
+    return list(index.sink_facts_by_symbol.get(_symbol_unique_name(sym), []))
+
+
 def _sink_type_for_text(text: str) -> str:
     tl = text.lower()
     if re.search(r"\b(system|popen|exec)", tl):
@@ -1213,7 +1592,8 @@ class PartialContextBuilder:
                 "callback_or_notifier": bool(signal["callback_or_notifier"]),
             })
         ranked = self._companion_candidates(index, context, signal)
-        limit = max(0, int(self._caps.max_companions or 0))
+        remaining = max(0, self._caps.max_total_context_functions - len(self._all_context_nodes(context)))
+        limit = min(max(0, int(self._caps.max_companions or 0)), remaining)
         companions = self._cap_ranked_symbols(ranked, limit)
         existing = {node.unique_name for node in self._all_context_nodes(context)}
         companions = [sym for sym in companions if _symbol_unique_name(sym) not in existing]
@@ -1674,6 +2054,11 @@ class PartialCandidateDetector:
         self._detect_state_publication(index, result, target_syms, target_prefixes)
         self._detect_publish_rollback(index, result, target_syms)
         self._detect_allocation_arithmetic(index, result, target_syms)
+        self._detect_arithmetic_chain_mismatch(index, result, target_syms)
+        self._detect_copy_contracts(index, result, target_syms)
+        self._detect_cleanup_symmetry(index, result, target_syms)
+        self._detect_accounting_drift(index, result, target_syms)
+        self._detect_resource_binding_order(index, result, target_syms)
         wrappers = self._detect_format_wrappers(index, result, target_syms, target_prefixes)
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
@@ -1683,6 +2068,7 @@ class PartialCandidateDetector:
         self._detect_disable_stale(index, result, target_syms)
         self._detect_callback_lifetime(index, result, target_syms, target_prefixes)
         self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
+        self._detect_policy_gate_before_sink(index, result, target_syms, context)
         self._detect_target_calls_wrappers(index, result, target_syms, wrappers)
         result.nodes = self._dedupe_nodes(result.nodes)
         result.globals = list({g.unique_name: g for g in result.globals}.values())
@@ -1796,6 +2182,248 @@ class PartialCandidateDetector:
                     "without an obvious checked multiplication or SIZE_MAX guard nearby."
                 )
                 self._add_node(index, result, sym)
+
+    def _detect_copy_contracts(self, index, result, target_syms):
+        for sym in target_syms:
+            guards = _symbol_guards(index, sym)
+            count_tokens = self._count_tokens_for_symbol(sym, _symbol_assignments(index, sym))
+            for use in _symbol_copy_uses(index, sym):
+                size_tokens = _fact_tokens(use.size_expr)
+                if not size_tokens & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS) and not self._copy_size_is_fixed(use.size_expr):
+                    continue
+                if self._copy_has_nearby_guard(guards, use, count_tokens):
+                    continue
+                if use.api in {"read", "write"} and not (size_tokens & _COUNT_SIZE_WORDS):
+                    continue
+                missing = self._copy_missing_guard_text(use, count_tokens)
+                result.copy_contract_notes.append(
+                    f"{sym.file_path}::{sym.name} line {use.line_number} calls {use.api} "
+                    f"with size/count `{_short_expr(use.size_expr)}` but {missing}: `{_line_excerpt(use.line_text)}`."
+                )
+                self._add_node(index, result, sym)
+                if len(result.copy_contract_notes) >= 20:
+                    return
+
+    def _count_tokens_for_symbol(self, sym: SymbolDef, assignments: list[AssignmentFact]) -> set[str]:
+        text = sym.signature
+        for assign in assignments[:80]:
+            text += f" {assign.target} {assign.value}"
+        tokens = _fact_tokens(text)
+        return tokens & _COUNT_SIZE_WORDS
+
+    def _copy_has_nearby_guard(self, guards: list[GuardFact], use: CopyUse, count_tokens: set[str]) -> bool:
+        size_tokens = _fact_tokens(use.size_expr)
+        wanted = (size_tokens | count_tokens) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS)
+        if not wanted and self._copy_size_is_fixed(use.size_expr):
+            wanted = count_tokens
+        for guard in guards:
+            if guard.line_number > use.line_number:
+                continue
+            if use.line_number - guard.line_number > 18:
+                continue
+            if guard.token in wanted:
+                return True
+            guard_text = f"{guard.lhs} {guard.rhs}"
+            if use.size_expr and _short_expr(use.size_expr) in guard_text:
+                return True
+        return False
+
+    def _copy_size_is_fixed(self, expr: str) -> bool:
+        expr_l = str(expr or "").lower()
+        return bool(re.search(r"\bsizeof\s*\(|^\s*\d+\s*$|^[A-Z0-9_]+$", expr_l, re.IGNORECASE))
+
+    def _copy_missing_guard_text(self, use: CopyUse, count_tokens: set[str]) -> str:
+        if self._copy_size_is_fixed(use.size_expr) and count_tokens:
+            return f"no nearby count/len guard ({', '.join(sorted(count_tokens)[:3])}) validates the fixed-size transfer"
+        if _fact_tokens(use.size_expr) & _COUNT_SIZE_WORDS:
+            return "no nearby upper-bound/short-transfer guard constrains the requested count"
+        return "no nearby contract guard is visible"
+
+    def _detect_cleanup_symmetry(self, index, result, target_syms):
+        for sym in target_syms:
+            facts = _symbol_cleanup_facts(index, sym)
+            acquires = [fact for fact in facts if fact.kind == "acquire"]
+            releases = [fact for fact in facts if fact.kind == "release"]
+            exits = [fact for fact in facts if fact.kind == "exit"]
+            if not acquires or not exits:
+                continue
+            for acquire in acquires[:20]:
+                expected = self._expected_release_actions(acquire.action)
+                if not expected:
+                    continue
+                later_releases = [
+                    rel for rel in releases
+                    if rel.line_number > acquire.line_number and rel.action in expected
+                ]
+                for exit_fact in exits:
+                    if exit_fact.line_number <= acquire.line_number:
+                        continue
+                    if exit_fact.line_number - acquire.line_number > 90:
+                        continue
+                    if any(acquire.line_number < rel.line_number < exit_fact.line_number for rel in later_releases):
+                        continue
+                    if "goto" in exit_fact.line_text.lower() and later_releases:
+                        continue
+                    result.cleanup_symmetry_notes.append(
+                        f"{sym.file_path}::{sym.name} line {acquire.line_number} performs {acquire.action} "
+                        f"`{_line_excerpt(acquire.line_text)}`, but exit line {exit_fact.line_number} "
+                        f"`{_line_excerpt(exit_fact.line_text)}` has no visible {sorted(expected)[0]} before leaving."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.cleanup_symmetry_notes) >= 20:
+                        return
+                    break
+
+    def _expected_release_actions(self, action: str) -> set[str]:
+        pairs = {
+            "alloc": {"free"},
+            "get": {"put"},
+            "map": {"unmap"},
+            "register": {"unregister"},
+            "insert": {"erase"},
+            "inc": {"dec"},
+            "enable": {"disable"},
+        }
+        return pairs.get(action, set())
+
+    def _detect_accounting_drift(self, index, result, target_syms):
+        for sym in target_syms:
+            facts = _symbol_cleanup_facts(index, sym)
+            incs = [fact for fact in facts if fact.action == "inc"]
+            decs = [fact for fact in facts if fact.action == "dec"]
+            exits = [fact for fact in facts if fact.kind == "exit"]
+            if not incs or not exits:
+                continue
+            for inc in incs[:20]:
+                resource_tokens = _fact_tokens(inc.resource)
+                matching_decs = [
+                    dec for dec in decs
+                    if resource_tokens & _fact_tokens(dec.resource)
+                    and dec.line_number > inc.line_number
+                ]
+                for exit_fact in exits:
+                    if exit_fact.line_number <= inc.line_number:
+                        continue
+                    if any(inc.line_number < dec.line_number < exit_fact.line_number for dec in matching_decs):
+                        continue
+                    result.accounting_drift_notes.append(
+                        f"{sym.file_path}::{sym.name} line {inc.line_number} updates counter/resource "
+                        f"`{_short_expr(inc.resource)}`, but exit line {exit_fact.line_number} "
+                        f"`{_line_excerpt(exit_fact.line_text)}` can leave before a matching decrement."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.accounting_drift_notes) >= 16:
+                        return
+                    break
+
+    def _detect_arithmetic_chain_mismatch(self, index, result, target_syms):
+        for sym in target_syms:
+            assigns = [assign for assign in _symbol_assignments(index, sym) if assign.is_arithmetic]
+            if len(assigns) < 1:
+                continue
+            copy_uses = _symbol_copy_uses(index, sym)
+            sinks = _symbol_sink_facts(index, sym)
+            guards = _symbol_guards(index, sym)
+            consumers = [
+                (use.line_number, use.size_expr, use.line_text, use.api)
+                for use in copy_uses
+                if _fact_tokens(use.size_expr) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS)
+            ]
+            consumers.extend(
+                (sink.line_number, sink.line_text, sink.line_text, sink.api)
+                for sink in sinks
+            )
+            for assign in assigns[:20]:
+                assign_tokens = set(assign.tokens) | (_fact_tokens(assign.value) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS))
+                if not assign_tokens:
+                    continue
+                for line_no, expr, line_text, api in consumers[:30]:
+                    if line_no <= assign.line_number:
+                        continue
+                    consumer_tokens = _fact_tokens(expr)
+                    overlap = assign_tokens & consumer_tokens
+                    if not overlap:
+                        continue
+                    if self._same_arithmetic_expr(assign.value, expr):
+                        continue
+                    if self._has_consistency_guard(guards, assign, line_no):
+                        continue
+                    result.arithmetic_chain_notes.append(
+                        f"{sym.file_path}::{sym.name} derives `{assign.target} = {_short_expr(assign.value)}` "
+                        f"at line {assign.line_number}, then {api} at line {line_no} consumes "
+                        f"`{_short_expr(expr)}` with shared token(s) {', '.join(sorted(overlap)[:3])} "
+                        "but no nearby consistency/overflow guard ties the formulas together."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.arithmetic_chain_notes) >= 16:
+                        return
+                    break
+
+    def _same_arithmetic_expr(self, a: str, b: str) -> bool:
+        ta = _fact_tokens(a)
+        tb = _fact_tokens(b)
+        return bool(ta and tb and ta == tb and _ARITH_EXPR_RE.search(a) and _ARITH_EXPR_RE.search(b))
+
+    def _has_consistency_guard(self, guards: list[GuardFact], assign: AssignmentFact, consumer_line: int) -> bool:
+        assign_tokens = set(assign.tokens) | _fact_tokens(assign.target) | _fact_tokens(assign.value)
+        for guard in guards:
+            if guard.line_number < assign.line_number or guard.line_number > consumer_line:
+                continue
+            if guard.token in assign_tokens:
+                return True
+        return False
+
+    def _detect_resource_binding_order(self, index, result, target_syms):
+        for sym in target_syms:
+            assigns = _symbol_assignments(index, sym)
+            resource_assigns = [
+                assign for assign in assigns
+                if set(assign.tokens) & _RESOURCE_WORDS
+            ]
+            state_assigns = [
+                assign for assign in assigns
+                if set(assign.tokens) & _TRANSITION_TOKENS
+                or _STATE_FIELD_RE.search(assign.line_text)
+            ]
+            if not resource_assigns and not state_assigns:
+                continue
+            self._detect_enable_before_bind(index, result, sym, resource_assigns, state_assigns)
+            self._detect_disable_leaves_resource(index, result, sym, resource_assigns, state_assigns)
+            if len(result.resource_binding_notes) >= 20:
+                return
+
+    def _detect_enable_before_bind(self, index, result, sym, resource_assigns, state_assigns):
+        if not _name_has_any(sym.name, {"enable", "start", "enter", "resume", "init", "setup"}):
+            return
+        first_resource = min((assign.line_number for assign in resource_assigns), default=0)
+        for state in state_assigns:
+            if not re.search(r"\b(?:1|true|TRUE|ON|ACTIVE|READY|ENABLED|POWERED)\b", state.value, re.IGNORECASE):
+                continue
+            if first_resource and state.line_number < first_resource:
+                resource = next((assign for assign in resource_assigns if assign.line_number == first_resource), None)
+                result.resource_binding_notes.append(
+                    f"{sym.file_path}::{sym.name} line {state.line_number} publishes state "
+                    f"`{_line_excerpt(state.line_text)}` before resource binding line {first_resource} "
+                    f"`{_line_excerpt(resource.line_text if resource else '')}`."
+                )
+                self._add_node(index, result, sym)
+                return
+
+    def _detect_disable_leaves_resource(self, index, result, sym, resource_assigns, state_assigns):
+        if not _name_has_any(sym.name, {"disable", "stop", "clear", "term", "shutdown", "release", "reset"}):
+            return
+        clears_state = any(_STATE_RESET_RE.search(assign.line_text) for assign in state_assigns)
+        if not clears_state or not resource_assigns:
+            return
+        clears_resource = any(_NULL_CLEAR_RE.search(assign.value) for assign in resource_assigns)
+        if clears_resource:
+            return
+        resources = ", ".join(sorted({token for assign in resource_assigns for token in assign.tokens if token in _RESOURCE_WORDS})[:4])
+        result.resource_binding_notes.append(
+            f"{sym.file_path}::{sym.name} clears/tears down state but leaves paired resource token(s) "
+            f"{resources or 'resource'} without a visible NULL/invalid reset."
+        )
+        self._add_node(index, result, sym)
 
     def _detect_info_leaks(self, index, result, target_syms):
         for sym in target_syms:
@@ -1925,6 +2553,8 @@ class PartialCandidateDetector:
         for sym in syms:
             for edge in _symbol_lock_edges(index, sym):
                 edge_map[(edge.first_lock, edge.second_lock)].append(edge)
+        for edge in self._interprocedural_lock_edges(index, syms):
+            edge_map[(edge.first_lock, edge.second_lock)].append(edge)
         if not edge_map:
             return
         seen = set()
@@ -1998,6 +2628,47 @@ class PartialCandidateDetector:
     def _add_edge_nodes(self, index: SymbolIndex, result: PartialDetectorResult, edges: list[LockOrderEdge]):
         for edge in edges:
             self._add_node(index, result, _lookup_symbol(index, edge.file_path, edge.function_name))
+
+    def _interprocedural_lock_edges(self, index: SymbolIndex, syms: list[SymbolDef]) -> list[LockOrderEdge]:
+        selected_by_name: dict[str, list[SymbolDef]] = defaultdict(list)
+        selected_unique = {_symbol_unique_name(sym) for sym in syms}
+        for sym in syms:
+            selected_by_name[sym.name].append(sym)
+        edges: list[LockOrderEdge] = []
+        for sym in syms:
+            held: list[str] = []
+            for line_no, line in self._lines(sym):
+                for match in _LOCK_CALL_RE.finditer(line):
+                    lock = _normalise_lock_expr(match.group("arg"))
+                    if not lock:
+                        continue
+                    if _UNLOCK_WORD_RE.search(match.group("fn")):
+                        if lock in held:
+                            held.remove(lock)
+                    elif lock not in held:
+                        held.append(lock)
+                if not held:
+                    continue
+                for call in _CALL_RE.findall(line):
+                    if call in _CONTROL_CALLS:
+                        continue
+                    for callee in selected_by_name.get(call, [])[:4]:
+                        if _symbol_unique_name(callee) not in selected_unique:
+                            continue
+                        callee_locks = _symbol_locks(index, callee)
+                        for held_lock in held:
+                            for callee_lock in sorted(callee_locks)[:4]:
+                                if held_lock == callee_lock:
+                                    continue
+                                edges.append(LockOrderEdge(
+                                    first_lock=held_lock,
+                                    second_lock=callee_lock,
+                                    file_path=sym.file_path,
+                                    function_name=sym.name,
+                                    line_number=line_no,
+                                    line_text=f"{_line_excerpt(line)} -> {callee.file_path}::{callee.name}",
+                                ))
+        return edges[:160]
 
     def _detect_stale_after_unlock(self, index, result, target_syms):
         for sym in target_syms:
@@ -2096,7 +2767,7 @@ class PartialCandidateDetector:
                 continue
             later = "\n".join(txt for _, txt in lines[idx + 1:idx + 16])
             later_tokens = set(_protocol_tokens_from_text(later))
-            if later_tokens and (_STATE_VERIFY_TOKENS & later_tokens):
+            if (later_tokens and (_STATE_VERIFY_TOKENS & later_tokens)) or self._has_state_verify_guard_after(index, sym, line_no):
                 continue
             companion = self._best_protocol_companion(index, sym, companions)
             note = (
@@ -2109,6 +2780,16 @@ class PartialCandidateDetector:
             result.protocol_notes.append(note)
             self._add_node(index, result, sym)
             return
+
+    def _has_state_verify_guard_after(self, index, sym: SymbolDef, line_number: int) -> bool:
+        for guard in _symbol_guards(index, sym):
+            if guard.line_number <= line_number:
+                continue
+            if guard.line_number - line_number > 18:
+                continue
+            if guard.token in _STATE_VERIFY_TOKENS:
+                return True
+        return False
 
     def _detect_protocol_lock_mismatch(self, index, result, sym: SymbolDef, companion_by_token: dict[str, list[SymbolDef]]):
         tokens = _symbol_state_tokens(index, sym)
@@ -2164,6 +2845,71 @@ class PartialCandidateDetector:
         stem_a = _module_stem(a.name)
         stem_b = _module_stem(b.name)
         return bool(stem_a and stem_b and (stem_a.startswith(stem_b) or stem_b.startswith(stem_a)))
+
+    def _detect_policy_gate_before_sink(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companion_guards = self._companion_policy_guards(index, context_syms, {sym.file_path for sym in target_syms})
+        for sym in target_syms:
+            sinks = _symbol_sink_facts(index, sym)
+            if not sinks:
+                continue
+            guards = _symbol_guards(index, sym)
+            for sink in sinks:
+                required = self._required_policy_tokens_for_sink(sink, sym, companion_guards)
+                if not required:
+                    continue
+                if self._has_policy_guard_before(guards, sink.line_number, required):
+                    continue
+                token = sorted(required)[0]
+                companion = companion_guards.get(token)
+                note = (
+                    f"{sym.file_path}::{sym.name} line {sink.line_number} reaches privileged sink "
+                    f"{sink.api} `{_line_excerpt(sink.line_text)}` without a prior "
+                    f"{token}/provenance gate in the target path."
+                )
+                if companion:
+                    note += (
+                        f" Companion guard evidence: {companion.file_path}::{companion.name} "
+                        f"checks `{token}`."
+                    )
+                    self._add_node(index, result, companion)
+                result.policy_gate_notes.append(note)
+                self._add_node(index, result, sym)
+                if len(result.policy_gate_notes) >= 16:
+                    return
+
+    def _companion_policy_guards(self, index, syms: list[SymbolDef], target_files: set[str]) -> dict[str, SymbolDef]:
+        guards = {}
+        for sym in syms:
+            if sym.file_path in target_files:
+                continue
+            for guard in _symbol_guards(index, sym):
+                if guard.token in _POLICY_GUARD_WORDS or guard.token in {"protected", "protm", "same_va", "imported"}:
+                    guards.setdefault(guard.token, sym)
+        return guards
+
+    def _required_policy_tokens_for_sink(self, sink: SinkFact, sym: SymbolDef, companion_guards: dict[str, SymbolDef]) -> set[str]:
+        sink_tokens = _fact_tokens(f"{sink.api} {sink.line_text} {sym.name}")
+        required = sink_tokens & (_POLICY_GUARD_WORDS | {"protected", "protm", "same_va", "imported"})
+        if sink.api in {"mmap", "vm_fault", "remap_pfn_range", "vm_insert_pfn", "vmf_insert_pfn", "insert_pfn", "io_remap_pfn_range"}:
+            required |= {"permission"} if "permission" in companion_guards else set()
+            required |= {"same_va"} if "same_va" in companion_guards else set()
+            required |= {"imported"} if "imported" in companion_guards else set()
+            required |= {"protected"} if "protected" in companion_guards else set()
+        if "dma_buf" in sink.api or "import" in sink.api or "export" in sink.api:
+            required |= {"imported"} if "imported" in companion_guards else set()
+            required |= {"owner"} if "owner" in companion_guards else set()
+        return {token for token in required if token in companion_guards or token in sink_tokens}
+
+    def _has_policy_guard_before(self, guards: list[GuardFact], line_number: int, required: set[str]) -> bool:
+        for guard in guards:
+            if guard.line_number > line_number:
+                continue
+            if line_number - guard.line_number > 35:
+                continue
+            if guard.token in required:
+                return True
+        return False
 
     def _paired_lifecycle_symbols(self, index, name, target_prefixes, wanted_actions):
         stem = _module_stem(name)
@@ -2263,6 +3009,30 @@ _PASS_FOCI = {
         "Multiplication or addition in malloc/calloc/realloc/copy sizes where count comes from a parameter or field and no "
         "checked arithmetic or SIZE_MAX guard prevents undersized allocation."
     ),
+    "copy_contract": (
+        "Fixed-size copy/read/write contract bugs in the target file: missing count/len validation before fixed-size or "
+        "user-controlled transfers, ignored short-transfer semantics, and mismatched object size versus requested count."
+    ),
+    "cleanup_symmetry": (
+        "Exact cleanup/unwind asymmetry in the target file: an alloc/get/map/register/insert is followed by an error/exit "
+        "path that skips the matching free/put/unmap/unregister/erase. Do not report generic leaks without the exact skipped unwind."
+    ),
+    "accounting_drift": (
+        "Counter/refcount/accounting drift in the target file: increments or mapping/page/group accounting updates whose "
+        "early returns or alternate branches skip the matching decrement or rollback."
+    ),
+    "arithmetic_chain_mismatch": (
+        "Arithmetic-chain mismatch bugs: one derived allocation/region quantity is based on one formula while later copy/map/"
+        "iteration consumes a stronger or different related formula without an overflow or consistency check."
+    ),
+    "resource_binding_order": (
+        "Resource binding and state ordering bugs: enable/ready/active/doorbell state published before binding or validation, "
+        "stale mapping/token/pages after disable/reset, and logical queue/context state diverging from actual mapped resources."
+    ),
+    "policy_gate_before_sink": (
+        "Policy/provenance gate-before-sink bugs in the target file: mmap/fault/PFN/usercopy/import/export sinks reached "
+        "without the required imported/same_va/protected/permission/owner guard. Companion files may show the expected guard."
+    ),
     "format_and_info_leak": (
         "Variadic logger wrappers, non-literal format arguments into printf-family wrappers, and debug/log output of "
         "physical addresses, DMA addresses, pointers, tokens, keys, or secrets. Fixed literal formats with %s arguments are not bugs."
@@ -2333,6 +3103,14 @@ class TargetedFileReviewer:
 
     def _build_passes(self, context, graph, detector_result):
         detector_nodes = detector_result.nodes or []
+        copy_nodes = self._nodes_for_notes(detector_nodes, detector_result.copy_contract_notes)
+        cleanup_nodes = self._nodes_for_notes(detector_nodes, detector_result.cleanup_symmetry_notes)
+        accounting_nodes = self._nodes_for_notes(detector_nodes, detector_result.accounting_drift_notes)
+        arithmetic_nodes = self._nodes_for_notes(detector_nodes, detector_result.arithmetic_chain_notes)
+        resource_nodes = self._nodes_for_notes(detector_nodes, detector_result.resource_binding_notes)
+        policy_nodes = self._nodes_for_notes(detector_nodes, detector_result.policy_gate_notes)
+        lock_cycle_nodes = self._nodes_for_notes(detector_nodes, detector_result.cross_file_lock_notes, cap=48)
+        protocol_nodes = self._nodes_for_notes(detector_nodes, detector_result.protocol_notes, cap=48)
         passes = [
             ("target_intra", context.target_nodes, []),
             ("inbound_contract", context.target_nodes, context.inbound_callers),
@@ -2348,6 +3126,24 @@ class TargetedFileReviewer:
             ))
         if detector_result.publish_rollback_notes:
             passes.append(("publish_rollback", context.target_nodes, context.lifecycle_pair_nodes + detector_nodes))
+        if detector_result.copy_contract_notes:
+            passes.append(("copy_contract", context.target_nodes, copy_nodes))
+        if detector_result.cleanup_symmetry_notes:
+            passes.append(("cleanup_symmetry", context.target_nodes, context.lifecycle_pair_nodes + cleanup_nodes))
+        if detector_result.accounting_drift_notes:
+            passes.append(("accounting_drift", context.target_nodes, context.shared_state_nodes + accounting_nodes))
+        if detector_result.arithmetic_chain_notes:
+            passes.append(("arithmetic_chain_mismatch", context.target_nodes, context.outbound_callees + arithmetic_nodes))
+        if detector_result.resource_binding_notes:
+            passes.append((
+                "resource_binding_order", context.target_nodes,
+                context.shared_state_nodes + context.lifecycle_pair_nodes + context.companion_nodes + resource_nodes,
+            ))
+        if detector_result.policy_gate_notes:
+            passes.append((
+                "policy_gate_before_sink", context.target_nodes,
+                context.companion_nodes + context.outbound_callees + policy_nodes,
+            ))
         if detector_result.allocation_arithmetic_notes:
             passes.append(("allocation_arithmetic", context.target_nodes, context.outbound_callees + detector_nodes))
         if detector_result.format_notes or detector_result.info_leak_notes:
@@ -2360,20 +3156,50 @@ class TargetedFileReviewer:
             passes.append((
                 "cross_file_lock_cycle", context.target_nodes,
                 context.companion_nodes + context.callback_nodes + context.lifecycle_pair_nodes
-                + context.shared_state_nodes + detector_nodes,
+                + context.shared_state_nodes + lock_cycle_nodes,
             ))
         if detector_result.protocol_notes:
             passes.append((
                 "state_transition_protocol", context.target_nodes,
                 context.companion_nodes + context.lifecycle_pair_nodes + context.callback_nodes
-                + context.shared_state_nodes + detector_nodes,
+                + context.shared_state_nodes + protocol_nodes,
             ))
         return passes
+
+    def _nodes_for_notes(self, nodes: list[FunctionNode], notes: list[str], *, cap: int = 32) -> list[FunctionNode]:
+        if not nodes or not notes:
+            return []
+        text = "\n".join(notes[:80])
+        selected = []
+        seen = set()
+        for node in nodes:
+            keys = (node.unique_name, f"{node.file_path}::{node.name}", node.name)
+            if not any(key and key in text for key in keys):
+                continue
+            if node.unique_name in seen:
+                continue
+            seen.add(node.unique_name)
+            selected.append(node)
+            if len(selected) >= cap:
+                break
+        if selected:
+            return selected
+        return self._dedupe_nodes(nodes)[:cap]
+
+    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
+        seen, out = set(), []
+        for node in nodes:
+            if node.unique_name in seen:
+                continue
+            seen.add(node.unique_name)
+            out.append(node)
+        return out
 
     def _run_pass(self, context, graph, pass_item, detector_result):
         pass_name, target_nodes, context_nodes = pass_item
         target_code = self._build_code(target_nodes, per_fn_chars=4500, max_total_chars=42000)
-        context_code = self._build_code(context_nodes, per_fn_chars=3000, max_total_chars=52000)
+        context_per_fn, context_total = self._context_code_budget(pass_name)
+        context_code = self._build_code(context_nodes, per_fn_chars=context_per_fn, max_total_chars=context_total)
         if not target_code:
             return []
         prompt = ChatPromptTemplate.from_messages([
@@ -2395,12 +3221,31 @@ class TargetedFileReviewer:
         }).strip()
         return self._parse_findings(raw, context, graph, analysis_type=f"partial_{pass_name}")
 
+    def _context_code_budget(self, pass_name: str) -> tuple[int, int]:
+        if pass_name in {
+            "copy_contract", "cleanup_symmetry", "accounting_drift",
+            "arithmetic_chain_mismatch", "resource_binding_order",
+            "policy_gate_before_sink",
+        }:
+            return 2600, 36000
+        return 3000, 52000
+
     def _scope_rule_for_pass(self, pass_name: str, target_file: str) -> str:
         if pass_name in {"cross_file_lock_cycle", "state_transition_protocol"}:
             return (
                 f"Findings must still use primary_file={target_file}. Companion files may prove the other half of the "
                 "deadlock/protocol failure, but the target file must contain the concrete defective edge, unsafe transition, "
                 "missing verification, or unsafe participation."
+            )
+        if pass_name in {
+            "copy_contract", "cleanup_symmetry", "accounting_drift",
+            "arithmetic_chain_mismatch", "resource_binding_order",
+            "policy_gate_before_sink",
+        }:
+            return (
+                f"Findings must use primary_file={target_file} and identify the exact target-file statement plus the exact "
+                "missing check, missing rollback, mismatched formula, stale binding, or missing policy gate. Do not report "
+                "adjacent generic lifecycle/race/null issues unless they are necessary to explain the same root cause."
             )
         return "Findings must be rooted in the target file. Other files are evidence/context only."
 
@@ -2445,6 +3290,19 @@ class TargetedFileReviewer:
             ),
             "publish_rollback": (("PUBLISH_ROLLBACK", detector_result.publish_rollback_notes),),
             "allocation_arithmetic": (("ALLOCATION_ARITHMETIC", detector_result.allocation_arithmetic_notes),),
+            "copy_contract": (("COPY_CONTRACT", detector_result.copy_contract_notes),),
+            "cleanup_symmetry": (("CLEANUP_SYMMETRY", detector_result.cleanup_symmetry_notes),),
+            "accounting_drift": (("ACCOUNTING_DRIFT", detector_result.accounting_drift_notes),),
+            "arithmetic_chain_mismatch": (
+                ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes),
+                ("ALLOCATION_ARITHMETIC", detector_result.allocation_arithmetic_notes[:12]),
+            ),
+            "resource_binding_order": (
+                ("RESOURCE_BINDING_ORDER", detector_result.resource_binding_notes),
+                ("STATE_PUBLICATION", detector_result.state_publication_notes[:12]),
+                ("DISABLE_STALE", detector_result.disable_stale_notes[:12]),
+            ),
+            "policy_gate_before_sink": (("POLICY_GATE_BEFORE_SINK", detector_result.policy_gate_notes),),
             "format_and_info_leak": (
                 ("FORMAT_WRAPPER", detector_result.format_notes),
                 ("INFO_LEAK", detector_result.info_leak_notes),
@@ -2569,11 +3427,9 @@ def _partial_duplicate_family(vtype: str) -> str:
         "deferred_uaf": "teardown_lifecycle",
         "teardown_race": "teardown_lifecycle",
         "file_ops_lifecycle_gap": "teardown_lifecycle",
-        "cleanup_symmetry": "teardown_lifecycle",
         "stale_after_unlock": "lifetime",
         "stale_pointer": "lifetime",
         "use_after_free": "lifetime",
-        "accounting_drift": "accounting",
         "refcount_imbalance": "accounting",
         "wrong_constant": "semantic_mismatch",
         "wrong_flag_semantic": "semantic_mismatch",
@@ -2581,6 +3437,14 @@ def _partial_duplicate_family(vtype: str) -> str:
         "state_order": "state_order",
         "ordering_gap": "state_order",
         "stale_state": "state_order",
+        "copy_contract": "copy_contract",
+        "cleanup_symmetry": "cleanup",
+        "accounting_drift": "accounting",
+        "arithmetic_chain_mismatch": "arithmetic_chain",
+        "resource_binding_order": "resource_binding",
+        "policy_gate_before_sink": "policy_gate",
+        "cross_file_lock_cycle": "lock_cycle",
+        "state_transition_protocol": "state_order",
     }
     return aliases.get(normal, normal)
 
@@ -2717,6 +3581,53 @@ def _suppress_generic_partial(finding: VulnerabilityFinding) -> bool:
     return False
 
 
+_EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
+    "partial_copy_contract",
+    "partial_cleanup_symmetry",
+    "partial_accounting_drift",
+    "partial_arithmetic_chain_mismatch",
+    "partial_resource_binding_order",
+    "partial_policy_gate_before_sink",
+    "partial_cross_file_lock_cycle",
+    "partial_state_transition_protocol",
+})
+_WEAK_GENERIC_VTYPES = frozenset({
+    "null_deref", "missing_lock", "teardown_race", "callback_lifecycle",
+    "deferred_uaf", "integer_overflow", "buffer_overflow", "other",
+})
+
+
+def _prefer_exact_partial_findings(findings: list[VulnerabilityFinding]) -> list[VulnerabilityFinding]:
+    exact = [f for f in findings if f.analysis_type in _EXACT_PARTIAL_ANALYSIS_TYPES]
+    if not exact:
+        return findings
+    kept = []
+    for finding in findings:
+        if finding.analysis_type in _EXACT_PARTIAL_ANALYSIS_TYPES:
+            kept.append(finding)
+            continue
+        if not _is_weaker_adjacent_to_exact(finding, exact):
+            kept.append(finding)
+    return kept
+
+
+def _is_weaker_adjacent_to_exact(finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]) -> bool:
+    vtype = _normalise_partial_vuln_type(finding.vulnerability_type)
+    if vtype not in _WEAK_GENERIC_VTYPES and not finding.analysis_type.endswith(("target_intra", "concurrency", "lifecycle")):
+        return False
+    fn = finding.primary_function or finding.sink_function or finding.source_function
+    line = _safe_int(finding.primary_line or finding.sink_line or finding.source_line, 0)
+    for exact in exact_findings:
+        exact_fn = exact.primary_function or exact.sink_function or exact.source_function
+        exact_line = _safe_int(exact.primary_line or exact.sink_line or exact.source_line, 0)
+        if fn and exact_fn and fn == exact_fn:
+            if not line or not exact_line or abs(line - exact_line) <= 18:
+                return True
+        if exact.sink_line and finding.sink_line and abs(exact.sink_line - finding.sink_line) <= 12:
+            return True
+    return False
+
+
 def _post_filter_partial_findings(
     findings: list[VulnerabilityFinding],
     target_file: str,
@@ -2741,7 +3652,9 @@ def _post_filter_partial_findings(
             stats.suppressed_generic += 1
             continue
         kept.append(finding)
-    return kept, stats
+    refined = _prefer_exact_partial_findings(kept)
+    stats.suppressed_generic += len(kept) - len(refined)
+    return refined, stats
 
 
 def _partial_cwe(vtype: str, finding: VulnerabilityFinding) -> str | None:
@@ -2799,6 +3712,12 @@ class PartialReachabilityFileService:
                 "state_publication": len(detector_result.state_publication_notes),
                 "publish_rollback": len(detector_result.publish_rollback_notes),
                 "allocation_arithmetic": len(detector_result.allocation_arithmetic_notes),
+                "copy_contracts": len(detector_result.copy_contract_notes),
+                "cleanup_symmetry": len(detector_result.cleanup_symmetry_notes),
+                "accounting_drift": len(detector_result.accounting_drift_notes),
+                "arithmetic_chain": len(detector_result.arithmetic_chain_notes),
+                "resource_binding": len(detector_result.resource_binding_notes),
+                "policy_gates": len(detector_result.policy_gate_notes),
                 "format_wrappers": len(detector_result.format_notes),
                 "info_leaks": len(detector_result.info_leak_notes),
                 "fops": len(detector_result.fops_notes),
@@ -2818,6 +3737,19 @@ class PartialReachabilityFileService:
                 progress_callback({
                     "event": "partial_protocol_candidates",
                     "candidates": len(detector_result.protocol_notes),
+                })
+            exact_count = (
+                len(detector_result.copy_contract_notes)
+                + len(detector_result.cleanup_symmetry_notes)
+                + len(detector_result.accounting_drift_notes)
+                + len(detector_result.arithmetic_chain_notes)
+                + len(detector_result.resource_binding_notes)
+                + len(detector_result.policy_gate_notes)
+            )
+            if exact_count:
+                progress_callback({
+                    "event": "partial_exact_root_cause_candidates",
+                    "candidates": exact_count,
                 })
         if progress_callback:
             progress_callback({
