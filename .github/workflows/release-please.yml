@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run release-please
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           command: manifest
           token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
