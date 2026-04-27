@@ -119,7 +119,8 @@ _VULN_TYPES = (
     "named_lock_inversion, active_singleton_stale, zero_count_underflow, "
     "owner_liveness_allocation, user_buffer_permission, zone_shrink_validation, "
     "success_path_cleanup, jit_lock_protocol, teardown_order, queue_publish_init, "
-    "fd_reuse_race, debugfs_permission, "
+    "fd_reuse_race, debugfs_permission, mmu_lockdrop_stale, mmu_teardown_order, "
+    "partial_mapping_rollback, migration_metadata_race, "
     "state_transition_protocol, "
     "stale_after_unlock, missing_lock, lock_order, state_order, ordering_gap, "
     "teardown_race, deferred_uaf, callback_lifecycle, refcount_imbalance, "
@@ -373,6 +374,54 @@ _TEARDOWN_ORDER_RE = re.compile(
     r"disable.*as|as.*disable|address.*space|free.*region|va_region|mmu.*teardown)\b",
     re.IGNORECASE,
 )
+_MMU_LOCKDROP_UNLOCK_RE = re.compile(
+    r"\b(?:mutex_unlock|spin_unlock(?:_irqrestore|_irq)?|up_read|up_write|"
+    r"read_unlock|write_unlock)\s*\([^;\n]*(?:mmu|mmap|vm|region|reg|lock|sem)[^;\n]*\)",
+    re.IGNORECASE,
+)
+_MMU_LOCKDROP_RELOCK_RE = re.compile(
+    r"\b(?:mutex_lock|spin_lock(?:_irqsave|_irq)?|down_read|down_write|"
+    r"read_lock|write_lock)\s*\([^;\n]*(?:mmu|mmap|vm|region|reg|lock|sem)[^;\n]*\)",
+    re.IGNORECASE,
+)
+_MMU_STALE_ASSIGN_RE = re.compile(
+    r"\b(?P<var>(?:reg|region|alloc|old|tmp|parent|pgd|pmd|pte|metadata|meta|page|phys|pfn)"
+    r"[A-Za-z0-9_]*)\s*=\s*[^;\n]*(?:->|\[|page_private|folio_get_private|"
+    r"kbase_region|kbase_mem|pgd|pmd|pte|metadata)",
+    re.IGNORECASE,
+)
+_MMU_STALE_REVALIDATE_RE = re.compile(
+    r"\b(?:find|lookup|validate|verify|WARN_ON|BUG_ON|VM_BUG_ON|"
+    r"if\s*\([^)]*(?:reg|region|alloc|pgd|pmd|pte|metadata|page)[^)]*(?:!=|==|NULL|valid|find))",
+    re.IGNORECASE,
+)
+_MMU_TEARDOWN_FREE_RE = re.compile(
+    r"\b(?:region_tracker_term|kbase_mmu_term|free.*region|kbase_free_alloced_region|"
+    r"rb_erase|kbase_mmu_teardown|free_pgd|pgd_free|pmd_free|pte_free|"
+    r"free_page_table|free.*pgd|free.*pmd|free.*pte)\w*\s*\(",
+    re.IGNORECASE,
+)
+_HW_QUIESCE_RE = re.compile(
+    r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|disable_as|mmu_disable|"
+    r"cache_flush|flush_cache|flush.*cache|kbase_gpu_cache|tlb|quiesce|stop.*gpu|"
+    r"wait.*idle|drain.*gpu|as_busy|address.*space.*disable)\b",
+    re.IGNORECASE,
+)
+_PARTIAL_MAPPING_INSTALL_RE = re.compile(
+    r"\b(?:insert_pages|mmu_insert|map_pages|alias|remap|vm_insert|vmf_insert|insert_pfn|"
+    r"vmap|map_attachment|kbase_mmu_insert|kbase_mmu_update|kbase_mmu_insert_pages)\w*\s*\(",
+    re.IGNORECASE,
+)
+_PARTIAL_MAPPING_ROLLBACK_RE = re.compile(
+    r"\b(?:unmap|zap|teardown|rollback|invalidate|flush|cache|kbase_mmu_teardown|"
+    r"kbase_mmu_update|kbase_mmu_flush|put_page|free_pages)\w*\s*\(",
+    re.IGNORECASE,
+)
+_MIGRATION_METADATA_RE = re.compile(
+    r"\b(?:migration|migrate|movable|isolate|shrink|shrinker|compact|compaction|"
+    r"page_private|folio_get_private|metadata|dma_addr_t|huge|2mb|2m|compound)\b",
+    re.IGNORECASE,
+)
 _QUEUE_PUBLISH_RE = re.compile(
     r"\b(?:kcpu_queues|queue_new|in_use|inuse|bitmap|array|slots?|queue\s*\[|"
     r"set_bit|bitmap_set|atomic_set)\b",
@@ -397,7 +446,8 @@ _DOMAIN_ROOT_TOKENS = frozenset({
     "sus_buf", "normal_suspend_buf", "clear_fault", "native", "vmap_prot",
     "active_protm_grp", "zero_count",
     "user_buffer", "zone", "jit", "mem_pool", "oom", "fd", "debugfs",
-    "tlstream", "bus_fault", "kcpu_queue",
+    "tlstream", "bus_fault", "kcpu_queue", "pgd", "pmd", "pte",
+    "migration", "shrinker", "compaction", "quiesce", "partial_mapping",
 })
 _MMU_RECOVERY_WORDS = frozenset({"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"})
 _MMU_RECOVERY_LOOP_RE = re.compile(r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)", re.IGNORECASE)
@@ -441,6 +491,10 @@ _PARTIAL_VULN_ALIASES = {
     "queue_publish_init": "queue_publish_init",
     "fd_reuse_race": "fd_reuse_race",
     "debugfs_permission": "debugfs_permission",
+    "mmu_lockdrop_stale": "mmu_lockdrop_stale",
+    "mmu_teardown_order": "mmu_teardown_order",
+    "partial_mapping_rollback": "partial_mapping_rollback",
+    "migration_metadata_race": "migration_metadata_race",
     "sentinel_misuse": "wrong_constant",
 }
 _PARTIAL_CWE_OVERRIDES = {
@@ -481,6 +535,10 @@ _PARTIAL_CWE_OVERRIDES = {
     "queue_publish_init": "CWE-416",
     "fd_reuse_race": "CWE-362",
     "debugfs_permission": "CWE-862",
+    "mmu_lockdrop_stale": "CWE-416",
+    "mmu_teardown_order": "CWE-416",
+    "partial_mapping_rollback": "CWE-459",
+    "migration_metadata_race": "CWE-362",
     "accounting_drift": "CWE-682",
     "missing_lock": "CWE-820",
     "state_order": "CWE-696",
@@ -529,27 +587,31 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_protected_mmu_protocol": 27,
     "partial_named_lock_inversion": 28,
     "partial_mmu_recovery_rollback": 29,
-    "partial_owner_liveness_allocation": 30,
-    "partial_user_buffer_permission": 31,
-    "partial_zone_shrink_validation": 32,
-    "partial_success_path_cleanup": 33,
-    "partial_jit_lock_protocol": 34,
-    "partial_teardown_order": 35,
-    "partial_queue_publish_init": 36,
-    "partial_fd_reuse_race": 37,
-    "partial_debugfs_permission": 38,
-    "partial_allocation_arithmetic": 39,
-    "partial_fops_lifecycle": 40,
-    "partial_cross_file_lock_cycle": 41,
-    "partial_state_transition_protocol": 42,
-    "partial_partial_exact_fallback": 43,
-    "partial_lock_and_stale": 44,
-    "partial_lifecycle": 45,
-    "partial_shared_state": 46,
-    "partial_inbound_contract": 47,
-    "partial_outbound_misuse": 48,
-    "partial_target_intra": 49,
-    "partial_concurrency": 50,
+    "partial_mmu_lockdrop_stale": 30,
+    "partial_mmu_teardown_order": 31,
+    "partial_partial_mapping_rollback": 32,
+    "partial_migration_metadata_race": 33,
+    "partial_owner_liveness_allocation": 34,
+    "partial_user_buffer_permission": 35,
+    "partial_zone_shrink_validation": 36,
+    "partial_success_path_cleanup": 37,
+    "partial_jit_lock_protocol": 38,
+    "partial_teardown_order": 39,
+    "partial_queue_publish_init": 40,
+    "partial_fd_reuse_race": 41,
+    "partial_debugfs_permission": 42,
+    "partial_allocation_arithmetic": 43,
+    "partial_fops_lifecycle": 44,
+    "partial_cross_file_lock_cycle": 45,
+    "partial_state_transition_protocol": 46,
+    "partial_partial_exact_fallback": 47,
+    "partial_lock_and_stale": 48,
+    "partial_lifecycle": 49,
+    "partial_shared_state": 50,
+    "partial_inbound_contract": 51,
+    "partial_outbound_misuse": 52,
+    "partial_target_intra": 53,
+    "partial_concurrency": 54,
 }
 
 
@@ -790,6 +852,10 @@ class PartialDetectorResult:
     queue_publish_init_notes: list[str] = None
     fd_reuse_notes: list[str] = None
     debugfs_permission_notes: list[str] = None
+    mmu_lockdrop_stale_notes: list[str] = None
+    mmu_teardown_order_notes: list[str] = None
+    partial_mapping_rollback_notes: list[str] = None
+    migration_metadata_race_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -815,6 +881,8 @@ class PartialDetectorResult:
             "owner_liveness_notes", "user_buffer_permission_notes", "zone_shrink_notes",
             "success_path_cleanup_notes", "jit_lock_protocol_notes", "teardown_order_notes",
             "queue_publish_init_notes", "fd_reuse_notes", "debugfs_permission_notes",
+            "mmu_lockdrop_stale_notes", "mmu_teardown_order_notes",
+            "partial_mapping_rollback_notes", "migration_metadata_race_notes",
             "nodes", "globals",
         ):
             if getattr(self, name) is None:
@@ -1117,6 +1185,8 @@ def _domain_root_tokens(text: str) -> set[str]:
         tokens.add("bus_fault")
     if "kcpu" in tokens and "queue" in tokens:
         tokens.add("kcpu_queue")
+    if "partial" in tokens and ("mapping" in tokens or "map" in tokens):
+        tokens.add("partial_mapping")
     return tokens & _DOMAIN_ROOT_TOKENS
 
 
@@ -2654,6 +2724,7 @@ class PartialCandidateDetector:
         self._detect_size_propagation(index, result, target_syms, context)
         self._detect_alias_size_chain(index, result, target_syms, context)
         self._detect_alias_extent_mismatch(index, result, target_syms, context)
+        self._detect_partial_mapping_rollback(index, result, target_syms, context)
         self._detect_copy_contracts(index, result, target_syms)
         self._detect_cleanup_symmetry(index, result, target_syms)
         self._detect_interprocedural_cleanup_ledger(index, result, target_syms, context)
@@ -2667,6 +2738,8 @@ class PartialCandidateDetector:
         self._detect_stale_tracker_state(index, result, target_syms)
         self._detect_region_replace_erase(index, result, target_syms, context)
         self._detect_metadata_type_confusion(index, result, target_syms)
+        self._detect_mmu_lockdrop_stale(index, result, target_syms)
+        self._detect_migration_metadata_race(index, result, target_syms)
         self._detect_pm_runtime_sequence(index, result, target_syms)
         self._detect_pm_callback_order(index, result, target_syms)
         self._detect_secondary_element_omission(index, result, target_syms)
@@ -2677,6 +2750,7 @@ class PartialCandidateDetector:
         self._detect_success_path_cleanup(index, result, target_syms)
         self._detect_jit_lock_protocol(index, result, target_syms, context)
         self._detect_teardown_order(index, result, target_syms, context)
+        self._detect_mmu_teardown_order(index, result, target_syms, context)
         self._detect_queue_publish_init(index, result, target_syms)
         self._detect_fd_reuse_race(index, result, target_syms)
         self._detect_debugfs_permission(index, result, target_syms)
@@ -3421,8 +3495,10 @@ class PartialCandidateDetector:
         for line_no, line in lines:
             if not (
                 re.search(r"\bpage_private\s*\(", line)
-                and re.search(r"\bkbase_page_metadata\b|page_metadata", line)
-                and re.search(r"\(\s*(?:struct\s+)?[A-Za-z_]*page_metadata[A-Za-z0-9_\s]*\*", line)
+                and (
+                    re.search(r"\bkbase_page_metadata\b|page_metadata", line)
+                    or re.search(r"\(\s*(?:const\s+)?struct\s+[A-Za-z_][A-Za-z0-9_]*\s*\*", line)
+                )
             ):
                 continue
             match = re.search(r"(?:struct\s+\w+\s*\*\s*)?(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=", line)
@@ -3443,12 +3519,107 @@ class PartialCandidateDetector:
                 continue
             result.metadata_type_confusion_notes.append(
                 f"{sym.file_path}::{sym.name} line {line_no} casts opaque page_private metadata "
-                f"`{_line_excerpt(line)}` to page metadata and dereferences `{target}` at line "
+                f"`{_line_excerpt(line)}` to a struct pointer and dereferences `{target}` at line "
                 f"{deref[0]} `{_line_excerpt(deref[1])}` without proving the private value has that type."
             )
             self._add_node(index, result, sym)
             return True
         return False
+
+    def _detect_mmu_lockdrop_stale(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            tokens = _fact_tokens(text)
+            if not (tokens & {"mmu", "vm", "region", "alloc", "pgd", "pmd", "pte", "metadata", "migration"}):
+                continue
+            if not (_MMU_LOCKDROP_UNLOCK_RE.search(text) and _MMU_LOCKDROP_RELOCK_RE.search(text)):
+                continue
+            cached: dict[str, tuple[int, str]] = {}
+            unlock_line: tuple[int, str] | None = None
+            relock_seen = False
+            revalidated: set[str] = set()
+            for line_no, line in self._lines(sym):
+                assign = _MMU_STALE_ASSIGN_RE.search(line)
+                if assign and unlock_line is None:
+                    var = assign.group("var")
+                    if _fact_tokens(var) & {"reg", "region", "alloc", "pgd", "pmd", "pte", "metadata", "meta", "page", "phys", "pfn"}:
+                        cached[var] = (line_no, line)
+                if _MMU_LOCKDROP_UNLOCK_RE.search(line):
+                    unlock_line = (line_no, line)
+                    continue
+                if unlock_line is None:
+                    continue
+                if _MMU_STALE_REVALIDATE_RE.search(line):
+                    for var in cached:
+                        if re.search(r"\b" + re.escape(var) + r"\b", line):
+                            revalidated.add(var)
+                if _MMU_LOCKDROP_RELOCK_RE.search(line):
+                    relock_seen = True
+                    continue
+                if not relock_seen:
+                    continue
+                for var, (assign_no, assign_line) in list(cached.items()):
+                    if var in revalidated or line_no <= unlock_line[0] + 1:
+                        continue
+                    if not re.search(r"\b" + re.escape(var) + r"\b", line):
+                        continue
+                    if not re.search(r"(?:->|\.|\[|\b(?:free|unmap|write|read|set|clear|put|get|memcpy|copy)\w*\s*\()", line):
+                        continue
+                    result.mmu_lockdrop_stale_notes.append(
+                        f"{sym.file_path}::{sym.name} caches MMU/VM state at line {assign_no} "
+                        f"`{_line_excerpt(assign_line)}`, drops the VM/MMU lock at line {unlock_line[0]} "
+                        f"`{_line_excerpt(unlock_line[1])}`, then reuses `{var}` at line {line_no} "
+                        f"`{_line_excerpt(line)}` after relock without visible lookup/revalidation."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.mmu_lockdrop_stale_notes) >= 8:
+                        return
+                    cached.pop(var, None)
+                    break
+
+    def _detect_migration_metadata_race(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not _MIGRATION_METADATA_RE.search(text):
+                continue
+            if not (_MMU_LOCKDROP_UNLOCK_RE.search(text) or re.search(r"\b(?:set_page_private|page_private|folio_get_private)\b", text)):
+                continue
+            lines = self._lines(sym)
+            private_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:page_private|folio_get_private|set_page_private|metadata|movable|migration)\b", line, re.IGNORECASE)
+            ), None)
+            if not private_line:
+                continue
+            unlock_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no > private_line[0] and _MMU_LOCKDROP_UNLOCK_RE.search(line)
+            ), None)
+            if not unlock_line:
+                continue
+            reuse_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no > unlock_line[0]
+                and re.search(r"\b(?:page_private|folio_get_private|metadata|movable|migration|compound|huge|dma)\b", line, re.IGNORECASE)
+                and re.search(r"(?:->|\.|\[|set_page_private|clear|free|put|sync|cache|migrate)", line, re.IGNORECASE)
+            ), None)
+            if not reuse_line:
+                continue
+            between = "\n".join(
+                line for line_no, line in lines
+                if unlock_line[0] < line_no < reuse_line[0]
+            )
+            if _MMU_STALE_REVALIDATE_RE.search(between):
+                continue
+            result.migration_metadata_race_notes.append(
+                f"{sym.file_path}::{sym.name} reads or mutates migration/page-private metadata at line {private_line[0]} "
+                f"`{_line_excerpt(private_line[1])}`, drops the VM/MMU lock at line {unlock_line[0]} "
+                f"`{_line_excerpt(unlock_line[1])}`, then reuses metadata at line {reuse_line[0]} "
+                f"`{_line_excerpt(reuse_line[1])}` without proving the page/private metadata stayed valid."
+            )
+            self._add_node(index, result, sym)
+            if len(result.migration_metadata_race_notes) >= 8:
+                return
 
     def _detect_pm_runtime_sequence(self, index, result, target_syms):
         for sym in target_syms:
@@ -3851,6 +4022,51 @@ class PartialCandidateDetector:
             if schedule_companion:
                 self._add_node(index, result, schedule_companion)
             if len(result.teardown_order_notes) >= 8:
+                return
+
+    def _detect_mmu_teardown_order(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        quiesce_companion = next((
+            sym for sym in context_syms
+            if sym not in target_syms
+            and _HW_QUIESCE_RE.search(f"{sym.name} {self._body_text(sym)[:8000]}")
+        ), None)
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not re.search(r"\b(?:mmu|region|va_region|address\s*space|pgd|pmd|pte)\b", text, re.IGNORECASE):
+                continue
+            if not re.search(r"\b(?:term|teardown|destroy|free|release|remove|unmap)\b", text, re.IGNORECASE):
+                continue
+            if not re.search(r"\b(?:gpu|cache|writeback|tlb|as|address\s*space|dirty|flush|schedule)\b", text, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            teardown_line = next((
+                (line_no, line) for line_no, line in lines
+                if _MMU_TEARDOWN_FREE_RE.search(line)
+            ), None)
+            if not teardown_line:
+                continue
+            prior_quiesce = next((
+                (line_no, line) for line_no, line in lines
+                if line_no < teardown_line[0] and _HW_QUIESCE_RE.search(line)
+            ), None)
+            if prior_quiesce:
+                continue
+            later_quiesce = next((
+                (line_no, line) for line_no, line in lines
+                if line_no > teardown_line[0] and line_no - teardown_line[0] <= 120 and _HW_QUIESCE_RE.search(line)
+            ), None)
+            result.mmu_teardown_order_notes.append(
+                f"{sym.file_path}::{sym.name} line {teardown_line[0]} tears down MMU/VA resources "
+                f"`{_line_excerpt(teardown_line[1])}` before a visible GPU address-space disable, schedule-out, "
+                f"TLB/cache flush, or hardware quiescence point"
+                f"{' (later line ' + str(later_quiesce[0]) + ' `' + _line_excerpt(later_quiesce[1]) + '`)' if later_quiesce else ''}"
+                f"{' shown only in companion ' + quiesce_companion.file_path + '::' + quiesce_companion.name if quiesce_companion and not later_quiesce else ''}."
+            )
+            self._add_node(index, result, sym)
+            if quiesce_companion:
+                self._add_node(index, result, quiesce_companion)
+            if len(result.mmu_teardown_order_notes) >= 8:
                 return
 
     def _detect_queue_publish_init(self, index, result, target_syms):
@@ -4287,6 +4503,76 @@ class PartialCandidateDetector:
             self._add_node(index, result, consumer_sym)
             if len(result.alias_extent_mismatch_notes) >= 8:
                 return
+
+    def _detect_partial_mapping_rollback(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        companion = next((
+            sym for sym in context_syms
+            if sym not in target_syms
+            and re.search(r"\b(?:unmap|rollback|teardown|invalidate|flush|cache)\b", f"{sym.name} {self._body_text(sym)[:8000]}", re.IGNORECASE)
+        ), None)
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            tokens = _fact_tokens(text)
+            if not (tokens & {"mmu", "alias", "mapping", "map", "pages", "pfn", "phys", "region"}):
+                continue
+            if not re.search(r"\b(?:fail|failure|rollback|partial|ENOMEM|goto\s+(?:err|fail|out)|return\s+-)\b", text, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            for install_no, install_line in lines:
+                if not _PARTIAL_MAPPING_INSTALL_RE.search(install_line):
+                    continue
+                install_tokens = _fact_tokens(install_line)
+                if not (install_tokens & {"mmu", "alias", "map", "pages", "pfn", "phys", "gpu_va", "region"}):
+                    continue
+                failure = next((
+                    (line_no, line) for line_no, line in lines
+                    if line_no > install_no
+                    and line_no - install_no <= 100
+                    and (_ERROR_PATH_RE.search(line) or re.search(r"\b(?:fail|failure|ENOMEM|rollback|partial)\b", line, re.IGNORECASE))
+                ), None)
+                if not failure:
+                    continue
+                path_lines = [
+                    (line_no, line) for line_no, line in lines
+                    if install_no <= line_no <= min(failure[0] + 70, sym.body_end or failure[0] + 70)
+                ]
+                rollback_lines = [
+                    (line_no, line) for line_no, line in path_lines
+                    if line_no > install_no and _PARTIAL_MAPPING_ROLLBACK_RE.search(line)
+                ]
+                if not rollback_lines:
+                    result.partial_mapping_rollback_notes.append(
+                        f"{sym.file_path}::{sym.name} line {install_no} partially installs mapping/MMU state "
+                        f"`{_line_excerpt(install_line)}`, then failure path line {failure[0]} "
+                        f"`{_line_excerpt(failure[1])}` has no visible unmap/invalidate/cache-maintenance rollback"
+                        f"{' despite companion rollback context ' + companion.file_path + '::' + companion.name if companion else ''}."
+                    )
+                    self._add_node(index, result, sym)
+                    if companion:
+                        self._add_node(index, result, companion)
+                    if len(result.partial_mapping_rollback_notes) >= 8:
+                        return
+                    continue
+                rollback_no, rollback_line = rollback_lines[0]
+                rollback_tokens = _fact_tokens(rollback_line)
+                extent_tokens = {"pages", "pfn", "phys", "gpu_va", "addr", "level", "count", "nr", "num", "region"}
+                shared_extent = (install_tokens & rollback_tokens & extent_tokens)
+                has_cache_or_invalidate = bool(re.search(r"\b(?:unmap|invalidate|flush|cache|tlb|zap|teardown)\b", rollback_line, re.IGNORECASE))
+                if shared_extent and has_cache_or_invalidate:
+                    continue
+                result.partial_mapping_rollback_notes.append(
+                    f"{sym.file_path}::{sym.name} line {install_no} installs mapping/MMU state "
+                    f"`{_line_excerpt(install_line)}`, but failure rollback line {rollback_no} "
+                    f"`{_line_excerpt(rollback_line)}` is not visibly tied to the same extent/level or cache/TLB invalidation "
+                    f"before failure path line {failure[0]}."
+                )
+                self._add_node(index, result, sym)
+                if companion:
+                    self._add_node(index, result, companion)
+                if len(result.partial_mapping_rollback_notes) >= 8:
+                    return
+                break
 
     def _detect_info_leaks(self, index, result, target_syms):
         reporter_notes = []
@@ -4952,7 +5238,8 @@ class PartialCandidateDetector:
                 and bool(re.search(r"\b(?:phys|pfn|base|start)\b", body, re.IGNORECASE))
                 and not re.search(r"\b(?:min|max|clamp|WARN_ON|BUG_ON|assert|if\s*\([^)]*(?:nr|count|pages)[^)]*(?:phys|pfn|base))", bounds_text, re.IGNORECASE)
             )
-            if not mismatch:
+            range_mismatch = self._mmu_recovery_range_mismatch(lines, loop_line[0])
+            if not mismatch and not range_mismatch:
                 continue
             caller = self._advanced_phys_pointer_caller(index, sym, context_syms)
             caller_suffix = ""
@@ -4960,13 +5247,15 @@ class PartialCandidateDetector:
                 caller_sym, caller_line, caller_text = caller
                 caller_suffix = (
                     f" Caller {caller_sym.file_path}::{caller_sym.name} line {caller_line} passes an advanced "
-                    f"phys/base pointer `{_line_excerpt(caller_text)}`, so rollback uses the wrong base."
+                    f"phys/base pointer `{_line_excerpt(caller_text)}`, so caller/callee rollback uses the wrong base or remaining count."
                 )
+            range_suffix = f" {range_mismatch}" if range_mismatch else ""
             result.mmu_recovery_notes.append(
                 f"{sym.file_path}::{sym.name} recovery loop line {loop_line[0]} `{_line_excerpt(loop_line[1])}` "
                 f"uses rollback/page bounds that are not visibly tied to phys-base adjustment"
                 f"{' line ' + str(phys_formula.line_number) + ' `' + _line_excerpt(phys_formula.line_text) + '`' if phys_formula else ''}; "
                 f"recovery action line {action_line[0]} `{_line_excerpt(action_line[1])}` may unmap/write/free the wrong rollback range."
+                f"{range_suffix}"
                 f"{caller_suffix}"
             )
             self._add_node(index, result, sym)
@@ -4985,6 +5274,38 @@ class PartialCandidateDetector:
                 if re.search(r"\b(?:phys|pfn|base)\s*(?:\+|\+=|\+\+)|&\s*(?:phys|pfn|base)\s*\[|(?:phys|pfn|base)\s*\+\s*(?:nr|count|pages|inserted|i)\b", line, re.IGNORECASE):
                     return sym, line_no, line
         return None
+
+    def _mmu_recovery_range_mismatch(self, lines: list[tuple[int, str]], loop_line: int) -> str:
+        window = "\n".join(
+            line for line_no, line in lines
+            if max(1, loop_line - 18) <= line_no <= loop_line + 24
+        )
+        inclusive_count = re.search(
+            r"\b(?:num_pages|nr_pages|count|pages)\s*=\s*(?:to|end)[A-Za-z0-9_]*\s*-\s*(?:from|start)[A-Za-z0-9_]*\s*\+\s*1\b",
+            window,
+            re.IGNORECASE,
+        )
+        exclusive_loop = re.search(
+            r"\b(?:for|while)\s*\([^)]*(?:<\s*(?:to|end)|<=\s*(?:to|end)|<\s*(?:num_pages|nr_pages|count|pages))",
+            window,
+            re.IGNORECASE,
+        )
+        advanced_base = re.search(
+            r"\b(?:phys|pfn|base|start)[A-Za-z0-9_]*(?:\s*\+|(?:\+\+)|\s*\+=)\s*(?:i|idx|inserted|done|nr|count|pages)",
+            window,
+            re.IGNORECASE,
+        )
+        if inclusive_count and exclusive_loop:
+            return (
+                "The nearby range calculation appears to mix inclusive page count (`end-start+1`) "
+                "with rollback loop bounds, which can overrun or under-rollback the recovery range."
+            )
+        if advanced_base and exclusive_loop:
+            return (
+                "The nearby rollback range uses an advanced phys/PFN/base expression with loop bounds, "
+                "so recovery may start from the wrong base page."
+            )
+        return ""
 
     def _detect_policy_gate_before_sink(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
@@ -5384,6 +5705,22 @@ _PASS_FOCI = {
         "Teardown-order bugs: VA regions or MMU tables are freed/terminated before the context is visibly scheduled out or "
         "its address space is disabled. Report the exact teardown statement and missing prior disable/schedule-out."
     ),
+    "mmu_teardown_order": (
+        "Exact MMU/cache teardown-order bugs: MMU tables, VA regions, or parent page tables are freed before GPU address-space "
+        "disable, schedule-out, TLB/cache flush, or hardware quiescence. Report the exact teardown and missing quiescence point."
+    ),
+    "mmu_lockdrop_stale": (
+        "Exact MMU/VM lock-drop stale-state bugs: region/allocation/PGD/metadata state is cached, the MMU/VM lock is dropped "
+        "and reacquired, then the cached value is reused without lookup/revalidation. Report exact cache, unlock, and reuse lines."
+    ),
+    "partial_mapping_rollback": (
+        "Partial mapping rollback bugs: a mapping/MMU/alias install partially succeeds, a later failure path runs, and rollback "
+        "uses the wrong extent/level or skips unmap/cache/TLB invalidation. Report exact install, failure, and rollback statements."
+    ),
+    "migration_metadata_race": (
+        "Migration/shrinker metadata races: page_private/movable/huge-page metadata is read or mutated across a VM/MMU lock drop "
+        "and then reused without proving the private metadata still has the same type or ownership."
+    ),
     "queue_publish_init": (
         "Queue publish-before-init bugs: queue pointers, array slots, or in-use bits are published before full initialization, "
         "and a later failure path lacks pointer/bit rollback. Report exact publish and failure statements."
@@ -5532,6 +5869,10 @@ class TargetedFileReviewer:
         success_cleanup_nodes = self._nodes_for_notes(detector_nodes, detector_result.success_path_cleanup_notes, cap=32)
         jit_lock_nodes = self._nodes_for_notes(detector_nodes, detector_result.jit_lock_protocol_notes, cap=48)
         teardown_order_nodes = self._nodes_for_notes(detector_nodes, detector_result.teardown_order_notes, cap=48)
+        mmu_lockdrop_nodes = self._nodes_for_notes(detector_nodes, detector_result.mmu_lockdrop_stale_notes, cap=40)
+        mmu_teardown_nodes = self._nodes_for_notes(detector_nodes, detector_result.mmu_teardown_order_notes, cap=48)
+        partial_mapping_nodes = self._nodes_for_notes(detector_nodes, detector_result.partial_mapping_rollback_notes, cap=40)
+        migration_metadata_nodes = self._nodes_for_notes(detector_nodes, detector_result.migration_metadata_race_notes, cap=40)
         queue_publish_nodes = self._nodes_for_notes(detector_nodes, detector_result.queue_publish_init_notes, cap=32)
         fd_reuse_nodes = self._nodes_for_notes(detector_nodes, detector_result.fd_reuse_notes, cap=32)
         debugfs_nodes = self._nodes_for_notes(detector_nodes, detector_result.debugfs_permission_notes, cap=32)
@@ -5568,6 +5909,8 @@ class TargetedFileReviewer:
             passes.append(("resource_validation_order", context.target_nodes, context.shared_state_nodes + context.companion_nodes + resource_validation_nodes))
         if detector_result.alias_extent_mismatch_notes:
             passes.append(("alias_extent_mismatch", context.target_nodes, context.outbound_callees + context.companion_nodes + alias_extent_nodes))
+        if detector_result.partial_mapping_rollback_notes:
+            passes.append(("partial_mapping_rollback", context.target_nodes, context.outbound_callees + context.companion_nodes + partial_mapping_nodes))
         if detector_result.arithmetic_chain_notes:
             passes.append(("arithmetic_chain_mismatch", context.target_nodes, context.outbound_callees + arithmetic_nodes))
         if detector_result.size_propagation_notes:
@@ -5587,6 +5930,10 @@ class TargetedFileReviewer:
             passes.append(("region_replace_erase", context.target_nodes, context.shared_state_nodes + context.companion_nodes + region_replace_nodes))
         if detector_result.metadata_type_confusion_notes:
             passes.append(("metadata_type_confusion", context.target_nodes, type_nodes))
+        if detector_result.mmu_lockdrop_stale_notes:
+            passes.append(("mmu_lockdrop_stale", context.target_nodes, context.shared_state_nodes + context.companion_nodes + mmu_lockdrop_nodes))
+        if detector_result.migration_metadata_race_notes:
+            passes.append(("migration_metadata_race", context.target_nodes, context.shared_state_nodes + context.companion_nodes + migration_metadata_nodes))
         if detector_result.pm_sequence_notes:
             passes.append(("pm_runtime_sequence", context.target_nodes, context.companion_nodes + pm_nodes))
         if detector_result.pm_callback_order_notes:
@@ -5607,6 +5954,8 @@ class TargetedFileReviewer:
             passes.append(("jit_lock_protocol", context.target_nodes, context.companion_nodes + context.shared_state_nodes + jit_lock_nodes))
         if detector_result.teardown_order_notes:
             passes.append(("teardown_order", context.target_nodes, context.companion_nodes + context.lifecycle_pair_nodes + teardown_order_nodes))
+        if detector_result.mmu_teardown_order_notes:
+            passes.append(("mmu_teardown_order", context.target_nodes, context.companion_nodes + context.lifecycle_pair_nodes + mmu_teardown_nodes))
         if detector_result.queue_publish_init_notes:
             passes.append(("queue_publish_init", context.target_nodes, context.shared_state_nodes + queue_publish_nodes))
         if detector_result.fd_reuse_notes:
@@ -5698,6 +6047,10 @@ class TargetedFileReviewer:
             or detector_result.success_path_cleanup_notes
             or detector_result.jit_lock_protocol_notes
             or detector_result.teardown_order_notes
+            or detector_result.mmu_lockdrop_stale_notes
+            or detector_result.mmu_teardown_order_notes
+            or detector_result.partial_mapping_rollback_notes
+            or detector_result.migration_metadata_race_notes
             or detector_result.queue_publish_init_notes
             or detector_result.fd_reuse_notes
             or detector_result.debugfs_permission_notes
@@ -5788,7 +6141,8 @@ class TargetedFileReviewer:
             "active_singleton_stale", "zero_count_underflow", "owner_liveness_allocation",
             "user_buffer_permission", "zone_shrink_validation", "success_path_cleanup",
             "jit_lock_protocol", "teardown_order", "queue_publish_init", "fd_reuse_race",
-            "debugfs_permission",
+            "debugfs_permission", "mmu_lockdrop_stale", "mmu_teardown_order",
+            "partial_mapping_rollback", "migration_metadata_race",
         }:
             return 2600, 36000
         if pass_name == "partial_exact_fallback":
@@ -5815,7 +6169,8 @@ class TargetedFileReviewer:
             "active_singleton_stale", "zero_count_underflow", "owner_liveness_allocation",
             "user_buffer_permission", "zone_shrink_validation", "success_path_cleanup",
             "jit_lock_protocol", "teardown_order", "queue_publish_init", "fd_reuse_race",
-            "debugfs_permission",
+            "debugfs_permission", "mmu_lockdrop_stale", "mmu_teardown_order",
+            "partial_mapping_rollback", "migration_metadata_race",
         }:
             return (
                 f"Findings must use primary_file={target_file} and identify the exact target-file statement plus the exact "
@@ -5894,6 +6249,10 @@ class TargetedFileReviewer:
                 ("ALIAS_EXTENT_MISMATCH", detector_result.alias_extent_mismatch_notes),
                 ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes[:8]),
             ),
+            "partial_mapping_rollback": (
+                ("PARTIAL_MAPPING_ROLLBACK", detector_result.partial_mapping_rollback_notes),
+                ("ALIAS_EXTENT_MISMATCH", detector_result.alias_extent_mismatch_notes[:6]),
+            ),
             "size_propagation": (
                 ("SIZE_PROPAGATION", detector_result.size_propagation_notes),
                 ("ARITHMETIC_CHAIN_MISMATCH", detector_result.arithmetic_chain_notes[:12]),
@@ -5915,6 +6274,14 @@ class TargetedFileReviewer:
                 ("STALE_TRACKER_STATE", detector_result.stale_tracker_notes[:8]),
             ),
             "metadata_type_confusion": (("METADATA_TYPE_CONFUSION", detector_result.metadata_type_confusion_notes),),
+            "mmu_lockdrop_stale": (
+                ("MMU_LOCKDROP_STALE", detector_result.mmu_lockdrop_stale_notes),
+                ("METADATA_TYPE_CONFUSION", detector_result.metadata_type_confusion_notes[:6]),
+            ),
+            "migration_metadata_race": (
+                ("MIGRATION_METADATA_RACE", detector_result.migration_metadata_race_notes),
+                ("METADATA_TYPE_CONFUSION", detector_result.metadata_type_confusion_notes[:6]),
+            ),
             "pm_runtime_sequence": (("PM_RUNTIME_SEQUENCE", detector_result.pm_sequence_notes),),
             "pm_callback_order": (
                 ("PM_CALLBACK_ORDER", detector_result.pm_callback_order_notes),
@@ -5931,6 +6298,10 @@ class TargetedFileReviewer:
             ),
             "jit_lock_protocol": (("JIT_LOCK_PROTOCOL", detector_result.jit_lock_protocol_notes),),
             "teardown_order": (("TEARDOWN_ORDER", detector_result.teardown_order_notes),),
+            "mmu_teardown_order": (
+                ("MMU_TEARDOWN_ORDER", detector_result.mmu_teardown_order_notes),
+                ("TEARDOWN_ORDER", detector_result.teardown_order_notes[:6]),
+            ),
             "queue_publish_init": (
                 ("QUEUE_PUBLISH_INIT", detector_result.queue_publish_init_notes),
                 ("STATE_PUBLICATION", detector_result.state_publication_notes[:6]),
@@ -6125,6 +6496,10 @@ def _partial_duplicate_family(vtype: str) -> str:
         "success_path_cleanup": "cleanup",
         "jit_lock_protocol": "lock_cycle",
         "teardown_order": "lifetime",
+        "mmu_lockdrop_stale": "lifetime",
+        "mmu_teardown_order": "lifetime",
+        "partial_mapping_rollback": "mmu_recovery",
+        "migration_metadata_race": "type_confusion",
         "queue_publish_init": "lifetime",
         "fd_reuse_race": "lifetime",
         "debugfs_permission": "policy_gate",
@@ -6300,6 +6675,10 @@ _EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
     "partial_success_path_cleanup",
     "partial_jit_lock_protocol",
     "partial_teardown_order",
+    "partial_mmu_lockdrop_stale",
+    "partial_mmu_teardown_order",
+    "partial_partial_mapping_rollback",
+    "partial_migration_metadata_race",
     "partial_queue_publish_init",
     "partial_fd_reuse_race",
     "partial_debugfs_permission",
@@ -6340,10 +6719,30 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
         "partial_async_event_order", "partial_cleanup_ledger",
         "partial_arithmetic_chain_mismatch", "partial_size_propagation",
         "partial_policy_gate_before_sink", "partial_stale_tracker_state",
-        "partial_pm_runtime_sequence",
+        "partial_pm_runtime_sequence", "partial_teardown_order",
+        "partial_owner_liveness_allocation",
+        "partial_metadata_type_confusion", "partial_alias_extent_mismatch",
+        "partial_zero_count_underflow",
     }
     if finding.analysis_type not in weaker:
         return False
+    preferred_stronger = {
+        "partial_alias_extent_mismatch": {"partial_partial_mapping_rollback"},
+        "partial_arithmetic_chain_mismatch": {"partial_alias_extent_mismatch", "partial_partial_mapping_rollback"},
+        "partial_size_propagation": {"partial_suspend_size_sink", "partial_partial_mapping_rollback"},
+        "partial_teardown_order": {"partial_mmu_teardown_order"},
+        "partial_metadata_type_confusion": {"partial_migration_metadata_race", "partial_mmu_lockdrop_stale"},
+        "partial_zero_count_underflow": {
+            "partial_mmu_recovery_rollback",
+            "partial_metadata_type_confusion",
+            "partial_migration_metadata_race",
+        },
+        "partial_owner_liveness_allocation": {
+            "partial_mmu_teardown_order",
+            "partial_mmu_lockdrop_stale",
+            "partial_partial_mapping_rollback",
+        },
+    }
     own_priority = _PARTIAL_PASS_PRIORITY.get(finding.analysis_type, 50)
     fn = finding.primary_function or finding.sink_function or finding.source_function
     line = _safe_int(finding.primary_line or finding.sink_line or finding.source_line, 0)
@@ -6353,8 +6752,6 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
     for exact in exact_findings:
         if exact is finding:
             continue
-        if _PARTIAL_PASS_PRIORITY.get(exact.analysis_type, 50) >= own_priority:
-            continue
         exact_file = exact.primary_file or exact.sink_file or exact.source_file
         if finding_file and exact_file and finding_file != exact_file:
             continue
@@ -6363,6 +6760,9 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
         exact_text = _partial_finding_text(exact).lower()
         exact_domains = _domain_root_tokens(exact_text)
         if not (finding_domains & exact_domains):
+            continue
+        preferred = exact.analysis_type in preferred_stronger.get(finding.analysis_type, set())
+        if _PARTIAL_PASS_PRIORITY.get(exact.analysis_type, 50) >= own_priority and not preferred:
             continue
         same_fn = bool(fn and exact_fn and fn == exact_fn)
         tight_line = bool(line and exact_line and abs(line - exact_line) <= 10)
@@ -6510,6 +6910,10 @@ class PartialReachabilityFileService:
                 "success_path_cleanup": len(detector_result.success_path_cleanup_notes),
                 "jit_lock_protocol": len(detector_result.jit_lock_protocol_notes),
                 "teardown_order": len(detector_result.teardown_order_notes),
+                "mmu_lockdrop_stale": len(detector_result.mmu_lockdrop_stale_notes),
+                "mmu_teardown_order": len(detector_result.mmu_teardown_order_notes),
+                "partial_mapping_rollback": len(detector_result.partial_mapping_rollback_notes),
+                "migration_metadata_race": len(detector_result.migration_metadata_race_notes),
                 "queue_publish_init": len(detector_result.queue_publish_init_notes),
                 "fd_reuse_race": len(detector_result.fd_reuse_notes),
                 "debugfs_permission": len(detector_result.debugfs_permission_notes),
@@ -6567,6 +6971,10 @@ class PartialReachabilityFileService:
                 + len(detector_result.success_path_cleanup_notes)
                 + len(detector_result.jit_lock_protocol_notes)
                 + len(detector_result.teardown_order_notes)
+                + len(detector_result.mmu_lockdrop_stale_notes)
+                + len(detector_result.mmu_teardown_order_notes)
+                + len(detector_result.partial_mapping_rollback_notes)
+                + len(detector_result.migration_metadata_race_notes)
                 + len(detector_result.queue_publish_init_notes)
                 + len(detector_result.fd_reuse_notes)
                 + len(detector_result.debugfs_permission_notes)
