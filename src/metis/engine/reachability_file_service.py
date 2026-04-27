@@ -117,6 +117,9 @@ _VULN_TYPES = (
     "mmu_recovery_rollback, suspend_cleanup_ledger, suspend_size_sink, fault_clear_order, "
     "pm_callback_order, region_replace_erase, imported_mapping_policy, alias_extent_mismatch, "
     "named_lock_inversion, active_singleton_stale, zero_count_underflow, "
+    "owner_liveness_allocation, user_buffer_permission, zone_shrink_validation, "
+    "success_path_cleanup, jit_lock_protocol, teardown_order, queue_publish_init, "
+    "fd_reuse_race, debugfs_permission, "
     "state_transition_protocol, "
     "stale_after_unlock, missing_lock, lock_order, state_order, ordering_gap, "
     "teardown_race, deferred_uaf, callback_lifecycle, refcount_imbalance, "
@@ -330,6 +333,61 @@ _ZERO_COUNT_UNDERFLOW_RE = re.compile(
     r"\b(?:for|while)\s*\([^)]*(?:>=\s*0|--)[^)]*\)",
     re.IGNORECASE,
 )
+_DOORBELL_BIND_RE = re.compile(
+    r"\b(?:assign_user_doorbell_to_queue|doorbell|USER_DOORBELL|real[_\s-]*doorbell|"
+    r"program_cs|program.*doorbell|doorbell.*(?:assign|program|map|bind|base|offset))\b",
+    re.IGNORECASE,
+)
+_QUEUE_LIVENESS_RE = re.compile(
+    r"\b(?:queue|csi|cs|group|kctx)[^;\n]*(?:enabled?|alive|terminat(?:ed|ing)|stopped|"
+    r"dying|run_state|KBASE_CSF_QUEUE)\b|"
+    r"\b(?:enabled?|alive|terminat(?:ed|ing)|stopped|dying)\b[^;\n]*(?:queue|csi|cs|group)",
+    re.IGNORECASE,
+)
+_OWNER_LIVENESS_RE = re.compile(
+    r"\b(?:signal_pending|fatal_signal_pending|task_is_oom_victim|oom_victim|PF_EXITING|"
+    r"exit_state|mmget_not_zero|kthread_should_stop|process_exiting|task.*exiting|task.*dying)\b",
+    re.IGNORECASE,
+)
+_POOL_ALLOC_RE = re.compile(
+    r"\b(?:kbase_mem_pool_(?:grow|alloc_pages)|mem_pool_(?:grow|alloc)|alloc_pages|"
+    r"kbase_alloc_phy_pages|kbase_mem_alloc_page|new_page|page_alloc)\w*\s*\(",
+    re.IGNORECASE,
+)
+_USER_BUFFER_RE = re.compile(r"\b(?:USER_BUFFER|user_buffer|from_user_buffer|KBASE_MEM_TYPE_IMPORTED_USER_BUF)\b", re.IGNORECASE)
+_GUP_RE = re.compile(r"\b(?:get_user_pages|pin_user_pages|get_user_pages_fast|pin_user_pages_fast)\w*\s*\(", re.IGNORECASE)
+_GPU_WRITE_FLAG_RE = re.compile(r"\b(?:KBASE_REG_GPU_WR|GPU_WR|GPU.*WRITE|gpu_wr|gpu_write|KBASE_REG_CPU_WR|CPU_WR)\b", re.IGNORECASE)
+_ZONE_SHRINK_RE = re.compile(
+    r"\b(?:init_(?:jit|exec)|region_tracker_init|shrink|split|resize|trim|zone|free.*zone|"
+    r"same_va|imported|dma_buf|user_buffer|overlap)\b",
+    re.IGNORECASE,
+)
+_SUCCESS_FD_RE = re.compile(r"\b(?:anon_inode_getfd|get_unused_fd_flags|fd_install|sync_fence_fdget|fdget)\s*\(", re.IGNORECASE)
+_JIT_STATE_RE = re.compile(
+    r"\b(?:jit|jit_alloc|jit_free|jit_active|jit_pool|jit_list|evict_list|pending_alloc|"
+    r"jit_allow_allocate|kbase_jit_(?:allocate|free))\b",
+    re.IGNORECASE,
+)
+_TEARDOWN_ORDER_RE = re.compile(
+    r"\b(?:context.*term|common_term|region_tracker_term|mmu_term|schedule_out|sched.*out|"
+    r"disable.*as|as.*disable|address.*space|free.*region|va_region|mmu.*teardown)\b",
+    re.IGNORECASE,
+)
+_QUEUE_PUBLISH_RE = re.compile(
+    r"\b(?:kcpu_queues|queue_new|in_use|inuse|bitmap|array|slots?|queue\s*\[|"
+    r"set_bit|bitmap_set|atomic_set)\b",
+    re.IGNORECASE,
+)
+_DEBUGFS_AUTH_RE = re.compile(
+    r"\b(?:debugfs_create_file|debugfs|timeline|tlstream|profil(?:e|ing)|S_IRUGO|0444|"
+    r"\w*timeline_io_acquire|capable|ptrace_may_access|S_IWUSR|0600)\b",
+    re.IGNORECASE,
+)
+_BUS_FAULT_REPORT_RE = re.compile(
+    r"\b(?:kbase_gpu_report_bus_fault_and_kill|bus[_\s-]*fault|cacheability|shareability|"
+    r"fault->addr|fault\.addr|PA\s*0x|physical address)\b",
+    re.IGNORECASE,
+)
 _DOMAIN_ROOT_TOKENS = frozenset({
     "doorbell", "queue", "fault", "irq", "interrupt", "slot", "atom", "pm",
     "runtime", "power", "clock", "clk", "same_va", "imported", "umm",
@@ -338,6 +396,8 @@ _DOMAIN_ROOT_TOKENS = frozenset({
     "cqs_wait", "alias", "nents", "stride", "pfn", "phys", "dma",
     "sus_buf", "normal_suspend_buf", "clear_fault", "native", "vmap_prot",
     "active_protm_grp", "zero_count",
+    "user_buffer", "zone", "jit", "mem_pool", "oom", "fd", "debugfs",
+    "tlstream", "bus_fault", "kcpu_queue",
 })
 _MMU_RECOVERY_WORDS = frozenset({"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"})
 _MMU_RECOVERY_LOOP_RE = re.compile(r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)", re.IGNORECASE)
@@ -372,6 +432,15 @@ _PARTIAL_VULN_ALIASES = {
     "named_lock_inversion": "named_lock_inversion",
     "active_singleton_stale": "active_singleton_stale",
     "zero_count_underflow": "zero_count_underflow",
+    "owner_liveness_allocation": "owner_liveness_allocation",
+    "user_buffer_permission": "user_buffer_permission",
+    "zone_shrink_validation": "zone_shrink_validation",
+    "success_path_cleanup": "success_path_cleanup",
+    "jit_lock_protocol": "jit_lock_protocol",
+    "teardown_order": "teardown_order",
+    "queue_publish_init": "queue_publish_init",
+    "fd_reuse_race": "fd_reuse_race",
+    "debugfs_permission": "debugfs_permission",
     "sentinel_misuse": "wrong_constant",
 }
 _PARTIAL_CWE_OVERRIDES = {
@@ -403,6 +472,15 @@ _PARTIAL_CWE_OVERRIDES = {
     "named_lock_inversion": "CWE-833",
     "active_singleton_stale": "CWE-416",
     "zero_count_underflow": "CWE-191",
+    "owner_liveness_allocation": "CWE-400",
+    "user_buffer_permission": "CWE-863",
+    "zone_shrink_validation": "CWE-787",
+    "success_path_cleanup": "CWE-401",
+    "jit_lock_protocol": "CWE-362",
+    "teardown_order": "CWE-416",
+    "queue_publish_init": "CWE-416",
+    "fd_reuse_race": "CWE-362",
+    "debugfs_permission": "CWE-862",
     "accounting_drift": "CWE-682",
     "missing_lock": "CWE-820",
     "state_order": "CWE-696",
@@ -451,18 +529,27 @@ _PARTIAL_PASS_PRIORITY = {
     "partial_protected_mmu_protocol": 27,
     "partial_named_lock_inversion": 28,
     "partial_mmu_recovery_rollback": 29,
-    "partial_allocation_arithmetic": 30,
-    "partial_fops_lifecycle": 31,
-    "partial_cross_file_lock_cycle": 32,
-    "partial_state_transition_protocol": 33,
-    "partial_partial_exact_fallback": 34,
-    "partial_lock_and_stale": 35,
-    "partial_lifecycle": 36,
-    "partial_shared_state": 37,
-    "partial_inbound_contract": 38,
-    "partial_outbound_misuse": 39,
-    "partial_target_intra": 40,
-    "partial_concurrency": 41,
+    "partial_owner_liveness_allocation": 30,
+    "partial_user_buffer_permission": 31,
+    "partial_zone_shrink_validation": 32,
+    "partial_success_path_cleanup": 33,
+    "partial_jit_lock_protocol": 34,
+    "partial_teardown_order": 35,
+    "partial_queue_publish_init": 36,
+    "partial_fd_reuse_race": 37,
+    "partial_debugfs_permission": 38,
+    "partial_allocation_arithmetic": 39,
+    "partial_fops_lifecycle": 40,
+    "partial_cross_file_lock_cycle": 41,
+    "partial_state_transition_protocol": 42,
+    "partial_partial_exact_fallback": 43,
+    "partial_lock_and_stale": 44,
+    "partial_lifecycle": 45,
+    "partial_shared_state": 46,
+    "partial_inbound_contract": 47,
+    "partial_outbound_misuse": 48,
+    "partial_target_intra": 49,
+    "partial_concurrency": 50,
 }
 
 
@@ -694,6 +781,15 @@ class PartialDetectorResult:
     named_lock_inversion_notes: list[str] = None
     active_singleton_stale_notes: list[str] = None
     zero_count_underflow_notes: list[str] = None
+    owner_liveness_notes: list[str] = None
+    user_buffer_permission_notes: list[str] = None
+    zone_shrink_notes: list[str] = None
+    success_path_cleanup_notes: list[str] = None
+    jit_lock_protocol_notes: list[str] = None
+    teardown_order_notes: list[str] = None
+    queue_publish_init_notes: list[str] = None
+    fd_reuse_notes: list[str] = None
+    debugfs_permission_notes: list[str] = None
     nodes: list[FunctionNode] = None
     globals: list[GlobalConstruct] = None
 
@@ -716,6 +812,9 @@ class PartialDetectorResult:
             "region_replace_erase_notes", "imported_mapping_policy_notes",
             "alias_extent_mismatch_notes", "named_lock_inversion_notes",
             "active_singleton_stale_notes", "zero_count_underflow_notes",
+            "owner_liveness_notes", "user_buffer_permission_notes", "zone_shrink_notes",
+            "success_path_cleanup_notes", "jit_lock_protocol_notes", "teardown_order_notes",
+            "queue_publish_init_notes", "fd_reuse_notes", "debugfs_permission_notes",
             "nodes", "globals",
         ):
             if getattr(self, name) is None:
@@ -964,6 +1063,16 @@ def _normalise_lock_expr(expr: str) -> str:
     ):
         if stable in expr:
             return stable
+    if "clk_rtm" in expr and "lock" in expr:
+        return "clk_rtm.lock"
+    if "hwaccess" in expr and "lock" in expr:
+        return "hwaccess_lock"
+    if ("hwcnt" in expr or "backend" in expr) and "state" in expr and "lock" in expr:
+        return "hwcnt_state.lock"
+    if "hwcnt" in expr and "lock" in expr:
+        return "hwcnt.lock"
+    if "backend" in expr and "lock" in expr:
+        return "backend.lock"
     if expr.endswith(".lock"):
         return ".".join(expr.split(".")[-2:])
     return expr
@@ -1000,6 +1109,14 @@ def _domain_root_tokens(text: str) -> set[str]:
         tokens.add("active_protm_grp")
     if "zero" in tokens and "count" in tokens:
         tokens.add("zero_count")
+    if "user" in tokens and "buffer" in tokens:
+        tokens.add("user_buffer")
+    if "mem" in tokens and "pool" in tokens:
+        tokens.add("mem_pool")
+    if "bus" in tokens and "fault" in tokens:
+        tokens.add("bus_fault")
+    if "kcpu" in tokens and "queue" in tokens:
+        tokens.add("kcpu_queue")
     return tokens & _DOMAIN_ROOT_TOKENS
 
 
@@ -2554,6 +2671,15 @@ class PartialCandidateDetector:
         self._detect_pm_callback_order(index, result, target_syms)
         self._detect_secondary_element_omission(index, result, target_syms)
         self._detect_zero_count_underflow(index, result, target_syms)
+        self._detect_owner_liveness_allocation(index, result, target_syms)
+        self._detect_user_buffer_permission(index, result, target_syms)
+        self._detect_zone_shrink_validation(index, result, target_syms)
+        self._detect_success_path_cleanup(index, result, target_syms)
+        self._detect_jit_lock_protocol(index, result, target_syms, context)
+        self._detect_teardown_order(index, result, target_syms, context)
+        self._detect_queue_publish_init(index, result, target_syms)
+        self._detect_fd_reuse_race(index, result, target_syms)
+        self._detect_debugfs_permission(index, result, target_syms)
         wrappers = self._detect_format_wrappers(index, result, target_syms, target_prefixes)
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
@@ -2566,7 +2692,7 @@ class PartialCandidateDetector:
         self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
         self._detect_protected_mmu_protocol(index, result, target_syms, context)
         self._detect_active_singleton_stale(index, result, target_syms, context)
-        self._detect_mmu_recovery_rollback(index, result, target_syms)
+        self._detect_mmu_recovery_rollback(index, result, target_syms, context)
         self._detect_policy_gate_before_sink(index, result, target_syms, context)
         self._detect_imported_same_va_fault_policy(index, result, target_syms, context)
         self._detect_imported_mapping_policy(index, result, target_syms, context)
@@ -3011,25 +3137,75 @@ class PartialCandidateDetector:
                 if event.kind == "validation" and event.token in liveness_tokens
                 and re.search(r"\b(?:enabled?|alive|terminated|terminating|stopped|active)\b", event.line_text, re.IGNORECASE)
             ]
-            if not binds:
+            if binds:
+                for bind in binds[:10]:
+                    later_validation = next((event for event in validations if event.line_number > bind.line_number), None)
+                    prior_final_validation = any(0 <= bind.line_number - event.line_number <= 6 for event in validations)
+                    if not later_validation and prior_final_validation:
+                        continue
+                    validation_text = (
+                        f"before final liveness validation line {later_validation.line_number} "
+                        f"`{_line_excerpt(later_validation.line_text)}`"
+                        if later_validation else "without a nearby queue enabled/alive/not-terminated validation"
+                    )
+                    result.resource_validation_notes.append(
+                        f"{sym.file_path}::{sym.name} line {bind.line_number} binds real resource `{_line_excerpt(bind.line_text)}` "
+                        f"{validation_text}."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.resource_validation_notes) >= 12:
+                        return
+            self._detect_doorbell_liveness_order(index, result, sym, liveness_tokens)
+            if len(result.resource_validation_notes) >= 12:
+                return
+
+    def _detect_doorbell_liveness_order(self, index, result, sym: SymbolDef, liveness_tokens: set[str]):
+        name_l = sym.name.lower()
+        lines = self._lines(sym)
+        body_text = "\n".join(line for _, line in lines)
+        if not (
+            "doorbell" in body_text.lower()
+            and (
+                "program_cs" in name_l
+                or "assign_user_doorbell" in name_l
+                or _name_has_any(sym.name, {"assign", "doorbell", "queue", "program", "bind"})
+            )
+        ):
+            return
+        bind_line = next((
+            (line_no, line) for line_no, line in lines
+            if _DOORBELL_BIND_RE.search(line)
+            and not re.search(r"\b(?:if|return|WARN_ON|BUG_ON)\b", line)
+            and re.search(r"\b(?:=|assign|program|map|bind|write|doorbell)\b", line, re.IGNORECASE)
+        ), None)
+        if not bind_line:
+            return
+        validations = [
+            (line_no, line) for line_no, line in lines
+            if (
+                (_QUEUE_LIVENESS_RE.search(line) or (_fact_tokens(line) & liveness_tokens))
+                and re.search(r"\b(?:if|WARN_ON|BUG_ON|return|goto)\b", line)
+                and re.search(r"\b(?:queue|doorbell|enabled?|alive|terminat(?:ed|ing)|stopped|active)\b", line, re.IGNORECASE)
+            )
+        ]
+        prior_final = any(0 <= bind_line[0] - line_no <= 8 for line_no, _ in validations)
+        later = next(((line_no, line) for line_no, line in validations if line_no > bind_line[0]), None)
+        if prior_final and not later:
+            return
+        validation_text = (
+            f"before later liveness predicate line {later[0]} `{_line_excerpt(later[1])}`"
+            if later else "without a nearby final queue enabled/alive/not-terminated predicate"
+        )
+        result.resource_validation_notes.append(
+            f"{sym.file_path}::{sym.name} line {bind_line[0]} assigns/programs a real hardware doorbell "
+            f"`{_line_excerpt(bind_line[1])}` {validation_text}; a terminated queue can retain stale real-doorbell binding."
+        )
+        self._add_node(index, result, sym)
+        for call in _symbol_calls(index, sym):
+            if "doorbell" not in call.lower() and "program_cs" not in call.lower():
                 continue
-            for bind in binds[:10]:
-                later_validation = next((event for event in validations if event.line_number > bind.line_number), None)
-                prior_final_validation = any(0 <= bind.line_number - event.line_number <= 6 for event in validations)
-                if not later_validation and prior_final_validation:
-                    continue
-                validation_text = (
-                    f"before final liveness validation line {later_validation.line_number} "
-                    f"`{_line_excerpt(later_validation.line_text)}`"
-                    if later_validation else "without a nearby queue enabled/alive/not-terminated validation"
-                )
-                result.resource_validation_notes.append(
-                    f"{sym.file_path}::{sym.name} line {bind.line_number} binds real resource `{_line_excerpt(bind.line_text)}` "
-                    f"{validation_text}."
-                )
-                self._add_node(index, result, sym)
-                if len(result.resource_validation_notes) >= 12:
-                    return
+            for helper in index.definitions.get(call, [])[:4]:
+                self._add_node(index, result, helper)
 
     def _detect_async_event_order(self, index, result, target_syms):
         event_family = {"fault", "irq", "interrupt", "event"}
@@ -3107,7 +3283,8 @@ class PartialCandidateDetector:
             )
             result.fault_clear_order_notes.append(
                 f"{sym.file_path}::{sym.name} line {clear_line[0]} clears/acks fault state "
-                f"`{_line_excerpt(clear_line[1])}` before {note_tail} has visible handled confirmation or serialization."
+                f"`{_line_excerpt(clear_line[1])}` before {note_tail} has visible handled confirmation or serialization; "
+                "repeated faults can be re-armed before deferred handling drains."
             )
             self._add_node(index, result, sym)
             if worker:
@@ -3172,11 +3349,21 @@ class PartialCandidateDetector:
             ), None)
             if not failure or not free_line:
                 continue
-            prior_erase = any(
-                line_no < free_line[0] and re.search(r"\b(?:rb_erase|list_del|start_pfn\s*=\s*0|rblink.*NULL|RB_CLEAR)\b", line, re.IGNORECASE)
-                for line_no, line in lines
+            path_window = "\n".join(
+                line for line_no, line in lines
+                if min(failure[0], free_line[0]) <= line_no <= max(failure[0], free_line[0])
             )
-            if prior_erase:
+            exact_replacement_path = re.search(
+                r"\b(?:ENOMEM|replace|replacement|exact|descriptor|alloc|merge)\b",
+                path_window,
+                re.IGNORECASE,
+            )
+            path_erase = re.search(
+                r"\b(?:rb_erase|list_del|start_pfn\s*=\s*0|rblink.*NULL|RB_CLEAR)\b",
+                path_window,
+                re.IGNORECASE,
+            )
+            if path_erase or not exact_replacement_path:
                 continue
             result.region_replace_erase_notes.append(
                 f"{sym.file_path}::{sym.name} line {failure[0]} enters replacement/failure path "
@@ -3192,6 +3379,11 @@ class PartialCandidateDetector:
 
     def _detect_metadata_type_confusion(self, index, result, target_syms):
         for sym in target_syms:
+            direct = self._detect_direct_page_private_metadata_cast(index, result, sym)
+            if direct:
+                if len(result.metadata_type_confusion_notes) >= 10:
+                    return
+                continue
             casts = _symbol_cast_facts(index, sym)
             if not casts:
                 continue
@@ -3223,6 +3415,40 @@ class PartialCandidateDetector:
                 self._add_node(index, result, sym)
                 if len(result.metadata_type_confusion_notes) >= 10:
                     return
+
+    def _detect_direct_page_private_metadata_cast(self, index, result, sym: SymbolDef) -> bool:
+        lines = self._lines(sym)
+        for line_no, line in lines:
+            if not (
+                re.search(r"\bpage_private\s*\(", line)
+                and re.search(r"\bkbase_page_metadata\b|page_metadata", line)
+                and re.search(r"\(\s*(?:struct\s+)?[A-Za-z_]*page_metadata[A-Za-z0-9_\s]*\*", line)
+            ):
+                continue
+            match = re.search(r"(?:struct\s+\w+\s*\*\s*)?(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            target = match.group("target") if match else ""
+            deref = next((
+                (later_no, later) for later_no, later in lines
+                if 0 < later_no - line_no <= 14
+                and target
+                and re.search(r"\b" + re.escape(target) + r"\s*(?:->|\.)", later)
+            ), None)
+            if not deref:
+                continue
+            context_text = "\n".join(
+                later for later_no, later in lines
+                if max(sym.line_number, line_no - 10) <= later_no <= line_no + 18
+            )
+            if not re.search(r"\b(?:huge|2mb|2m|migration|recover|recovery|dma_addr_t|page_private|compound)\b", context_text, re.IGNORECASE):
+                continue
+            result.metadata_type_confusion_notes.append(
+                f"{sym.file_path}::{sym.name} line {line_no} casts opaque page_private metadata "
+                f"`{_line_excerpt(line)}` to page metadata and dereferences `{target}` at line "
+                f"{deref[0]} `{_line_excerpt(deref[1])}` without proving the private value has that type."
+            )
+            self._add_node(index, result, sym)
+            return True
+        return False
 
     def _detect_pm_runtime_sequence(self, index, result, target_syms):
         for sym in target_syms:
@@ -3277,6 +3503,11 @@ class PartialCandidateDetector:
                     return
 
     def _detect_pm_callback_order(self, index, result, target_syms):
+        power_owner = [
+            sym for sym in target_syms
+            if re.search(r"pm_callback_power_(?:on|off)", sym.name, re.IGNORECASE)
+            and re.search(r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(", self._body_text(sym), re.IGNORECASE)
+        ]
         for sym in target_syms:
             name_l = sym.name.lower()
             if not (
@@ -3298,6 +3529,19 @@ class PartialCandidateDetector:
             if not power_lines:
                 continue
             first_power = power_lines[0]
+            if "runtime" in name_l and power_owner:
+                owner_names = ", ".join(f"{owner.file_path}::{owner.name}" for owner in power_owner[:2])
+                result.pm_callback_order_notes.append(
+                    f"{sym.file_path}::{sym.name} line {first_power[0]} performs runtime-callback GPU power-control "
+                    f"`{_line_excerpt(first_power[1])}` while power callback path(s) {owner_names} also own "
+                    "GPU power-control transitions; this creates an extra unsynchronized runtime power-control path."
+                )
+                self._add_node(index, result, sym)
+                for owner in power_owner[:2]:
+                    self._add_node(index, result, owner)
+                if len(result.pm_callback_order_notes) >= 8:
+                    return
+                continue
             if "enable_gpu_power_control" in first_power[1] and (not runtime_get or first_power[0] < runtime_get[0]):
                 result.pm_callback_order_notes.append(
                     f"{sym.file_path}::{sym.name} line {first_power[0]} enables GPU power control "
@@ -3325,6 +3569,10 @@ class PartialCandidateDetector:
         for sym in target_syms:
             if not _name_has_any(sym.name, {"slot", "atom", "job", "sched", "queue"}):
                 continue
+            if self._detect_head_next_priority_omission(index, result, sym):
+                if len(result.secondary_omission_notes) >= 8:
+                    return
+                continue
             events = _symbol_event_facts(index, sym)
             firsts = [event for event in events if event.kind == "slot_first"]
             seconds = [event for event in events if event.kind == "slot_second"]
@@ -3346,6 +3594,33 @@ class PartialCandidateDetector:
                 self._add_node(index, result, sym)
                 if len(result.secondary_omission_notes) >= 8:
                     return
+
+    def _detect_head_next_priority_omission(self, index, result, sym: SymbolDef) -> bool:
+        body = self._body_text(sym)[:16000]
+        if not re.search(r"\b(?:JS_HEAD|HEAD_NEXT|head_next|slot|soft_hard_stop|reset|stop)\b", f"{sym.name} {body}", re.IGNORECASE):
+            return False
+        if not re.search(r"\b(?:prio|priority)\b", body, re.IGNORECASE):
+            return False
+        lines = self._lines(sym)
+        head_line = next(((line_no, line) for line_no, line in lines if re.search(r"\b(?:JS_HEAD|head)\b", line, re.IGNORECASE)), None)
+        next_line = next(((line_no, line) for line_no, line in lines if re.search(r"\b(?:JS_HEAD_NEXT|HEAD_NEXT|next)\b", line, re.IGNORECASE)), None)
+        skip_line = next((
+            (line_no, line) for line_no, line in lines
+            if re.search(r"\b(?:prio|priority)\b", line, re.IGNORECASE)
+            and re.search(r"\b(?:return|continue|break|goto)\b|!=|<|>", line)
+        ), None)
+        if not head_line or not skip_line:
+            return False
+        if next_line and next_line[0] < skip_line[0]:
+            return False
+        result.secondary_omission_notes.append(
+            f"{sym.file_path}::{sym.name} processes job-slot head at line {head_line[0]} "
+            f"`{_line_excerpt(head_line[1])}`, then priority branch line {skip_line[0]} "
+            f"`{_line_excerpt(skip_line[1])}` can leave before JS_HEAD_NEXT/next-atom handling"
+            f"{' at line ' + str(next_line[0]) if next_line else ''}."
+        )
+        self._add_node(index, result, sym)
+        return True
 
     def _detect_zero_count_underflow(self, index, result, target_syms):
         for sym in target_syms:
@@ -3369,6 +3644,307 @@ class PartialCandidateDetector:
                 self._add_node(index, result, sym)
                 if len(result.zero_count_underflow_notes) >= 8:
                     return
+
+    def _detect_owner_liveness_allocation(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not re.search(r"\b(?:mem_pool|pool|grow|alloc_pages)\b", text, re.IGNORECASE):
+                continue
+            if not (_POOL_ALLOC_RE.search(text) and re.search(r"\b(?:for|while|do\s*\{)\b", text)):
+                continue
+            if not re.search(r"\b(?:kctx|current|task|process|user|oom|dying|worker|workqueue|owner)\b", text, re.IGNORECASE):
+                continue
+            if _OWNER_LIVENESS_RE.search(text):
+                continue
+            lines = self._lines(sym)
+            alloc_line = next(((line_no, line) for line_no, line in lines if _POOL_ALLOC_RE.search(line)), None)
+            loop_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:for|while|do)\b", line)
+                and re.search(r"\b(?:page|pool|alloc|grow)\b", line, re.IGNORECASE)
+            ), None)
+            if not alloc_line:
+                continue
+            result.owner_liveness_notes.append(
+                f"{sym.file_path}::{sym.name} line {alloc_line[0]} performs page/pool allocation "
+                f"`{_line_excerpt(alloc_line[1])}` in a growth/allocation loop without a visible owner-task "
+                f"exiting/OOM/fatal-signal bailout"
+                f"{' near loop line ' + str(loop_line[0]) + ' `' + _line_excerpt(loop_line[1]) + '`' if loop_line else ''}."
+            )
+            self._add_node(index, result, sym)
+            if len(result.owner_liveness_notes) >= 8:
+                return
+
+    def _detect_user_buffer_permission(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not (_USER_BUFFER_RE.search(text) and _GUP_RE.search(text) and _GPU_WRITE_FLAG_RE.search(text)):
+                continue
+            if not _name_has_any(sym.name, {"user", "buffer", "import", "from_user", "mem"}):
+                continue
+            lines = self._lines(sym)
+            gup_line = next(((line_no, line) for line_no, line in lines if _GUP_RE.search(line)), None)
+            flag_line = next(((line_no, line) for line_no, line in lines if _GPU_WRITE_FLAG_RE.search(line)), None)
+            if not gup_line:
+                continue
+            prior = "\n".join(line for line_no, line in lines if line_no <= gup_line[0])
+            has_cpu_write_gate = re.search(
+                r"\b(?:KBASE_REG_CPU_WR|CPU_WR|FOLL_WRITE|writeable|writable|VM_WRITE)\b",
+                prior,
+                re.IGNORECASE,
+            )
+            has_gpu_only_gate = re.search(r"\b(?:KBASE_REG_GPU_WR|GPU_WR|gpu_wr|GPU.*WRITE)\b", prior, re.IGNORECASE)
+            if has_cpu_write_gate and not has_gpu_only_gate:
+                continue
+            result.user_buffer_permission_notes.append(
+                f"{sym.file_path}::{sym.name} line {gup_line[0]} pins/imports USER_BUFFER pages "
+                f"`{_line_excerpt(gup_line[1])}` while permission logic uses GPU-write semantics"
+                f"{' at line ' + str(flag_line[0]) + ' `' + _line_excerpt(flag_line[1]) + '`' if flag_line else ''}; "
+                "the target path lacks a clear CPU-write/FOLL_WRITE provenance gate before user pages become writable."
+            )
+            self._add_node(index, result, sym)
+            if len(result.user_buffer_permission_notes) >= 8:
+                return
+
+    def _detect_zone_shrink_validation(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not _ZONE_SHRINK_RE.search(text):
+                continue
+            if not re.search(r"\b(?:init_jit|init_exec|region_tracker_init|jit|exec|zone)\b", text, re.IGNORECASE):
+                continue
+            if not re.search(r"\b(?:shrink|split|resize|trim|replace)\b", text, re.IGNORECASE):
+                continue
+            if re.search(r"\b(?:entire(?:ly)?\s+free|fully\s+free|zone.*free.*check|overlap.*check|is_region_free)\b", text, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            shrink_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:shrink|split|resize|trim|replace|zone)\b", line, re.IGNORECASE)
+            ), None)
+            if not shrink_line:
+                continue
+            imported_context = re.search(r"\b(?:imported|dma_buf|user_buffer|same_va|overlap|mapping)\b", text, re.IGNORECASE)
+            result.zone_shrink_notes.append(
+                f"{sym.file_path}::{sym.name} line {shrink_line[0]} shrinks/splits an existing VA zone "
+                f"`{_line_excerpt(shrink_line[1])}` without a visible validation that the source zone is still entirely free"
+                f"{' while imported/user-buffer overlap tokens are in scope' if imported_context else ''}."
+            )
+            self._add_node(index, result, sym)
+            if len(result.zone_shrink_notes) >= 8:
+                return
+
+    def _detect_success_path_cleanup(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not (re.search(r"\breq_arr\b", text) and _SUCCESS_FD_RE.search(text)):
+                continue
+            lines = self._lines(sym)
+            alloc_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\breq_arr\b", line)
+                and re.search(r"\b(?:alloc|calloc|kmalloc|kcalloc|kvmalloc|vzalloc)\b", line)
+            ), None)
+            fd_line = next(((line_no, line) for line_no, line in lines if re.search(r"\banon_inode_getfd\s*\(", line)), None)
+            if not alloc_line or not fd_line:
+                continue
+            return_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no > fd_line[0]
+                and line_no - fd_line[0] <= 24
+                and re.search(r"\breturn\s+(?:fd|ret|[A-Za-z_][A-Za-z0-9_]*)\b", line)
+            ), None)
+            if not return_line:
+                continue
+            between = "\n".join(line for line_no, line in lines if fd_line[0] <= line_no <= return_line[0])
+            if re.search(r"\b(?:kfree|kvfree|vfree|free)\s*\(\s*req_arr\b|goto\s+free_buf", between):
+                continue
+            result.success_path_cleanup_notes.append(
+                f"{sym.file_path}::{sym.name} allocates temporary `req_arr` at line {alloc_line[0]} "
+                f"`{_line_excerpt(alloc_line[1])}`, then success path line {return_line[0]} "
+                f"`{_line_excerpt(return_line[1])}` returns after anon_inode_getfd line {fd_line[0]} without freeing it."
+            )
+            self._add_node(index, result, sym)
+            if len(result.success_path_cleanup_notes) >= 8:
+                return
+
+    def _detect_jit_lock_protocol(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        target_uniques = {_symbol_unique_name(target) for target in target_syms}
+        jit_companions = [
+            sym for sym in context_syms
+            if _symbol_unique_name(sym) not in target_uniques
+            and _JIT_STATE_RE.search(f"{sym.name} {self._body_text(sym)[:8000]}")
+        ][:40]
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not _JIT_STATE_RE.search(text):
+                continue
+            if not re.search(r"\b(?:allocate|alloc|free|process|finish|allow)\b", text, re.IGNORECASE):
+                continue
+            if not re.search(r"\b(?:list_add|list_del|limit|usage|count|evict|pool|alloc)\b", text, re.IGNORECASE):
+                continue
+            locks = _symbol_locks(index, sym)
+            has_jit_lock = any(
+                re.search(r"\b(?:jit|kctx|ctx|csf).*(?:lock|mutex)|(?:lock|mutex).*(?:jit|kctx|ctx|csf)\b", lock)
+                for lock in locks
+            )
+            if has_jit_lock:
+                continue
+            companion = next((
+                candidate for candidate in jit_companions
+                if bool(re.search(r"\bfree\b", candidate.name, re.IGNORECASE)) != bool(re.search(r"\bfree\b", sym.name, re.IGNORECASE))
+            ), jit_companions[0] if jit_companions else None)
+            state_line = next((
+                (line_no, line) for line_no, line in self._lines(sym)
+                if re.search(r"\b(?:jit|list_add|list_del|limit|usage|alloc|free|evict)\b", line, re.IGNORECASE)
+            ), None)
+            if not state_line:
+                continue
+            result.jit_lock_protocol_notes.append(
+                f"{sym.file_path}::{sym.name} line {state_line[0]} updates shared JIT state "
+                f"`{_line_excerpt(state_line[1])}` without a visible context-wide JIT lock"
+                f"{' while companion path ' + companion.file_path + '::' + companion.name + ' also mutates JIT state' if companion else ''}."
+            )
+            self._add_node(index, result, sym)
+            if companion:
+                self._add_node(index, result, companion)
+            if len(result.jit_lock_protocol_notes) >= 8:
+                return
+
+    def _detect_teardown_order(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
+        schedule_companion = next((
+            sym for sym in context_syms
+            if re.search(
+                r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|address.*space)\b",
+                f"{sym.name} {self._body_text(sym)[:8000]}",
+                re.IGNORECASE,
+            )
+        ), None)
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not _TEARDOWN_ORDER_RE.search(text):
+                continue
+            if not re.search(r"\b(?:term|teardown|destroy|free|release|region_tracker|mmu)\b", text, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            free_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:region_tracker_term|kbase_mmu_term|free.*region|kbase_free_alloced_region|rb_erase|mmu.*term)\b", line, re.IGNORECASE)
+            ), None)
+            if not free_line:
+                continue
+            schedule_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|mmu_disable|address.*space)\b", line, re.IGNORECASE)
+            ), None)
+            if schedule_line and schedule_line[0] < free_line[0]:
+                continue
+            result.teardown_order_notes.append(
+                f"{sym.file_path}::{sym.name} line {free_line[0]} tears down VA/MMU resources "
+                f"`{_line_excerpt(free_line[1])}` before a visible schedule-out/address-space-disable point"
+                f"{' (later line ' + str(schedule_line[0]) + ' `' + _line_excerpt(schedule_line[1]) + '`)' if schedule_line else ''}"
+                f"{' shown in companion ' + schedule_companion.file_path + '::' + schedule_companion.name if schedule_companion and not schedule_line else ''}."
+            )
+            self._add_node(index, result, sym)
+            if schedule_companion:
+                self._add_node(index, result, schedule_companion)
+            if len(result.teardown_order_notes) >= 8:
+                return
+
+    def _detect_queue_publish_init(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not (_QUEUE_PUBLISH_RE.search(text) and _name_has_any(sym.name, {"queue", "new", "create", "alloc"})):
+                continue
+            lines = self._lines(sym)
+            publish_line = next((
+                (line_no, line) for line_no, line in lines
+                if _QUEUE_PUBLISH_RE.search(line)
+                and re.search(r"\b(?:=|set_bit|bitmap_set|atomic_set)\b", line)
+            ), None)
+            if not publish_line:
+                continue
+            fail_line = next((
+                (line_no, line) for line_no, line in lines
+                if line_no > publish_line[0]
+                and line_no - publish_line[0] <= 90
+                and _ERROR_PATH_RE.search(line)
+            ), None)
+            if not fail_line:
+                continue
+            unwind = "\n".join(line for line_no, line in lines if publish_line[0] < line_no < fail_line[0])
+            if re.search(r"\b(?:clear_bit|bitmap_clear|array.*=\s*NULL|in_use.*=\s*0|queue.*=\s*NULL)\b", unwind, re.IGNORECASE):
+                continue
+            result.queue_publish_init_notes.append(
+                f"{sym.file_path}::{sym.name} line {publish_line[0]} publishes queue pointer/in-use state "
+                f"`{_line_excerpt(publish_line[1])}` before full initialization; failure path line {fail_line[0]} "
+                f"`{_line_excerpt(fail_line[1])}` lacks visible pointer/bit rollback."
+            )
+            self._add_node(index, result, sym)
+            if len(result.queue_publish_init_notes) >= 8:
+                return
+
+    def _detect_fd_reuse_race(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not re.search(r"\b(?:sync_fence|fence|fd)\b", text, re.IGNORECASE):
+                continue
+            if not (_SUCCESS_FD_RE.search(text) and re.search(r"\b(?:fd_install|copy_to_user|return\s+fd|put_user)\b", text, re.IGNORECASE)):
+                continue
+            lines = self._lines(sym)
+            publish_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:fd_install|copy_to_user|put_user|return\s+fd)\b", line, re.IGNORECASE)
+            ), None)
+            lookup_line = next((
+                (line_no, line) for line_no, line in lines
+                if publish_line
+                and line_no > publish_line[0]
+                and re.search(r"\b(?:sync_fence_fdget|fdget|fget)\s*\(", line)
+            ), None)
+            if not publish_line or not lookup_line:
+                continue
+            result.fd_reuse_notes.append(
+                f"{sym.file_path}::{sym.name} publishes fd at line {publish_line[0]} "
+                f"`{_line_excerpt(publish_line[1])}`, then re-looks up an fd at line {lookup_line[0]} "
+                f"`{_line_excerpt(lookup_line[1])}`; descriptor reuse can bind later trigger/cleanup to the wrong fence."
+            )
+            self._add_node(index, result, sym)
+            if len(result.fd_reuse_notes) >= 8:
+                return
+
+    def _detect_debugfs_permission(self, index, result, target_syms):
+        for sym in target_syms:
+            text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
+            if not _DEBUGFS_AUTH_RE.search(text):
+                continue
+            if not re.search(r"\b(?:debugfs|timeline|tlstream|profil)\b", text, re.IGNORECASE):
+                continue
+            lines = self._lines(sym)
+            create_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\bdebugfs_create_file\s*\(", line)
+                and re.search(r"\b(?:0444|S_IRUGO|S_IROTH|S_IRUSR\s*\|\s*S_IRGRP\s*\|\s*S_IROTH)\b", line)
+            ), None)
+            acquire_line = next((
+                (line_no, line) for line_no, line in lines
+                if re.search(r"\b(?:\w*timeline_io_acquire|tlstream\w*|profil\w*)\s*\(", line, re.IGNORECASE)
+            ), None)
+            if not create_line and not acquire_line:
+                continue
+            prior = "\n".join(line for line_no, line in lines if not acquire_line or line_no <= acquire_line[0])
+            if re.search(r"\b(?:capable|ptrace_may_access|uid_eq|permission|0600|S_IWUSR)\b", prior, re.IGNORECASE):
+                continue
+            line_no, line = acquire_line or create_line
+            result.debugfs_permission_notes.append(
+                f"{sym.file_path}::{sym.name} line {line_no} exposes/acquires debugfs profiling stream "
+                f"`{_line_excerpt(line)}` without a visible capability/owner permission check on the target path."
+            )
+            self._add_node(index, result, sym)
+            if len(result.debugfs_permission_notes) >= 8:
+                return
 
     def _detect_interprocedural_cleanup_ledger(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
@@ -3445,15 +4021,31 @@ class PartialCandidateDetector:
                 sinks.append(sym)
         if not sources or not sinks:
             return
+        sinks = sorted(sinks[:40], key=lambda sym: (
+            0 if _name_has_any(sym.name, {"delete", "drain", "process", "kcpu", "cleanup"}) else 1,
+            sym.file_path,
+            sym.line_number,
+        ))
         for sink in sinks[:24]:
             sink_body = self._body_text(sink)[:16000]
             branch_line = next((
                 (line_no, line) for line_no, line in self._lines(sink)
-                if re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete|cleanup|release|wait)\b", line)
+                if re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete_queue|kcpu_queue_process|delete|cleanup|release|wait)\b", line)
             ), None)
             if not branch_line:
                 continue
-            if _SUSPEND_RELEASE_RE.search(sink_body):
+            sink_lines = self._lines(sink)
+            branch_window = "\n".join(
+                line for line_no, line in sink_lines
+                if branch_line[0] <= line_no <= branch_line[0] + 70
+            )
+            if _SUSPEND_RELEASE_RE.search(branch_window):
+                continue
+            branch_tokens = _fact_tokens(f"{sink.name} {branch_line[1]} {sink_body[:4000]}")
+            if not (
+                branch_tokens & {"drain_queue", "drain", "group_suspend", "cqs_wait", "suspend", "queue", "wait"}
+                or re.search(r"\b(?:GROUP_SUSPEND|CQS_WAIT|drain_queue|delete_queue|kcpu_queue_process)\b", branch_window)
+            ):
                 continue
             for source in sources[:24]:
                 if _symbol_unique_name(source) == _symbol_unique_name(sink):
@@ -3467,8 +4059,8 @@ class PartialCandidateDetector:
                 result.suspend_cleanup_ledger_notes.append(
                     f"{sink.file_path}::{sink.name} line {branch_line[0]} owns branch-specific suspend cleanup "
                     f"`{_line_excerpt(branch_line[1])}` for resources prepared in "
-                    f"{source.file_path}::{source.name}, but this cleanup path has no visible put_page/"
-                    "unpin_user_pages/kbase_mem_phy_alloc_put/kbase_mem_phy_alloc_kernel_unmapped release."
+                    f"{source.file_path}::{source.name}, but the selected drain/CQS/GROUP_SUSPEND delete path has no visible "
+                    "put_page/unpin_user_pages/kbase_mem_phy_alloc_put/kbase_mem_phy_alloc_kernel_unmapped release."
                 )
                 self._add_node(index, result, sink)
                 self._add_node(index, result, source)
@@ -3483,7 +4075,8 @@ class PartialCandidateDetector:
         for sym in context_syms:
             for line_no, line in self._lines(sym):
                 if not re.search(
-                    r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|normal_suspend_buf|sus_buf|nr_pages|phy\s*\[|copy)\b",
+                    r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|normal_suspend_buf|sus_buf|nr_pages|phy\s*\[|copy|"
+                    r"group_copy_suspend_buf|suspend_buf)\b",
                     line,
                     re.IGNORECASE,
                 ):
@@ -3493,6 +4086,11 @@ class PartialCandidateDetector:
                     consumers.append((sym, line_no, line))
         if not consumers:
             return
+        consumers = sorted(consumers, key=lambda item: (
+            0 if re.search(r"\b(?:group_copy_suspend_buf|normal_suspend_buf|PFN_UP|phy\s*\[)\b", f"{item[0].name} {item[2]}", re.IGNORECASE) else 1,
+            item[0].file_path,
+            item[1],
+        ))
         for producer in context_syms:
             if producer.file_path not in target_files and not _name_has_any(producer.name, {"suspend", "queue", "group"}):
                 continue
@@ -3514,11 +4112,15 @@ class PartialCandidateDetector:
                         continue
                     if producer.file_path not in target_files and consumer.file_path not in target_files:
                         continue
+                    exact_page_array_sink = bool(
+                        re.search(r"(PFN_UP|normal_suspend_buf|phy\s*\[)", consumer_text, re.IGNORECASE)
+                    )
                     result.suspend_size_sink_notes.append(
                         f"{producer.file_path}::{producer.name} line {assign.line_number} propagates suspend size/page "
                         f"state `{_line_excerpt(assign.line_text)}` without a visible upper bound; "
                         f"{consumer.file_path}::{consumer.name} later consumes the derived suspend extent at line "
-                        f"{consumer_line} `{_line_excerpt(consumer_text)}`."
+                        f"{consumer_line} `{_line_excerpt(consumer_text)}`"
+                        f"{' using PFN_UP/normal_suspend_buf.phy-style page-array indexing' if exact_page_array_sink else ''}."
                     )
                     self._add_node(index, result, producer)
                     self._add_node(index, result, consumer)
@@ -3645,15 +4247,26 @@ class PartialCandidateDetector:
                 if "mul" in formula.operators
                 and {"nents", "stride"} <= (_fact_tokens(formula.expr) | set(formula.tokens))
             ), None)
+            extent_line = None
             if not extent:
+                extent_line = next((
+                    (line_no, line) for line_no, line in self._lines(sym)
+                    if re.search(r"\b(?:num_pages|nr_pages|va_pages|extent|size)\b", line, re.IGNORECASE)
+                    and re.search(r"\bnents\b", line, re.IGNORECASE)
+                    and re.search(r"\bstride\b", line, re.IGNORECASE)
+                    and "*" in line
+                ), None)
+            if not extent and not extent_line:
                 continue
-            if self._has_formula_consistency_guard(guards, extent, extent.line_number + 24):
+            extent_number = extent.line_number if extent else extent_line[0]
+            extent_text = extent.line_text if extent else extent_line[1]
+            if extent and self._has_formula_consistency_guard(guards, extent, extent.line_number + 24):
                 continue
             reservation = next((
                 formula for formula in formulas
-                if formula.line_number > extent.line_number
+                if formula.line_number > extent_number
                 and {"pages", "region", "gpu_va"} & (set(formula.tokens) | _fact_tokens(formula.target))
-                and formula.normalized != extent.normalized
+                and (not extent or formula.normalized != extent.normalized)
             ), None)
             consumer = next((
                 item for item in consumers
@@ -3663,8 +4276,8 @@ class PartialCandidateDetector:
                 continue
             consumer_sym, consumer_line, consumer_text = consumer
             result.alias_extent_mismatch_notes.append(
-                f"{sym.file_path}::{sym.name} line {extent.line_number} derives alias extent "
-                f"`{extent.target} = {_short_expr(extent.expr)}` from nents*stride without a visible overflow/"
+                f"{sym.file_path}::{sym.name} line {extent_number} derives alias extent "
+                f"`{_line_excerpt(extent_text)}` from nents*stride without a visible overflow/"
                 f"consistency guard; "
                 f"{'reservation line ' + str(reservation.line_number) + ' `' + _line_excerpt(reservation.line_text) + '` and ' if reservation else ''}"
                 f"{consumer_sym.file_path}::{consumer_sym.name} consumes alias region/page extent at line "
@@ -3676,6 +4289,25 @@ class PartialCandidateDetector:
                 return
 
     def _detect_info_leaks(self, index, result, target_syms):
+        reporter_notes = []
+        for sym in target_syms:
+            if not re.search(r"\b(?:report_bus_fault|bus_fault|fault_and_kill)\b", sym.name, re.IGNORECASE):
+                continue
+            for line_no, line in self._lines(sym):
+                if not (_LOG_CALL_RE.search(line) and _BUS_FAULT_REPORT_RE.search(f"{sym.name} {line}")):
+                    continue
+                if not (_SENSITIVE_FORMAT_RE.search(line) or re.search(r"\b(?:PA|phys|physical|fault->addr|fault\.addr)\b", line)):
+                    continue
+                reporter_notes.append((
+                    sym,
+                    f"{sym.file_path}::{sym.name} line {line_no} logs hardware-supplied bus-fault physical address "
+                    f"`{_line_excerpt(line)}`; bus/cacheability/shareability fault reporters should not expose PA/fault->addr."
+                ))
+        if reporter_notes:
+            for sym, note in reporter_notes[:8]:
+                result.info_leak_notes.append(note)
+                self._add_node(index, result, sym)
+            return
         for sym in target_syms:
             for line_no, line in self._lines(sym):
                 if not _LOG_CALL_RE.search(line):
@@ -4178,11 +4810,18 @@ class PartialCandidateDetector:
 
     def _detect_protected_mmu_protocol(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
+        target_uniques = {_symbol_unique_name(target) for target in target_syms}
         companion_mmu = [
             sym for sym in context_syms
-            if sym.file_path not in {target.file_path for target in target_syms}
-            and "mmu" in _symbol_state_tokens(index, sym)
-            and any(self._is_mmu_serialization_lock(lock) for lock in _symbol_locks(index, sym))
+            if _symbol_unique_name(sym) not in target_uniques
+            and (
+                "mmu" in _symbol_state_tokens(index, sym)
+                or re.search(r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b", self._body_text(sym)[:8000], re.IGNORECASE)
+            )
+            and (
+                any(self._is_mmu_serialization_lock(lock) for lock in _symbol_locks(index, sym))
+                or re.search(r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b", self._body_text(sym)[:8000], re.IGNORECASE)
+            )
         ][:40]
         if not companion_mmu:
             return
@@ -4195,29 +4834,44 @@ class PartialCandidateDetector:
                 or "protected" in name_l
                 or "wait_protected_mode_enter" in name_l
                 or "protected_mode_enter" in name_l
+                or "scheduler_group_check_protm_enter" in name_l
             ):
                 continue
             tokens = _symbol_state_tokens(index, sym)
-            if not ({"protected", "protm"} & tokens and tokens & _WAIT_ACK_TOKENS):
+            body = self._body_text(sym)[:16000]
+            if not ({"protected", "protm"} & (tokens | _fact_tokens(body))):
                 continue
             events = _symbol_event_facts(index, sym)
             waits = [event for event in events if event.kind == "protected_wait"]
-            if not waits:
+            wait_line = None
+            if waits:
+                wait_line = (waits[0].line_number, waits[0].line_text)
+            else:
+                wait_line = next((
+                    (line_no, line) for line_no, line in self._lines(sym)
+                    if re.search(r"\b(?:wait.*protected|protected.*wait|ack|completion|event|fence)\b", line, re.IGNORECASE)
+                ), None)
+            if not wait_line:
                 continue
             verifies = [event for event in events if event.kind == "protected_verify"]
             sym_locks = _symbol_locks(index, sym)
             companion = self._best_protocol_companion(index, sym, companion_mmu) or companion_mmu[0]
             if not self._same_protocol_area(sym, companion):
                 continue
-            companion_locks = _symbol_locks(index, companion)
+            companion_locks = set(_symbol_locks(index, companion))
+            if re.search(r"\bmmu_hw_mutex\b", self._body_text(companion)[:8000], re.IGNORECASE):
+                companion_locks.add("mmu_hw_mutex")
             mmu_locks = {lock for lock in companion_locks if self._is_mmu_serialization_lock(lock)}
             missing_mmu_lock = bool(mmu_locks and not (sym_locks & mmu_locks))
-            missing_verify = not any(0 < verify.line_number - waits[0].line_number <= 24 for verify in verifies)
+            missing_verify = not any(0 < verify.line_number - wait_line[0] <= 24 for verify in verifies)
+            if not missing_verify:
+                later = "\n".join(line for line_no, line in self._lines(sym) if wait_line[0] < line_no <= wait_line[0] + 24)
+                missing_verify = not re.search(r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b", later, re.IGNORECASE)
             if not (missing_mmu_lock and missing_verify):
                 continue
             result.protected_mmu_notes.append(
-                f"{sym.file_path}::{sym.name} line {waits[0].line_number} enters/waits for protected mode "
-                f"`{_line_excerpt(waits[0].line_text)}` while companion MMU path {companion.file_path}::{companion.name} "
+                f"{sym.file_path}::{sym.name} line {wait_line[0]} enters/waits for protected mode "
+                f"`{_line_excerpt(wait_line[1])}` while companion MMU path {companion.file_path}::{companion.name} "
                 f"uses MMU serialization lock(s) {', '.join(sorted(mmu_locks)[:3])}; target lock coverage "
                 f"{sorted(sym_locks)[:3] or ['(none)']} and final protected-active verification are insufficient."
             )
@@ -4271,7 +4925,8 @@ class PartialCandidateDetector:
         lock_l = str(lock or "").lower()
         return bool(re.search(r"\bmmu\b|mmu_.*mutex|hw_mutex|mmu\.lock|mmu_lock", lock_l))
 
-    def _detect_mmu_recovery_rollback(self, index, result, target_syms):
+    def _detect_mmu_recovery_rollback(self, index, result, target_syms, context):
+        context_syms = self._context_symbols(index, context, target_syms)
         for sym in target_syms:
             name_tokens = _fact_tokens(sym.name)
             if not ({"mmu", "recovery", "rollback", "insert"} & name_tokens):
@@ -4299,15 +4954,37 @@ class PartialCandidateDetector:
             )
             if not mismatch:
                 continue
+            caller = self._advanced_phys_pointer_caller(index, sym, context_syms)
+            caller_suffix = ""
+            if caller:
+                caller_sym, caller_line, caller_text = caller
+                caller_suffix = (
+                    f" Caller {caller_sym.file_path}::{caller_sym.name} line {caller_line} passes an advanced "
+                    f"phys/base pointer `{_line_excerpt(caller_text)}`, so rollback uses the wrong base."
+                )
             result.mmu_recovery_notes.append(
                 f"{sym.file_path}::{sym.name} recovery loop line {loop_line[0]} `{_line_excerpt(loop_line[1])}` "
                 f"uses rollback/page bounds that are not visibly tied to phys-base adjustment"
                 f"{' line ' + str(phys_formula.line_number) + ' `' + _line_excerpt(phys_formula.line_text) + '`' if phys_formula else ''}; "
                 f"recovery action line {action_line[0]} `{_line_excerpt(action_line[1])}` may unmap/write/free the wrong rollback range."
+                f"{caller_suffix}"
             )
             self._add_node(index, result, sym)
+            if caller:
+                self._add_node(index, result, caller[0])
             if len(result.mmu_recovery_notes) >= 8:
                 return
+
+    def _advanced_phys_pointer_caller(self, index: SymbolIndex, callee: SymbolDef, context_syms: list[SymbolDef]):
+        for sym in context_syms[:120]:
+            if _symbol_unique_name(sym) == _symbol_unique_name(callee):
+                continue
+            for line_no, line in self._lines(sym):
+                if not re.search(r"\b" + re.escape(callee.name) + r"\s*\(", line):
+                    continue
+                if re.search(r"\b(?:phys|pfn|base)\s*(?:\+|\+=|\+\+)|&\s*(?:phys|pfn|base)\s*\[|(?:phys|pfn|base)\s*\+\s*(?:nr|count|pages|inserted|i)\b", line, re.IGNORECASE):
+                    return sym, line_no, line
+        return None
 
     def _detect_policy_gate_before_sink(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
@@ -4409,16 +5086,22 @@ class PartialCandidateDetector:
 
     def _detect_imported_mapping_policy(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
+        target_files = {target.file_path for target in target_syms}
+        context_provenance: set[str] = set()
+        for ctx_sym in context_syms[:120]:
+            ctx_text = f"{ctx_sym.name} {ctx_sym.signature} {self._body_text(ctx_sym)[:8000]}"
+            context_provenance.update(_domain_root_tokens(ctx_text))
+            context_provenance.update(_fact_tokens(ctx_text) & {"imported", "same_va", "same", "va", "dma", "buf", "umm", "protected", "native"})
         companion = next((
             sym for sym in context_syms
-            if sym.file_path not in {target.file_path for target in target_syms}
+            if sym.file_path not in target_files
             and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}") & {"imported", "same_va", "dma", "umm", "native"}
         ), None)
         for sym in target_syms:
             body = self._body_text(sym)[:18000]
             text = f"{sym.name} {sym.signature} {body}"
             tokens = _fact_tokens(text)
-            provenance = tokens & (_MAPPING_POLICY_WORDS | {"same", "va", "dma", "buf", "type"})
+            provenance = (tokens | context_provenance) & (_MAPPING_POLICY_WORDS | {"same", "va", "dma", "buf", "type"})
             if not ({"imported", "protected"} & provenance or {"dma", "buf"} <= provenance or {"same", "va"} <= provenance):
                 continue
             if not (provenance & {"native", "imported", "protected", "umm", "dma", "buf", "same", "va"}):
@@ -4427,7 +5110,7 @@ class PartialCandidateDetector:
                 (line_no, line) for line_no, line in self._lines(sym)
                 if re.search(
                     r"\b(?:vmap_prot|vmap|kmap|mmap|vm_fault|vm_insert_pfn|vmf_insert_pfn|"
-                    r"remap_pfn_range|copy_to_user|copy_from_user|softjob|kcpu)\b",
+                    r"remap_pfn_range|copy_to_user|copy_from_user|softjob|kcpu|cpu_vm_fault|reg_mmap|context_mmap)\b",
                     line,
                     re.IGNORECASE,
                 )
@@ -4435,7 +5118,8 @@ class PartialCandidateDetector:
             if not sink_line:
                 continue
             prior = "\n".join(line for line_no, line in self._lines(sym) if line_no <= sink_line[0])
-            if re.search(r"\b(?:KBASE_MEM_TYPE_NATIVE|MEM_TYPE_NATIVE|native)\b", prior, re.IGNORECASE):
+            has_native_gate = re.search(r"\b(?:KBASE_MEM_TYPE_NATIVE|MEM_TYPE_NATIVE)\b", prior, re.IGNORECASE)
+            if has_native_gate and re.search(r"\b(?:if|WARN_ON|BUG_ON|return|goto)\b", prior, re.IGNORECASE):
                 continue
             result.imported_mapping_policy_notes.append(
                 f"{sym.file_path}::{sym.name} line {sink_line[0]} reaches CPU mapping/access sink "
@@ -4454,6 +5138,33 @@ class PartialCandidateDetector:
             if not sentinels:
                 continue
             lines = self._lines(sym)
+            exact_phys_context = re.search(
+                r"\b(?:syncset|sync_set|mem_pool|pool|cache|flush|clean|invalidate|phys|dma)\b",
+                f"{sym.name} {self._body_text(sym)[:12000]}",
+                re.IGNORECASE,
+            )
+            if exact_phys_context:
+                for sentinel in sentinels[:8]:
+                    sentinel_text = f"{sentinel.expr} {sentinel.line_text}"
+                    if not re.search(r"\b(?:phys|phys_addr|dma|pfn|pa)\b", sentinel_text, re.IGNORECASE):
+                        continue
+                    downstream = next((
+                        (line_no, line) for line_no, line in lines
+                        if 0 < line_no - sentinel.line_number <= 24
+                        and re.search(r"\b(?:sync|cache|flush|clean|invalidate|pool|free|add|release|skip|page)\b", line, re.IGNORECASE)
+                    ), None)
+                    if not downstream:
+                        continue
+                    result.sentinel_misuse_notes.append(
+                        f"{sym.file_path}::{sym.name} line {sentinel.line_number} treats physical/DMA/PFN zero "
+                        f"`{_line_excerpt(sentinel.line_text)}` as not-present, controlling cache/pool/page action "
+                        f"line {downstream[0]} `{_line_excerpt(downstream[1])}` where address zero can be valid."
+                    )
+                    self._add_node(index, result, sym)
+                    if len(result.sentinel_misuse_notes) >= 8:
+                        return
+                if result.sentinel_misuse_notes:
+                    continue
             for sentinel in sentinels[:8]:
                 downstream = next((
                     (line_no, line) for line_no, line in lines
@@ -4649,6 +5360,42 @@ _PASS_FOCI = {
         "Zero-count underflow bugs: count/nr/num is used in count-1 or reverse scan logic without a nearby nonzero guard. "
         "Report the exact loop/index expression and missing zero-count validation."
     ),
+    "owner_liveness_allocation": (
+        "Owner-task liveness allocation bugs: page/pool growth loops allocate on behalf of a userspace owner without checking "
+        "exiting/OOM/fatal-signal liveness. Report the exact allocation loop and missing owner bailout; avoid generic loop leaks."
+    ),
+    "user_buffer_permission": (
+        "USER_BUFFER permission semantic bugs: get_user_pages/pin_user_pages import paths use GPU-write semantics where a "
+        "CPU-write/FOLL_WRITE provenance gate is required. Report the exact pin/import call and mismatched permission predicate."
+    ),
+    "zone_shrink_validation": (
+        "Region-zone shrink validation bugs: init/split/shrink paths reduce or replace a VA zone without proving the source "
+        "zone is still entirely free, especially with imported/user-buffer overlap context. Report the exact shrink statement."
+    ),
+    "success_path_cleanup": (
+        "Success-path temporary cleanup bugs: temporary buffers are allocated, an fd/resource is successfully installed, then "
+        "the success return bypasses the cleanup label/free. Report only exact temp-resource and success-return evidence."
+    ),
+    "jit_lock_protocol": (
+        "JIT lock protocol bugs: JIT allocate/free/process paths mutate shared JIT lists, limits, or pools from different queue "
+        "paths without a common context-wide JIT lock. Report exact shared-state updates and companion mutator evidence."
+    ),
+    "teardown_order": (
+        "Teardown-order bugs: VA regions or MMU tables are freed/terminated before the context is visibly scheduled out or "
+        "its address space is disabled. Report the exact teardown statement and missing prior disable/schedule-out."
+    ),
+    "queue_publish_init": (
+        "Queue publish-before-init bugs: queue pointers, array slots, or in-use bits are published before full initialization, "
+        "and a later failure path lacks pointer/bit rollback. Report exact publish and failure statements."
+    ),
+    "fd_reuse_race": (
+        "FD reuse race bugs: an fd is published to userspace and later re-looked-up for trigger/cleanup, allowing descriptor "
+        "reuse to bind the operation to the wrong object. Report exact publish and relookup statements."
+    ),
+    "debugfs_permission": (
+        "Debugfs/profiling authorization bugs: profiling/timeline debugfs streams are world-readable or acquired without a "
+        "capability/owner check. Report exact debugfs/acquire statement and missing permission gate."
+    ),
     "protected_mmu_protocol": (
         "Protected-mode/MMU protocol bugs: protected-mode enter/wait lacks the companion MMU serialization lock or final "
         "protected-active verification. Report the exact wait/enter statement and missing lock/verification."
@@ -4779,6 +5526,15 @@ class TargetedFileReviewer:
         named_lock_nodes = self._nodes_for_notes(detector_nodes, detector_result.named_lock_inversion_notes, cap=48)
         active_singleton_nodes = self._nodes_for_notes(detector_nodes, detector_result.active_singleton_stale_notes, cap=40)
         zero_count_nodes = self._nodes_for_notes(detector_nodes, detector_result.zero_count_underflow_notes, cap=24)
+        owner_liveness_nodes = self._nodes_for_notes(detector_nodes, detector_result.owner_liveness_notes, cap=32)
+        user_buffer_nodes = self._nodes_for_notes(detector_nodes, detector_result.user_buffer_permission_notes, cap=32)
+        zone_shrink_nodes = self._nodes_for_notes(detector_nodes, detector_result.zone_shrink_notes, cap=32)
+        success_cleanup_nodes = self._nodes_for_notes(detector_nodes, detector_result.success_path_cleanup_notes, cap=32)
+        jit_lock_nodes = self._nodes_for_notes(detector_nodes, detector_result.jit_lock_protocol_notes, cap=48)
+        teardown_order_nodes = self._nodes_for_notes(detector_nodes, detector_result.teardown_order_notes, cap=48)
+        queue_publish_nodes = self._nodes_for_notes(detector_nodes, detector_result.queue_publish_init_notes, cap=32)
+        fd_reuse_nodes = self._nodes_for_notes(detector_nodes, detector_result.fd_reuse_notes, cap=32)
+        debugfs_nodes = self._nodes_for_notes(detector_nodes, detector_result.debugfs_permission_notes, cap=32)
         lock_cycle_nodes = self._nodes_for_notes(detector_nodes, detector_result.cross_file_lock_notes, cap=48)
         protocol_nodes = self._nodes_for_notes(detector_nodes, detector_result.protocol_notes, cap=48)
         passes = [
@@ -4839,6 +5595,24 @@ class TargetedFileReviewer:
             passes.append(("secondary_element_omission", context.target_nodes, secondary_nodes))
         if detector_result.zero_count_underflow_notes:
             passes.append(("zero_count_underflow", context.target_nodes, zero_count_nodes))
+        if detector_result.owner_liveness_notes:
+            passes.append(("owner_liveness_allocation", context.target_nodes, context.companion_nodes + owner_liveness_nodes))
+        if detector_result.user_buffer_permission_notes:
+            passes.append(("user_buffer_permission", context.target_nodes, context.companion_nodes + user_buffer_nodes))
+        if detector_result.zone_shrink_notes:
+            passes.append(("zone_shrink_validation", context.target_nodes, context.shared_state_nodes + context.companion_nodes + zone_shrink_nodes))
+        if detector_result.success_path_cleanup_notes:
+            passes.append(("success_path_cleanup", context.target_nodes, success_cleanup_nodes))
+        if detector_result.jit_lock_protocol_notes:
+            passes.append(("jit_lock_protocol", context.target_nodes, context.companion_nodes + context.shared_state_nodes + jit_lock_nodes))
+        if detector_result.teardown_order_notes:
+            passes.append(("teardown_order", context.target_nodes, context.companion_nodes + context.lifecycle_pair_nodes + teardown_order_nodes))
+        if detector_result.queue_publish_init_notes:
+            passes.append(("queue_publish_init", context.target_nodes, context.shared_state_nodes + queue_publish_nodes))
+        if detector_result.fd_reuse_notes:
+            passes.append(("fd_reuse_race", context.target_nodes, context.companion_nodes + fd_reuse_nodes))
+        if detector_result.debugfs_permission_notes:
+            passes.append(("debugfs_permission", context.target_nodes, debugfs_nodes))
         if detector_result.policy_gate_notes:
             passes.append((
                 "policy_gate_before_sink", context.target_nodes,
@@ -4918,6 +5692,15 @@ class TargetedFileReviewer:
             or detector_result.pm_callback_order_notes
             or detector_result.secondary_omission_notes
             or detector_result.zero_count_underflow_notes
+            or detector_result.owner_liveness_notes
+            or detector_result.user_buffer_permission_notes
+            or detector_result.zone_shrink_notes
+            or detector_result.success_path_cleanup_notes
+            or detector_result.jit_lock_protocol_notes
+            or detector_result.teardown_order_notes
+            or detector_result.queue_publish_init_notes
+            or detector_result.fd_reuse_notes
+            or detector_result.debugfs_permission_notes
             or detector_result.policy_gate_notes
             or detector_result.imported_mapping_policy_notes
             or detector_result.sentinel_misuse_notes
@@ -5002,7 +5785,10 @@ class TargetedFileReviewer:
             "sentinel_misuse", "suspend_cleanup_ledger", "suspend_size_sink",
             "fault_clear_order", "pm_callback_order", "region_replace_erase",
             "imported_mapping_policy", "alias_extent_mismatch", "named_lock_inversion",
-            "active_singleton_stale", "zero_count_underflow",
+            "active_singleton_stale", "zero_count_underflow", "owner_liveness_allocation",
+            "user_buffer_permission", "zone_shrink_validation", "success_path_cleanup",
+            "jit_lock_protocol", "teardown_order", "queue_publish_init", "fd_reuse_race",
+            "debugfs_permission",
         }:
             return 2600, 36000
         if pass_name == "partial_exact_fallback":
@@ -5026,7 +5812,10 @@ class TargetedFileReviewer:
             "sentinel_misuse", "suspend_cleanup_ledger", "suspend_size_sink",
             "fault_clear_order", "pm_callback_order", "region_replace_erase",
             "imported_mapping_policy", "alias_extent_mismatch", "named_lock_inversion",
-            "active_singleton_stale", "zero_count_underflow",
+            "active_singleton_stale", "zero_count_underflow", "owner_liveness_allocation",
+            "user_buffer_permission", "zone_shrink_validation", "success_path_cleanup",
+            "jit_lock_protocol", "teardown_order", "queue_publish_init", "fd_reuse_race",
+            "debugfs_permission",
         }:
             return (
                 f"Findings must use primary_file={target_file} and identify the exact target-file statement plus the exact "
@@ -5133,6 +5922,21 @@ class TargetedFileReviewer:
             ),
             "secondary_element_omission": (("SECONDARY_ELEMENT_OMISSION", detector_result.secondary_omission_notes),),
             "zero_count_underflow": (("ZERO_COUNT_UNDERFLOW", detector_result.zero_count_underflow_notes),),
+            "owner_liveness_allocation": (("OWNER_LIVENESS_ALLOCATION", detector_result.owner_liveness_notes),),
+            "user_buffer_permission": (("USER_BUFFER_PERMISSION", detector_result.user_buffer_permission_notes),),
+            "zone_shrink_validation": (("ZONE_SHRINK_VALIDATION", detector_result.zone_shrink_notes),),
+            "success_path_cleanup": (
+                ("SUCCESS_PATH_CLEANUP", detector_result.success_path_cleanup_notes),
+                ("CLEANUP_SYMMETRY", detector_result.cleanup_symmetry_notes[:6]),
+            ),
+            "jit_lock_protocol": (("JIT_LOCK_PROTOCOL", detector_result.jit_lock_protocol_notes),),
+            "teardown_order": (("TEARDOWN_ORDER", detector_result.teardown_order_notes),),
+            "queue_publish_init": (
+                ("QUEUE_PUBLISH_INIT", detector_result.queue_publish_init_notes),
+                ("STATE_PUBLICATION", detector_result.state_publication_notes[:6]),
+            ),
+            "fd_reuse_race": (("FD_REUSE_RACE", detector_result.fd_reuse_notes),),
+            "debugfs_permission": (("DEBUGFS_PERMISSION", detector_result.debugfs_permission_notes),),
             "protected_mmu_protocol": (
                 ("PROTECTED_MMU_PROTOCOL", detector_result.protected_mmu_notes),
                 ("STATE_TRANSITION_PROTOCOL", detector_result.protocol_notes[:12]),
@@ -5315,6 +6119,15 @@ def _partial_duplicate_family(vtype: str) -> str:
         "pm_callback_order": "state_order",
         "secondary_element_omission": "logic_omission",
         "zero_count_underflow": "integer_underflow",
+        "owner_liveness_allocation": "resource_exhaustion",
+        "user_buffer_permission": "policy_gate",
+        "zone_shrink_validation": "resource_binding",
+        "success_path_cleanup": "cleanup",
+        "jit_lock_protocol": "lock_cycle",
+        "teardown_order": "lifetime",
+        "queue_publish_init": "lifetime",
+        "fd_reuse_race": "lifetime",
+        "debugfs_permission": "policy_gate",
         "protected_mmu_protocol": "state_order",
         "active_singleton_stale": "lifetime",
         "mmu_recovery_rollback": "mmu_recovery",
@@ -5481,6 +6294,15 @@ _EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
     "partial_pm_callback_order",
     "partial_secondary_element_omission",
     "partial_zero_count_underflow",
+    "partial_owner_liveness_allocation",
+    "partial_user_buffer_permission",
+    "partial_zone_shrink_validation",
+    "partial_success_path_cleanup",
+    "partial_jit_lock_protocol",
+    "partial_teardown_order",
+    "partial_queue_publish_init",
+    "partial_fd_reuse_race",
+    "partial_debugfs_permission",
     "partial_protected_mmu_protocol",
     "partial_active_singleton_stale",
     "partial_mmu_recovery_rollback",
@@ -5515,6 +6337,10 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
     weaker = {
         "partial_cross_file_lock_cycle", "partial_state_transition_protocol",
         "partial_resource_binding_order", "partial_allocation_arithmetic",
+        "partial_async_event_order", "partial_cleanup_ledger",
+        "partial_arithmetic_chain_mismatch", "partial_size_propagation",
+        "partial_policy_gate_before_sink", "partial_stale_tracker_state",
+        "partial_pm_runtime_sequence",
     }
     if finding.analysis_type not in weaker:
         return False
@@ -5678,6 +6504,15 @@ class PartialReachabilityFileService:
                 "pm_callback_order": len(detector_result.pm_callback_order_notes),
                 "secondary_omission": len(detector_result.secondary_omission_notes),
                 "zero_count_underflow": len(detector_result.zero_count_underflow_notes),
+                "owner_liveness_allocation": len(detector_result.owner_liveness_notes),
+                "user_buffer_permission": len(detector_result.user_buffer_permission_notes),
+                "zone_shrink_validation": len(detector_result.zone_shrink_notes),
+                "success_path_cleanup": len(detector_result.success_path_cleanup_notes),
+                "jit_lock_protocol": len(detector_result.jit_lock_protocol_notes),
+                "teardown_order": len(detector_result.teardown_order_notes),
+                "queue_publish_init": len(detector_result.queue_publish_init_notes),
+                "fd_reuse_race": len(detector_result.fd_reuse_notes),
+                "debugfs_permission": len(detector_result.debugfs_permission_notes),
                 "protected_mmu": len(detector_result.protected_mmu_notes),
                 "active_singleton_stale": len(detector_result.active_singleton_stale_notes),
                 "mmu_recovery": len(detector_result.mmu_recovery_notes),
@@ -5726,6 +6561,15 @@ class PartialReachabilityFileService:
                 + len(detector_result.pm_callback_order_notes)
                 + len(detector_result.secondary_omission_notes)
                 + len(detector_result.zero_count_underflow_notes)
+                + len(detector_result.owner_liveness_notes)
+                + len(detector_result.user_buffer_permission_notes)
+                + len(detector_result.zone_shrink_notes)
+                + len(detector_result.success_path_cleanup_notes)
+                + len(detector_result.jit_lock_protocol_notes)
+                + len(detector_result.teardown_order_notes)
+                + len(detector_result.queue_publish_init_notes)
+                + len(detector_result.fd_reuse_notes)
+                + len(detector_result.debugfs_permission_notes)
                 + len(detector_result.protected_mmu_notes)
                 + len(detector_result.active_singleton_stale_notes)
                 + len(detector_result.mmu_recovery_notes)
