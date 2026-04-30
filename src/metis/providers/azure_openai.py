@@ -70,6 +70,7 @@ class AzureOpenAIProvider(LLMProvider):
 
         self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 512))
+        self.reasoning_effort = config.get("llama_query_reasoning_effort")
 
         self.model_token_param = config.get(
             "model_token_param", "max_completion_tokens"
@@ -120,6 +121,8 @@ class AzureOpenAIProvider(LLMProvider):
         }
         if callbacks is not None:
             params["callbacks"] = callbacks
+        if self.reasoning_effort:
+            params["reasoning_effort"] = self.reasoning_effort
         if "response_format" in kwargs:
             if kwargs["response_format"] is not None:
                 params["response_format"] = kwargs["response_format"]

@@ -75,3 +75,13 @@ def test_provider_uses_explicit_callbacks_without_mutation():
     assert query_kwargs["llm"].callbacks == [callback]
     assert query_kwargs["callback_manager"] is callback_manager
     assert code_embeddings.callback_manager is not callback_manager
+
+
+def test_provider_passes_reasoning_effort_to_chat_model():
+    config = _config()
+    config["llama_query_reasoning_effort"] = "medium"
+    provider = AzureOpenAIProvider(config)
+
+    llm = provider.get_chat_model()
+
+    assert llm.reasoning_effort == "medium"
