@@ -8,7 +8,6 @@ import yaml
 from importlib.resources import files, as_file
 from pathlib import Path
 
-
 logger = logging.getLogger("metis")
 
 
@@ -143,6 +142,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["llama_query_model"] = query_cfg.get("model") or runtime.get("model", "")
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
+    runtime["llama_query_reasoning_effort"] = (
+        query_cfg.get("reasoning_effort")
+        or query_cfg.get("reasoning_level")
+        or llm_cfg.get("reasoning_effort")
+        or llm_cfg.get("reasoning_level")
+    )
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
     runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
     runtime["response_mode"] = query_cfg.get("response_mode", "compact")

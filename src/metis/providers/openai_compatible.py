@@ -33,6 +33,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self.query_model = config.get("llama_query_model") or config.get("model")
         self.temperature = config.get("llama_query_temperature", 0.0)
         self.max_tokens = config.get("llama_query_max_tokens", 512)
+        self.reasoning_effort = config.get("llama_query_reasoning_effort")
         self.context_window = config.get("llama_query_context_window") or config.get(
             "max_token_length"
         )
@@ -117,6 +118,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["default_headers"] = self.default_headers
         if callbacks is not None:
             params["callbacks"] = callbacks
+        if self.reasoning_effort:
+            params["reasoning_effort"] = self.reasoning_effort
 
         for optional_key in (
             "timeout",
@@ -161,6 +164,8 @@ class OpenAICompatibleProvider(LLMProvider):
             params["default_headers"] = self.default_headers
         if callback_manager is not None:
             params["callback_manager"] = callback_manager
+        if self.reasoning_effort:
+            params["reasoning_effort"] = self.reasoning_effort
         if self._should_use_openai_like():
             params["context_window"] = self._resolve_context_window()
             params.setdefault("is_chat_model", True)
