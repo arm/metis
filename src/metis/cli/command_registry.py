@@ -12,10 +12,12 @@ from .command_runtime import CommandRuntime
 from .commands import (
     run_ask,
     run_file_review,
+    run_file_review_modular,
     run_index,
     run_reachability,
     run_review,
     run_review_code,
+    run_review_code_interactive,
     run_triage,
     run_update,
     show_help,
@@ -68,13 +70,13 @@ class CommandSpec:
             and not self.supports_triage
         ):
             print_console(
-                "[red]Error:[/red] --triage can only be used with review_code, review_file, or review_patch.",
+                "[red]Error:[/red] --triage can only be used with review_code, review_file, review_file_modular, or review_patch.",
                 args.quiet,
             )
             return False
         if ignore_index_requested and self.index_policy != "optional":
             print_console(
-                "[red]Error:[/red] --ignore-index can only be used with review_code, review_file, review_patch, or triage.",
+                "[red]Error:[/red] --ignore-index can only be used with review_code, review_code_interactive, review_file, review_file_modular, review_patch, or triage.",
                 args.quiet,
             )
             return False
@@ -131,6 +133,14 @@ COMMANDS = {
         index_policy="optional",
         supports_triage=True,
     ),
+    "review_code_interactive": CommandSpec(
+        run_review_code_interactive,
+        tracked=True,
+        invocation_mode="args",
+        prepares_output_file=False,
+        index_policy="optional",
+        supports_triage=False,
+    ),
     "update": CommandSpec(
         run_update,
         invocation_mode="path",
@@ -139,6 +149,15 @@ COMMANDS = {
     ),
     "review_file": CommandSpec(
         run_file_review,
+        tracked=True,
+        invocation_mode="path",
+        include_target_in_display_name=True,
+        prepares_output_file=True,
+        index_policy="optional",
+        supports_triage=True,
+    ),
+    "review_file_modular": CommandSpec(
+        run_file_review_modular,
         tracked=True,
         invocation_mode="path",
         include_target_in_display_name=True,

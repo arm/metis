@@ -125,7 +125,7 @@ If the index is unavailable and you still want to run an analysis, use:
 ```
 review_code --ignore-index
 ```
-This is supported only for `review_code`, `review_file`, `review_patch`, and `triage`. In that mode Metis skips retrieval and warns that relevant-context lookup was disabled.
+This is supported only for `review_code`, `review_code_interactive`, `review_file`, `review_file_modular`, `review_patch`, and `triage`. In that mode Metis skips retrieval and warns that relevant-context lookup was disabled.
 
 ### 3.1 Docker
 
@@ -197,9 +197,9 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 - `--custom-prompt PATH` – optional `.md` or `.txt` file that contains additional guidance. When provided, Metis loads it once and weaves the text into every security-review prompt. If the flag is omitted, Metis looks for `.metis.md` in your project root and uses it when present. Use this to inject organization-specific policy or security requirements without editing `plugins.yaml`.
 - `--backend chroma|postgres` – choose vector-store backend (default `chroma`).
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
-- `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
+- `--triage` – after `review_code`, `review_file`, `review_file_modular`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--ignore-index` – allow `review_code`, `review_file`, `review_patch`, and `triage` to run without index-backed context. Metis warns and skips retrieval in this mode. It does not apply to `ask` or `update`.
+- `--ignore-index` – allow `review_code`, `review_code_interactive`, `review_file`, `review_file_modular`, `review_patch`, and `triage` to run without index-backed context. Metis warns and skips retrieval in this mode. It does not apply to `ask` or `update`.
 - `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
 
 ### `index`
@@ -209,8 +209,15 @@ Indexes your codebase into a vector database. Must be run before any analysis.
 Performs a full security review of the indexed codebase.
 Use `--ignore-index` to run without retrieval when no index is available.
 
+### `review_code_interactive`
+Runs full reachability graph review with terminal prompts and live progress. It asks before graph construction, writes `graph_*.jsonl` and `paths_*.jsonl` under the codebase output directory, lets you choose all paths or the top N paths, and streams each confirmed finding to `findings_stream_*.jsonl` as soon as it is found.
+
 ### `review_file <path>`
 Performs a targeted security review of a single file.
+Use `--ignore-index` to run without retrieval when no index is available.
+
+### `review_file_modular <path>`
+Runs the same targeted file review through the modular partial reachability implementation for side-by-side validation before replacing the legacy single-file implementation.
 Use `--ignore-index` to run without retrieval when no index is available.
 
 ### `review_patch <patch.diff>`

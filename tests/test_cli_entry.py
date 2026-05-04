@@ -8,11 +8,21 @@ from types import SimpleNamespace
 import pytest
 
 from metis.cli import entry
+from metis.cli import commands
 from metis.cli import command_registry
+from metis.cli.command_runtime import CommandRuntime
 
 
 @pytest.mark.parametrize(
-    "cmd", ["review_file", "review_code", "review_patch", "triage"]
+    "cmd",
+    [
+        "review_file",
+        "review_file_modular",
+        "review_code",
+        "review_code_interactive",
+        "review_patch",
+        "triage",
+    ],
 )
 def test_prepare_command_runtime_allows_opt_in_no_index_for_supported_command(cmd):
     args = SimpleNamespace(ignore_index=False, quiet=True, codebase_path="src/metis")
@@ -212,6 +222,45 @@ def test_execute_command_rejects_inline_ignore_index_flag_before_index_gating(
     assert result is None
     assert any("--ignore-index can only be used" in message for message in captured)
     assert not any("Index missing" in message for message in captured)
+
+
+def test_run_file_review_modular_uses_modular_review_path(monkeypatch):
+    calls = []
+    finalized = []
+
+    def _review_file_modular(**kwargs):
+        calls.append(kwargs)
+        return {"reviews": []}
+
+    engine = SimpleNamespace(
+        review=SimpleNamespace(review_file_modular=_review_file_modular)
+    )
+    args = SimpleNamespace(
+        quiet=True,
+        verbose=False,
+        output_file=None,
+        triage=False,
+        include_triaged=False,
+    )
+    runtime = CommandRuntime(
+        command="review_file_modular",
+        command_args=["sample.c"],
+        use_retrieval_context=False,
+    )
+
+    monkeypatch.setattr(commands, "check_file_exists", lambda _path: True)
+    monkeypatch.setattr(
+        commands,
+        "_finalize_review_output",
+        lambda _engine, results, _args, _runtime: finalized.append(results),
+    )
+
+    commands.run_file_review_modular(engine, "sample.c", args, runtime)
+
+    assert calls
+    assert calls[0]["file_path"] == "sample.c"
+    assert calls[0]["mode"] == "partial"
+    assert finalized == [{"reviews": [{"reviews": []}]}]
 
 
 def test_run_non_interactive_keeps_quiet_without_verbose():

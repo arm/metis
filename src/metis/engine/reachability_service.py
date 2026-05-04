@@ -886,6 +886,33 @@ class GraphBuilder:
                 "globals": len(graph.get_globals()), "errors": errors})
         return graph
 
+    def build_interactive(self, files, codebase_path, *, progress_callback=None):
+        """Build a graph with one in-flight extraction so Ctrl-C stops promptly."""
+        graph = ReachabilityGraph()
+        total = len(files); errors = []
+        if progress_callback: progress_callback({"event": "extraction_start", "total": total})
+        for done, fp in enumerate(files, start=1):
+            if progress_callback:
+                progress_callback({"event": "extraction_file_start", "completed": done - 1, "total": total, "file": fp})
+            try:
+                nodes, globals_ = self._extract(fp, codebase_path)
+                for n in nodes: graph.add_node(n)
+                for g in globals_: graph.add_global(g)
+            except KeyboardInterrupt:
+                if progress_callback:
+                    progress_callback({"event": "extraction_cancelled", "completed": done - 1, "total": total, "file": fp})
+                raise
+            except Exception as e:
+                errors.append(f"{os.path.basename(fp)}: {e}")
+            if progress_callback:
+                progress_callback({"event": "extraction_progress", "completed": done, "total": total, "file": fp})
+        graph.resolve_all_calls()
+        if progress_callback:
+            progress_callback({"event": "extraction_done", "nodes": graph.node_count(), "edges": graph.edge_count(),
+                "sources": len(graph.get_sources()), "sinks": len(graph.get_sinks()),
+                "globals": len(graph.get_globals()), "errors": errors})
+        return graph
+
     def _extract(self, file_path, codebase_path):
         content = read_file_content(file_path)
         if not content or not content.strip(): return [], []
@@ -1120,6 +1147,55 @@ class VulnerabilityConfirmer:
         finally:
             if fh: fh.close()
         if progress_callback: progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
+        return all_f
+
+    def confirm_streaming(self, paths, graph, *, output_path=None, progress_callback=None):
+        """Confirm paths one sink at a time and flush findings as soon as they arrive."""
+        if not paths: return []
+        groups = defaultdict(list)
+        for p in paths: groups[p.sink].append(p)
+        items = list(groups.items())
+        total = len(items); all_f = []
+        if progress_callback:
+            progress_callback({"event": "confirmation_start", "total": total, "paths": len(paths)})
+        fh = None
+        if output_path:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            fh = open(output_path, "w", encoding="utf-8")
+        try:
+            for done, (sn, gp) in enumerate(items, start=1):
+                try:
+                    findings = self._group(sn, gp, graph)
+                except KeyboardInterrupt:
+                    if progress_callback:
+                        progress_callback({"event": "confirmation_cancelled", "completed": done - 1, "total": total, "sink": sn})
+                    raise
+                except Exception as e:
+                    logger.warning("Confirm fail %s: %s", sn, e)
+                    findings = []
+                if findings:
+                    all_f.extend(findings)
+                    if fh:
+                        for f in findings:
+                            fh.write(json.dumps(f.to_dict(), ensure_ascii=False) + "\n")
+                        fh.flush()
+                        try: os.fsync(fh.fileno())
+                        except OSError: pass
+                    if progress_callback:
+                        progress_callback({
+                            "event": "confirmation_findings",
+                            "completed": done,
+                            "total": total,
+                            "sink": sn,
+                            "findings": len(findings),
+                            "confirmed": len(all_f),
+                        })
+                if progress_callback:
+                    progress_callback({"event": "confirmation_progress", "completed": done, "total": total, "sink": sn})
+        finally:
+            if fh: fh.close()
+        if progress_callback:
+            progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
         return all_f
 
     def _group(self, sink_name, paths, graph):
@@ -2719,6 +2795,10 @@ class ReachabilityService:
         return GraphBuilder(self._llm_provider, extraction_model, self._usage_runtime).build(
             files, self._config.codebase_path, max_workers=max_workers, progress_callback=progress_callback)
 
+    def build_graph_interactive(self, files, *, extraction_model="gpt-4.1-mini", progress_callback=None):
+        return GraphBuilder(self._llm_provider, extraction_model, self._usage_runtime).build_interactive(
+            files, self._config.codebase_path, progress_callback=progress_callback)
+
     def trace_paths(self, graph, *, max_path_length=25):
         return PathTracer(graph, max_path_length=max_path_length).find_all_paths()
 
@@ -2731,6 +2811,11 @@ class ReachabilityService:
         cm = confirmation_model or self._config.llama_query_model
         return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_parallel(
             paths, graph, max_workers=max_workers, output_path=output_path, progress_callback=progress_callback)
+
+    def confirm_paths_streaming(self, paths, graph, *, confirmation_model=None, output_path=None, progress_callback=None):
+        cm = confirmation_model or self._config.llama_query_model
+        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_streaming(
+            paths, graph, output_path=output_path, progress_callback=progress_callback)
 
     def confirm_paths_for_file(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None):
         cm = confirmation_model or self._config.llama_query_model
