@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-05-05)
+
+
+### Features
+
+* **cli:** add --ignore-index support ([#182](https://github.com/arm/metis/issues/182)) ([879b344](https://github.com/arm/metis/commit/879b344fc4967baf3c694b506feb2800bf0385ca))
+* **refactor:** decouple engine workflows and centralize tool policies ([#180](https://github.com/arm/metis/issues/180)) ([3c7a3bf](https://github.com/arm/metis/commit/3c7a3bf9c0c1c69ade73716c22f26de519f0233f))
+* **usage:** Add token usage tracking ([#179](https://github.com/arm/metis/issues/179)) ([11eea95](https://github.com/arm/metis/commit/11eea95d1db96d76d19dc8b391cfdeac65954a1d))
+* **verilog:** Add Verilog support ([#168](https://github.com/arm/metis/issues/168)) ([a457783](https://github.com/arm/metis/commit/a45778318a6b8870b87ee5efb229116a5549a53d))
+
+
+### Bug Fixes
+
+* **chroma:** serialize local store and query engine initialization ([#171](https://github.com/arm/metis/issues/171)) ([a74d5cf](https://github.com/arm/metis/commit/a74d5cf68ffb8dba48a60ee9e394cf41e0e25e2e))
+* **config:** Support metis.yml config fallback ([#183](https://github.com/arm/metis/issues/183)) ([9af12b3](https://github.com/arm/metis/commit/9af12b32981153e13c7fe3e06bf3ba0ddb70eb43))
+* **metisignore:** support allowlist patterns consistently ([#181](https://github.com/arm/metis/issues/181)) ([cc42aba](https://github.com/arm/metis/commit/cc42abaf995f9a4eb5aef5a9d3e237310e73764e))
+* **review:** skip patch summaries when review_patch finds no issues ([#187](https://github.com/arm/metis/issues/187)) ([a771dc6](https://github.com/arm/metis/commit/a771dc62c746e98187c6411e9f5da5e956841d0e))
+* **triage:** Prevent triage grep drift across environments ([#186](https://github.com/arm/metis/issues/186)) ([7ec8023](https://github.com/arm/metis/commit/7ec80230b879423e6a6b36a67a043c9185da1a6a))
+
 ## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2026-03-09)
 
 
