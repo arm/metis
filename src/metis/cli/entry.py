@@ -5,6 +5,7 @@
 
 import argparse
 from datetime import datetime
+import json
 import logging
 from pathlib import Path
 from typing import cast
@@ -56,19 +57,44 @@ def determine_output_file(cmd, args, cmd_args):
 
     if overrides:
         args.output_file = overrides
+        _write_initial_output_placeholder(cmd, cmd_args, args)
         return
 
     if cmd == "triage":
         args.output_file = existing_outputs
+        _write_initial_output_placeholder(cmd, cmd_args, args)
         return
 
     if existing_outputs:
         args.output_file = existing_outputs
+        _write_initial_output_placeholder(cmd, cmd_args, args)
         return
 
     Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     args.output_file = [f"results/{cmd}_{timestamp}.json"]
+    _write_initial_output_placeholder(cmd, cmd_args, args)
+
+
+def _write_initial_output_placeholder(cmd, cmd_args, args):
+    if cmd not in {
+        "review_file",
+        "review_file_modular",
+        "review_code",
+        "review_patch",
+    }:
+        return
+    output_files = list(getattr(args, "output_file", None) or [])
+    if not output_files:
+        return
+    payload = _empty_output_payload(cmd, cmd_args)
+    for output_file in output_files:
+        path = Path(str(output_file))
+        if path.suffix.lower() != ".json" or path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4)
 
 
 def resolve_custom_prompt(args):
