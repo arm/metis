@@ -30,6 +30,7 @@ from .utils import (
     build_pg_backend,
     build_chroma_backend,
     print_console,
+    save_output,
     print_usage_summary,
     print_final_usage_summary,
 )
@@ -290,6 +291,48 @@ def execute_command(engine, cmd, cmd_args, args):
     )
 
 
+def _empty_output_payload(cmd, cmd_args):
+    if cmd in {"review_file", "review_file_modular"}:
+        target = cmd_args[0] if cmd_args else ""
+        return {
+            "reviews": [
+                {
+                    "file": target,
+                    "file_path": target,
+                    "reviews": [],
+                    "errors": ["Command completed without writing output."],
+                }
+            ]
+        }
+    return {"reviews": [], "errors": ["Command completed without writing output."]}
+
+
+def _ensure_non_interactive_output(cmd, cmd_args, args):
+    spec = COMMANDS.get(cmd)
+    if spec is None or not spec.prepares_output_file:
+        return
+    output_files = list(getattr(args, "output_file", None) or [])
+    if not output_files:
+        fallback_cmd_args = list(cmd_args)
+        determine_output_file(cmd, args, fallback_cmd_args)
+        output_files = list(getattr(args, "output_file", None) or [])
+    if not output_files:
+        return
+    missing = [
+        str(output_file)
+        for output_file in output_files
+        if str(output_file).lower().endswith(".json")
+        and not Path(str(output_file)).is_file()
+    ]
+    if not missing:
+        return
+    save_output(
+        missing,
+        _empty_output_payload(cmd, cmd_args),
+        quiet=getattr(args, "quiet", False),
+    )
+
+
 def run_non_interactive(engine, args):
     args.quiet = not args.verbose
     if not args.command:
@@ -305,6 +348,7 @@ def run_non_interactive(engine, args):
     except Exception as e:
         print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
         return 1, None
+    _ensure_non_interactive_output(cmd, cmd_args, args)
     farewell = "[magenta]Goodbye![/magenta]" if result is EXIT_REQUESTED else None
     return 0, farewell
 
