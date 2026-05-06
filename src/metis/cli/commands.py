@@ -178,6 +178,17 @@ def _run_file_review_with(
     if not check_file_exists(file_path):
         if original_file_path != file_path:
             check_file_exists(original_file_path)
+        missing_result = {
+            "reviews": [
+                {
+                    "file": str(original_file_path),
+                    "file_path": str(original_file_path),
+                    "reviews": [],
+                    "errors": [f"File not found: {original_file_path}"],
+                }
+            ]
+        }
+        _finalize_review_output(engine, missing_result, args, runtime)
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
