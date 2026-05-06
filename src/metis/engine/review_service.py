@@ -147,39 +147,63 @@ class ReviewService:
                 and self._is_file_in_codebase(file_path)
                 and self._is_c_cpp_file(file_path)
             ):
-                result = self._treesitter_reachability_service.review_file(
-                    file_path,
-                    confirmation_model=self._reachability_settings.get("confirmation_model"),
-                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
-                    max_paths=int(self._reachability_settings.get("max_paths", 0)),
-                    max_paths_per_sink=int(
-                        self._reachability_settings.get("max_paths_per_sink", 3)
-                    ),
-                    max_path_length=int(
-                        self._reachability_settings.get("max_path_length", 25)
-                    ),
-                    reasoning_effort=self._reachability_settings.get("reasoning_effort"),
-                    progress_callback=progress_callback,
-                )
-                if result is not None:
-                    return result
+                try:
+                    result = self._treesitter_reachability_service.review_file(
+                        file_path,
+                        confirmation_model=self._reachability_settings.get("confirmation_model"),
+                        max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                        max_paths=int(self._reachability_settings.get("max_paths", 0)),
+                        max_paths_per_sink=int(
+                            self._reachability_settings.get("max_paths_per_sink", 3)
+                        ),
+                        max_path_length=int(
+                            self._reachability_settings.get("max_path_length", 25)
+                        ),
+                        reasoning_effort=self._reachability_settings.get("reasoning_effort"),
+                        progress_callback=progress_callback,
+                    )
+                except Exception as e:
+                    logger.exception("Tree-sitter file review failed for %s", file_path)
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "event": "treesitter_file_review_error",
+                                "file": file_path,
+                                "error": f"{type(e).__name__}: {e}",
+                            }
+                        )
+                else:
+                    if result is not None:
+                        return result
             if partial_file_service is not None:
-                result = partial_file_service.review_file(
-                    file_path,
-                    extraction_model=self._reachability_settings.get(
-                        "extraction_model", "gpt-4.1-mini"
-                    ),
-                    review_model=self._reachability_settings.get("confirmation_model"),
-                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
-                    context_budget=context_budget or 250,
-                    max_paths_per_sink=int(
-                        self._reachability_settings.get("max_paths_per_sink", 3)
-                    ),
-                    reasoning_effort=self._reachability_settings.get("reasoning_effort"),
-                    progress_callback=progress_callback,
-                )
-                if result is not None:
-                    return result
+                try:
+                    result = partial_file_service.review_file(
+                        file_path,
+                        extraction_model=self._reachability_settings.get(
+                            "extraction_model", "gpt-4.1-mini"
+                        ),
+                        review_model=self._reachability_settings.get("confirmation_model"),
+                        max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                        context_budget=context_budget or 250,
+                        max_paths_per_sink=int(
+                            self._reachability_settings.get("max_paths_per_sink", 3)
+                        ),
+                        reasoning_effort=self._reachability_settings.get("reasoning_effort"),
+                        progress_callback=progress_callback,
+                    )
+                except Exception as e:
+                    logger.exception("Partial file review failed for %s", file_path)
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "event": "partial_review_error",
+                                "pass": "partial_file_service",
+                                "error": f"{type(e).__name__}: {e}",
+                            }
+                        )
+                else:
+                    if result is not None:
+                        return result
         if (
             self._use_reachability_for_review
             and self._reachability_service is not None

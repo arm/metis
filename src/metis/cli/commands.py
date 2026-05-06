@@ -222,6 +222,12 @@ def _run_file_review_with(
                 f"paths={event.get('path_findings', 0)}, deterministic={event.get('deterministic_findings', 0)}[/green]",
                 args.quiet,
             )
+        elif ev == "treesitter_file_review_error":
+            print_console(
+                f"[red]Tree-sitter file review error in {escape(str(event.get('file', 'unknown')))}: "
+                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
+                args.quiet,
+            )
         elif ev.endswith("_start"):
             count = event.get("functions") or event.get("files") or event.get("globals") or 0
             print_console(
@@ -273,23 +279,36 @@ def _run_file_review_with(
             )
 
     mode_label = f"{mode} mode{' modular' if modular else ''}"
-    raw_result = with_spinner(
-        f"Reviewing file {file_path} ({mode_label})...",
-        review_file_func,
-        file_path=file_path,
-        options=options,
-        mode=mode,
-        context_budget=context_budget,
-        progress_callback=_progress,
-        quiet=args.quiet,
-    )
+    try:
+        raw_result = with_spinner(
+            f"Reviewing file {file_path} ({mode_label})...",
+            review_file_func,
+            file_path=file_path,
+            options=options,
+            mode=mode,
+            context_budget=context_budget,
+            progress_callback=_progress,
+            quiet=args.quiet,
+        )
 
-    if raw_result and isinstance(raw_result.get("reviews"), list):
-        results = {"reviews": [raw_result]}
-    else:
-        results = {"reviews": []}
+        if raw_result and isinstance(raw_result.get("reviews"), list):
+            results = {"reviews": [raw_result]}
+        else:
+            results = {"reviews": []}
 
-    _finalize_review_output(engine, results, args, runtime)
+        _finalize_review_output(engine, results, args, runtime)
+    except Exception as exc:
+        error_result = {
+            "reviews": [
+                {
+                    "file": str(original_file_path),
+                    "file_path": str(file_path),
+                    "reviews": [],
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                }
+            ]
+        }
+        save_output(args.output_file, error_result, args.quiet)
 
 
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
