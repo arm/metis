@@ -90,6 +90,15 @@ def build_engine(args, runtime):
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
+    reachability_config = dict(runtime.get("_reachability_config") or {})
+    engine_runtime = dict(runtime)
+    engine_runtime.pop("_reachability_config", None)
+
+    def _reachability_value(arg_name, config_name, default=None):
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            return value
+        return reachability_config.get(config_name, default)
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(
@@ -114,13 +123,41 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        reachability_extraction_model=args.reachability_extraction_model,
-        reachability_confirmation_model=args.reachability_confirmation_model,
-        reachability_workers=args.reachability_workers,
-        reachability_max_paths=args.reachability_max_paths,
-        reachability_max_paths_per_sink=args.reachability_max_paths_per_sink,
-        reachability_reasoning_effort=args.reachability_reasoning_effort,
-        **runtime,
+        use_reachability_for_review=_reachability_value(
+            "use_reachability_for_review",
+            "use_reachability_for_review",
+            False,
+        ),
+        reachability_extraction_model=_reachability_value(
+            "reachability_extraction_model",
+            "reachability_extraction_model",
+            "gpt-4.1-mini",
+        ),
+        reachability_confirmation_model=_reachability_value(
+            "reachability_confirmation_model",
+            "reachability_confirmation_model",
+        ),
+        reachability_workers=_reachability_value(
+            "reachability_workers",
+            "reachability_workers",
+        ),
+        reachability_max_paths=_reachability_value(
+            "reachability_max_paths",
+            "reachability_max_paths",
+        ),
+        reachability_max_paths_per_sink=_reachability_value(
+            "reachability_max_paths_per_sink",
+            "reachability_max_paths_per_sink",
+        ),
+        reachability_max_path_length=_reachability_value(
+            "reachability_max_path_length",
+            "reachability_max_path_length",
+        ),
+        reachability_reasoning_effort=_reachability_value(
+            "reachability_reasoning_effort",
+            "reachability_reasoning_effort",
+        ),
+        **engine_runtime,
     )
     return engine, vector_backend
 
@@ -381,39 +418,51 @@ def main():
     parser.add_argument(
         "--reachability-extraction-model",
         type=str,
-        default="gpt-4.1-mini",
+        default=None,
         help="LLM model for reachability function extraction (default: gpt-4.1-mini)",
     )
     parser.add_argument(
         "--reachability-confirmation-model",
         type=str,
-        default="gpt-5.5",
+        default=None,
         help="LLM model for reachability vulnerability analysis (default: gpt-5.5)",
     )
     parser.add_argument(
         "--reachability-reasoning-effort",
         type=str,
-        default="high",
+        default=None,
         choices=["none", "minimal", "low", "medium", "high"],
         help="Reasoning effort for reachability vulnerability analysis when supported (default: high)",
     )
     parser.add_argument(
         "--reachability-max-paths-per-sink",
         type=int,
-        default=3,
+        default=None,
         help="Maximum diverse paths per root-cause sink in reachability output (default: 3)",
     )
     parser.add_argument(
         "--reachability-workers",
         type=int,
-        default=8,
+        default=None,
         help="Parallel workers for reachability extraction and confirmation (default: 8)",
     )
     parser.add_argument(
         "--reachability-max-paths",
         type=int,
-        default=0,
+        default=None,
         help="Max paths to analyze (0 = all, interactive mode will prompt). Default: 0",
+    )
+    parser.add_argument(
+        "--reachability-max-path-length",
+        type=int,
+        default=None,
+        help="Maximum source-to-sink path length for reachability tracing (default: 25)",
+    )
+    parser.add_argument(
+        "--use-reachability-for-review",
+        action="store_true",
+        default=None,
+        help="Use reachability-backed review_code/review_file when available.",
     )
 
 

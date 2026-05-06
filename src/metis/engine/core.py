@@ -29,6 +29,20 @@ from .triage_service import TriageService
 logger = logging.getLogger("metis")
 
 
+def _bool_setting(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _int_setting(value, default):
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
 class MetisEngine:
     _SUPPORTED_LANGUAGES = None
 
@@ -78,20 +92,24 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
-        self.use_reachability_for_review = bool(
-            kwargs.get("use_reachability_for_review", False)
+        self.use_reachability_for_review = _bool_setting(
+            kwargs.get("use_reachability_for_review"), False
         )
         self.reachability_settings = {
             "extraction_model": kwargs.get(
                 "reachability_extraction_model", "gpt-4.1-mini"
             ),
             "confirmation_model": kwargs.get("reachability_confirmation_model"),
-            "max_workers": int(kwargs.get("reachability_workers", self.max_workers)),
-            "max_paths": int(kwargs.get("reachability_max_paths", 0)),
-            "max_paths_per_sink": int(
-                kwargs.get("reachability_max_paths_per_sink", 3)
+            "max_workers": _int_setting(
+                kwargs.get("reachability_workers"), self.max_workers
             ),
-            "max_path_length": int(kwargs.get("reachability_max_path_length", 25)),
+            "max_paths": _int_setting(kwargs.get("reachability_max_paths"), 0),
+            "max_paths_per_sink": _int_setting(
+                kwargs.get("reachability_max_paths_per_sink"), 3
+            ),
+            "max_path_length": _int_setting(
+                kwargs.get("reachability_max_path_length"), 25
+            ),
             "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
         }
 

@@ -50,6 +50,15 @@ def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
     )
 
 
+def _reachability_setting(engine, args, arg_name: str, setting_name: str, default=None):
+    value = getattr(args, arg_name, None)
+    if value is not None:
+        return value
+    settings = getattr(engine, "reachability_settings", {}) or {}
+    value = settings.get(setting_name)
+    return default if value is None else value
+
+
 def _parse_review_file_options(runtime: CommandRuntime):
     mode = "partial"
     context_budget = None
@@ -412,9 +421,8 @@ def _write_paths_jsonl(paths, graph, output_path: Path):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _select_interactive_paths(paths, args, parsed_options, *, quiet: bool):
+def _select_interactive_paths(paths, args, parsed_options, *, quiet: bool, max_paths_limit: int = 0):
     top_paths = parsed_options.get("top_paths")
-    max_paths_limit = int(getattr(args, "reachability_max_paths", 0) or 0)
     if top_paths:
         return paths[:top_paths], f"top {min(top_paths, len(paths))}"
     if parsed_options.get("all_paths"):
@@ -459,11 +467,25 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
             )
             return
 
-    extraction_model = getattr(args, "reachability_extraction_model", "gpt-4.1-mini")
-    confirmation_model = getattr(args, "reachability_confirmation_model", None)
-    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
-    max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
-    max_path_length = int(getattr(args, "reachability_max_path_length", 25))
+    extraction_model = _reachability_setting(
+        engine, args, "reachability_extraction_model", "extraction_model", "gpt-4.1-mini"
+    )
+    confirmation_model = _reachability_setting(
+        engine, args, "reachability_confirmation_model", "confirmation_model"
+    )
+    reasoning_effort = _reachability_setting(
+        engine, args, "reachability_reasoning_effort", "reasoning_effort"
+    )
+    max_paths_per_sink = _reachability_setting(
+        engine, args, "reachability_max_paths_per_sink", "max_paths_per_sink", 3
+    )
+    max_paths_limit = int(
+        _reachability_setting(engine, args, "reachability_max_paths", "max_paths", 0)
+        or 0
+    )
+    max_path_length = int(
+        _reachability_setting(engine, args, "reachability_max_path_length", "max_path_length", 25)
+    )
     confirm_model = confirmation_model or engine.reachability._config.llama_query_model
 
     files = sorted(engine.reachability.get_c_cpp_files())
@@ -565,6 +587,7 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
             args,
             parsed_options,
             quiet=q,
+            max_paths_limit=max_paths_limit,
         )
         if not paths_to_analyze:
             print_console("[yellow]Cancelled before AI path analysis.[/yellow]", q)
@@ -771,11 +794,17 @@ def run_reachability_treesitter(engine, args, runtime: CommandRuntime):
         DEFAULT_TREESITTER_OUTPUT_DIR,
     )
 
-    confirmation_model = getattr(args, "reachability_confirmation_model", None) or "gpt-5.5"
-    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
-    max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
-    workers = getattr(args, "reachability_workers", 8)
-    max_paths_limit = getattr(args, "reachability_max_paths", 0)
+    confirmation_model = _reachability_setting(
+        engine, args, "reachability_confirmation_model", "confirmation_model", "gpt-5.5"
+    )
+    reasoning_effort = _reachability_setting(
+        engine, args, "reachability_reasoning_effort", "reasoning_effort"
+    )
+    max_paths_per_sink = _reachability_setting(
+        engine, args, "reachability_max_paths_per_sink", "max_paths_per_sink", 3
+    )
+    workers = _reachability_setting(engine, args, "reachability_workers", "max_workers", 8)
+    max_paths_limit = _reachability_setting(engine, args, "reachability_max_paths", "max_paths", 0)
     q = args.quiet
 
     output_dir = engine.reachability_treesitter.default_output_dir()
@@ -968,12 +997,20 @@ def run_reachability_treesitter(engine, args, runtime: CommandRuntime):
 def run_reachability(engine, args, runtime: CommandRuntime):
     from metis.engine.reachability_service import DEFAULT_OUTPUT_DIR
 
-    extraction_model = getattr(args, "reachability_extraction_model", "gpt-4.1-mini")
-    confirmation_model = getattr(args, "reachability_confirmation_model", None)
-    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
-    max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
-    workers = getattr(args, "reachability_workers", 8)
-    max_paths_limit = getattr(args, "reachability_max_paths", 0)
+    extraction_model = _reachability_setting(
+        engine, args, "reachability_extraction_model", "extraction_model", "gpt-4.1-mini"
+    )
+    confirmation_model = _reachability_setting(
+        engine, args, "reachability_confirmation_model", "confirmation_model"
+    )
+    reasoning_effort = _reachability_setting(
+        engine, args, "reachability_reasoning_effort", "reasoning_effort"
+    )
+    max_paths_per_sink = _reachability_setting(
+        engine, args, "reachability_max_paths_per_sink", "max_paths_per_sink", 3
+    )
+    workers = _reachability_setting(engine, args, "reachability_workers", "max_workers", 8)
+    max_paths_limit = _reachability_setting(engine, args, "reachability_max_paths", "max_paths", 0)
     is_interactive = not bool(getattr(args, "non_interactive", False))
 
     output_dir = DEFAULT_OUTPUT_DIR

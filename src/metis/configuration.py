@@ -262,6 +262,23 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
+    reachability_keys = (
+        "use_reachability_for_review",
+        "reachability_extraction_model",
+        "reachability_confirmation_model",
+        "reachability_workers",
+        "reachability_max_paths",
+        "reachability_max_paths_per_sink",
+        "reachability_max_path_length",
+        "reachability_reasoning_effort",
+    )
+    reachability_cfg = {}
+    for key in reachability_keys:
+        if key in cfg:
+            reachability_cfg[key] = cfg[key]
+        elif key in engine_cfg:
+            reachability_cfg[key] = engine_cfg[key]
+    runtime["_reachability_config"] = reachability_cfg
 
     # Query config
     query_cfg = cfg.get("query", {})
