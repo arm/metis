@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+import shlex
 from typing import cast
 
 from rich.markup import escape
@@ -252,21 +253,27 @@ def _interactive_command_ignores_index(cmd, cmd_args, args):
 
 
 def execute_command(engine, cmd, cmd_args, args):
+    setattr(args, "_metis_command_status", "starting")
     if cmd not in COMMANDS:
+        setattr(args, "_metis_command_status", "unknown_command")
         print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
         return
 
     spec = COMMANDS[cmd]
     if cmd == "exit":
+        setattr(args, "_metis_command_status", "exit_requested")
         return EXIT_REQUESTED
     runtime = _prepare_command_runtime(cmd, list(cmd_args), args)
     if runtime is None:
+        setattr(args, "_metis_command_status", "runtime_unavailable")
         return
 
     if spec.prepares_output_file:
         determine_output_file(cmd, args, runtime.command_args)
+        setattr(args, "_metis_command_status", "output_prepared")
 
     if not spec.validate(cmd, runtime.command_args, args):
+        setattr(args, "_metis_command_status", "validation_failed")
         return
 
     usage_command = None
@@ -278,13 +285,18 @@ def execute_command(engine, cmd, cmd_args, args):
         )
 
     if usage_command is None:
+        setattr(args, "_metis_command_status", "handler_invoking")
         spec.invoke(engine, runtime.command_args, args, runtime)
+        setattr(args, "_metis_command_status", "handler_invoked")
         return
 
+    setattr(args, "_metis_command_status", "handler_invoking")
     with usage_command as command:
         spec.invoke(engine, runtime.command_args, args, runtime)
+    setattr(args, "_metis_command_status", "handler_invoked")
 
     record = engine.finalize_usage_command(command)
+    setattr(args, "_metis_command_status", "usage_finalized")
     print_usage_summary(
         record["display_name"],
         record["summary"],
@@ -293,7 +305,9 @@ def execute_command(engine, cmd, cmd_args, args):
     )
 
 
-def _empty_output_payload(cmd, cmd_args):
+def _empty_output_payload(cmd, cmd_args, args=None):
+    status = str(getattr(args, "_metis_command_status", "unknown"))
+    error = f"Command completed without writing output. status={status}"
     if cmd in {"review_file", "review_file_modular"}:
         target = cmd_args[0] if cmd_args else ""
         return {
@@ -302,24 +316,32 @@ def _empty_output_payload(cmd, cmd_args):
                     "file": target,
                     "file_path": target,
                     "reviews": [],
-                    "errors": ["Command completed without writing output."],
+                    "errors": [error],
                 }
-            ]
+            ],
+            "diagnostics": {
+                "command": cmd,
+                "command_args": list(cmd_args),
+                "status": status,
+                "output_file": list(getattr(args, "output_file", None) or []),
+                "ignore_index": bool(getattr(args, "ignore_index", False)),
+                "non_interactive": bool(getattr(args, "non_interactive", False)),
+            },
         }
-    return {"reviews": [], "errors": ["Command completed without writing output."]}
+    return {"reviews": [], "errors": [error]}
 
 
 def _ensure_non_interactive_output(cmd, cmd_args, args):
     spec = COMMANDS.get(cmd)
     if spec is None or not spec.prepares_output_file:
-        return
+        return False
     output_files = list(getattr(args, "output_file", None) or [])
     if not output_files:
         fallback_cmd_args = list(cmd_args)
         determine_output_file(cmd, args, fallback_cmd_args)
         output_files = list(getattr(args, "output_file", None) or [])
     if not output_files:
-        return
+        return False
     missing = [
         str(output_file)
         for output_file in output_files
@@ -327,12 +349,13 @@ def _ensure_non_interactive_output(cmd, cmd_args, args):
         and not Path(str(output_file)).is_file()
     ]
     if not missing:
-        return
+        return False
     save_output(
         missing,
-        _empty_output_payload(cmd, cmd_args),
+        _empty_output_payload(cmd, cmd_args, args),
         quiet=getattr(args, "quiet", False),
     )
+    return True
 
 
 def run_non_interactive(engine, args):
@@ -343,7 +366,11 @@ def run_non_interactive(engine, args):
             args.quiet,
         )
         return 1, None
-    parts = args.command.strip().split()
+    try:
+        parts = shlex.split(args.command.strip())
+    except ValueError as e:
+        print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
+        return 1, None
     cmd, cmd_args = parts[0], parts[1:]
     result = None
     exit_code = 0
@@ -354,13 +381,21 @@ def run_non_interactive(engine, args):
         exit_code = 1
     finally:
         try:
-            _ensure_non_interactive_output(cmd, cmd_args, args)
+            wrote_fallback = _ensure_non_interactive_output(cmd, cmd_args, args)
         except Exception as e:
             print_console(
                 f"[bold red]Error writing output fallback:[/bold red] {escape(str(e))}",
                 args.quiet,
             )
             exit_code = 1
+        else:
+            if wrote_fallback and cmd in {
+                "review_file",
+                "review_file_modular",
+                "review_code",
+                "review_patch",
+            }:
+                exit_code = 1
     if exit_code:
         return exit_code, None
     farewell = "[magenta]Goodbye![/magenta]" if result is EXIT_REQUESTED else None
