@@ -38,8 +38,11 @@ class ReviewService:
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
 
-    def get_code_files(self):
-        return self._repository.get_code_files()
+    def get_code_files(self, options: ReviewOptions | None = None):
+        options = coerce_review_options(options)
+        return self._repository.get_code_files(
+            include_suffixed_sources=not options.use_retrieval_context
+        )
 
     def review_file(
         self,
@@ -60,8 +63,7 @@ class ReviewService:
         if not snippet:
             return None
 
-        ext = os.path.splitext(file_path)[1].lower()
-        plugin = self._repository.get_plugin_for_extension(ext)
+        plugin = self._repository.get_plugin_for_path(file_path)
         if not plugin:
             return None
 
@@ -134,7 +136,11 @@ class ReviewService:
             options,
             use_retrieval_context=use_retrieval_context,
         )
-        files = (get_code_files_func or self.get_code_files)()
+        files = (
+            get_code_files_func()
+            if get_code_files_func is not None
+            else self.get_code_files(options=options)
+        )
         if not files:
             return
         review_fn = review_file_func or self.review_file
@@ -198,8 +204,7 @@ class ReviewService:
             relative_path = self._repository.normalize_match_path(abs_path)
             if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
                 continue
-            ext = os.path.splitext(file_diff.path)[1].lower()
-            plugin = self._repository.get_plugin_for_extension(ext)
+            plugin = self._repository.get_plugin_for_path(file_diff.path)
             if not plugin:
                 continue
             snippet = process_diff_file(

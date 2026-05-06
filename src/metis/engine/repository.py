@@ -14,6 +14,14 @@ from .runtime import EngineConfig, EngineState
 logger = logging.getLogger("metis")
 
 
+def _matches_suffix_pattern(name: str, pattern: str) -> bool:
+    if "*" not in pattern:
+        return name.endswith(pattern)
+    if pattern.count("*") != 1 or not pattern.endswith("*"):
+        return False
+    return pattern[:-1] in name
+
+
 class EngineRepository:
     def __init__(self, config: EngineConfig, state: EngineState):
         self._config = config
@@ -21,6 +29,18 @@ class EngineRepository:
 
     def get_plugin_for_extension(self, extension):
         return self._config.ext_plugin_map.get(extension.lower())
+
+    def get_plugin_for_path(self, path: str):
+        ext = os.path.splitext(path)[1].lower()
+        plugin = self.get_plugin_for_extension(ext)
+        if plugin is not None:
+            return plugin
+
+        name = os.path.basename(path).lower()
+        for pattern, plugin in self._config.ext_pattern_plugin_map:
+            if _matches_suffix_pattern(name, pattern):
+                return plugin
+        return None
 
     def get_all_supported_code_extensions(self):
         return sorted(self._config.code_exts)
@@ -87,7 +107,7 @@ class EngineRepository:
             logger.info(f"MetisIgnore file not loaded {metisignore_path}")
             return None
 
-    def get_code_files(self):
+    def get_code_files(self, *, include_suffixed_sources: bool = False):
         base_path = os.path.abspath(self._config.codebase_path)
         metisignore_spec = self.load_metisignore()
         include_spec = None
@@ -104,8 +124,10 @@ class EngineRepository:
         for root, _, files in os.walk(base_path):
             for file in files:
                 full_path = os.path.join(root, file)
-                ext = os.path.splitext(file)[1].lower()
-                if ext not in self._config.code_exts:
+                if include_suffixed_sources:
+                    if self.get_plugin_for_path(file) is None:
+                        continue
+                elif os.path.splitext(file)[1].lower() not in self._config.code_exts:
                     continue
                 rel_path = self.normalize_match_path(full_path)
                 if metisignore_spec and metisignore_spec.match_file(rel_path):

@@ -126,7 +126,7 @@ def run_review_code(engine, args, runtime: CommandRuntime):
     options = _review_options_for_runtime(runtime)
     if args.verbose:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-        total = len(engine.review.get_code_files())
+        total = len(engine.review.get_code_files(options=options))
         file_reviews = iterate_with_progress(
             total,
             engine.review.review_code(options=options),

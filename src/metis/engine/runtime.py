@@ -33,6 +33,7 @@ class EngineConfig:
     review_code_exclude_paths: list[str]
     code_exts: set[str] = field(default_factory=set)
     ext_plugin_map: dict[str, Any] = field(default_factory=dict)
+    ext_pattern_plugin_map: list[tuple[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

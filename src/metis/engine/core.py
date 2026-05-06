@@ -81,9 +81,13 @@ class MetisEngine:
 
         self.code_exts = set()
         self.ext_plugin_map = {}
+        self.ext_pattern_plugin_map = []
         for plugin in self.plugins:
             for extension in plugin.get_supported_extensions():
                 lowered = extension.lower()
+                if "*" in lowered:
+                    self.ext_pattern_plugin_map.append((lowered, plugin))
+                    continue
                 self.code_exts.add(lowered)
                 self.ext_plugin_map[lowered] = plugin
 
@@ -111,6 +115,7 @@ class MetisEngine:
             review_code_exclude_paths=list(self.review_code_exclude_paths),
             code_exts=self.code_exts,
             ext_plugin_map=self.ext_plugin_map,
+            ext_pattern_plugin_map=self.ext_pattern_plugin_map,
         )
         self._state = EngineState()
         self.repository = EngineRepository(self._config, self._state)

@@ -60,7 +60,8 @@ class _DummyEngine:
         )
         return {"code": "ctx", "docs": "docs"}
 
-    def get_code_files(self):
+    def get_code_files(self, options=None):
+        assert isinstance(options, ReviewOptions)
         return ["src/example.py"]
 
     def review_code(self, options=None):
