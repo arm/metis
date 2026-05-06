@@ -204,7 +204,7 @@ plugins:
         Please update the patch file so that is fixes these vulnerabilities.
         Do not include any commentary—only output the patch diff.
   systemverilog:
-    supported_extensions: [".sv", ".svh"]
+    supported_extensions: [".sv", ".svh", ".sv.*", ".svh.*"]
     splitting:
       chunk_lines: 60
       chunk_lines_overlap: 20
@@ -295,7 +295,7 @@ plugins:
         Please update the patch so it fixes these issues.
         Output ONLY the patch diff, with minimal changes.
   verilog:
-    supported_extensions: [".v", ".vh"]
+    supported_extensions: [".v", ".vh", ".v.*", ".vh.*"]
     splitting:
       chunk_lines: 60
       chunk_lines_overlap: 20

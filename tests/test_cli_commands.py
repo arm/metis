@@ -11,11 +11,12 @@ from metis.engine.options import ReviewOptions, TriageOptions
 
 
 def test_run_review_code_uses_review_domain_surface(monkeypatch):
-    calls: list[str] = []
+    calls = []
 
     class _ReviewDomain:
-        def get_code_files(self):
-            calls.append("get_code_files")
+        def get_code_files(self, options=None):
+            assert isinstance(options, ReviewOptions)
+            calls.append(("get_code_files", options.use_retrieval_context))
             return ["a.py"]
 
         def review_code(self, options=None):
@@ -46,7 +47,7 @@ def test_run_review_code_uses_review_domain_surface(monkeypatch):
 
     commands.run_review_code(engine, args, runtime)
 
-    assert calls == ["get_code_files", ("review_code", True)]
+    assert calls == [("get_code_files", True), ("review_code", True)]
 
 
 def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):
@@ -196,7 +197,7 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     calls = []
 
     class _ReviewDomain:
-        def get_code_files(self):
+        def get_code_files(self, options=None):
             return ["a.py"]
 
         def review_code(self, options=None):
