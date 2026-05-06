@@ -29,6 +29,7 @@ class PartialReachabilityFileService:
         max_workers=8,
         context_budget=250,
         max_paths_per_sink=3,
+        reasoning_effort=None,
         progress_callback=None,
     ):
         abs_target, rel_target = self._normalize_target_file(file_path)
@@ -184,10 +185,11 @@ class PartialReachabilityFileService:
         model = review_model or self._config.llama_query_model
         reviewer = TargetedFileReviewer(
             self._llm_provider, model, self._usage_runtime, self._config.codebase_path,
-            cache=cache, symbol_index=index)
+            cache=cache, symbol_index=index, reasoning_effort=reasoning_effort)
         findings = reviewer.review(
             context, partial_graph, detector_result=detector_result,
             max_workers=max_workers, progress_callback=progress_callback)
+        review_errors = list(getattr(reviewer, "last_errors", []) or [])
         raw_findings = len(findings)
         findings = _post_filter_findings(findings, self._config.codebase_path)
         findings, filter_stats = _post_filter_partial_findings(
@@ -204,11 +206,14 @@ class PartialReachabilityFileService:
                 "suppressed_generic": filter_stats.suppressed_generic,
                 "suppressed_non_target": filter_stats.suppressed_non_target,
             })
-        return {
+        result = {
             "file": rel_target,
             "file_path": abs_target,
             "reviews": [self._finding_to_review(f) for f in deduped],
         }
+        if review_errors:
+            result["errors"] = review_errors
+        return result
 
     def _ensure_symbol_index(self, *, progress_callback=None):
         with self._index_lock:

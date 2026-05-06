@@ -25,6 +25,13 @@ from .runtime import EngineConfig
 logger = logging.getLogger("metis")
 
 
+def _chat_model_kwargs(usage_runtime, *, reasoning_effort=None):
+    kwargs = usage_runtime.hooks.chat_model_kwargs()
+    if reasoning_effort and str(reasoning_effort).lower() not in {"none", "off", "false", "default"}:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
+
 # ── types ────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -493,6 +500,10 @@ _VULN_TO_CWE = {
     "info_leak": "CWE-532", "teardown_race": "CWE-362", "width_mismatch": "CWE-681",
     "partial_cleanup": "CWE-459", "rollback_gap": "CWE-460", "deferred_uaf": "CWE-416",
     "stale_state": "CWE-664", "cleanup_symmetry": "CWE-459",
+    "missing_bounds_check": "CWE-120",
+    "auth_comparison_logic_error": "CWE-863", "partial_cleanup_on_error": "CWE-459",
+    "ownership_overwrite": "CWE-772", "premature_state_transition": "CWE-696",
+    "stale_state_after_disable": "CWE-664",
     "ordering_gap": "CWE-696", "file_ops_lifecycle_gap": "CWE-362",
 }
 
@@ -513,17 +524,23 @@ _VTYPE_FAMILY = {
     "partial_cleanup": "cleanup",
     "rollback_gap": "cleanup",
     "state_order": "state_order",
+    "premature_state_transition": "state_order",
     "ordering_gap": "state_order",
     "stale_state": "state_order",
+    "stale_state_after_disable": "state_order",
     "lock_order": "lock_order",
     "stale_after_unlock": "lock_order",
     "missing_auth": "authorization",
     "permission_mismatch": "authorization",
     "wrong_constant": "authorization",
     "boolean_coercion": "authorization",
+    "auth_comparison_logic_error": "authorization",
     "accounting_drift": "accounting",
     "refcount_imbalance": "refcount",
     "info_leak": "information_disclosure",
+    "missing_bounds_check": "memory_bounds",
+    "partial_cleanup_on_error": "cleanup",
+    "ownership_overwrite": "cleanup",
     "width_mismatch": "type_width",
 }
 
@@ -541,6 +558,9 @@ _VULN_TYPE_ALIASES = {
     "lock_order_inversion": "lock_order", "deadlock": "lock_order",
     "missing_cleanup": "partial_cleanup", "resource_leak": "partial_cleanup",
     "missing_authorization": "missing_auth", "missing_permission": "missing_auth",
+    "wrong_enum_constant": "wrong_constant", "wrong_resource_constant": "wrong_constant",
+    "wrong_resource": "wrong_constant", "wrong_permission_constant": "wrong_constant",
+    "resource_mismatch": "permission_mismatch",
     "information_leak": "info_leak", "information_disclosure": "info_leak",
     "arbitrary_file_read": "path_traversal", "arbitrary_file_write": "path_traversal",
     "unvalidated_path": "path_traversal", "filesystem_traversal": "path_traversal",
@@ -877,7 +897,12 @@ class GraphBuilder:
                     nodes, globals_ = fut.result()
                     for n in nodes: graph.add_node(n)
                     for g in globals_: graph.add_global(g)
-                except Exception as e: errors.append(f"{os.path.basename(fp)}: {e}")
+                except Exception as e:
+                    try:
+                        rel = os.path.relpath(fp, codebase_path)
+                    except Exception:
+                        rel = os.path.basename(fp)
+                    errors.append(f"{rel}: {type(e).__name__}: {e}")
                 if progress_callback: progress_callback({"event": "extraction_progress", "completed": done, "total": total, "file": fp})
         graph.resolve_all_calls()
         if progress_callback:
@@ -903,7 +928,11 @@ class GraphBuilder:
                     progress_callback({"event": "extraction_cancelled", "completed": done - 1, "total": total, "file": fp})
                 raise
             except Exception as e:
-                errors.append(f"{os.path.basename(fp)}: {e}")
+                try:
+                    rel = os.path.relpath(fp, codebase_path)
+                except Exception:
+                    rel = os.path.basename(fp)
+                errors.append(f"{rel}: {type(e).__name__}: {e}")
             if progress_callback:
                 progress_callback({"event": "extraction_progress", "completed": done, "total": total, "file": fp})
         graph.resolve_all_calls()
@@ -918,7 +947,7 @@ class GraphBuilder:
         if not content or not content.strip(): return [], []
         base = os.path.abspath(codebase_path)
         rel = os.path.relpath(file_path, base)
-        kw = self._u.hooks.chat_model_kwargs()
+        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.0, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _EXTRACTION_SYSTEM_PROMPT), ("user", _EXTRACTION_USER_TEMPLATE)])
         raw = (prompt | chat | StrOutputParser()).invoke({"file_path": rel, "file_content": _number_lines(content)}).strip()
@@ -1021,10 +1050,11 @@ For EACH path determine if it is a real exploitable vulnerability:
 Return ONLY valid JSON:
 {{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
 "severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
-integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, \
-state_order, lock_order, stale_after_unlock, accounting_drift, missing_auth, permission_mismatch, \
-info_leak, teardown_race, partial_cleanup, deferred_uaf, stale_state, toctou, other.
+vulnerability_type: buffer_overflow, use_after_free, double_free, double_close, null_deref, command_injection, \
+format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, \
+out_of_bounds, refcount_imbalance, state_order, lock_order, stale_after_unlock, accounting_drift, \
+missing_auth, permission_mismatch, info_leak, teardown_race, partial_cleanup, deferred_uaf, stale_state, \
+toctou, other.
 severity: critical, high, medium, low. confidence: high, medium, low. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
 
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
@@ -1113,9 +1143,18 @@ _CROSS_FILE_USR = """Focus file: {target_file}
 
 
 class VulnerabilityConfirmer:
-    def __init__(self, llm_provider, model, usage_runtime, codebase_path, max_tokens=4096):
+    def __init__(
+        self,
+        llm_provider,
+        model,
+        usage_runtime,
+        codebase_path,
+        max_tokens=4096,
+        reasoning_effort=None,
+    ):
         self._p = llm_provider; self._m = model; self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path); self._t = max_tokens
+        self._reasoning_effort = reasoning_effort
 
     # --- Bulk confirmation (used by standalone reachability command) ---
 
@@ -1141,7 +1180,14 @@ class VulnerabilityConfirmer:
                             if fh:
                                 for f in findings: fh.write(json.dumps(f.to_dict(), ensure_ascii=False) + "\n")
                                 fh.flush()
-                    except Exception as e: logger.warning("Confirm fail %s: %s", sn, e)
+                    except Exception as e:
+                        logger.warning("Confirm fail %s: %s", sn, e)
+                        if progress_callback:
+                            progress_callback({
+                                "event": "confirmation_error",
+                                "sink": sn,
+                                "error": f"{type(e).__name__}: {e}",
+                            })
                     with lock: done[0] += 1
                     if progress_callback: progress_callback({"event": "confirmation_progress", "completed": done[0], "total": total, "sink": sn})
         finally:
@@ -1172,6 +1218,14 @@ class VulnerabilityConfirmer:
                     raise
                 except Exception as e:
                     logger.warning("Confirm fail %s: %s", sn, e)
+                    if progress_callback:
+                        progress_callback({
+                            "event": "confirmation_error",
+                            "completed": done - 1,
+                            "total": total,
+                            "sink": sn,
+                            "error": f"{type(e).__name__}: {e}",
+                        })
                     findings = []
                 if findings:
                     all_f.extend(findings)
@@ -1214,7 +1268,7 @@ class VulnerabilityConfirmer:
         for u, n in needed.items():
             b = _read_function_body(self._cb, n)
             if b: cs.append(f"\n--- {u} (line {n.line_number}) ---\n{b}")
-        kw = self._u.hooks.chat_model_kwargs()
+        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _CONFIRM_SYS), ("user", _CONFIRM_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({"paths_section": "\n".join(ps), "code_section": "\n".join(cs)}).strip()
@@ -1289,7 +1343,7 @@ class VulnerabilityConfirmer:
         for u, n in related_nodes.items():
             body = _read_function_body(self._cb, n, 2500)
             if body: rc.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
-        kw = self._u.hooks.chat_model_kwargs()
+        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _FILE_CONFIRM_SYS), ("user", _FILE_CONFIRM_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({
@@ -1345,7 +1399,7 @@ class VulnerabilityConfirmer:
             body = _read_function_body(self._cb, n, 3000)
             if body: rc.append(f"\n--- {u} (line {n.line_number} in {n.file_path}) ---\n{body}")
 
-        kw = self._u.hooks.chat_model_kwargs()
+        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _CROSS_FILE_SYS), ("user", _CROSS_FILE_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({
@@ -1423,7 +1477,9 @@ _LIFECYCLE_KW = frozenset({
 _CLASSIC_C_SINK_RE = re.compile(
     r"\b(?:sprintf|vsprintf|strcpy|strcat|gets|scanf|sscanf|memcpy|memmove|strncpy|"
     r"snprintf|system|popen|exec(?:l|le|lp|lpe|v|ve|vp|vpe)?|fopen|open|stat|"
-    r"lstat|access|printf|fprintf|vfprintf|malloc|calloc|realloc)\s*\(",
+    r"lstat|access|printf|fprintf|vprintf|vfprintf|malloc|calloc|realloc|free|"
+    r"strlen|strnlen|close|auth_get_level|store_unref|store_compact|task_serialize|"
+    r"util_log|session_sweep|session_close|notify_fire)\s*\(",
     re.IGNORECASE,
 )
 _ERROR_UNWIND_RE = re.compile(
@@ -1722,6 +1778,10 @@ Target only these bug classes:
 - A privileged CPU operation checks GPU_WR or a GPU-only permission when CPU_WR is needed.
 - A channel, message, firmware, reset, debug, sysfs, ioctl, or destructive operation
   checks a wrong resource constant such as RES_MSG before channel deletion.
+- A function returns a numeric permission level or role and callers treat it as a boolean,
+  allowing low-privilege nonzero values to pass high-privilege checks.
+- A caller checks the wrong resource/domain constant for the operation being performed,
+  such as checking task permission before creating/deleting a project.
 - A privileged operation uses a generic boolean permission check where a domain-specific
   capability/permission check is required.
 - reset, firmware load, debug, MMIO, DMA, or register access lacks capability or
@@ -1864,30 +1924,64 @@ Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDIN
 
 class SupplementaryAnalyzer:
     def __init__(self, llm_provider, audit_model, strong_model, usage_runtime, codebase_path,
-                 audit_max_tokens=8192, strong_max_tokens=16384):
+                 audit_max_tokens=8192, strong_max_tokens=16384, reasoning_effort=None):
         self._p = llm_provider; self._am = audit_model; self._sm = strong_model
         self._u = usage_runtime; self._cb = os.path.abspath(codebase_path)
         self._at = audit_max_tokens; self._st = strong_max_tokens
+        self._reasoning_effort = reasoning_effort
 
     def analyze(self, graph, *, max_workers=8, progress_callback=None):
+        pass_specs = [
+            ("intra_audit", self._pass_intra),
+            ("lifecycle_audit", self._pass_lifecycle),
+            ("ownership_audit", self._pass_ownership),
+            ("semantic_audit", self._pass_semantic),
+            ("state_audit", self._pass_state_concurrency),
+            ("targeted_state_order", self._pass_targeted_state_order),
+            ("targeted_callback_lifecycle", self._pass_targeted_callback_lifecycle),
+            ("targeted_refcount", self._pass_targeted_refcount),
+            ("targeted_permission", self._pass_targeted_permission),
+            ("targeted_toctou", self._pass_targeted_toctou),
+            ("classic_c_sink", self._pass_classic_c_sinks),
+            ("error_unwind", self._pass_error_unwind),
+            ("counter_symmetry", self._pass_counter_symmetry),
+            ("global_lifecycle", self._pass_global_lifecycle),
+            ("lock_order_extraction", self._pass_lock_order),
+            ("targeted_ordering_gap", self._pass_targeted_ordering_gap),
+            ("targeted_path_access", self._pass_targeted_path_access),
+        ]
         findings = []
-        findings.extend(self._pass_intra(graph, max_workers, progress_callback))
-        findings.extend(self._pass_lifecycle(graph, max_workers, progress_callback))
-        findings.extend(self._pass_ownership(graph, max_workers, progress_callback))
-        findings.extend(self._pass_semantic(graph, max_workers, progress_callback))
-        findings.extend(self._pass_state_concurrency(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_state_order(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_callback_lifecycle(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_refcount(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_permission(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_toctou(graph, max_workers, progress_callback))
-        findings.extend(self._pass_classic_c_sinks(graph, max_workers, progress_callback))
-        findings.extend(self._pass_error_unwind(graph, max_workers, progress_callback))
-        findings.extend(self._pass_counter_symmetry(graph, max_workers, progress_callback))
-        findings.extend(self._pass_global_lifecycle(graph, max_workers, progress_callback))
-        findings.extend(self._pass_lock_order(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_ordering_gap(graph, max_workers, progress_callback))
-        findings.extend(self._pass_targeted_path_access(graph, max_workers, progress_callback))
+        if not pass_specs:
+            return findings
+        worker_budget = max(1, int(max_workers or 1))
+        pass_parallelism = max(1, min(len(pass_specs), worker_budget, 8))
+        pass_workers = max(1, worker_budget // pass_parallelism)
+
+        def _run_pass(pass_name, pass_fn):
+            try:
+                return pass_fn(graph, pass_workers, progress_callback)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                logger.warning("%s pass fail: %s", pass_name, exc)
+                if progress_callback:
+                    progress_callback({
+                        "event": f"{pass_name}_error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                return []
+
+        if pass_parallelism == 1:
+            for pass_name, pass_fn in pass_specs:
+                findings.extend(_run_pass(pass_name, pass_fn))
+        else:
+            with ThreadPoolExecutor(max_workers=pass_parallelism) as executor:
+                futures = {
+                    submit_with_current_context(executor, _run_pass, pass_name, pass_fn): pass_name
+                    for pass_name, pass_fn in pass_specs
+                }
+                for future in as_completed(futures):
+                    findings.extend(future.result())
         if progress_callback:
             by_type = defaultdict(int)
             for f in findings: by_type[f.analysis_type] += 1
@@ -1935,7 +2029,7 @@ class SupplementaryAnalyzer:
             b = _read_function_body(self._cb, fn, 4096)
             if b: bodies.append(f"--- {fn.unique_name} (line {fn.line_number}) ---\n{b}")
         if not bodies: return []
-        kw = self._u.hooks.chat_model_kwargs()
+        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
         chat = self._p.get_chat_model(model=self._am, max_tokens=self._at, temperature=0.1, **kw)
         prompt = ChatPromptTemplate.from_messages([("system", _INTRA_SYS), ("user", _INTRA_USR)])
         raw = (prompt | chat | StrOutputParser()).invoke({"file_path": file_path, "functions_code": "\n\n".join(bodies)}).strip()
@@ -1987,7 +2081,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=model, max_tokens=max_tokens, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", usr_template)])
             raw = (prompt | chat | StrOutputParser()).invoke({usr_key: code_chunk}).strip()
@@ -2021,7 +2115,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", _SEM_SYS), ("user", _SEM_USR)])
             return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
@@ -2071,7 +2165,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", _STATE_SYS), ("user", _STATE_USR)])
             return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
@@ -2107,7 +2201,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _SEM_USR)])
             return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
@@ -2134,7 +2228,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _INTRA_USR)])
             raw = (prompt | chat | StrOutputParser()).invoke({
@@ -2163,7 +2257,7 @@ class SupplementaryAnalyzer:
         results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _SEM_USR)])
             raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
@@ -2230,7 +2324,7 @@ class SupplementaryAnalyzer:
 
         def _run_chunk(chunk_nodes, code_chunk):
             code = f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{code_chunk}"
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", _GLOBAL_LIFECYCLE_SYS), ("user", _SEM_USR)])
             raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code}).strip()
@@ -2327,7 +2421,7 @@ class SupplementaryAnalyzer:
                         nodes.append(node)
             body_chunks = _build_file_grouped_chunks(self._cb, nodes, max_total_chars=50000, per_fn_chars=5000)
             code = "\n".join(lines) + "\n\n== RELEVANT FUNCTION BODIES ==\n" + "\n\n".join(body_chunks)
-            kw = self._u.hooks.chat_model_kwargs()
+            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
             chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
             prompt = ChatPromptTemplate.from_messages([("system", _LOCK_ORDER_SYS), ("user", _SEM_USR)])
             raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code}).strip()
@@ -2476,7 +2570,13 @@ _CALLBACK_TEARDOWN_TYPES = frozenset({
     "teardown_race", "callback_uaf", "deferred_uaf",
     "cleanup_symmetry", "file_ops_lifecycle_gap",
 })
-_AUTH_DEDUP_TYPES = frozenset({"missing_auth", "permission_mismatch", "wrong_constant"})
+_AUTH_DEDUP_TYPES = frozenset({
+    "missing_auth",
+    "permission_mismatch",
+    "wrong_constant",
+    "auth_comparison_logic_error",
+    "boolean_coercion",
+})
 _CALLBACK_OBJECT_TOKENS = frozenset({
     "callback", "cb", "work", "worker", "workqueue", "timer", "watchdog",
     "flush", "cancel", "release", "reset", "poll", "ioctl", "file", "fops",
@@ -2484,6 +2584,8 @@ _CALLBACK_OBJECT_TOKENS = frozenset({
 _PRIVILEGED_OP_TOKENS = frozenset({
     "reset", "firmware", "fw", "debug", "mmio", "dma", "register",
     "channel", "delete", "destroy", "load", "write", "cpu", "gpu",
+    "project", "proj", "task", "create", "update", "resource", "res",
+    "permission", "domain", "level", "role", "boolean",
 })
 
 
@@ -2579,8 +2681,10 @@ def _finding_info(f):
 def _compatible_dedupe_family(a, b):
     types = {a["vtype"], b["vtype"]}
     if types <= _AUTH_DEDUP_TYPES:
+        if a["fn"] != b["fn"]:
+            return False
         shared = (a["tokens"] & b["tokens"]) & _PRIVILEGED_OP_TOKENS
-        return a["fn"] == b["fn"] and bool(shared)
+        return bool(shared) or (a["line"] and b["line"] and abs(a["line"] - b["line"]) <= 5)
     if a["family"] == b["family"]:
         return True
     if types <= _CALLBACK_TEARDOWN_TYPES:
@@ -2802,29 +2906,34 @@ class ReachabilityService:
     def trace_paths(self, graph, *, max_path_length=25):
         return PathTracer(graph, max_path_length=max_path_length).find_all_paths()
 
-    def run_supplementary_analysis(self, graph, *, audit_model="gpt-4.1-mini", strong_model=None, max_workers=8, progress_callback=None):
+    def run_supplementary_analysis(self, graph, *, audit_model="gpt-4.1-mini", strong_model=None, max_workers=8, progress_callback=None, reasoning_effort=None):
         sm = strong_model or self._config.llama_query_model
-        return SupplementaryAnalyzer(self._llm_provider, audit_model, sm, self._usage_runtime, self._config.codebase_path
+        return SupplementaryAnalyzer(self._llm_provider, audit_model, sm, self._usage_runtime, self._config.codebase_path,
+                                     reasoning_effort=reasoning_effort,
         ).analyze(graph, max_workers=max_workers, progress_callback=progress_callback)
 
-    def confirm_paths(self, paths, graph, *, confirmation_model=None, max_workers=8, output_path=None, progress_callback=None):
+    def confirm_paths(self, paths, graph, *, confirmation_model=None, max_workers=8, output_path=None, progress_callback=None, reasoning_effort=None):
         cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_parallel(
+        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path,
+                                      reasoning_effort=reasoning_effort).confirm_parallel(
             paths, graph, max_workers=max_workers, output_path=output_path, progress_callback=progress_callback)
 
-    def confirm_paths_streaming(self, paths, graph, *, confirmation_model=None, output_path=None, progress_callback=None):
+    def confirm_paths_streaming(self, paths, graph, *, confirmation_model=None, output_path=None, progress_callback=None, reasoning_effort=None):
         cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_streaming(
+        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path,
+                                      reasoning_effort=reasoning_effort).confirm_streaming(
             paths, graph, output_path=output_path, progress_callback=progress_callback)
 
-    def confirm_paths_for_file(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None):
+    def confirm_paths_for_file(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None, reasoning_effort=None):
         cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_for_file(
+        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path,
+                                      reasoning_effort=reasoning_effort).confirm_for_file(
             target_file, paths, graph, max_workers=max_workers, progress_callback=progress_callback)
 
-    def confirm_cross_file_for_target(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None):
+    def confirm_cross_file_for_target(self, target_file, paths, graph, *, confirmation_model=None, max_workers=8, progress_callback=None, reasoning_effort=None):
         cm = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path).confirm_cross_file(
+        return VulnerabilityConfirmer(self._llm_provider, cm, self._usage_runtime, self._config.codebase_path,
+                                      reasoning_effort=reasoning_effort).confirm_cross_file(
             target_file, paths, graph, max_workers=max_workers, progress_callback=progress_callback)
 
     def graph_coverage_report(self, graph):
@@ -2859,13 +2968,13 @@ class ReachabilityService:
     def _graph_cache_key(self, *, extraction_model, max_workers, max_paths, max_path_length):
         return (str(extraction_model or ""), int(max_workers), int(max_paths), int(max_path_length))
 
-    def _supp_cache_key(self, *, extraction_model, confirmation_model, max_workers, max_paths, max_path_length):
+    def _supp_cache_key(self, *, extraction_model, confirmation_model, max_workers, max_paths, max_path_length, reasoning_effort=None):
         return (str(extraction_model or ""), str(confirmation_model or self._config.llama_query_model or ""),
-                int(max_workers), int(max_paths), int(max_path_length))
+                int(max_workers), int(max_paths), int(max_path_length), str(reasoning_effort or ""))
 
-    def _file_review_cache_key(self, *, target_file, extraction_model, confirmation_model, max_workers, max_paths, max_paths_per_sink, max_path_length):
+    def _file_review_cache_key(self, *, target_file, extraction_model, confirmation_model, max_workers, max_paths, max_paths_per_sink, max_path_length, reasoning_effort=None):
         return (str(target_file), str(extraction_model or ""), str(confirmation_model or self._config.llama_query_model or ""),
-                int(max_workers), int(max_paths), int(max_paths_per_sink), int(max_path_length))
+                int(max_workers), int(max_paths), int(max_paths_per_sink), int(max_path_length), str(reasoning_effort or ""))
 
 
     def _ensure_graph_and_paths(self, *, extraction_model="gpt-4.1-mini", max_workers=8, max_paths=0, max_path_length=25, progress_callback=None):
@@ -2890,15 +2999,19 @@ class ReachabilityService:
 
 
     def _ensure_supplementary(self, graph, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
-                              max_workers=8, max_paths=0, max_path_length=25, progress_callback=None):
+                              max_workers=8, max_paths=0, max_path_length=25, progress_callback=None,
+                              reasoning_effort=None):
         key = self._supp_cache_key(extraction_model=extraction_model, confirmation_model=confirmation_model,
-                                   max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length)
+                                   max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length,
+                                   reasoning_effort=reasoning_effort)
         with self._cache_lock:
             cached = self._supp_cache.get(key)
         if cached is not None: return cached
+        semantic_model = confirmation_model or self._config.llama_query_model
         findings = self.run_supplementary_analysis(
-            graph, audit_model=extraction_model, strong_model=confirmation_model,
-            max_workers=max_workers, progress_callback=progress_callback)
+            graph, audit_model=semantic_model, strong_model=semantic_model,
+            max_workers=max_workers, progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort)
         with self._cache_lock: self._supp_cache[key] = findings
         return findings
 
@@ -2943,7 +3056,8 @@ class ReachabilityService:
 
 
     def review_codebase(self, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
-                        max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25, progress_callback=None):
+                        max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25,
+                        progress_callback=None, reasoning_effort=None):
         graph, paths = self._ensure_graph_and_paths(
             extraction_model=extraction_model, max_workers=max_workers,
             max_paths=max_paths, max_path_length=max_path_length, progress_callback=progress_callback)
@@ -2952,7 +3066,7 @@ class ReachabilityService:
         supp_findings = self._ensure_supplementary(
             graph, extraction_model=extraction_model, confirmation_model=confirmation_model,
             max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length,
-            progress_callback=progress_callback)
+            progress_callback=progress_callback, reasoning_effort=reasoning_effort)
 
         files_with_paths = set()
         for p in paths:
@@ -2972,7 +3086,8 @@ class ReachabilityService:
             review = self.review_single_file_from_codebase(
                 target_file, extraction_model=extraction_model, confirmation_model=confirmation_model,
                 max_workers=max_workers, max_paths=max_paths, max_paths_per_sink=max_paths_per_sink,
-                max_path_length=max_path_length, progress_callback=progress_callback)
+                max_path_length=max_path_length, progress_callback=progress_callback,
+                reasoning_effort=reasoning_effort)
             completed += 1
             if review and review.get("reviews"): results.append(review)
             if progress_callback: progress_callback({"event": "file_review_progress", "completed": completed, "total": len(all_target_files), "file": target_file})
@@ -2980,11 +3095,13 @@ class ReachabilityService:
         return results
 
     def review_single_file_from_codebase(self, file_path, *, extraction_model="gpt-4.1-mini", confirmation_model=None,
-                                          max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25, progress_callback=None):
+                                          max_workers=8, max_paths=0, max_paths_per_sink=3, max_path_length=25,
+                                          progress_callback=None, reasoning_effort=None):
         abs_target, relative_target = self._normalize_target_file(file_path)
         cache_key = self._file_review_cache_key(
             target_file=relative_target, extraction_model=extraction_model, confirmation_model=confirmation_model,
-            max_workers=max_workers, max_paths=max_paths, max_paths_per_sink=max_paths_per_sink, max_path_length=max_path_length)
+            max_workers=max_workers, max_paths=max_paths, max_paths_per_sink=max_paths_per_sink,
+            max_path_length=max_path_length, reasoning_effort=reasoning_effort)
         with self._cache_lock:
             cached = self._file_review_cache.get(cache_key)
         if cached is not None: return dict(cached)
@@ -2999,7 +3116,8 @@ class ReachabilityService:
 
         supp_findings = self._ensure_supplementary(
             graph, extraction_model=extraction_model, confirmation_model=confirmation_model,
-            max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length, progress_callback=progress_callback)
+            max_workers=max_workers, max_paths=max_paths, max_path_length=max_path_length,
+            progress_callback=progress_callback, reasoning_effort=reasoning_effort)
         file_supp = self._supp_findings_for_file(supp_findings, relative_target)
 
         inbound_paths, cross_file_paths = self._split_paths_for_file(graph, paths, relative_target)
@@ -3008,13 +3126,15 @@ class ReachabilityService:
         if inbound_paths:
             file_reach = self.confirm_paths_for_file(
                 relative_target, inbound_paths, graph,
-                confirmation_model=confirmation_model, max_workers=max_workers, progress_callback=progress_callback)
+                confirmation_model=confirmation_model, max_workers=max_workers,
+                progress_callback=progress_callback, reasoning_effort=reasoning_effort)
 
         cross_findings = []
         if cross_file_paths:
             cross_findings = self.confirm_cross_file_for_target(
                 relative_target, cross_file_paths, graph,
-                confirmation_model=confirmation_model, max_workers=max_workers, progress_callback=progress_callback)
+                confirmation_model=confirmation_model, max_workers=max_workers,
+                progress_callback=progress_callback, reasoning_effort=reasoning_effort)
 
         all_findings = file_reach + cross_findings + file_supp
         if not all_findings:

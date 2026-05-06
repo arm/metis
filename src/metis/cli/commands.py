@@ -92,7 +92,7 @@ Type one of the following commands (with arguments):
 - [cyan]index[/cyan]
 - [cyan]review_patch mypatch.diff[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
-  - default uses partial C/C++ reachability; add [cyan]--mode full[/cyan] for the old full-graph path.
+  - default uses full tree-sitter reachability scoped to paths touching the file; add [cyan]--mode full[/cyan] for the old full-graph path.
 - [cyan]review_file_modular path_to_file/myfile.c[/cyan]
   - uses the modular partial reachability implementation for side-by-side validation.
 - [cyan]review_code[/cyan]
@@ -102,6 +102,7 @@ Type one of the following commands (with arguments):
 - [cyan]update patch.diff[/cyan]
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [cyan]reachability[/cyan]
+- [cyan]reachability_treesitter[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
 - [magenta]help[/magenta]   (show this message)
 
@@ -117,12 +118,14 @@ Options:
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
     --reachability-extraction-model MODEL    Model for function extraction (default: gpt-4.1-mini).
-    --reachability-confirmation-model MODEL  Model for deep analysis.
+    --reachability-confirmation-model MODEL  Model for vulnerability analysis (default: gpt-5.5).
+    --reachability-reasoning-effort LEVEL    Reasoning effort when supported: none|minimal|low|medium|high (default: high).
     --reachability-max-paths-per-sink N      Max diverse paths per root-cause sink (default: 3)
     --reachability-workers N                 Parallel workers (default: 8)
     --reachability-max-path N                Max paths to analyze, 0=all (default: 0)
     review_file/review_file_modular options: --mode partial|full, --full, --context-budget N
-    review_code_interactive options: --yes, --all-paths, --top-paths N, --output-dir DIR
+    review_code_interactive options: --yes, --all-paths, --top-paths N, --output-dir DIR, --output-file PATH.jsonl
+    review_file and reachability_treesitter use tree-sitter for graph construction and AI confirmation.
 """
     )
 
@@ -156,7 +159,16 @@ def _run_file_review_with(
     *,
     modular: bool = False,
 ):
+    original_file_path = file_path
+    if not Path(str(file_path)).is_file():
+        codebase_path = getattr(engine, "codebase_path", None)
+        if codebase_path:
+            candidate = Path(str(codebase_path)) / str(file_path)
+            if candidate.is_file():
+                file_path = str(candidate)
     if not check_file_exists(file_path):
+        if original_file_path != file_path:
+            check_file_exists(original_file_path)
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
@@ -166,7 +178,44 @@ def _run_file_review_with(
         if not args.verbose:
             return
         ev = event.get("event", "")
-        if ev == "partial_symbol_index_start":
+        if ev == "treesitter_graph_start":
+            print_console(
+                f"[cyan]Building tree-sitter reachability graph for {event.get('total', 0)} C/C++ files...[/cyan]",
+                args.quiet,
+            )
+        elif ev == "treesitter_graph_done":
+            print_console(
+                f"[green]Tree-sitter graph: {event.get('nodes', 0)} functions, "
+                f"{event.get('edges', 0)} edges, {event.get('sources', 0)} sources, "
+                f"{event.get('sinks', 0)} sinks[/green]",
+                args.quiet,
+            )
+        elif ev == "treesitter_file_paths_done":
+            print_console(
+                f"[green]Tree-sitter focus paths for {escape(str(event.get('file', '')))}: "
+                f"{event.get('paths', 0)}[/green]",
+                args.quiet,
+            )
+        elif ev == "treesitter_file_review_done":
+            print_console(
+                f"[green]Tree-sitter file review: supplementary={event.get('supplementary_findings', 0)}, "
+                f"paths={event.get('path_findings', 0)}, deterministic={event.get('deterministic_findings', 0)}[/green]",
+                args.quiet,
+            )
+        elif ev.endswith("_start"):
+            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            print_console(
+                f"[cyan]{escape(str(ev).replace('_', ' '))}: {count} candidate(s)[/cyan]",
+                args.quiet,
+            )
+        elif ev.endswith("_done") and ev != "treesitter_file_review_done":
+            if "findings" in event:
+                print_console(
+                    f"[green]{escape(str(ev).replace('_', ' '))}: "
+                    f"{event.get('findings', 0)} finding(s)[/green]",
+                    args.quiet,
+                )
+        elif ev == "partial_symbol_index_start":
             print_console(f"[cyan]Building symbol index for {event.get('files', 0)} C/C++ files...[/cyan]", args.quiet)
         elif ev == "partial_symbol_index_done":
             print_console(
@@ -194,6 +243,12 @@ def _run_file_review_with(
             print_console(
                 f"[green]Partial review: {event.get('deduped_findings', 0)} findings "
                 f"after filtering[/green]",
+                args.quiet,
+            )
+        elif ev == "partial_review_error":
+            print_console(
+                f"[red]Partial review LLM error in {escape(str(event.get('pass', 'unknown')))}: "
+                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
                 args.quiet,
             )
 
@@ -406,6 +461,7 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
 
     extraction_model = getattr(args, "reachability_extraction_model", "gpt-4.1-mini")
     confirmation_model = getattr(args, "reachability_confirmation_model", None)
+    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
     max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
     max_path_length = int(getattr(args, "reachability_max_path_length", 25))
     confirm_model = confirmation_model or engine.reachability._config.llama_query_model
@@ -467,7 +523,12 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
                     q,
                 )
                 if event.get("errors"):
-                    print_console(f"[yellow]  Extraction errors: {len(event['errors'])}[/yellow]", q)
+                    errors = event.get("errors") or []
+                    print_console(f"[yellow]  Extraction errors: {len(errors)}[/yellow]", q)
+                    for err in errors[:8]:
+                        print_console(f"    [yellow]{escape(str(err))}[/yellow]", q)
+                    if len(errors) > 8:
+                        print_console(f"    [yellow]... {len(errors) - 8} more[/yellow]", q)
 
         with usage_operation("reachability"):
             graph = engine.reachability.build_graph_interactive(
@@ -532,6 +593,12 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
                     f"{escape(str(event.get('sink', '')))}",
                     q,
                 )
+            elif ev == "confirmation_error":
+                print_console(
+                    f"  [red]LLM error for {escape(str(event.get('sink', '')))}: "
+                    f"{escape(str(event.get('error', 'unknown error')))}[/red]",
+                    q,
+                )
             elif ev == "confirmation_done":
                 print_console(f"[green]  AI path analysis complete: {event['confirmed']} findings[/green]", q)
 
@@ -542,6 +609,7 @@ def run_review_code_interactive(engine, args, runtime: CommandRuntime):
                 confirmation_model=confirmation_model,
                 output_path=str(findings_path),
                 progress_callback=_confirm_cb,
+                reasoning_effort=reasoning_effort,
             )
 
         print_console("\n[cyan]Phase 4/4 - Deduplicating streamed findings[/cyan]", q)
@@ -698,11 +766,211 @@ def _finalize_review_output(engine, results, args, runtime: CommandRuntime):
     save_output(args.output_file, results, args.quiet, sarif_payload=sarif_payload)
 
 
+def run_reachability_treesitter(engine, args, runtime: CommandRuntime):
+    from metis.engine.reachability_service_modular.service import (
+        DEFAULT_TREESITTER_OUTPUT_DIR,
+    )
+
+    confirmation_model = getattr(args, "reachability_confirmation_model", None) or "gpt-5.5"
+    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
+    max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
+    workers = getattr(args, "reachability_workers", 8)
+    max_paths_limit = getattr(args, "reachability_max_paths", 0)
+    q = args.quiet
+
+    output_dir = engine.reachability_treesitter.default_output_dir()
+    findings_path = None
+    if args.output_file:
+        jsonl = [p for p in args.output_file if str(p).lower().endswith(".jsonl")]
+        if jsonl:
+            findings_path = Path(str(jsonl[0]))
+            output_dir = findings_path.parent
+        else:
+            output_dir = Path(str(args.output_file[0]))
+    if not findings_path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        findings_path = output_dir / f"findings_treesitter_{timestamp}.jsonl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    graph_path = output_dir / f"graph_treesitter_{timestamp}.jsonl"
+    paths_path = output_dir / f"paths_treesitter_{timestamp}.jsonl"
+    raw_findings_path = output_dir / f"findings_treesitter_raw_{timestamp}.jsonl"
+    supplementary_findings_path = output_dir / f"findings_treesitter_supplementary_raw_{timestamp}.jsonl"
+
+    files = engine.reachability_treesitter.get_c_cpp_files()
+    if not files:
+        print_console("[yellow]No C/C++ files found in codebase.[/yellow]", q)
+        return
+
+    print_console(
+        f"\n[bold cyan]Metis Tree-sitter Reachability[/bold cyan]\n"
+        f"  Files: {len(files)}\n"
+        f"  Analysis model: {escape(str(confirmation_model))}"
+        f"{' | reasoning=' + escape(str(reasoning_effort)) if reasoning_effort else ''}\n"
+        f"  Output: {escape(str(output_dir or DEFAULT_TREESITTER_OUTPUT_DIR))}",
+        q,
+    )
+
+    def _graph_cb(event):
+        ev = event.get("event", "")
+        if ev == "treesitter_graph_start":
+            print_console(f"\n[cyan]Phase 1/5 - Building deterministic graph from {event['total']} files[/cyan]", q)
+        elif ev == "treesitter_graph_progress" and args.verbose:
+            print_console(
+                f"  [{event['completed']}/{event['total']}] "
+                f"{escape(str(event.get('file', '')))} "
+                f"functions={event.get('functions', 0)} globals={event.get('globals', 0)}",
+                q,
+            )
+            for error in event.get("error_messages", []) or []:
+                print_console(f"    [yellow]{escape(str(error))}[/yellow]", q)
+        elif ev == "treesitter_graph_done":
+            print_console(
+                f"[green]  Graph: {event['nodes']} functions, {event['edges']} edges, "
+                f"{event['sources']} sources, {event['sinks']} sinks[/green]",
+                q,
+            )
+            if event.get("errors"):
+                errors = event.get("errors") or []
+                print_console(f"[yellow]  Parse issues: {len(errors)}[/yellow]", q)
+                for error in errors[:8]:
+                    print_console(f"    [yellow]{escape(str(error))}[/yellow]", q)
+                if len(errors) > 8:
+                    print_console(f"    [yellow]... {len(errors) - 8} more[/yellow]", q)
+
+    with usage_operation("reachability_treesitter"):
+        graph = engine.reachability_treesitter.build_graph(
+            files,
+            progress_callback=_graph_cb,
+        )
+
+    if graph.node_count() == 0:
+        print_console("[yellow]Tree-sitter graph empty - no functions extracted.[/yellow]", q)
+        return
+
+    graph.save_jsonl(graph_path, include_globals=True)
+    print_console(f"  Graph saved: {escape(str(graph_path))}", q)
+
+    print_console("\n[cyan]Phase 2/5 - Tracing source-to-sink paths[/cyan]", q)
+    paths = engine.reachability_treesitter.trace_paths(graph)
+    if max_paths_limit > 0:
+        paths_to_analyze = paths[:max_paths_limit]
+    else:
+        paths_to_analyze = paths
+    _write_paths_jsonl(paths, graph, paths_path)
+    print_console(
+        f"  Paths: [bold]{len(paths)}[/bold] | Selected: [bold]{len(paths_to_analyze)}[/bold]\n"
+        f"  Paths saved: {escape(str(paths_path))}",
+        q,
+    )
+
+    def _supp_cb(event):
+        ev = str(event.get("event", ""))
+        if ev.endswith("_start"):
+            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            print_console(
+                f"  [cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
+                q,
+            )
+        elif ev.endswith("_done") and ev != "supplementary_done":
+            print_console(
+                f"  [green]{escape(ev.replace('_', ' '))}: "
+                f"{event.get('findings', 0)} finding(s)[/green]",
+                q,
+            )
+        elif ev == "supplementary_done":
+            print_console(
+                f"[green]  Supplementary findings: {event.get('total', 0)}[/green]",
+                q,
+            )
+
+    print_console("\n[cyan]Phase 3/5 - Supplementary semantic audit[/cyan]", q)
+    with usage_operation("reachability_treesitter"):
+        supplementary_findings = engine.reachability_treesitter.run_supplementary_analysis(
+            graph,
+            audit_model=confirmation_model,
+            strong_model=confirmation_model,
+            max_workers=workers,
+            progress_callback=_supp_cb,
+            reasoning_effort=reasoning_effort,
+        )
+    from metis.engine.reachability_service import _write_jsonl
+
+    _write_jsonl(str(supplementary_findings_path), supplementary_findings)
+
+    if not paths_to_analyze:
+        print_console("[yellow]No source-to-sink paths selected for AI path review.[/yellow]", q)
+        findings = []
+    else:
+        findings = None
+
+    def _confirm_cb(event):
+        ev = event.get("event", "")
+        if ev == "confirmation_start":
+            print_console(f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} sinks[/cyan]", q)
+        elif ev == "confirmation_progress" and args.verbose:
+            print_console(
+                f"  [{event['completed']}/{event['total']}] {escape(str(event.get('sink', '')))}",
+                q,
+            )
+        elif ev == "confirmation_error":
+            print_console(
+                f"  [red]LLM error for {escape(str(event.get('sink', '')))}: "
+                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
+                q,
+            )
+        elif ev == "confirmation_done":
+            print_console(f"[green]  Confirmed findings: {event['confirmed']}[/green]", q)
+
+    if findings is None:
+        with usage_operation("reachability_treesitter"):
+            findings = engine.reachability_treesitter.confirm_paths(
+                paths_to_analyze,
+                graph,
+                confirmation_model=confirmation_model,
+                max_workers=workers,
+                output_path=str(raw_findings_path),
+                progress_callback=_confirm_cb,
+                reasoning_effort=reasoning_effort,
+            )
+
+    all_findings = list(supplementary_findings) + list(findings)
+    print_console("\n[cyan]Phase 5/5 - Deduplicating findings[/cyan]", q)
+    if not all_findings:
+        print_console(
+            f"[yellow]No vulnerabilities confirmed.[/yellow]\n"
+            f"  Raw findings: {escape(str(raw_findings_path))}\n"
+            f"  Supplementary raw findings: {escape(str(supplementary_findings_path))}\n"
+            f"  Graph: {escape(str(graph_path))}",
+            q,
+        )
+        return
+
+    with usage_operation("reachability_treesitter"):
+        deduped, total_before, removed = engine.reachability_treesitter.deduplicate_and_write(
+            all_findings,
+            str(findings_path),
+            max_paths_per_sink=max_paths_per_sink,
+        )
+
+    print_console(
+        f"[green]  Findings: {total_before} raw, {len(deduped)} after dedupe "
+        f"({removed} removed)[/green]\n"
+        f"  Findings:     {escape(str(findings_path))}\n"
+        f"  Raw findings: {escape(str(raw_findings_path))}\n"
+        f"  Supplementary raw findings: {escape(str(supplementary_findings_path))}\n"
+        f"  Graph:        {escape(str(graph_path))}\n"
+        f"  Paths:        {escape(str(paths_path))}",
+        q,
+    )
+
+
 def run_reachability(engine, args, runtime: CommandRuntime):
     from metis.engine.reachability_service import DEFAULT_OUTPUT_DIR
 
     extraction_model = getattr(args, "reachability_extraction_model", "gpt-4.1-mini")
     confirmation_model = getattr(args, "reachability_confirmation_model", None)
+    reasoning_effort = getattr(args, "reachability_reasoning_effort", None)
     max_paths_per_sink = getattr(args, "reachability_max_paths_per_sink", 3)
     workers = getattr(args, "reachability_workers", 8)
     max_paths_limit = getattr(args, "reachability_max_paths", 0)
@@ -748,6 +1016,10 @@ def run_reachability(engine, args, runtime: CommandRuntime):
             errs = e.get("errors", [])
             if errs:
                 print_console(f"[yellow]  {len(errs)} extraction error(s)[/yellow]", q)
+                for err in errs[:8]:
+                    print_console(f"    [yellow]{escape(str(err))}[/yellow]", q)
+                if len(errs) > 8:
+                    print_console(f"    [yellow]... {len(errs) - 8} more[/yellow]", q)
 
     with usage_operation("reachability"):
         graph = engine.reachability.build_graph(files, extraction_model=extraction_model, max_workers=workers, progress_callback=_ext_cb)
@@ -804,8 +1076,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
 
     with usage_operation("reachability"):
         supp_findings = engine.reachability.run_supplementary_analysis(
-            graph, audit_model=extraction_model, strong_model=confirmation_model,
-            max_workers=workers, progress_callback=_supp_cb)
+            graph, audit_model=confirmation_model or confirm_model, strong_model=confirm_model,
+            max_workers=workers, progress_callback=_supp_cb,
+            reasoning_effort=reasoning_effort)
 
     reach_findings = []
     if paths_to_analyze:
@@ -815,13 +1088,20 @@ def run_reachability(engine, args, runtime: CommandRuntime):
                 print_console(f"\n[cyan]Phase 6/6 — Confirming {len(paths_to_analyze)} paths across {e['total']} sinks...[/cyan]", q)
             elif ev == "confirmation_progress" and args.verbose:
                 print_console(f"  [{e['completed']}/{e['total']}] {escape(str(e.get('sink', '')))}", q)
+            elif ev == "confirmation_error":
+                print_console(
+                    f"  [red]LLM error for {escape(str(e.get('sink', '')))}: "
+                    f"{escape(str(e.get('error', 'unknown error')))}[/red]",
+                    q,
+                )
             elif ev == "confirmation_done":
                 print_console(f"[green]  ✓ Reachability: {e['confirmed']} confirmed[/green]", q)
 
         with usage_operation("reachability"):
             reach_findings = engine.reachability.confirm_paths(
                 paths_to_analyze, graph, confirmation_model=confirmation_model,
-                max_workers=workers, progress_callback=_conf_cb)
+                max_workers=workers, progress_callback=_conf_cb,
+                reasoning_effort=reasoning_effort)
 
     all_findings = reach_findings + supp_findings
     if not all_findings:

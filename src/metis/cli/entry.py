@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import cast
 
 from rich.markup import escape
-from prompt_toolkit import prompt
-from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
@@ -24,7 +22,7 @@ except ImportError:
     pass
 
 
-from .command_registry import COMMANDS, completer
+from .command_registry import COMMANDS, get_completer
 from .command_runtime import CommandRuntime
 from .utils import (
     configure_logger,
@@ -116,12 +114,12 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        use_reachability_for_review=True,
         reachability_extraction_model=args.reachability_extraction_model,
         reachability_confirmation_model=args.reachability_confirmation_model,
         reachability_workers=args.reachability_workers,
         reachability_max_paths=args.reachability_max_paths,
         reachability_max_paths_per_sink=args.reachability_max_paths_per_sink,
+        reachability_reasoning_effort=args.reachability_reasoning_effort,
         **runtime,
     )
     return engine, vector_backend
@@ -275,10 +273,14 @@ def run_non_interactive(engine, args):
 
 
 def run_interactive_loop(engine, args, vector_backend):
+    from prompt_toolkit import prompt
+    from prompt_toolkit.history import InMemoryHistory
+
     print_console(
         "[bold cyan]Metis CLI. Type 'help' for usage, 'exit' to quit.[/bold cyan]",
         args.quiet,
     )
+    completer = get_completer()
     history = InMemoryHistory()
 
     while True:
@@ -385,8 +387,15 @@ def main():
     parser.add_argument(
         "--reachability-confirmation-model",
         type=str,
-        default=None,
-        help="LLM model for reachability vulnerability confirmation (default: configured query model)",
+        default="gpt-5.5",
+        help="LLM model for reachability vulnerability analysis (default: gpt-5.5)",
+    )
+    parser.add_argument(
+        "--reachability-reasoning-effort",
+        type=str,
+        default="high",
+        choices=["none", "minimal", "low", "medium", "high"],
+        help="Reasoning effort for reachability vulnerability analysis when supported (default: high)",
     )
     parser.add_argument(
         "--reachability-max-paths-per-sink",
@@ -451,3 +460,7 @@ def main():
         finalize_cli_session_and_close(engine, args, farewell)
     if exit_code:
         raise SystemExit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

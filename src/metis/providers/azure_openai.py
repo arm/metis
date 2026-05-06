@@ -171,6 +171,8 @@ class AzureOpenAIProvider(LLMProvider):
             "frequency_penalty",
             "presence_penalty",
             "response_format",
+            "reasoning_effort",
+            "verbosity",
         ):
             if optional_key in kwargs and optional_key != "response_format":
                 params[optional_key] = kwargs[optional_key]

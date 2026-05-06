@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-from prompt_toolkit.completion import WordCompleter
 from rich.markup import escape
 
 from .command_runtime import CommandRuntime
@@ -15,6 +14,7 @@ from .commands import (
     run_file_review_modular,
     run_index,
     run_reachability,
+    run_reachability_treesitter,
     run_review,
     run_review_code,
     run_review_code_interactive,
@@ -187,9 +187,25 @@ COMMANDS = {
         prepares_output_file=False,
         index_policy="none",
     ),
+    "reachability_treesitter": CommandSpec(
+        run_reachability_treesitter,
+        tracked=True,
+        invocation_mode="args",
+        prepares_output_file=False,
+        index_policy="none",
+    ),
     "help": CommandSpec(show_help, invocation_mode="meta"),
     "version": CommandSpec(show_version, invocation_mode="meta"),
     "exit": CommandSpec(None),
 }
 
-completer = WordCompleter(list(COMMANDS), ignore_case=True)
+_completer = None
+
+
+def get_completer():
+    global _completer
+    if _completer is None:
+        from prompt_toolkit.completion import WordCompleter
+
+        _completer = WordCompleter(list(COMMANDS), ignore_case=True)
+    return _completer

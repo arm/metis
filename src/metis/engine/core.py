@@ -19,6 +19,7 @@ from .reachability_file_service_modular import (
     PartialReachabilityFileService as ModularPartialReachabilityFileService,
 )
 from .reachability_service import ReachabilityService
+from .reachability_service_modular import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
@@ -80,7 +81,6 @@ class MetisEngine:
         self.use_reachability_for_review = bool(
             kwargs.get("use_reachability_for_review", False)
         )
-        print("ENGINE FLAG use_reachability_for_review =", self.use_reachability_for_review)
         self.reachability_settings = {
             "extraction_model": kwargs.get(
                 "reachability_extraction_model", "gpt-4.1-mini"
@@ -92,6 +92,7 @@ class MetisEngine:
                 kwargs.get("reachability_max_paths_per_sink", 3)
             ),
             "max_path_length": int(kwargs.get("reachability_max_path_length", 25)),
+            "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
         }
 
         self.plugin_config = load_plugin_config()
@@ -152,6 +153,12 @@ class MetisEngine:
             usage_runtime=self.usage_runtime
 
         )
+        self.reachability_treesitter = TreeSitterReachabilityService(
+            config=self._config,
+            repository=self.repository,
+            llm_provider=self.llm_provider,
+            usage_runtime=self.usage_runtime,
+        )
         self.partial_reachability_file = PartialReachabilityFileService(
             config=self._config,
             repository=self.repository,
@@ -170,6 +177,7 @@ class MetisEngine:
             get_query_engines=lambda: self._init_and_get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
             reachability_service=self.reachability,
+            treesitter_reachability_service=self.reachability_treesitter,
             partial_reachability_file_service=self.partial_reachability_file,
             modular_reachability_file_service=self.partial_reachability_file_modular,
             use_reachability_for_review=self.use_reachability_for_review,

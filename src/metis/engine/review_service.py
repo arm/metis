@@ -34,6 +34,7 @@ class ReviewService:
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
         reachability_service=None,
+        treesitter_reachability_service=None,
         partial_reachability_file_service=None,
         modular_reachability_file_service=None,
         use_reachability_for_review: bool = False,
@@ -44,6 +45,7 @@ class ReviewService:
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
         self._reachability_service = reachability_service
+        self._treesitter_reachability_service = treesitter_reachability_service
         self._partial_reachability_file_service = partial_reachability_file_service
         self._modular_reachability_file_service = modular_reachability_file_service
         self._use_reachability_for_review = use_reachability_for_review
@@ -92,6 +94,7 @@ class ReviewService:
             context_budget=context_budget,
             progress_callback=progress_callback,
             partial_file_service=self._partial_reachability_file_service,
+            prefer_treesitter_reachability=True,
         )
 
     def review_file_modular(
@@ -124,6 +127,7 @@ class ReviewService:
         context_budget: int | None = None,
         progress_callback=None,
         partial_file_service=None,
+        prefer_treesitter_reachability: bool = False,
     ):
         options = coerce_review_options(
             options,
@@ -137,6 +141,28 @@ class ReviewService:
             ):
                 return self._find_reachability_review_for_file(file_path)
         elif mode == "partial":
+            if (
+                prefer_treesitter_reachability
+                and self._treesitter_reachability_service is not None
+                and self._is_file_in_codebase(file_path)
+                and self._is_c_cpp_file(file_path)
+            ):
+                result = self._treesitter_reachability_service.review_file(
+                    file_path,
+                    confirmation_model=self._reachability_settings.get("confirmation_model"),
+                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                    max_paths=int(self._reachability_settings.get("max_paths", 0)),
+                    max_paths_per_sink=int(
+                        self._reachability_settings.get("max_paths_per_sink", 3)
+                    ),
+                    max_path_length=int(
+                        self._reachability_settings.get("max_path_length", 25)
+                    ),
+                    reasoning_effort=self._reachability_settings.get("reasoning_effort"),
+                    progress_callback=progress_callback,
+                )
+                if result is not None:
+                    return result
             if partial_file_service is not None:
                 result = partial_file_service.review_file(
                     file_path,
@@ -149,6 +175,7 @@ class ReviewService:
                     max_paths_per_sink=int(
                         self._reachability_settings.get("max_paths_per_sink", 3)
                     ),
+                    reasoning_effort=self._reachability_settings.get("reasoning_effort"),
                     progress_callback=progress_callback,
                 )
                 if result is not None:
@@ -194,7 +221,25 @@ class ReviewService:
             return self._review_graph_factory().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
-            return None
+            return {
+                "file": relative_path,
+                "file_path": file_path,
+                "reviews": [],
+                "errors": [f"{type(e).__name__}: {e}"],
+            }
+
+    def _is_file_in_codebase(self, file_path):
+        try:
+            base = os.path.abspath(self._config.codebase_path)
+            target = os.path.abspath(str(file_path))
+            return os.path.commonpath([base, target]) == base
+        except (OSError, ValueError):
+            return False
+
+    def _is_c_cpp_file(self, file_path):
+        return os.path.splitext(str(file_path))[1].lower() in {
+            ".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"
+        }
 
     def _invoke_review_file(
         self,
@@ -280,7 +325,14 @@ class ReviewService:
                     result = future.result()
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
-                    yield None
+                    yield {
+                        "file": os.path.relpath(
+                            path, os.path.abspath(self._config.codebase_path)
+                        ),
+                        "file_path": path,
+                        "reviews": [],
+                        "errors": [f"{type(e).__name__}: {e}"],
+                    }
                     continue
                 if result:
                     yield result

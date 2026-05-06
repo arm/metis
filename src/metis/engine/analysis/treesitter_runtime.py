@@ -28,7 +28,11 @@ class TreeSitterRuntime:
             self._parser = True
             self._available = True
         except Exception as exc:
-            self._init_error = str(exc)
+            self._init_error = (
+                f"{exc}. Install a compatible parser pack with: "
+                "uv pip install --reinstall --no-cache --link-mode=copy "
+                "'tree-sitter-language-pack>=0.13.0,<1.0.0'"
+            )
 
     @property
     def is_available(self) -> bool:

@@ -553,11 +553,28 @@ def check_file_exists(file_path, quiet=False):
 
 def pretty_print_reviews(results, quiet=False):
     if not results or not results.get("reviews"):
+        errors = []
+        if isinstance(results, dict):
+            errors = results.get("errors") or []
+        if errors:
+            print_console("[bold red]Review failed before LLM analysis completed.[/bold red]", quiet)
+            for err in errors[:8]:
+                print_console(f"  [red]{escape(str(err))}[/red]", quiet)
+            if len(errors) > 8:
+                print_console(f"  [red]... {len(errors) - 8} more[/red]", quiet)
+            return
         print_console("[bold green]No security issues found![/bold green]", quiet)
         return
 
     for file_review in results.get("reviews", []):
         file = file_review.get("file", "UNKNOWN FILE")
+        errors = file_review.get("errors") or []
+        if errors:
+            print_console(f"\n[bold red]Review failed for {escape(file)}[/bold red]", quiet)
+            for err in errors[:8]:
+                print_console(f"  [red]{escape(str(err))}[/red]", quiet)
+            if len(errors) > 8:
+                print_console(f"  [red]... {len(errors) - 8} more[/red]", quiet)
         reviews = file_review.get("reviews", [])
         if reviews:
             print_console(f"\n[bold blue]File: {escape(file)}[/bold blue]", quiet)
@@ -615,7 +632,7 @@ def pretty_print_reviews(results, quiet=False):
                     )
                 if any(r.get(field) for field in ("confidence", "severity", "cwe")):
                     print_console("", quiet)
-        else:
+        elif not errors:
             print_console(f"[green]No issues in {escape(file)}[/green]", quiet)
 
 

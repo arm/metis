@@ -212,6 +212,9 @@ Use `--ignore-index` to run without retrieval when no index is available.
 ### `review_code_interactive`
 Runs full reachability graph review with terminal prompts and live progress. It asks before graph construction, writes `graph_*.jsonl` and `paths_*.jsonl` under the codebase output directory, lets you choose all paths or the top N paths, and streams each confirmed finding to `findings_stream_*.jsonl` as soon as it is found.
 
+### `reachability_treesitter`
+Builds the reachability graph deterministically with tree-sitter instead of LLM extraction, writes `graph_treesitter_*.jsonl` and `paths_treesitter_*.jsonl`, then uses the existing AI confirmation stage to review selected source-to-sink paths.
+
 ### `review_file <path>`
 Performs a targeted security review of a single file.
 Use `--ignore-index` to run without retrieval when no index is available.

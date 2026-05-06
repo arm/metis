@@ -5463,6 +5463,7 @@ class TargetedFileReviewer:
         max_tokens: int = 8192,
         cache: PartialAnalysisCache | None = None,
         symbol_index: SymbolIndex | None = None,
+        reasoning_effort: str | None = None,
     ):
         self._p = llm_provider
         self._m = model
@@ -5471,6 +5472,7 @@ class TargetedFileReviewer:
         self._t = max_tokens
         self._cache = cache or PartialAnalysisCache(codebase_path, symbol_index)
         self._cache.bind_index(symbol_index)
+        self._reasoning_effort = reasoning_effort
 
     def review(self, context: PartialReviewContext, partial_graph: ReachabilityGraph, *,
                detector_result: PartialDetectorResult | None = None,
@@ -5482,6 +5484,7 @@ class TargetedFileReviewer:
         if progress_callback:
             progress_callback({"event": "partial_review_start", "passes": len(passes)})
         findings: list[VulnerabilityFinding] = []
+        self.last_errors = []
         with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(passes)))) as ex:
             futs = {
                 submit_with_current_context(ex, self._run_pass, context, partial_graph, item, detector_result): item[0]
@@ -5493,6 +5496,14 @@ class TargetedFileReviewer:
                     findings.extend(fut.result())
                 except Exception as exc:
                     logger.warning("Partial review pass failed for %s: %s", pass_name, exc)
+                    error = f"{pass_name}: {type(exc).__name__}: {exc}"
+                    self.last_errors.append(error)
+                    if progress_callback:
+                        progress_callback({
+                            "event": "partial_review_error",
+                            "pass": pass_name,
+                            "error": error,
+                        })
         if progress_callback:
             progress_callback({"event": "partial_review_raw_done", "raw_findings": len(findings)})
         return findings
@@ -5760,6 +5771,8 @@ class TargetedFileReviewer:
             ("user", _PARTIAL_REVIEW_USR),
         ])
         kw = self._u.hooks.chat_model_kwargs()
+        if self._reasoning_effort and str(self._reasoning_effort).lower() not in {"none", "off", "false", "default"}:
+            kw["reasoning_effort"] = self._reasoning_effort
         chat = self._p.get_chat_model(model=self._m, max_tokens=self._t, temperature=0.1, **kw)
         raw = (prompt | chat | StrOutputParser()).invoke({
             "target_file": context.target_file,
@@ -6455,6 +6468,7 @@ class PartialReachabilityFileService:
         max_workers=8,
         context_budget=250,
         max_paths_per_sink=3,
+        reasoning_effort=None,
         progress_callback=None,
     ):
         abs_target, rel_target = self._normalize_target_file(file_path)
@@ -6610,10 +6624,11 @@ class PartialReachabilityFileService:
         model = review_model or self._config.llama_query_model
         reviewer = TargetedFileReviewer(
             self._llm_provider, model, self._usage_runtime, self._config.codebase_path,
-            cache=cache, symbol_index=index)
+            cache=cache, symbol_index=index, reasoning_effort=reasoning_effort)
         findings = reviewer.review(
             context, partial_graph, detector_result=detector_result,
             max_workers=max_workers, progress_callback=progress_callback)
+        review_errors = list(getattr(reviewer, "last_errors", []) or [])
         raw_findings = len(findings)
         findings = _post_filter_findings(findings, self._config.codebase_path)
         findings, filter_stats = _post_filter_partial_findings(
@@ -6630,11 +6645,14 @@ class PartialReachabilityFileService:
                 "suppressed_generic": filter_stats.suppressed_generic,
                 "suppressed_non_target": filter_stats.suppressed_non_target,
             })
-        return {
+        result = {
             "file": rel_target,
             "file_path": abs_target,
             "reviews": [self._finding_to_review(f) for f in deduped],
         }
+        if review_errors:
+            result["errors"] = review_errors
+        return result
 
     def _ensure_symbol_index(self, *, progress_callback=None):
         with self._index_lock:
