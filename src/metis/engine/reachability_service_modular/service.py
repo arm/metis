@@ -128,7 +128,7 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
         )
         if graph.node_count() == 0:
-            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+            return None
 
         target_paths = self._paths_touching_file(graph, paths, relative_target)
         if max_paths > 0:
@@ -140,11 +140,14 @@ class TreeSitterReachabilityService:
                 "paths": len(target_paths),
             })
 
-        if not target_paths:
-            return {"file": relative_target, "file_path": abs_target, "reviews": []}
-
         model = confirmation_model or self._config.llama_query_model
-        focus_graph = self._build_focus_graph(graph, target_paths)
+        focus_graph = (
+            self._build_focus_graph(graph, target_paths)
+            if target_paths
+            else self._build_file_focus_graph(graph, relative_target)
+        )
+        if focus_graph.node_count() == 0:
+            return None
         supplementary = self._ensure_supplementary(
             focus_graph,
             scope_id=relative_target,
@@ -281,8 +284,25 @@ class TreeSitterReachabilityService:
         return list(findings)
 
     def _build_focus_graph(self, graph, target_paths):
-        focus = ReachabilityGraph()
         needed = self._path_node_names(target_paths)
+        return self._build_graph_from_node_names(graph, needed)
+
+    def _build_file_focus_graph(self, graph, target_file):
+        needed = {node.unique_name for node in graph.get_file_nodes(target_file)}
+        if not needed:
+            return ReachabilityGraph()
+
+        for node_name in list(needed):
+            node = graph.get_node(node_name)
+            if not node:
+                continue
+            needed.update(node.resolved_calls or [])
+            for caller in graph.get_callers(node_name):
+                needed.add(caller.unique_name)
+        return self._build_graph_from_node_names(graph, needed)
+
+    def _build_graph_from_node_names(self, graph, needed):
+        focus = ReachabilityGraph()
         for unique_name in sorted(needed):
             node = graph.get_node(unique_name)
             if not node:

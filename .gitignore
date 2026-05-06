@@ -10,3 +10,4 @@ dist/
 .python-version
 uv.lock
 results/
+.venv_nonlinux_*/
