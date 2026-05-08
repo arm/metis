@@ -15,7 +15,7 @@ from metis.engine.analysis.c_family_analyzer_common import (
 )
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
-from ..reachability_service import FunctionNode, GlobalConstruct
+from ..reachability_common import FunctionNode, GlobalConstruct
 from .heuristics import (
     CONTROL_CALLS,
     ENTRYPOINT_FIELDS,
@@ -73,7 +73,7 @@ class CFamilyTreeSitterExtractor:
         nodes: list[FunctionNode] = []
         seen: set[str] = set()
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             node_type = str(getattr(node, "type", "") or "")
             if node_type in {"function_definition", "method_definition"}:
                 name = self._function_name(node, source)
@@ -103,10 +103,6 @@ class CFamilyTreeSitterExtractor:
                                 sink_reason=sink_reason,
                             )
                         )
-            for child in getattr(node, "children", []) or []:
-                walk(child)
-
-        walk(root)
         return sorted(nodes, key=lambda item: (item.file_path, item.line_number, item.name))
 
     def _function_name(self, node, source: bytes) -> str:
@@ -127,15 +123,11 @@ class CFamilyTreeSitterExtractor:
             seen.add(symbol)
             calls.append(symbol)
 
-        def walk(node):
+        for node in self._iter_nodes(scope_node):
             node_type = str(getattr(node, "type", "") or "")
             if node_type == "call_expression":
                 function_node = self._field(node, "function")
                 add(_identifier_from_node(function_node or node, source))
-            for child in getattr(node, "children", []) or []:
-                walk(child)
-
-        walk(scope_node)
         return calls
 
     def _collect_globals(
@@ -148,7 +140,7 @@ class CFamilyTreeSitterExtractor:
         entrypoint_refs: set[str] = set()
         seen: set[str] = set()
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             node_type = str(getattr(node, "type", "") or "")
             if node_type in {"init_declarator", "declaration", "field_declaration"}:
                 text = _node_text(node, source)
@@ -170,11 +162,18 @@ class CFamilyTreeSitterExtractor:
                             )
                         )
                     entrypoint_refs.update(refs)
-            for child in getattr(node, "children", []) or []:
-                walk(child)
-
-        walk(root)
         return globals_, entrypoint_refs
+
+    def _iter_nodes(self, root):
+        if root is None:
+            return
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            yield node
+            children = getattr(node, "children", []) or []
+            for child in reversed(children):
+                stack.append(child)
 
     def _entrypoint_references(self, text: str) -> list[str]:
         refs: list[str] = []

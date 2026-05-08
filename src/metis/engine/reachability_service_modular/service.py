@@ -10,7 +10,7 @@ from pathlib import Path
 
 from metis.utils import read_file_content
 
-from ..reachability_service import (
+from ..reachability_common import (
     Deduplicator,
     FunctionNode,
     PathTracer,
@@ -25,8 +25,11 @@ from ..reachability_service import (
     _severity_title,
     _write_jsonl,
 )
+from .file_focus import FileFocusBuilder
+from .finding_paths import FindingPathAnnotator
 
-DEFAULT_TREESITTER_OUTPUT_DIR = "metis_reachability_treesitter_results"
+DEFAULT_OUTPUT_DIR = "metis_reachability_results"
+DEFAULT_TREESITTER_OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 _C_CPP_EXTENSIONS = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
 
 
@@ -60,6 +63,9 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
         )
 
+    def build_graph_interactive(self, files=None, *, progress_callback=None, **_kwargs):
+        return self.build_graph(files, progress_callback=progress_callback)
+
     def trace_paths(self, graph, *, max_path_length=25):
         return PathTracer(graph, max_path_length=max_path_length).find_all_paths()
 
@@ -85,6 +91,30 @@ class TreeSitterReachabilityService:
             paths,
             graph,
             max_workers=max_workers,
+            output_path=output_path,
+            progress_callback=progress_callback,
+        )
+
+    def confirm_paths_streaming(
+        self,
+        paths,
+        graph,
+        *,
+        confirmation_model=None,
+        output_path=None,
+        progress_callback=None,
+        reasoning_effort=None,
+    ):
+        model = confirmation_model or self._config.llama_query_model
+        return VulnerabilityConfirmer(
+            self._llm_provider,
+            model,
+            self._usage_runtime,
+            self._config.codebase_path,
+            reasoning_effort=reasoning_effort,
+        ).confirm_streaming(
+            paths,
+            graph,
             output_path=output_path,
             progress_callback=progress_callback,
         )
@@ -123,29 +153,29 @@ class TreeSitterReachabilityService:
         reasoning_effort=None,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
-        graph, paths = self._ensure_graph_and_paths(
-            max_path_length=max_path_length,
-            progress_callback=progress_callback,
-        )
+        graph = self._ensure_graph(progress_callback=progress_callback)
         if graph.node_count() == 0:
             return None
 
-        target_paths = self._paths_touching_file(graph, paths, relative_target)
-        if max_paths > 0:
-            target_paths = target_paths[:max_paths]
+        focus = FileFocusBuilder(
+            graph,
+            max_path_length=max_path_length,
+            max_incoming_paths=max_paths if max_paths > 0 else None,
+        ).build(relative_target)
+        source_to_file_paths = focus.incoming_paths
+        outgoing_context_paths = focus.outgoing_context_paths
         if progress_callback:
             progress_callback({
                 "event": "treesitter_file_paths_done",
                 "file": relative_target,
-                "paths": len(target_paths),
+                "paths": len(source_to_file_paths),
+                "source_to_file_paths": len(source_to_file_paths),
+                "outgoing_context_paths": len(outgoing_context_paths),
+                "focus_nodes": len(focus.node_names),
             })
 
         model = confirmation_model or self._config.llama_query_model
-        focus_graph = (
-            self._build_focus_graph(graph, target_paths)
-            if target_paths
-            else self._build_file_focus_graph(graph, relative_target)
-        )
+        focus_graph = self._build_graph_from_node_names(graph, focus.node_names)
         if focus_graph.node_count() == 0:
             return None
         supplementary = self._ensure_supplementary(
@@ -157,11 +187,6 @@ class TreeSitterReachabilityService:
             reasoning_effort=reasoning_effort,
         )
 
-        inbound_paths, cross_file_paths = self._split_paths_for_file(
-            graph,
-            target_paths,
-            relative_target,
-        )
         confirmer = VulnerabilityConfirmer(
             self._llm_provider,
             model,
@@ -171,21 +196,11 @@ class TreeSitterReachabilityService:
         )
 
         path_findings = []
-        if inbound_paths:
+        if source_to_file_paths:
             path_findings.extend(
                 confirmer.confirm_for_file(
                     relative_target,
-                    inbound_paths,
-                    graph,
-                    max_workers=max_workers,
-                    progress_callback=progress_callback,
-                )
-            )
-        if cross_file_paths:
-            path_findings.extend(
-                confirmer.confirm_cross_file(
-                    relative_target,
-                    cross_file_paths,
+                    source_to_file_paths,
                     graph,
                     max_workers=max_workers,
                     progress_callback=progress_callback,
@@ -195,7 +210,7 @@ class TreeSitterReachabilityService:
         deterministic_findings = self._deterministic_file_findings(
             relative_target,
             graph,
-            target_paths,
+            source_to_file_paths,
         )
         if progress_callback:
             progress_callback({
@@ -211,6 +226,11 @@ class TreeSitterReachabilityService:
             + self._findings_for_file(path_findings, relative_target, graph)
             + deterministic_findings
         )
+        all_findings = FindingPathAnnotator(
+            graph,
+            relative_target,
+            max_path_length=max_path_length,
+        ).annotate(all_findings)
         all_findings = self._strict_file_findings(all_findings)
         all_findings = _post_filter_findings(all_findings, self._config.codebase_path)
         if not all_findings:
@@ -231,6 +251,86 @@ class TreeSitterReachabilityService:
         ))
         return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
+    def review_codebase(
+        self,
+        *,
+        confirmation_model=None,
+        max_workers=8,
+        max_paths=0,
+        max_paths_per_sink=3,
+        max_path_length=25,
+        progress_callback=None,
+        reasoning_effort=None,
+        **_kwargs,
+    ):
+        graph, paths = self._ensure_graph_and_paths(
+            max_path_length=max_path_length,
+            progress_callback=progress_callback,
+        )
+        if graph.node_count() == 0:
+            return []
+        if max_paths > 0:
+            paths = paths[:max_paths]
+
+        model = confirmation_model or self._config.llama_query_model
+        supplementary = self._ensure_supplementary(
+            graph,
+            scope_id="full",
+            model=model,
+            max_workers=max_workers,
+            progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
+        )
+
+        files_with_paths = set()
+        for path in paths:
+            for node_name in path.path or []:
+                node = graph.get_node(node_name)
+                if node:
+                    files_with_paths.add(node.file_path)
+        files_with_supplementary = {
+            file_name
+            for finding in supplementary
+            for file_name in (
+                finding.primary_file,
+                finding.source_file,
+                finding.sink_file,
+            )
+            if file_name
+        }
+        target_files = sorted(files_with_paths | files_with_supplementary)
+
+        if progress_callback:
+            progress_callback({"event": "file_review_start", "files": len(target_files)})
+        reviews = []
+        for completed, target_file in enumerate(target_files, start=1):
+            review = self.review_file(
+                target_file,
+                confirmation_model=confirmation_model,
+                max_workers=max_workers,
+                max_paths=max_paths,
+                max_paths_per_sink=max_paths_per_sink,
+                max_path_length=max_path_length,
+                progress_callback=progress_callback,
+                reasoning_effort=reasoning_effort,
+            )
+            if review and review.get("reviews"):
+                reviews.append(review)
+            if progress_callback:
+                progress_callback({
+                    "event": "file_review_progress",
+                    "completed": completed,
+                    "total": len(target_files),
+                    "file": target_file,
+                })
+        if progress_callback:
+            progress_callback({"event": "file_review_done", "files": len(reviews)})
+        return reviews
+
+    def review_single_file_from_codebase(self, file_path, **kwargs):
+        kwargs.pop("extraction_model", None)
+        return self.review_file(file_path, **kwargs)
+
     def deduplicate_and_write(self, findings, output_path, *, max_paths_per_sink=3):
         filtered_findings = _post_filter_findings(findings, self._config.codebase_path)
         deduped, _total, _removed = Deduplicator.deduplicate(
@@ -246,11 +346,16 @@ class TreeSitterReachabilityService:
     def _ensure_graph_and_paths(self, *, max_path_length=25, progress_callback=None):
         if self._graph_cache is not None and self._paths_cache is not None:
             return self._graph_cache, list(self._paths_cache)
-        graph = self.build_graph(progress_callback=progress_callback)
+        graph = self._ensure_graph(progress_callback=progress_callback)
         paths = self.trace_paths(graph, max_path_length=max_path_length)
-        self._graph_cache = graph
         self._paths_cache = list(paths)
         return graph, list(paths)
+
+    def _ensure_graph(self, *, progress_callback=None):
+        if self._graph_cache is not None:
+            return self._graph_cache
+        self._graph_cache = self.build_graph(progress_callback=progress_callback)
+        return self._graph_cache
 
     def _ensure_supplementary(
         self,

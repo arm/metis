@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Modular implementation of partial reachability file review.
-
-This package intentionally mirrors ``metis.engine.reachability_file_service`` so
-``review_file_modular`` can be exercised before the legacy single-file module is
-replaced.
-"""
+"""Modular implementation of partial reachability file review."""
 
 from .common import *
 from .context import *

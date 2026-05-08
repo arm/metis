@@ -19,11 +19,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from metis.usage import submit_with_current_context
 from metis.utils import parse_json_output, read_file_content
 
-from ..reachability_service import (
+from ..reachability_common import (
     Deduplicator,
     FunctionNode,
     GlobalConstruct,
-    GraphBuilder,
     PathTracer,
     ReachabilityGraph,
     ReachabilityPath,

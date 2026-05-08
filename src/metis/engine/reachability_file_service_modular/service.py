@@ -240,25 +240,16 @@ class PartialReachabilityFileService:
     def _extract_target(self, abs_target, rel_target, extraction_model, max_workers, progress_callback, cache):
         if progress_callback:
             progress_callback({"event": "partial_target_extract_start", "file": rel_target})
-        try:
-            graph = GraphBuilder(
-                self._llm_provider, extraction_model, self._usage_runtime
-            ).build([abs_target], self._config.codebase_path, max_workers=1)
-            nodes = [n for n in graph.nodes.values() if n.file_path.replace("\\", "/") == rel_target]
-            globals_ = [g for g in graph.get_globals() if g.file_path.replace("\\", "/") == rel_target]
-            for node in nodes:
-                node.file_path = node.file_path.replace("\\", "/")
-                node.unique_name = f"{node.file_path}::{node.name}"
-            for g in globals_:
-                g.file_path = g.file_path.replace("\\", "/")
-                g.unique_name = f"{g.file_path}::{g.name}"
-        except Exception as exc:
-            logger.warning("Partial target extraction failed for %s: %s", rel_target, exc)
-            nodes, globals_ = [], []
-        if not nodes and self._symbol_index is not None:
-            defs = _symbols_for_file(self._symbol_index, rel_target)
-            nodes = [_symbol_to_node(self._symbol_index, self._config.codebase_path, sym, cache) for sym in defs]
-            globals_ = [g for g in self._symbol_index.globals if g.file_path == rel_target]
+        defs = _symbols_for_file(self._symbol_index, rel_target) if self._symbol_index is not None else []
+        nodes = [
+            _symbol_to_node(self._symbol_index, self._config.codebase_path, sym, cache)
+            for sym in defs
+        ]
+        globals_ = (
+            [g for g in self._symbol_index.globals if g.file_path == rel_target]
+            if self._symbol_index is not None
+            else []
+        )
         if progress_callback:
             progress_callback({
                 "event": "partial_target_extract_done",

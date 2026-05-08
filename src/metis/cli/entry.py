@@ -42,6 +42,8 @@ logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
 EXIT_REQUESTED = object()
+prompt = None
+InMemoryHistory = None
 
 
 def determine_output_file(cmd, args, cmd_args):
@@ -308,7 +310,7 @@ def execute_command(engine, cmd, cmd_args, args):
 def _empty_output_payload(cmd, cmd_args, args=None):
     status = str(getattr(args, "_metis_command_status", "unknown"))
     error = f"Command completed without writing output. status={status}"
-    if cmd in {"review_file", "review_file_modular"}:
+    if cmd == "review_file":
         target = cmd_args[0] if cmd_args else ""
         return {
             "reviews": [
@@ -391,7 +393,6 @@ def run_non_interactive(engine, args):
         else:
             if wrote_fallback and cmd in {
                 "review_file",
-                "review_file_modular",
                 "review_code",
                 "review_patch",
             }:
@@ -403,8 +404,15 @@ def run_non_interactive(engine, args):
 
 
 def run_interactive_loop(engine, args, vector_backend):
-    from prompt_toolkit import prompt
-    from prompt_toolkit.history import InMemoryHistory
+    global prompt, InMemoryHistory
+    if prompt is None or InMemoryHistory is None:
+        from prompt_toolkit import prompt as _prompt
+        from prompt_toolkit.history import InMemoryHistory as _InMemoryHistory
+
+        if prompt is None:
+            prompt = _prompt
+        if InMemoryHistory is None:
+            InMemoryHistory = _InMemoryHistory
 
     print_console(
         "[bold cyan]Metis CLI. Type 'help' for usage, 'exit' to quit.[/bold cyan]",
@@ -428,7 +436,7 @@ def run_interactive_loop(engine, args, vector_backend):
                     )
                     continue
                 if (
-                    cmd in {"ask", "review_code", "review_file", "review_file_modular"}
+                    cmd in {"ask", "review_code", "review_file"}
                     and not _interactive_command_ignores_index(cmd, cmd_args, args)
                     and not vector_backend.check_project_schema_exists()
                 ):
@@ -512,7 +520,7 @@ def main():
         "--reachability-extraction-model",
         type=str,
         default=None,
-        help="LLM model for reachability function extraction (default: gpt-4.1-mini)",
+        help="Deprecated; graph extraction now uses deterministic tree-sitter.",
     )
     parser.add_argument(
         "--reachability-confirmation-model",

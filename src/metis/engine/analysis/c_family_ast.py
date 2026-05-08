@@ -51,14 +51,31 @@ class CFamilyAstMixin:
         nodes: list[Any] = []
         parent_map: dict[int, Any | None] = {}
 
-        def walk(node, parent):
+        for node, parent in self._iter_nodes_with_parent(root):
             nodes.append(node)
             parent_map[id(node)] = parent
-            for child in _node_children(node):
-                walk(child, node)
 
-        walk(root, None)
         return nodes, parent_map
+
+    def _iter_nodes(self, root):
+        if root is None:
+            return
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            yield node
+            for child in reversed(_node_children(node)):
+                stack.append(child)
+
+    def _iter_nodes_with_parent(self, root):
+        if root is None:
+            return
+        stack = [(root, None)]
+        while stack:
+            node, parent = stack.pop()
+            yield node, parent
+            for child in reversed(_node_children(node)):
+                stack.append((child, node))
 
     def _find_anchor_node(self, nodes: list[Any], line: int):
         best = None
@@ -96,7 +113,7 @@ class CFamilyAstMixin:
         if scope_node is None:
             return guards
 
-        def walk(node):
+        for node in self._iter_nodes(scope_node):
             node_type = _node_kind(node)
             if node_type in {
                 "if_statement",
@@ -111,10 +128,7 @@ class CFamilyAstMixin:
                         role="check", line=_node_line(node), detail=f"guard '{detail}'"
                     )
                 )
-            for child in _node_children(node):
-                walk(child)
 
-        walk(scope_node)
         guards.sort(key=lambda h: (abs(h.line - line), h.line))
         return guards[:4]
 
@@ -123,23 +137,20 @@ class CFamilyAstMixin:
         if scope_node is None:
             return out
 
-        def walk(node):
+        for node in self._iter_nodes(scope_node):
             if _node_kind(node) == "call_expression":
                 function_node = _node_child_by_field_name(node, "function")
                 symbol = _identifier_from_node(function_node or node, source)
                 if symbol:
                     out.append(_Reference(symbol=symbol, line=_node_line(node)))
-            for child in _node_children(node):
-                walk(child)
 
-        walk(scope_node)
         out.sort(key=lambda item: (item.line, item.symbol.lower()))
         return out
 
     def _collect_functions(self, root, source: bytes) -> dict[str, list[_FunctionInfo]]:
         out: dict[str, list[_FunctionInfo]] = {}
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             node_type = _node_kind(node)
             if node_type == "function_definition":
                 declarator = _node_child_by_field_name(node, "declarator")
@@ -154,10 +165,7 @@ class CFamilyAstMixin:
                         checks=self._collect_guard_hops(node, source, _node_line(node)),
                     )
                     out.setdefault(name, []).append(info)
-            for child in _node_children(node):
-                walk(child)
 
-        walk(root)
         for name in list(out.keys()):
             out[name] = sorted(out[name], key=lambda f: (f.line_start, f.line_end))
         return out
@@ -238,7 +246,7 @@ class CFamilyAstMixin:
                 return
             out.setdefault(symbol, []).append(_Definition(symbol=symbol, line=line))
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             node_type = _node_kind(node)
             line = _node_line(node)
 
@@ -258,10 +266,6 @@ class CFamilyAstMixin:
                         symbol = _identifier_from_node(child, source)
                         add(symbol, line)
 
-            for child in _node_children(node):
-                walk(child)
-
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out
@@ -269,7 +273,7 @@ class CFamilyAstMixin:
     def _collect_references(self, root, source: bytes) -> dict[str, list[_Reference]]:
         out: dict[str, list[_Reference]] = {}
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             if _node_kind(node) in {"identifier", "field_identifier"}:
                 symbol = _node_text(node, source).strip()
                 if symbol:
@@ -277,10 +281,7 @@ class CFamilyAstMixin:
                     out.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
-            for child in _node_children(node):
-                walk(child)
 
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out
@@ -288,7 +289,7 @@ class CFamilyAstMixin:
     def _collect_calls(self, root, source: bytes) -> dict[str, list[_Reference]]:
         out: dict[str, list[_Reference]] = {}
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             if _node_kind(node) == "call_expression":
                 function_node = _node_child_by_field_name(node, "function")
                 symbol = _identifier_from_node(function_node or node, source)
@@ -297,10 +298,7 @@ class CFamilyAstMixin:
                     out.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
-            for child in _node_children(node):
-                walk(child)
 
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out

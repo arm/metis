@@ -36,7 +36,6 @@ class ReviewService:
         reachability_service=None,
         treesitter_reachability_service=None,
         partial_reachability_file_service=None,
-        modular_reachability_file_service=None,
         use_reachability_for_review: bool = False,
         reachability_settings: dict[str, Any] | None = None,
     ):
@@ -47,7 +46,6 @@ class ReviewService:
         self._reachability_service = reachability_service
         self._treesitter_reachability_service = treesitter_reachability_service
         self._partial_reachability_file_service = partial_reachability_file_service
-        self._modular_reachability_file_service = modular_reachability_file_service
         self._use_reachability_for_review = use_reachability_for_review
         self._reachability_settings = dict(reachability_settings or {})
         self._reachability_cache = None
@@ -95,26 +93,6 @@ class ReviewService:
             progress_callback=progress_callback,
             partial_file_service=self._partial_reachability_file_service,
             prefer_treesitter_reachability=True,
-        )
-
-    def review_file_modular(
-        self,
-        file_path,
-        options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
-        mode: str = "partial",
-        context_budget: int | None = None,
-        progress_callback=None,
-    ):
-        return self._review_file_impl(
-            file_path,
-            options,
-            use_retrieval_context=use_retrieval_context,
-            mode=mode,
-            context_budget=context_budget,
-            progress_callback=progress_callback,
-            partial_file_service=self._modular_reachability_file_service,
         )
 
     def _review_file_impl(

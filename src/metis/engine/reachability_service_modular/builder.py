@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 
-from ..reachability_service import ReachabilityGraph
+from ..reachability_common import ReachabilityGraph
 from .c_family import CFamilyTreeSitterExtractor
 
 
