@@ -203,6 +203,9 @@ class ReviewGraph:
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
             "security_review_report", ""
         )
+        self.prompt_contract = self.plugin_config.get("general_prompts", {}).get(
+            "gpt55_prompt_contract", ""
+        )
         self.hardware_cwe_guidance = self.plugin_config.get("general_prompts", {}).get(
             "hardware_cwe_guidance", ""
         )
@@ -261,6 +264,7 @@ class ReviewGraph:
             custom_guidance_precedence=self.custom_guidance_precedence,
             schema_prompt_section=self._schema_prompt_section,
             hardware_cwe_guidance=self.hardware_cwe_guidance,
+            prompt_contract=self.prompt_contract,
         )
         review = partial(
             review_node_llm,

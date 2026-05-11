@@ -28,6 +28,13 @@ def summarize_changes(llm_provider, file_path, issues, summary_prompt, callbacks
         return ""
 
 
+def prepend_prompt_contract(base_prompt, prompt_contract):
+    """Prepend shared model-specific prompt instructions when configured."""
+    if not prompt_contract:
+        return base_prompt
+    return f"{prompt_contract.strip()}\n\n{base_prompt}"
+
+
 def prepare_nodes_iter(
     code_docs,
     doc_docs,

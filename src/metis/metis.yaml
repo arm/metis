@@ -21,7 +21,7 @@ metis_engine:
 
 llm_provider:
   name: "openai"
-  model: "gpt-5.4"
+  model: "gpt-5.5"
   # Optional for reasoning-capable OpenAI models: none, minimal, low, medium,
   # high, or xhigh depending on model support. Can be overridden under query.
   # reasoning_effort: "medium"

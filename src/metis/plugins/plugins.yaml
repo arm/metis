@@ -2,6 +2,12 @@ docs:
   supported_extensions:  [".md", ".html", ".txt", ".pdf", ".rst"]
 
 general_prompts:
+  gpt55_prompt_contract: |-
+    GPT-5.5 operating instructions:
+    - Follow the configured task exactly. Treat schema, JSON-only, and status-output requirements as mandatory.
+    - Ground every security conclusion in provided file, change, context, or tool evidence. If required evidence is missing, return no finding or inconclusive as the task specifies.
+    - Use internal reasoning to resolve ambiguity, but do not reveal hidden chain-of-thought. Put only concise, evidence-backed rationale in the requested fields.
+    - Prefer deterministic, compact outputs. Stop when the requested output is complete and do not add extra prose, issue classes, or recommendations outside the configured scope.
   custom_guidance_precedence: |-
     Instruction precedence: When 'Custom Guidance' conflicts with any default
     instructions or checks below, follow 'Custom Guidance'. If guidance excludes

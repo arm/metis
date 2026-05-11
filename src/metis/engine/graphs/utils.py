@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Annotated, Literal, get_args, get_origin
 
-from metis.engine.helpers import apply_custom_guidance
+from metis.engine.helpers import apply_custom_guidance, prepend_prompt_contract
 from .schemas import ReviewIssueModel
 
 logger = logging.getLogger("metis")
@@ -260,6 +260,7 @@ def build_review_system_prompt(
     custom_guidance_precedence,
     schema_prompt_section,
     hardware_cwe_guidance="",
+    prompt_contract="",
     include_relevant_context=True,
 ):
     """Compose the system prompt for a review in a single place."""
@@ -288,6 +289,7 @@ def build_review_system_prompt(
         base,
         include_relevant_context=include_relevant_context,
     )
+    base = prepend_prompt_contract(base, prompt_contract)
     base = apply_custom_guidance(
         base, custom_prompt_text, custom_guidance_precedence or ""
     )

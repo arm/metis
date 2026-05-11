@@ -7,6 +7,7 @@ from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END, StateGraph
 
 from ..schemas import TriageDecisionModel
+from ...helpers import prepend_prompt_contract
 from .adjudication import (
     adjudicate_status_deterministic,
     compose_final_reason,
@@ -32,12 +33,16 @@ class TriageGraph:
         self.llama_query_model = llama_query_model
         self.toolbox = toolbox
         general_prompts = (plugin_config or {}).get("general_prompts", {})
+        prompt_contract = general_prompts.get("gpt55_prompt_contract", "")
         self.triage_system_prompt = (
             general_prompts.get("triage_system_prompt")
             or "You triage static analysis findings. "
             "Only decide whether the finding is valid or invalid based on static code evidence. "
             "Treat the reported line as potentially inaccurate. "
             "Prefer inspecting nearby code first with sed/cat in the reported file."
+        )
+        self.triage_system_prompt = prepend_prompt_contract(
+            self.triage_system_prompt, prompt_contract
         )
         self.triage_decision_prompt = (
             general_prompts.get("triage_decision_prompt")

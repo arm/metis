@@ -24,6 +24,14 @@ def test_load_metis_config_prefers_yaml_over_yml(tmp_path, monkeypatch):
     assert config == {"selected": "yaml"}
 
 
+def test_packaged_config_defaults_to_gpt_5_5_openai(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    runtime = load_runtime_config()
+
+    assert runtime["llama_query_model"] == "gpt-5.5"
+
+
 def test_load_runtime_config_reads_query_reasoning_effort(tmp_path, monkeypatch):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(

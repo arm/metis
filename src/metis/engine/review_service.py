@@ -17,7 +17,7 @@ from metis.utils import read_file_content
 
 from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
-from .helpers import apply_custom_guidance, summarize_changes
+from .helpers import apply_custom_guidance, prepend_prompt_contract, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
 from .runtime import EngineConfig
@@ -245,6 +245,12 @@ class ReviewService:
                 if not issues.strip():
                     continue
                 summary_prompt = language_prompts["snippet_security_summary"]
+                summary_prompt = prepend_prompt_contract(
+                    summary_prompt,
+                    self._config.plugin_config.get("general_prompts", {}).get(
+                        "gpt55_prompt_contract", ""
+                    ),
+                )
                 summary_prompt = apply_custom_guidance(
                     summary_prompt,
                     self._config.custom_prompt_text,

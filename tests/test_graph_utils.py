@@ -44,6 +44,25 @@ def test_build_review_system_prompt_replaces_placeholder():
     assert schema_section in prompt
 
 
+def test_build_review_system_prompt_prepends_prompt_contract():
+    language_prompts = {
+        "security_review_file": "Intro [[REVIEW_SCHEMA_FIELDS]]",
+        "security_review_checks": "Checklist items.",
+    }
+    schema_section = '- "issue": description'
+    prompt = build_review_system_prompt(
+        language_prompts,
+        "security_review_file",
+        report_prompt="Reporting instructions.",
+        custom_prompt_text=None,
+        custom_guidance_precedence="",
+        schema_prompt_section=schema_section,
+        prompt_contract="GPT-5.5 contract.",
+    )
+
+    assert prompt.startswith("GPT-5.5 contract.\n\nIntro")
+
+
 def test_build_review_system_prompt_preserves_legacy_context_prompt():
     language_prompts = {
         "security_review_file": (

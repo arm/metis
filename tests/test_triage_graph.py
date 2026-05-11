@@ -118,6 +118,22 @@ def test_triage_graph_propagates_retrieval_context_flag(monkeypatch):
     assert app.last_input["use_retrieval_context"] is False
 
 
+def test_triage_graph_prepends_prompt_contract():
+    graph = TriageGraph(
+        llm_provider=object(),
+        llama_query_model="dummy",
+        toolbox=object(),
+        plugin_config={
+            "general_prompts": {
+                "gpt55_prompt_contract": "GPT-5.5 contract.",
+                "triage_system_prompt": "Triage prompt.",
+            }
+        },
+    )
+
+    assert graph.triage_system_prompt == "GPT-5.5 contract.\n\nTriage prompt."
+
+
 def test_triage_graph_fills_unresolved_hops_for_inconclusive(monkeypatch):
     g = _build_graph()
     monkeypatch.setattr(
