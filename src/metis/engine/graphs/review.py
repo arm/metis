@@ -121,6 +121,7 @@ def review_node_build_prompt(
     custom_guidance_precedence: str,
     schema_prompt_section: str,
     hardware_cwe_guidance: str = "",
+    prompt_contract: str = "",
 ) -> ReviewState:
     include_relevant_context = bool(state.get("use_retrieval_context", True))
     system = build_review_system_prompt(
@@ -131,6 +132,7 @@ def review_node_build_prompt(
         custom_guidance_precedence,
         schema_prompt_section,
         hardware_cwe_guidance,
+        prompt_contract=prompt_contract,
         include_relevant_context=include_relevant_context,
     )
     new_state: ReviewState = dict(state)

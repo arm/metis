@@ -66,8 +66,10 @@ def test_review_nodes_pipeline_parses():
         custom_prompt_text=None,
         custom_guidance_precedence="",
         schema_prompt_section='- "issue": desc',
+        prompt_contract="GPT-5.5 contract.",
     )
     assert "system_prompt" in s2
+    assert s2["system_prompt"].startswith("GPT-5.5 contract.")
 
     # Step 3: run LLM review (stub)
     class _DummyNode:
