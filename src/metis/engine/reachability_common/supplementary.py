@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Graph-wide supplementary audits for C/C++ reachability review."""
+
 from __future__ import annotations
 import logging
 import os
@@ -494,6 +496,8 @@ Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDIN
 
 
 class SupplementaryAnalyzer:
+    """Run targeted semantic passes over graph-selected function groups."""
+
     def __init__(self, llm_provider, audit_model, strong_model, usage_runtime, codebase_path,
                  audit_max_tokens=8192, strong_max_tokens=16384, reasoning_effort=None):
         self._p = llm_provider; self._am = audit_model; self._sm = strong_model

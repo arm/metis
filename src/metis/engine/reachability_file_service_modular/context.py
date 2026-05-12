@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Context selection for partial single-file reachability review."""
+
 from __future__ import annotations
 
 from .common import *
 
 class PartialContextBuilder:
+    """Select callers, callees, shared state, lifecycle peers, and callbacks."""
+
     def __init__(
         self,
         codebase_path: str,

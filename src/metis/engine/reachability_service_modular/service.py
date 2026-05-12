@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Full-codebase tree-sitter reachability service."""
+
 from __future__ import annotations
 
 import os
@@ -47,6 +49,8 @@ def c_cpp_files(files) -> list[str]:
 
 
 class TreeSitterReachabilityService:
+    """Coordinate graph building, path tracing, supplementary passes, and output."""
+
     def __init__(self, config, repository, llm_provider, usage_runtime):
         self._config = config
         self._repository = repository
@@ -167,6 +171,8 @@ class TreeSitterReachabilityService:
         reasoning_effort=None,
         analysis_profile="full",
     ):
+        # Supplementary passes inspect the whole graph and usually provide the
+        # final findings when path confirmation is skipped for large graphs.
         model = strong_model or self._config.llama_query_model
         audit = audit_model or model
         return SupplementaryAnalyzer(
@@ -351,6 +357,8 @@ class TreeSitterReachabilityService:
                 progress_callback=progress_callback,
             )
 
+        # Convert direct function-level findings back into source-rooted paths
+        # before filtering and legacy review JSON serialization.
         all_findings = self.annotate_findings_with_source_paths(
             list(supplementary) + list(path_findings),
             graph,

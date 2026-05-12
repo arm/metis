@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Reviewed-file focus selection for full-graph ``review_file`` runs."""
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
@@ -18,6 +20,8 @@ DEFAULT_MAX_OUTGOING_PATHS_PER_TARGET = 4
 
 @dataclass
 class FileFocus:
+    """Bounded graph slice centered on one target file."""
+
     target_file: str
     target_nodes: list[str] = field(default_factory=list)
     incoming_paths: list[ReachabilityPath] = field(default_factory=list)

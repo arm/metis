@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Partial reachability service used by ``review_file --mode partial``."""
+
 from __future__ import annotations
 
 from .common import *
@@ -12,6 +14,8 @@ from .reviewer import *
 from .filters import *
 
 class PartialReachabilityFileService:
+    """Coordinate indexing, context selection, detectors, LLM review, and output."""
+
     def __init__(self, config: EngineConfig, repository: EngineRepository, llm_provider, usage_runtime):
         self._config = config
         self._repository = repository
@@ -50,6 +54,8 @@ class PartialReachabilityFileService:
             context.globals = self._merge_globals(context.globals, target_globals)
         context_builder.expand_companions(context, index, progress_callback=progress_callback)
 
+        # Detector notes do not become findings directly; they choose focused
+        # prompts and add concrete evidence to the partial review context.
         detector_result = PartialCandidateDetector(self._config.codebase_path, cache).detect(
             index, rel_target, context.target_nodes, context)
         self._merge_detector_context(context, detector_result)

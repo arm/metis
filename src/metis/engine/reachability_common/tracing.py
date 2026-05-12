@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Path tracing utilities over the shared reachability graph."""
+
 from __future__ import annotations
 from collections import defaultdict, deque
 
@@ -68,6 +70,8 @@ _EXTRACTION_USER_TEMPLATE = "File: {file_path}\n\nCode:\n{file_content}"
 
 
 class PathTracer:
+    """Trace source-to-labeled-sink paths for legacy confirmation flows."""
+
     def __init__(self, graph, *, max_path_length=25, max_paths_per_source=200):
         self._g = graph; self._ml = max_path_length; self._mp = max_paths_per_source
 

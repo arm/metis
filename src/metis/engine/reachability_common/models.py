@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Small graph and finding records shared by reachability implementations."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ from pathlib import Path
 
 @dataclass
 class FunctionNode:
+    """Function-level call-graph node keyed as ``relative/path.c::symbol``."""
+
     unique_name: str
     file_path: str
     name: str
@@ -62,6 +66,8 @@ class ReachabilityPath:
 
 @dataclass
 class VulnerabilityFinding:
+    """Internal finding model before conversion to the legacy review JSON shape."""
+
     id: str
     vulnerability_type: str
     severity: str
@@ -106,6 +112,8 @@ class VulnerabilityFinding:
 
 
 class ReachabilityGraph:
+    """Mutable call graph with best-effort name-based call resolution."""
+
     def __init__(self):
         self.nodes: dict[str, FunctionNode] = {}
         self.name_index: dict[str, list[str]] = {}

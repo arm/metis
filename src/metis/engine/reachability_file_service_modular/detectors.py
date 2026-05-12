@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Cheap static detectors that seed targeted partial-review prompts."""
+
 from __future__ import annotations
 
 from .common import *
 
 class PartialCandidateDetector:
+    """Collect exact signals before the LLM reviews the selected context."""
+
     def __init__(self, codebase_path: str, cache: PartialAnalysisCache | None = None):
         self._cb = os.path.abspath(codebase_path)
         self._cache = cache or PartialAnalysisCache(codebase_path)

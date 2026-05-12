@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared formatting, context-window, and finding-normalization helpers."""
+
 from __future__ import annotations
 import json
 import os
@@ -215,6 +217,8 @@ def _severity_title(value, default="Medium"):
     return text[:1].upper() + text[1:]
 
 def _confidence_score(value, default=0.75):
+    """Normalize reachability confidence labels into the legacy numeric schema."""
+
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return max(0.0, min(1.0, round(float(value), 2)))
 

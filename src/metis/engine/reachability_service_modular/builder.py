@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Build the full C/C++ reachability graph from tree-sitter extraction."""
+
 from __future__ import annotations
 
 import os
@@ -10,6 +12,8 @@ from .c_family import CFamilyTreeSitterExtractor
 
 
 class TreeSitterReachabilityGraphBuilder:
+    """Parse selected C-family files and resolve calls into one graph."""
+
     def __init__(self):
         self._extractor = CFamilyTreeSitterExtractor()
 

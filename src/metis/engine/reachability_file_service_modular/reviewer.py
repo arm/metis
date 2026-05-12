@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""LLM review passes for partial single-file reachability context."""
+
 from __future__ import annotations
 
 from .common import *
 
 class TargetedFileReviewer:
+    """Run focused prompts over target, related context, and detector notes."""
+
     def __init__(
         self,
         llm_provider,

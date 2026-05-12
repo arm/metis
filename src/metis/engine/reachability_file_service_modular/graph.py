@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Partial graph assembly for a selected single-file review context."""
+
 from __future__ import annotations
 
 from .common import *
 
 class PartialGraphBuilder:
+    """Materialize the selected partial context into a small reachability graph."""
+
     def build(self, context: PartialReviewContext, symbol_index: SymbolIndex, codebase_path: str) -> ReachabilityGraph:
         graph = ReachabilityGraph()
         for node in self._all_nodes(context):

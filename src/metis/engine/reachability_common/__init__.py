@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared compatibility surface for full and partial reachability review."""
+
 from __future__ import annotations
-"""Compatibility exports for reachability graph, analysis, and finding helpers."""
 
 from .dedup import Deduplicator
 from .confirmer import VulnerabilityConfirmer

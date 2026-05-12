@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared data structures and scanners for partial reachability file review."""
+
 from __future__ import annotations
 
 import logging
@@ -693,6 +695,8 @@ class SentinelFact:
 
 @dataclass
 class SymbolIndex:
+    """Repository-level symbol index used to select context around one file."""
+
     definitions: dict[str, list[SymbolDef]]
     callsites: dict[str, list[CallSite]]
     field_uses: dict[str, list[FieldUse]]
@@ -728,6 +732,8 @@ class SymbolIndex:
 
 @dataclass
 class PartialReviewContext:
+    """Bounded context package passed from selection into LLM review passes."""
+
     target_file: str
     target_nodes: list[FunctionNode]
     inbound_callers: list[FunctionNode]
@@ -742,6 +748,8 @@ class PartialReviewContext:
 
 @dataclass
 class PartialDetectorResult:
+    """Static detector notes that steer targeted partial-review prompts."""
+
     state_publication_notes: list[str] = None
     publish_rollback_notes: list[str] = None
     allocation_arithmetic_notes: list[str] = None
@@ -1264,6 +1272,8 @@ class PartialAnalysisCache:
 
 
 class SymbolIndexBuilder:
+    """Build a coarse C-family symbol index without requiring a full graph."""
+
     def build(self, files, codebase_path) -> SymbolIndex:
         definitions: dict[str, list[SymbolDef]] = defaultdict(list)
         callsites: dict[str, list[CallSite]] = defaultdict(list)
