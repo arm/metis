@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from .common import *
+from .detectors import _PARTIAL_REVIEW_SYS, _PARTIAL_REVIEW_USR, _PASS_FOCI
 
 class TargetedFileReviewer:
     """Run focused prompts over target, related context, and detector notes."""
