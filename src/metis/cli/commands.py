@@ -121,7 +121,6 @@ Options:
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
-    --reachability-extraction-model MODEL    Model for function extraction (default: gpt-4.1-mini).
     --reachability-confirmation-model MODEL  Model for vulnerability analysis (default: gpt-5.5).
     --reachability-reasoning-effort LEVEL    Reasoning effort when supported: none|minimal|low|medium|high (default: high).
     --reachability-max-paths-per-sink N      Max diverse paths per root-cause sink (default: 3)
@@ -224,7 +223,12 @@ def _run_file_review_with(
                 args.quiet,
             )
         elif ev.endswith("_start"):
-            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            count = (
+                event.get("functions")
+                or event.get("files")
+                or event.get("globals")
+                or 0
+            )
             print_console(
                 f"[cyan]{escape(str(ev).replace('_', ' '))}: {count} candidate(s)[/cyan]",
                 args.quiet,
@@ -237,7 +241,10 @@ def _run_file_review_with(
                     args.quiet,
                 )
         elif ev == "partial_symbol_index_start":
-            print_console(f"[cyan]Building symbol index for {event.get('files', 0)} C/C++ files...[/cyan]", args.quiet)
+            print_console(
+                f"[cyan]Building symbol index for {event.get('files', 0)} C/C++ files...[/cyan]",
+                args.quiet,
+            )
         elif ev == "partial_symbol_index_done":
             print_console(
                 f"[green]Symbol index: {event.get('definitions', 0)} functions, "
@@ -245,7 +252,10 @@ def _run_file_review_with(
                 args.quiet,
             )
         elif ev == "partial_target_extract_start":
-            print_console(f"[cyan]Extracting target anchors from {escape(str(event.get('file', '')))}...[/cyan]", args.quiet)
+            print_console(
+                f"[cyan]Extracting target anchors from {escape(str(event.get('file', '')))}...[/cyan]",
+                args.quiet,
+            )
         elif ev == "partial_context_done":
             print_console(
                 f"[green]Partial context: target={event.get('target_nodes', 0)}, "
@@ -320,7 +330,9 @@ def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
     use_reachability = False
-    uses_reachability_fn = getattr(engine.review, "uses_reachability_for_code_review", None)
+    uses_reachability_fn = getattr(
+        engine.review, "uses_reachability_for_code_review", None
+    )
     if callable(uses_reachability_fn):
         use_reachability = bool(uses_reachability_fn())
 
@@ -358,12 +370,20 @@ def run_review_code(engine, args, runtime: CommandRuntime):
                 args.quiet,
             )
         elif ev.endswith("_start"):
-            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            count = (
+                event.get("functions")
+                or event.get("files")
+                or event.get("globals")
+                or 0
+            )
             print_console(
                 f"[cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
                 args.quiet,
             )
-        elif ev.endswith("_done") and ev not in {"treesitter_graph_done", "treesitter_code_review_done"}:
+        elif ev.endswith("_done") and ev not in {
+            "treesitter_graph_done",
+            "treesitter_code_review_done",
+        }:
             if "findings" in event:
                 print_console(
                     f"[green]{escape(ev.replace('_', ' '))}: "
@@ -391,9 +411,16 @@ def run_review_code(engine, args, runtime: CommandRuntime):
 
     if args.verbose:
         if use_reachability:
-            print_console("[cyan]Reviewing C/C++ codebase with tree-sitter reachability...[/cyan]", args.quiet)
+            print_console(
+                "[cyan]Reviewing C/C++ codebase with tree-sitter reachability...[/cyan]",
+                args.quiet,
+            )
             file_reviews = [
-                r for r in engine.review.review_code(options=options, progress_callback=_progress) if r
+                r
+                for r in engine.review.review_code(
+                    options=options, progress_callback=_progress
+                )
+                if r
             ]
         else:
             print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
@@ -407,7 +434,11 @@ def run_review_code(engine, args, runtime: CommandRuntime):
         if use_reachability:
             results = {
                 "reviews": [
-                    r for r in engine.review.review_code(options=options, progress_callback=_progress) if r
+                    r
+                    for r in engine.review.review_code(
+                        options=options, progress_callback=_progress
+                    )
+                    if r
                 ]
             }
         else:
@@ -582,8 +613,12 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     max_paths_per_sink = _reachability_setting(
         engine, args, "reachability_max_paths_per_sink", "max_paths_per_sink", 3
     )
-    workers = _reachability_setting(engine, args, "reachability_workers", "max_workers", 8)
-    max_paths_limit = _reachability_setting(engine, args, "reachability_max_paths", "max_paths", 0)
+    workers = _reachability_setting(
+        engine, args, "reachability_workers", "max_workers", 8
+    )
+    max_paths_limit = _reachability_setting(
+        engine, args, "reachability_max_paths", "max_paths", 0
+    )
     q = args.quiet
 
     output_dir = engine.reachability.default_output_dir()
@@ -603,7 +638,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     graph_path = output_dir / f"graph_{timestamp}.jsonl"
     paths_path = output_dir / f"paths_{timestamp}.jsonl"
     raw_findings_path = output_dir / f"findings_raw_{timestamp}.jsonl"
-    supplementary_findings_path = output_dir / f"findings_supplementary_raw_{timestamp}.jsonl"
+    supplementary_findings_path = (
+        output_dir / f"findings_supplementary_raw_{timestamp}.jsonl"
+    )
 
     files = engine.reachability.get_c_cpp_files()
     if not files:
@@ -622,7 +659,10 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     def _graph_cb(event):
         ev = event.get("event", "")
         if ev == "treesitter_graph_start":
-            print_console(f"\n[cyan]Phase 1/5 - Building deterministic graph from {event['total']} files[/cyan]", q)
+            print_console(
+                f"\n[cyan]Phase 1/5 - Building deterministic graph from {event['total']} files[/cyan]",
+                q,
+            )
         elif ev == "treesitter_graph_progress" and args.verbose:
             print_console(
                 f"  [{event['completed']}/{event['total']}] "
@@ -653,7 +693,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         )
 
     if graph.node_count() == 0:
-        print_console("[yellow]Tree-sitter graph empty - no functions extracted.[/yellow]", q)
+        print_console(
+            "[yellow]Tree-sitter graph empty - no functions extracted.[/yellow]", q
+        )
         return
 
     graph.save_jsonl(graph_path, include_globals=True)
@@ -667,7 +709,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         max_paths=max_paths_limit,
     )
     _write_paths_jsonl(paths, graph, paths_path)
-    selection_note = "explicit limit" if max_paths_limit and max_paths_limit > 0 else "auto cap"
+    selection_note = (
+        "explicit limit" if max_paths_limit and max_paths_limit > 0 else "auto cap"
+    )
     print_console(
         f"  Paths: [bold]{len(paths)}[/bold] | Selected: [bold]{len(paths_to_analyze)}[/bold] "
         f"({selection_note})\n"
@@ -678,7 +722,12 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     def _supp_cb(event):
         ev = str(event.get("event", ""))
         if ev.endswith("_start"):
-            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            count = (
+                event.get("functions")
+                or event.get("files")
+                or event.get("globals")
+                or 0
+            )
             print_console(
                 f"  [cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
                 q,
@@ -710,7 +759,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     _write_jsonl(str(supplementary_findings_path), supplementary_findings)
 
     if not paths_to_analyze:
-        print_console("[yellow]No source-rooted paths selected for AI path review.[/yellow]", q)
+        print_console(
+            "[yellow]No source-rooted paths selected for AI path review.[/yellow]", q
+        )
         findings = []
     else:
         findings = None
@@ -718,7 +769,10 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     def _confirm_cb(event):
         ev = event.get("event", "")
         if ev == "confirmation_start":
-            print_console(f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} endpoints[/cyan]", q)
+            print_console(
+                f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} endpoints[/cyan]",
+                q,
+            )
         elif ev == "confirmation_progress" and args.verbose:
             endpoint = event.get("endpoint", event.get("sink", ""))
             print_console(
@@ -733,7 +787,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
                 q,
             )
         elif ev == "confirmation_done":
-            print_console(f"[green]  Confirmed findings: {event['confirmed']}[/green]", q)
+            print_console(
+                f"[green]  Confirmed findings: {event['confirmed']}[/green]", q
+            )
 
     if findings is None:
         with usage_operation("reachability"):

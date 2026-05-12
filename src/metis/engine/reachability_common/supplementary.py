@@ -32,30 +32,112 @@ from .utils import (
 )
 
 logger = logging.getLogger("metis")
-_RESOURCE_KW = frozenset({
-    "free", "malloc", "calloc", "realloc", "close", "destroy", "release",
-    "delete", "munmap", "unref", "grow", "compact", "resize",
-    "kfree", "vfree", "devm_kfree", "put", "get", "ref", "unref",
-})
-_AUTH_KW = frozenset({
-    "auth", "login", "check", "verify", "compare", "validate", "token",
-    "password", "permit", "deny", "match", "level", "permission",
-    "capable", "access_ok",
-})
-_HW_STATE_KW = frozenset({
-    "ready", "init", "enable", "disable", "reset", "power", "suspend",
-    "resume", "probe", "remove", "shutdown", "flush", "drain",
-    "start", "stop", "halt", "abort", "fence", "sync",
-    "doorbell", "register", "mmio", "firmware", "fw",
-    "irq", "interrupt", "handler", "callback", "work", "timer",
-    "schedule", "cancel", "queue", "dequeue",
-    "lock", "unlock", "mutex", "spinlock", "spin_lock", "spin_unlock",
-})
-_LIFECYCLE_KW = frozenset({
-    "create", "alloc", "open", "setup", "teardown", "cleanup",
-    "fini", "exit", "deinit", "unregister", "detach",
-    "load", "unload", "bind", "unbind",
-})
+_RESOURCE_KW = frozenset(
+    {
+        "free",
+        "malloc",
+        "calloc",
+        "realloc",
+        "close",
+        "destroy",
+        "release",
+        "delete",
+        "munmap",
+        "unref",
+        "grow",
+        "compact",
+        "resize",
+        "kfree",
+        "vfree",
+        "devm_kfree",
+        "put",
+        "get",
+        "ref",
+        "unref",
+    }
+)
+_AUTH_KW = frozenset(
+    {
+        "auth",
+        "login",
+        "check",
+        "verify",
+        "compare",
+        "validate",
+        "token",
+        "password",
+        "permit",
+        "deny",
+        "match",
+        "level",
+        "permission",
+        "capable",
+        "access_ok",
+    }
+)
+_HW_STATE_KW = frozenset(
+    {
+        "ready",
+        "init",
+        "enable",
+        "disable",
+        "reset",
+        "power",
+        "suspend",
+        "resume",
+        "probe",
+        "remove",
+        "shutdown",
+        "flush",
+        "drain",
+        "start",
+        "stop",
+        "halt",
+        "abort",
+        "fence",
+        "sync",
+        "doorbell",
+        "register",
+        "mmio",
+        "firmware",
+        "fw",
+        "irq",
+        "interrupt",
+        "handler",
+        "callback",
+        "work",
+        "timer",
+        "schedule",
+        "cancel",
+        "queue",
+        "dequeue",
+        "lock",
+        "unlock",
+        "mutex",
+        "spinlock",
+        "spin_lock",
+        "spin_unlock",
+    }
+)
+_LIFECYCLE_KW = frozenset(
+    {
+        "create",
+        "alloc",
+        "open",
+        "setup",
+        "teardown",
+        "cleanup",
+        "fini",
+        "exit",
+        "deinit",
+        "unregister",
+        "detach",
+        "load",
+        "unload",
+        "bind",
+        "unbind",
+    }
+)
 
 _CLASSIC_C_SINK_RE = re.compile(
     r"\b(?:sprintf|vsprintf|strcpy|strcat|gets|scanf|sscanf|memcpy|memmove|strncpy|"
@@ -101,27 +183,62 @@ _LOCK_EVENT_RE = re.compile(
     r"\(\s*(?P<arg>[^,\)]+)",
     re.IGNORECASE,
 )
-_RELATED_FILE_FUNCTION_KEYWORDS = frozenset({
-    "init", "term", "shutdown", "destroy", "release", "cancel", "flush",
-    "create", "get", "put", "ref", "unref", "map", "unmap", "grow",
-    "shrink", "alias", "load", "unload", "verify", "open", "poll",
-    "ioctl", "enable", "disable", "reset", "schedule", "callback",
-    "worker", "work", "timer", "watchdog",
-})
+_RELATED_FILE_FUNCTION_KEYWORDS = frozenset(
+    {
+        "init",
+        "term",
+        "shutdown",
+        "destroy",
+        "release",
+        "cancel",
+        "flush",
+        "create",
+        "get",
+        "put",
+        "ref",
+        "unref",
+        "map",
+        "unmap",
+        "grow",
+        "shrink",
+        "alias",
+        "load",
+        "unload",
+        "verify",
+        "open",
+        "poll",
+        "ioctl",
+        "enable",
+        "disable",
+        "reset",
+        "schedule",
+        "callback",
+        "worker",
+        "work",
+        "timer",
+        "watchdog",
+    }
+)
+
 
 def _node_match_text(codebase_path, node, max_chars=12000):
     body = _read_function_body(codebase_path, node, max_chars)
     return f"{node.name}\n{' '.join(node.calls)}\n{body}"
 
+
 def _select_nodes_by_regex(graph, codebase_path, pattern, *, max_body_chars=12000):
     nodes = []
-    for node in sorted(graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)):
+    for node in sorted(
+        graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)
+    ):
         if pattern.search(_node_match_text(codebase_path, node, max_body_chars)):
             nodes.append(node)
     return nodes
 
+
 def _function_name_tokens(name):
     return [t for t in re.split(r"[^a-z0-9]+", str(name or "").lower()) if t]
+
 
 def _related_function_score(seed_nodes, node, relation_keywords):
     name_l = str(node.name or "").lower()
@@ -146,11 +263,16 @@ def _related_function_score(seed_nodes, node, relation_keywords):
         score += max(1, 8 - nearest // 20)
     return score
 
-def _expand_candidates_with_related_file_functions(graph, candidates, relation_keywords, max_extra_per_file=8):
+
+def _expand_candidates_with_related_file_functions(
+    graph, candidates, relation_keywords, max_extra_per_file=8
+):
     """Add a capped set of same-file lifecycle/accounting siblings for local context."""
     if not candidates:
         return []
-    relation_keywords = frozenset(str(k).lower() for k in relation_keywords if str(k).strip())
+    relation_keywords = frozenset(
+        str(k).lower() for k in relation_keywords if str(k).strip()
+    )
     if not relation_keywords:
         return list(candidates)
 
@@ -167,14 +289,23 @@ def _expand_candidates_with_related_file_functions(graph, candidates, relation_k
             score = _related_function_score(seed_nodes, node, relation_keywords)
             if score <= 0:
                 continue
-            nearest = min(abs(int(node.line_number or 0) - int(seed.line_number or 0)) for seed in seed_nodes)
-            scored.append((-score, nearest, int(node.line_number or 0), node.name, node))
+            nearest = min(
+                abs(int(node.line_number or 0) - int(seed.line_number or 0))
+                for seed in seed_nodes
+            )
+            scored.append(
+                (-score, nearest, int(node.line_number or 0), node.name, node)
+            )
         for _, _, _, _, node in sorted(scored)[:max_extra_per_file]:
             selected[node.unique_name] = node
 
-    return sorted(selected.values(), key=lambda n: (n.file_path, int(n.line_number or 0), n.name))
+    return sorted(
+        selected.values(), key=lambda n: (n.file_path, int(n.line_number or 0), n.name)
+    )
 
-_INTRA_SYS = """\
+
+_INTRA_SYS = (
+    """\
 You are a C/C++ vulnerability expert. Examine each function below for bugs WITHIN the function itself.
 Look for:
 1. DOUBLE-FREE / DOUBLE-CLOSE: Can any path free/close the same resource twice? goto to cleanup that frees something already freed on an error path.
@@ -195,11 +326,14 @@ Look for:
 Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "double_free", "severity": "high", "confidence": "high", \
 "function_name": "handle_set", "line": 55, "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 _INTRA_USR = "File: {file_path}\n\n{functions_code}"
 
-_LIFE_SYS = """\
+_LIFE_SYS = (
+    """\
 You are analyzing a C/C++ codebase for USE-AFTER-FREE, DANGLING POINTER, and LIFETIME bugs spanning MULTIPLE functions.
 Below are functions from the codebase. Analyze their INTERACTIONS:
 1. USE-AFTER-FREE: Function A frees a resource, Function B later dereferences it.
@@ -214,11 +348,14 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "use_after_free", "severity": "high", "confidence": "high", \
 "free_function": "session_close", "use_function": "store_lookup", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 _LIFE_USR = "{all_functions_code}"
 
-_OWN_SYS = """\
+_OWN_SYS = (
+    """\
 You are analyzing a C/C++ codebase for RESOURCE OWNERSHIP, CLEANUP COORDINATION, and TEARDOWN bugs.
 Examine ALL functions below for:
 1. DOUBLE-FREE / DOUBLE-CLOSE ACROSS FUNCTIONS: Function A frees on error, caller also frees unconditionally. \
@@ -237,11 +374,14 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "double_free", "severity": "high", "confidence": "high", \
 "function_a": "proto_parse", "function_b": "dispatch", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 _OWN_USR = "{all_functions_code}"
 
-_SEM_SYS = """\
+_SEM_SYS = (
+    """\
 You are analyzing a C/C++ codebase for SEMANTIC, TYPE, and DATA-FLOW correctness bugs.
 Examine ALL functions below for:
 1. BOOLEAN COERCION OF RICH RETURNS: Function returns level/enum/count, caller checks with if (!func()). \
@@ -267,11 +407,14 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "boolean_coercion", "severity": "high", "confidence": "high", \
 "function_name": "dispatch", "related_function": "auth_get_level", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be EXTREMELY thorough.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be EXTREMELY thorough."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 _SEM_USR = "{all_functions_code}"
 
-_STATE_SYS = """\
+_STATE_SYS = (
+    """\
 You are analyzing a C/C++ codebase for STATE ORDERING, CONCURRENCY, and SYNCHRONIZATION bugs.
 Examine ALL functions below for:
 1. PREMATURE STATE TRANSITION: A "ready", "enabled", or "initialized" flag/field is set \
@@ -297,11 +440,14 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "state_order", "severity": "high", "confidence": "high", \
 "function_name": "device_init", "related_function": "device_ready_check", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be thorough.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be thorough."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 _STATE_USR = "{all_functions_code}"
 
-_TARGET_STATE_SYS = """\
+_TARGET_STATE_SYS = (
+    """\
 You are analyzing C/C++ GPU, firmware, and driver-style code for ready/state flag ordering bugs.
 Target only this bug class:
 - State flags or fields named like gpu_ready, loaded, active, initialized, enabled,
@@ -314,9 +460,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "state_order", "severity": "high",
 "confidence": "high", "function_name": "gpu_init", "related_function": "gpu_submit",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_CALLBACK_SYS = """\
+_TARGET_CALLBACK_SYS = (
+    """\
 You are analyzing C/C++ GPU, firmware, and driver-style code for callback teardown symmetry bugs.
 Target only this bug class:
 - timer/work/watchdog/callback fn/data/ctx is initialized with an object pointer.
@@ -330,9 +479,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "teardown_race", "severity": "high",
 "confidence": "high", "function_name": "gpu_remove", "related_function": "gpu_watchdog_fn",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_REFCOUNT_SYS = """\
+_TARGET_REFCOUNT_SYS = (
+    """\
 You are analyzing C/C++ code for no-op reference counting helpers.
 Target only this bug class:
 - Functions named like *_get, *_put, *_ref, *_unref, acquire, release, retain, or drop
@@ -343,9 +495,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "refcount_imbalance", "severity": "high",
 "confidence": "high", "function_name": "gpu_ctx_get", "related_function": "gpu_ctx_put",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_PERMISSION_SYS = """\
+_TARGET_PERMISSION_SYS = (
+    """\
 You are analyzing C/C++ GPU, firmware, and driver-style code for permission-domain mismatches.
 Target only these bug classes:
 - A privileged CPU operation checks GPU_WR or a GPU-only permission when CPU_WR is needed.
@@ -363,9 +518,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "permission_mismatch", "severity": "high",
 "confidence": "high", "function_name": "gpu_ioctl_reset", "related_function": "gpu_check_perm",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_TOCTOU_SYS = """\
+_TARGET_TOCTOU_SYS = (
+    """\
 You are analyzing C/C++ code for filesystem time-of-check/time-of-use bugs.
 Target only this bug class:
 - stat, lstat, access, faccessat, or similar path checks are followed by fopen, open,
@@ -377,9 +535,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "toctou", "severity": "medium",
 "confidence": "high", "function_name": "load_firmware_path", "related_function": "",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_CLASSIC_C_SINK_SYS = """\
+_CLASSIC_C_SINK_SYS = (
+    """\
 You are analyzing selected C/C++ functions that contain classic dangerous APIs.
 Only report concrete bugs in the shown functions:
 1. Unbounded sprintf/vsprintf/strcpy/strcat into fixed-size or caller-provided buffers.
@@ -397,9 +558,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "buffer_overflow", "severity": "high",
 "confidence": "high", "function_name": "gpu_debug_dump_context", "line": 123,
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative and report each root cause once.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative and report each root cause once."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_ERROR_UNWIND_SYS = """\
+_ERROR_UNWIND_SYS = (
+    """\
 You are analyzing selected C/C++ functions for error-unwind, cleanup, and rollback bugs.
 Focus only on:
 - Partial cleanup: a loop allocates multiple objects and a later failure leaks earlier objects.
@@ -415,9 +579,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "rollback_gap", "severity": "high",
 "confidence": "high", "function_name": "gpu_region_create", "related_function": "rb_erase",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative and do not report style-only cleanup issues.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative and do not report style-only cleanup issues."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_COUNTER_SYMMETRY_SYS = """\
+_COUNTER_SYMMETRY_SYS = (
+    """\
 You are analyzing selected C/C++ functions for counter, refcount, and accounting symmetry bugs.
 Compare add/remove, create/destroy, map/unmap, alias_create/alias_destroy, get/put,
 grow/shrink, and allocation/free pairs.
@@ -432,9 +599,12 @@ Return ONLY valid JSON:
 "confidence": "high", "function_name": "gpu_region_create_alias",
 "related_function": "gpu_region_destroy_alias",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_GLOBAL_LIFECYCLE_SYS = """\
+_GLOBAL_LIFECYCLE_SYS = (
+    """\
 You are analyzing global C/C++ callback and file-operations tables plus referenced functions.
 Focus on:
 - struct file_operations / fops tables, ops tables, timer/work/watchdog callback tables.
@@ -448,9 +618,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "teardown_race", "severity": "high",
 "confidence": "high", "function_name": "gpu_file_release", "related_function": "gpu_file_poll",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative and report only actionable lifecycle gaps.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative and report only actionable lifecycle gaps."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_LOCK_ORDER_SYS = """\
+_LOCK_ORDER_SYS = (
+    """\
 You are analyzing deterministic lock acquisition sequences extracted from C/C++ functions.
 Confirm only real lock-order inversions:
 - Function A acquires lock A then lock B while Function B can acquire lock B then lock A.
@@ -461,9 +634,12 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "lock_order", "severity": "medium",
 "confidence": "high", "function_name": "gpu_sched_submit", "related_function": "gpu_ctx_destroy",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_ORDERING_GAP_SYS = """\
+_TARGET_ORDERING_GAP_SYS = (
+    """\
 You are analyzing C/C++ driver-like code for operation ordering gaps.
 Focus only on:
 - flush/sync/drain/fence/reset/power transition ordering bugs.
@@ -476,9 +652,12 @@ Return ONLY valid JSON:
 "confidence": "high", "function_name": "gpu_mmu_insert_pages",
 "related_function": "gpu_power_off",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
-_TARGET_PATH_ACCESS_SYS = """\
+_TARGET_PATH_ACCESS_SYS = (
+    """\
 You are analyzing selected C/C++ functions for path traversal and filesystem TOCTOU.
 Target only:
 - Caller/user-controlled path used directly in fopen/open/stat/access.
@@ -492,20 +671,37 @@ Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "path_traversal", "severity": "high",
 "confidence": "high", "function_name": "gpu_fw_load_custom", "related_function": "",
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative.""" + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative."""
+    + _CANONICAL_FINDING_INSTRUCTIONS
+)
 
 
 class SupplementaryAnalyzer:
     """Run targeted semantic passes over graph-selected function groups."""
 
-    def __init__(self, llm_provider, audit_model, strong_model, usage_runtime, codebase_path,
-                 audit_max_tokens=8192, strong_max_tokens=16384, reasoning_effort=None):
-        self._p = llm_provider; self._am = audit_model; self._sm = strong_model
-        self._u = usage_runtime; self._cb = os.path.abspath(codebase_path)
-        self._at = audit_max_tokens; self._st = strong_max_tokens
+    def __init__(
+        self,
+        llm_provider,
+        audit_model,
+        strong_model,
+        usage_runtime,
+        codebase_path,
+        audit_max_tokens=8192,
+        strong_max_tokens=16384,
+        reasoning_effort=None,
+    ):
+        self._p = llm_provider
+        self._am = audit_model
+        self._sm = strong_model
+        self._u = usage_runtime
+        self._cb = os.path.abspath(codebase_path)
+        self._at = audit_max_tokens
+        self._st = strong_max_tokens
         self._reasoning_effort = reasoning_effort
 
-    def analyze(self, graph, *, max_workers=8, progress_callback=None, analysis_profile="full"):
+    def analyze(
+        self, graph, *, max_workers=8, progress_callback=None, analysis_profile="full"
+    ):
         full_pass_specs = [
             ("intra_audit", self._pass_intra),
             ("lifecycle_audit", self._pass_lifecycle),
@@ -559,10 +755,12 @@ class SupplementaryAnalyzer:
             except Exception as exc:
                 logger.warning("%s pass fail: %s", pass_name, exc)
                 if progress_callback:
-                    progress_callback({
-                        "event": f"{pass_name}_error",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
+                    progress_callback(
+                        {
+                            "event": f"{pass_name}_error",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
                 return []
 
         if pass_parallelism == 1:
@@ -571,110 +769,212 @@ class SupplementaryAnalyzer:
         else:
             with ThreadPoolExecutor(max_workers=pass_parallelism) as executor:
                 futures = {
-                    submit_with_current_context(executor, _run_pass, pass_name, pass_fn): pass_name
+                    submit_with_current_context(
+                        executor, _run_pass, pass_name, pass_fn
+                    ): pass_name
                     for pass_name, pass_fn in pass_specs
                 }
                 for future in as_completed(futures):
                     findings.extend(future.result())
         if progress_callback:
             by_type = defaultdict(int)
-            for f in findings: by_type[f.analysis_type] += 1
-            progress_callback({"event": "supplementary_done", **dict(by_type), "total": len(findings)})
+            for f in findings:
+                by_type[f.analysis_type] += 1
+            progress_callback(
+                {"event": "supplementary_done", **dict(by_type), "total": len(findings)}
+            )
         return findings
 
     def _pass_intra(self, graph, max_workers, cb):
         targets = self._select_intra_targets(graph)
-        if not targets: return []
+        if not targets:
+            return []
         groups = defaultdict(list)
-        for t in targets: groups[t.file_path].append(t)
-        if cb: cb({"event": "intra_audit_start", "files": len(groups), "functions": len(targets)})
+        for t in targets:
+            groups[t.file_path].append(t)
+        if cb:
+            cb(
+                {
+                    "event": "intra_audit_start",
+                    "files": len(groups),
+                    "functions": len(targets),
+                }
+            )
         results = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {submit_with_current_context(ex, self._audit_file, fp, fns): fp for fp, fns in groups.items()}
+            futs = {
+                submit_with_current_context(ex, self._audit_file, fp, fns): fp
+                for fp, fns in groups.items()
+            }
             done = 0
             for fut in as_completed(futs):
-                fp = futs[fut]; done += 1
-                try: results.extend(fut.result())
-                except Exception as e: logger.warning("Intra audit fail %s: %s", fp, e)
-                if cb: cb({"event": "intra_audit_progress", "completed": done, "total": len(groups), "file": fp})
+                fp = futs[fut]
+                done += 1
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("Intra audit fail %s: %s", fp, e)
+                if cb:
+                    cb(
+                        {
+                            "event": "intra_audit_progress",
+                            "completed": done,
+                            "total": len(groups),
+                            "file": fp,
+                        }
+                    )
         return results
 
     def _select_intra_targets(self, graph):
         all_kw = _RESOURCE_KW | _AUTH_KW | _HW_STATE_KW | _LIFECYCLE_KW
         seen, targets = set(), []
         for n in graph.nodes.values():
-            nl = n.name.lower(); cl = [c.lower() for c in n.calls]; ac = nl + " " + " ".join(cl)
-            if (n.is_sink or n.is_source
-                    or any(k in ac for k in all_kw)
-                    or "goto" in ac):
-                if n.unique_name not in seen: seen.add(n.unique_name); targets.append(n)
+            nl = n.name.lower()
+            cl = [c.lower() for c in n.calls]
+            ac = nl + " " + " ".join(cl)
+            if n.is_sink or n.is_source or any(k in ac for k in all_kw) or "goto" in ac:
+                if n.unique_name not in seen:
+                    seen.add(n.unique_name)
+                    targets.append(n)
         # if we missed any functions (small codebase), include everything
         if len(targets) < len(graph.nodes) * 0.3:
             for n in graph.nodes.values():
                 if n.unique_name not in seen:
-                    seen.add(n.unique_name); targets.append(n)
+                    seen.add(n.unique_name)
+                    targets.append(n)
         return targets
 
     def _audit_file(self, file_path, functions):
         bodies = []
         for fn in functions:
             b = _read_function_body(self._cb, fn, 4096)
-            if b: bodies.append(f"--- {fn.unique_name} (line {fn.line_number}) ---\n{b}")
-        if not bodies: return []
-        kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-        chat = self._p.get_chat_model(model=self._am, max_tokens=self._at, temperature=0.1, **kw)
-        prompt = ChatPromptTemplate.from_messages([("system", _INTRA_SYS), ("user", _INTRA_USR)])
-        raw = (prompt | chat | StrOutputParser()).invoke({"file_path": file_path, "functions_code": "\n\n".join(bodies)}).strip()
+            if b:
+                bodies.append(f"--- {fn.unique_name} (line {fn.line_number}) ---\n{b}")
+        if not bodies:
+            return []
+        kw = _chat_model_kwargs(
+            self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+        )
+        chat = self._p.get_chat_model(
+            model=self._am, max_tokens=self._at, temperature=0.1, **kw
+        )
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", _INTRA_SYS), ("user", _INTRA_USR)]
+        )
+        raw = (
+            (prompt | chat | StrOutputParser())
+            .invoke({"file_path": file_path, "functions_code": "\n\n".join(bodies)})
+            .strip()
+        )
         return self._parse_intra(raw, functions)
 
     def _parse_intra(self, raw, functions, analysis_type="intra_function"):
         parsed = parse_json_output(raw)
-        if not isinstance(parsed, dict): return []
+        if not isinstance(parsed, dict):
+            return []
         fl = parsed.get("findings")
-        if not isinstance(fl, list): return []
-        lk = {fn.name: fn for fn in functions}; bu = {f.unique_name: f for f in functions}
+        if not isinstance(fl, list):
+            return []
+        lk = {fn.name: fn for fn in functions}
+        bu = {f.unique_name: f for f in functions}
         results = []
         for e in fl:
-            if not isinstance(e, dict): continue
+            if not isinstance(e, dict):
+                continue
             fn = _lookup_fn(str(e.get("function_name") or ""), lk, bu, functions)
-            if not fn: fn = functions[0]
+            if not fn:
+                fn = functions[0]
             line = fn.line_number
-            try: line = max(1, int(e.get("line", line)))
-            except: pass
-            primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
-                e, default_file=fn.file_path, default_function=fn.unique_name, default_line=line)
-            results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16],
-                vulnerability_type=_normalise_vuln_type(e.get("vulnerability_type") or "other"),
-                severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
-                source_function=fn.unique_name, source_file=fn.file_path, source_line=line,
-                sink_function=fn.unique_name, sink_file=fn.file_path, sink_line=line,
-                path=[fn.unique_name], description=str(e.get("description") or ""),
-                root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
-                analysis_type=analysis_type, primary_file=primary_file,
-                primary_function=primary_function, primary_line=primary_line,
-                canonical_key=canonical_key))
+            try:
+                line = max(1, int(e.get("line", line)))
+            except (TypeError, ValueError):
+                pass
+            primary_file, primary_function, primary_line, canonical_key = (
+                _canonical_fields(
+                    e,
+                    default_file=fn.file_path,
+                    default_function=fn.unique_name,
+                    default_line=line,
+                )
+            )
+            results.append(
+                VulnerabilityFinding(
+                    id=uuid.uuid4().hex[:16],
+                    vulnerability_type=_normalise_vuln_type(
+                        e.get("vulnerability_type") or "other"
+                    ),
+                    severity=str(e.get("severity") or "medium"),
+                    confidence=str(e.get("confidence") or "medium"),
+                    source_function=fn.unique_name,
+                    source_file=fn.file_path,
+                    source_line=line,
+                    sink_function=fn.unique_name,
+                    sink_file=fn.file_path,
+                    sink_line=line,
+                    path=[fn.unique_name],
+                    description=str(e.get("description") or ""),
+                    root_cause=str(e.get("root_cause") or ""),
+                    evidence=str(e.get("evidence") or ""),
+                    analysis_type=analysis_type,
+                    primary_file=primary_file,
+                    primary_function=primary_function,
+                    primary_line=primary_line,
+                    canonical_key=canonical_key,
+                )
+            )
         return results
+
     # All use chunking to avoid blowing context windows.
 
-    def _run_chunked_cross_pass(self, graph, sys_prompt, usr_template, usr_key,
-                                 analysis_type, key_a, key_b, model, max_tokens,
-                                 max_workers, cb, event_prefix, include_globals=False):
+    def _run_chunked_cross_pass(
+        self,
+        graph,
+        sys_prompt,
+        usr_template,
+        usr_key,
+        analysis_type,
+        key_a,
+        key_b,
+        model,
+        max_tokens,
+        max_workers,
+        cb,
+        event_prefix,
+        include_globals=False,
+    ):
         fns = list(graph.nodes.values())
-        if not fns: return []
-        if cb: cb({"event": f"{event_prefix}_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(self._cb, fns, max_total_chars=60000, per_fn_chars=3000)
-        if not chunks: return []
+        if not fns:
+            return []
+        if cb:
+            cb({"event": f"{event_prefix}_start", "functions": len(fns)})
+        chunks = _build_file_grouped_chunks(
+            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        )
+        if not chunks:
+            return []
         globals_code = _build_globals_code(graph) if include_globals else ""
         if globals_code:
-            chunks = [f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}" for chunk in chunks]
+            chunks = [
+                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
+                for chunk in chunks
+            ]
         results = []
 
         def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=model, max_tokens=max_tokens, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", usr_template)])
-            raw = (prompt | chat | StrOutputParser()).invoke({usr_key: code_chunk}).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=model, max_tokens=max_tokens, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", sys_prompt), ("user", usr_template)]
+            )
+            raw = (
+                (prompt | chat | StrOutputParser())
+                .invoke({usr_key: code_chunk})
+                .strip()
+            )
             return raw
 
         if len(chunks) == 1:
@@ -682,40 +982,67 @@ class SupplementaryAnalyzer:
             results = self._parse_cross(raw, fns, analysis_type, key_a, key_b)
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {submit_with_current_context(ex, _run_chunk, chunk): i for i, chunk in enumerate(chunks)}
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
                 for fut in as_completed(futs):
                     try:
                         raw = fut.result()
-                        results.extend(self._parse_cross(raw, fns, analysis_type, key_a, key_b))
+                        results.extend(
+                            self._parse_cross(raw, fns, analysis_type, key_a, key_b)
+                        )
                     except Exception as e:
                         logger.warning("%s chunk fail: %s", event_prefix, e)
 
-        if cb: cb({"event": f"{event_prefix}_done", "findings": len(results)})
+        if cb:
+            cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
     def _run_chunked_semantic_pass(self, graph, max_workers, cb):
         fns = list(graph.nodes.values())
-        if not fns: return []
-        if cb: cb({"event": "semantic_audit_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(self._cb, fns, max_total_chars=60000, per_fn_chars=3000)
-        if not chunks: return []
+        if not fns:
+            return []
+        if cb:
+            cb({"event": "semantic_audit_start", "functions": len(fns)})
+        chunks = _build_file_grouped_chunks(
+            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        )
+        if not chunks:
+            return []
         globals_code = _build_globals_code(graph)
         if globals_code:
-            chunks = [f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}" for chunk in chunks]
+            chunks = [
+                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
+                for chunk in chunks
+            ]
         results = []
 
         def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", _SEM_SYS), ("user", _SEM_USR)])
-            return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", _SEM_SYS), ("user", _SEM_USR)]
+            )
+            return (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code_chunk})
+                .strip()
+            )
 
         if len(chunks) == 1:
             raw = _run_chunk(chunks[0])
             results = self._parse_semantic(raw, fns)
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {submit_with_current_context(ex, _run_chunk, chunk): i for i, chunk in enumerate(chunks)}
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
                 for fut in as_completed(futs):
                     try:
                         raw = fut.result()
@@ -723,21 +1050,42 @@ class SupplementaryAnalyzer:
                     except Exception as e:
                         logger.warning("Semantic chunk fail: %s", e)
 
-        if cb: cb({"event": "semantic_audit_done", "findings": len(results)})
+        if cb:
+            cb({"event": "semantic_audit_done", "findings": len(results)})
         return results
 
     def _pass_lifecycle(self, graph, max_workers, cb):
         return self._run_chunked_cross_pass(
-            graph, _LIFE_SYS, _LIFE_USR, "all_functions_code",
-            "lifecycle", "free_function", "use_function",
-            self._sm, self._st, max_workers, cb, "lifecycle_audit")
+            graph,
+            _LIFE_SYS,
+            _LIFE_USR,
+            "all_functions_code",
+            "lifecycle",
+            "free_function",
+            "use_function",
+            self._sm,
+            self._st,
+            max_workers,
+            cb,
+            "lifecycle_audit",
+        )
 
     def _pass_ownership(self, graph, max_workers, cb):
         return self._run_chunked_cross_pass(
-            graph, _OWN_SYS, _OWN_USR, "all_functions_code",
-            "ownership", "function_a", "function_b",
-            self._sm, self._st, max_workers, cb, "ownership_audit",
-            include_globals=True)
+            graph,
+            _OWN_SYS,
+            _OWN_USR,
+            "all_functions_code",
+            "ownership",
+            "function_a",
+            "function_b",
+            self._sm,
+            self._st,
+            max_workers,
+            cb,
+            "ownership_audit",
+            include_globals=True,
+        )
 
     def _pass_semantic(self, graph, max_workers, cb):
         return self._run_chunked_semantic_pass(graph, max_workers, cb)
@@ -745,188 +1093,377 @@ class SupplementaryAnalyzer:
     def _pass_state_concurrency(self, graph, max_workers, cb):
         """New pass: state ordering, lock discipline, teardown races."""
         fns = list(graph.nodes.values())
-        if not fns: return []
-        if cb: cb({"event": "state_audit_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(self._cb, fns, max_total_chars=60000, per_fn_chars=3000)
-        if not chunks: return []
+        if not fns:
+            return []
+        if cb:
+            cb({"event": "state_audit_start", "functions": len(fns)})
+        chunks = _build_file_grouped_chunks(
+            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        )
+        if not chunks:
+            return []
         globals_code = _build_globals_code(graph)
         if globals_code:
-            chunks = [f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}" for chunk in chunks]
+            chunks = [
+                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
+                for chunk in chunks
+            ]
         results = []
 
         def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", _STATE_SYS), ("user", _STATE_USR)])
-            return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", _STATE_SYS), ("user", _STATE_USR)]
+            )
+            return (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code_chunk})
+                .strip()
+            )
 
         if len(chunks) == 1:
             raw = _run_chunk(chunks[0])
             results = self._parse_semantic(raw, fns, analysis_type="state_concurrency")
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {submit_with_current_context(ex, _run_chunk, chunk): i for i, chunk in enumerate(chunks)}
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
                 for fut in as_completed(futs):
                     try:
                         raw = fut.result()
-                        results.extend(self._parse_semantic(raw, fns, analysis_type="state_concurrency"))
+                        results.extend(
+                            self._parse_semantic(
+                                raw, fns, analysis_type="state_concurrency"
+                            )
+                        )
                     except Exception as e:
                         logger.warning("State/concurrency chunk fail: %s", e)
 
-        if cb: cb({"event": "state_audit_done", "findings": len(results)})
+        if cb:
+            cb({"event": "state_audit_done", "findings": len(results)})
         return results
 
-    def _run_targeted_pass(self, graph, sys_prompt, analysis_type, max_workers, cb, event_prefix,
-                           relation_keywords=None):
+    def _run_targeted_pass(
+        self,
+        graph,
+        sys_prompt,
+        analysis_type,
+        max_workers,
+        cb,
+        event_prefix,
+        relation_keywords=None,
+    ):
         fns = list(graph.nodes.values())
         if relation_keywords:
-            fns = _expand_candidates_with_related_file_functions(graph, fns, relation_keywords)
-        if not fns: return []
-        if cb: cb({"event": f"{event_prefix}_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(self._cb, fns, max_total_chars=60000, per_fn_chars=3000)
-        if not chunks: return []
+            fns = _expand_candidates_with_related_file_functions(
+                graph, fns, relation_keywords
+            )
+        if not fns:
+            return []
+        if cb:
+            cb({"event": f"{event_prefix}_start", "functions": len(fns)})
+        chunks = _build_file_grouped_chunks(
+            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        )
+        if not chunks:
+            return []
         globals_code = _build_globals_code(graph)
         if globals_code:
-            chunks = [f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}" for chunk in chunks]
+            chunks = [
+                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
+                for chunk in chunks
+            ]
         results = []
 
         def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _SEM_USR)])
-            return (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", sys_prompt), ("user", _SEM_USR)]
+            )
+            return (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code_chunk})
+                .strip()
+            )
 
         if len(chunks) == 1:
-            results = self._parse_semantic(_run_chunk(chunks[0]), fns, analysis_type=analysis_type)
+            results = self._parse_semantic(
+                _run_chunk(chunks[0]), fns, analysis_type=analysis_type
+            )
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {submit_with_current_context(ex, _run_chunk, chunk): i for i, chunk in enumerate(chunks)}
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
                 for fut in as_completed(futs):
                     try:
-                        results.extend(self._parse_semantic(fut.result(), fns, analysis_type=analysis_type))
+                        results.extend(
+                            self._parse_semantic(
+                                fut.result(), fns, analysis_type=analysis_type
+                            )
+                        )
                     except Exception as e:
                         logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb: cb({"event": f"{event_prefix}_done", "findings": len(results)})
+        if cb:
+            cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
-    def _run_candidate_intra_pass(self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix):
+    def _run_candidate_intra_pass(
+        self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix
+    ):
         candidates = _select_nodes_by_regex(graph, self._cb, pattern)
-        if not candidates: return []
-        if cb: cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
-        chunks = _build_file_grouped_node_chunks(self._cb, candidates, max_total_chars=50000, per_fn_chars=5000)
-        if not chunks: return []
+        if not candidates:
+            return []
+        if cb:
+            cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
+        chunks = _build_file_grouped_node_chunks(
+            self._cb, candidates, max_total_chars=50000, per_fn_chars=5000
+        )
+        if not chunks:
+            return []
         results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _INTRA_USR)])
-            raw = (prompt | chat | StrOutputParser()).invoke({
-                "file_path": "candidate functions",
-                "functions_code": code_chunk,
-            }).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", sys_prompt), ("user", _INTRA_USR)]
+            )
+            raw = (
+                (prompt | chat | StrOutputParser())
+                .invoke(
+                    {
+                        "file_path": "candidate functions",
+                        "functions_code": code_chunk,
+                    }
+                )
+                .strip()
+            )
             return self._parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(chunks)))) as ex:
-            futs = {submit_with_current_context(ex, _run_chunk, nodes, text): i for i, (nodes, text) in enumerate(chunks)}
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(chunks)))
+        ) as ex:
+            futs = {
+                submit_with_current_context(ex, _run_chunk, nodes, text): i
+                for i, (nodes, text) in enumerate(chunks)
+            }
             for fut in as_completed(futs):
-                try: results.extend(fut.result())
-                except Exception as e: logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb: cb({"event": f"{event_prefix}_done", "findings": len(results)})
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("%s chunk fail: %s", event_prefix, e)
+        if cb:
+            cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
-    def _run_candidate_semantic_pass(self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix,
-                                     relation_keywords=None):
+    def _run_candidate_semantic_pass(
+        self,
+        graph,
+        pattern,
+        sys_prompt,
+        analysis_type,
+        max_workers,
+        cb,
+        event_prefix,
+        relation_keywords=None,
+    ):
         candidates = _select_nodes_by_regex(graph, self._cb, pattern)
-        if not candidates: return []
+        if not candidates:
+            return []
         if relation_keywords:
-            candidates = _expand_candidates_with_related_file_functions(graph, candidates, relation_keywords)
-        if cb: cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
-        chunks = _build_file_grouped_node_chunks(self._cb, candidates, max_total_chars=60000, per_fn_chars=4000)
-        if not chunks: return []
+            candidates = _expand_candidates_with_related_file_functions(
+                graph, candidates, relation_keywords
+            )
+        if cb:
+            cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
+        chunks = _build_file_grouped_node_chunks(
+            self._cb, candidates, max_total_chars=60000, per_fn_chars=4000
+        )
+        if not chunks:
+            return []
         results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", sys_prompt), ("user", _SEM_USR)])
-            raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code_chunk}).strip()
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", sys_prompt), ("user", _SEM_USR)]
+            )
+            raw = (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code_chunk})
+                .strip()
+            )
             return self._parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
 
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(chunks)))) as ex:
-            futs = {submit_with_current_context(ex, _run_chunk, nodes, text): i for i, (nodes, text) in enumerate(chunks)}
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(chunks)))
+        ) as ex:
+            futs = {
+                submit_with_current_context(ex, _run_chunk, nodes, text): i
+                for i, (nodes, text) in enumerate(chunks)
+            }
             for fut in as_completed(futs):
-                try: results.extend(fut.result())
-                except Exception as e: logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb: cb({"event": f"{event_prefix}_done", "findings": len(results)})
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("%s chunk fail: %s", event_prefix, e)
+        if cb:
+            cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
     def _pass_classic_c_sinks(self, graph, max_workers, cb):
         return self._run_candidate_intra_pass(
-            graph, _CLASSIC_C_SINK_RE, _CLASSIC_C_SINK_SYS,
-            "classic_c_sink", max_workers, cb, "classic_c_sink")
+            graph,
+            _CLASSIC_C_SINK_RE,
+            _CLASSIC_C_SINK_SYS,
+            "classic_c_sink",
+            max_workers,
+            cb,
+            "classic_c_sink",
+        )
 
     def _pass_error_unwind(self, graph, max_workers, cb):
         return self._run_candidate_semantic_pass(
-            graph, _ERROR_UNWIND_RE, _ERROR_UNWIND_SYS,
-            "error_unwind", max_workers, cb, "error_unwind",
-            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS)
+            graph,
+            _ERROR_UNWIND_RE,
+            _ERROR_UNWIND_SYS,
+            "error_unwind",
+            max_workers,
+            cb,
+            "error_unwind",
+            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
+        )
 
     def _pass_counter_symmetry(self, graph, max_workers, cb):
         return self._run_candidate_semantic_pass(
-            graph, _COUNTER_RE, _COUNTER_SYMMETRY_SYS,
-            "counter_symmetry", max_workers, cb, "counter_symmetry",
-            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS)
+            graph,
+            _COUNTER_RE,
+            _COUNTER_SYMMETRY_SYS,
+            "counter_symmetry",
+            max_workers,
+            cb,
+            "counter_symmetry",
+            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
+        )
 
     def _pass_targeted_ordering_gap(self, graph, max_workers, cb):
         return self._run_candidate_semantic_pass(
-            graph, _ORDERING_GAP_RE, _TARGET_ORDERING_GAP_SYS,
-            "targeted_ordering_gap", max_workers, cb, "targeted_ordering_gap",
-            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS)
+            graph,
+            _ORDERING_GAP_RE,
+            _TARGET_ORDERING_GAP_SYS,
+            "targeted_ordering_gap",
+            max_workers,
+            cb,
+            "targeted_ordering_gap",
+            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
+        )
 
     def _pass_targeted_path_access(self, graph, max_workers, cb):
         return self._run_candidate_semantic_pass(
-            graph, _PATH_ACCESS_RE, _TARGET_PATH_ACCESS_SYS,
-            "targeted_path_access", max_workers, cb, "targeted_path_access")
+            graph,
+            _PATH_ACCESS_RE,
+            _TARGET_PATH_ACCESS_SYS,
+            "targeted_path_access",
+            max_workers,
+            cb,
+            "targeted_path_access",
+        )
 
     def _pass_global_lifecycle(self, graph, max_workers, cb):
         globals_ = graph.get_globals()
-        if not globals_: return []
+        if not globals_:
+            return []
         nodes_by_unique = {}
         for g in globals_:
             prefix = re.split(r"[_\W]+", g.name.lower())[0] if g.name else ""
             for ref in g.referenced_functions:
                 for unique_name in graph.name_index.get(ref, []):
                     node = graph.get_node(unique_name)
-                    if node: nodes_by_unique[node.unique_name] = node
+                    if node:
+                        nodes_by_unique[node.unique_name] = node
             for node in graph.get_file_nodes(g.file_path):
                 name_l = node.name.lower()
-                if _GLOBAL_LIFECYCLE_NAME_RE.search(name_l) or (prefix and name_l.startswith(prefix)):
+                if _GLOBAL_LIFECYCLE_NAME_RE.search(name_l) or (
+                    prefix and name_l.startswith(prefix)
+                ):
                     nodes_by_unique[node.unique_name] = node
         nodes = _expand_candidates_with_related_file_functions(
-            graph, list(nodes_by_unique.values()), _RELATED_FILE_FUNCTION_KEYWORDS)
+            graph, list(nodes_by_unique.values()), _RELATED_FILE_FUNCTION_KEYWORDS
+        )
         nodes = sorted(nodes, key=lambda n: (n.file_path, n.line_number, n.name))
-        if not nodes: return []
-        if cb: cb({"event": "global_lifecycle_start", "globals": len(globals_), "functions": len(nodes)})
-        chunks = _build_file_grouped_node_chunks(self._cb, nodes, max_total_chars=50000, per_fn_chars=4000)
+        if not nodes:
+            return []
+        if cb:
+            cb(
+                {
+                    "event": "global_lifecycle_start",
+                    "globals": len(globals_),
+                    "functions": len(nodes),
+                }
+            )
+        chunks = _build_file_grouped_node_chunks(
+            self._cb, nodes, max_total_chars=50000, per_fn_chars=4000
+        )
         globals_code = _build_globals_code(graph, max_chars=30000)
         results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
             code = f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{code_chunk}"
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", _GLOBAL_LIFECYCLE_SYS), ("user", _SEM_USR)])
-            raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code}).strip()
-            return self._parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", _GLOBAL_LIFECYCLE_SYS), ("user", _SEM_USR)]
+            )
+            raw = (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code})
+                .strip()
+            )
+            return self._parse_semantic(
+                raw, chunk_nodes, analysis_type="global_lifecycle"
+            )
 
-        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(chunks)))) as ex:
-            futs = {submit_with_current_context(ex, _run_chunk, chunk_nodes, text): i
-                    for i, (chunk_nodes, text) in enumerate(chunks)}
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(chunks)))
+        ) as ex:
+            futs = {
+                submit_with_current_context(ex, _run_chunk, chunk_nodes, text): i
+                for i, (chunk_nodes, text) in enumerate(chunks)
+            }
             for fut in as_completed(futs):
-                try: results.extend(fut.result())
-                except Exception as e: logger.warning("Global lifecycle chunk fail: %s", e)
-        if cb: cb({"event": "global_lifecycle_done", "findings": len(results)})
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("Global lifecycle chunk fail: %s", e)
+        if cb:
+            cb({"event": "global_lifecycle_done", "findings": len(results)})
         return results
 
     def _normalise_lock_expr(self, expr):
@@ -954,14 +1491,18 @@ class SupplementaryAnalyzer:
 
     def _extract_lock_conflicts(self, graph):
         edges = defaultdict(list)
-        for node in sorted(graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)):
+        for node in sorted(
+            graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)
+        ):
             body = _read_function_body(self._cb, node, 8000)
-            if not body: continue
+            if not body:
+                continue
             held = []
             for match in _LOCK_EVENT_RE.finditer(body):
                 lock = self._normalise_lock_expr(match.group("arg"))
-                if not lock: continue
-                line = node.line_number + body[:match.start()].count("\n")
+                if not lock:
+                    continue
+                line = node.line_number + body[: match.start()].count("\n")
                 fn_name = match.group("fn").lower()
                 if "unlock" in fn_name:
                     if lock in held:
@@ -982,7 +1523,10 @@ class SupplementaryAnalyzer:
                 for node_b, line_b in reverse_edges:
                     if node_a.unique_name == node_b.unique_name:
                         continue
-                    key = tuple(sorted((node_a.unique_name, node_b.unique_name)) + sorted((a, b)))
+                    key = tuple(
+                        sorted((node_a.unique_name, node_b.unique_name))
+                        + sorted((a, b))
+                    )
                     if key in seen:
                         continue
                     seen.add(key)
@@ -993,8 +1537,10 @@ class SupplementaryAnalyzer:
 
     def _pass_lock_order(self, graph, max_workers, cb):
         conflicts = self._extract_lock_conflicts(graph)
-        if not conflicts: return []
-        if cb: cb({"event": "lock_order_extraction_start", "conflicts": len(conflicts)})
+        if not conflicts:
+            return []
+        if cb:
+            cb({"event": "lock_order_extraction_start", "conflicts": len(conflicts)})
         results = []
         for batch in _chunked(conflicts, 8):
             nodes = []
@@ -1009,92 +1555,189 @@ class SupplementaryAnalyzer:
                     if node.unique_name not in seen:
                         seen.add(node.unique_name)
                         nodes.append(node)
-            body_chunks = _build_file_grouped_chunks(self._cb, nodes, max_total_chars=50000, per_fn_chars=5000)
-            code = "\n".join(lines) + "\n\n== RELEVANT FUNCTION BODIES ==\n" + "\n\n".join(body_chunks)
-            kw = _chat_model_kwargs(self._u, reasoning_effort=getattr(self, "_reasoning_effort", None))
-            chat = self._p.get_chat_model(model=self._sm, max_tokens=self._st, temperature=0.1, **kw)
-            prompt = ChatPromptTemplate.from_messages([("system", _LOCK_ORDER_SYS), ("user", _SEM_USR)])
-            raw = (prompt | chat | StrOutputParser()).invoke({"all_functions_code": code}).strip()
-            results.extend(self._parse_semantic(raw, nodes, analysis_type="lock_order_extraction"))
-        if cb: cb({"event": "lock_order_extraction_done", "findings": len(results)})
+            body_chunks = _build_file_grouped_chunks(
+                self._cb, nodes, max_total_chars=50000, per_fn_chars=5000
+            )
+            code = (
+                "\n".join(lines)
+                + "\n\n== RELEVANT FUNCTION BODIES ==\n"
+                + "\n\n".join(body_chunks)
+            )
+            kw = _chat_model_kwargs(
+                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
+            )
+            chat = self._p.get_chat_model(
+                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", _LOCK_ORDER_SYS), ("user", _SEM_USR)]
+            )
+            raw = (
+                (prompt | chat | StrOutputParser())
+                .invoke({"all_functions_code": code})
+                .strip()
+            )
+            results.extend(
+                self._parse_semantic(raw, nodes, analysis_type="lock_order_extraction")
+            )
+        if cb:
+            cb({"event": "lock_order_extraction_done", "findings": len(results)})
         return results
 
     def _pass_targeted_state_order(self, graph, max_workers, cb):
         return self._run_targeted_pass(
-            graph, _TARGET_STATE_SYS, "targeted_state_order", max_workers, cb,
-            "targeted_state_order")
+            graph,
+            _TARGET_STATE_SYS,
+            "targeted_state_order",
+            max_workers,
+            cb,
+            "targeted_state_order",
+        )
 
     def _pass_targeted_callback_lifecycle(self, graph, max_workers, cb):
         return self._run_targeted_pass(
-            graph, _TARGET_CALLBACK_SYS, "targeted_callback_lifecycle", max_workers, cb,
-            "targeted_callback_lifecycle", relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS)
+            graph,
+            _TARGET_CALLBACK_SYS,
+            "targeted_callback_lifecycle",
+            max_workers,
+            cb,
+            "targeted_callback_lifecycle",
+            relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
+        )
 
     def _pass_targeted_refcount(self, graph, max_workers, cb):
         return self._run_targeted_pass(
-            graph, _TARGET_REFCOUNT_SYS, "targeted_refcount", max_workers, cb,
-            "targeted_refcount")
+            graph,
+            _TARGET_REFCOUNT_SYS,
+            "targeted_refcount",
+            max_workers,
+            cb,
+            "targeted_refcount",
+        )
 
     def _pass_targeted_permission(self, graph, max_workers, cb):
         return self._run_targeted_pass(
-            graph, _TARGET_PERMISSION_SYS, "targeted_permission", max_workers, cb,
-            "targeted_permission")
+            graph,
+            _TARGET_PERMISSION_SYS,
+            "targeted_permission",
+            max_workers,
+            cb,
+            "targeted_permission",
+        )
 
     def _pass_targeted_toctou(self, graph, max_workers, cb):
         return self._run_targeted_pass(
-            graph, _TARGET_TOCTOU_SYS, "targeted_toctou", max_workers, cb,
-            "targeted_toctou")
+            graph,
+            _TARGET_TOCTOU_SYS,
+            "targeted_toctou",
+            max_workers,
+            cb,
+            "targeted_toctou",
+        )
 
     def _parse_cross(self, raw, all_fns, analysis_type, key_a, key_b):
         parsed = parse_json_output(raw)
-        if not isinstance(parsed, dict): return []
+        if not isinstance(parsed, dict):
+            return []
         fl = parsed.get("findings")
-        if not isinstance(fl, list): return []
-        bn = {fn.name: fn for fn in all_fns}; bu = {fn.unique_name: fn for fn in all_fns}
+        if not isinstance(fl, list):
+            return []
+        bn = {fn.name: fn for fn in all_fns}
+        bu = {fn.unique_name: fn for fn in all_fns}
         results = []
         for e in fl:
-            if not isinstance(e, dict): continue
+            if not isinstance(e, dict):
+                continue
             fa = _lookup_fn(str(e.get(key_a) or ""), bn, bu, all_fns)
             fb = _lookup_fn(str(e.get(key_b) or ""), bn, bu, all_fns)
-            if not fa or not fb: continue
-            primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
-                e, default_file=fb.file_path, default_function=fb.unique_name, default_line=fb.line_number)
-            results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16],
-                vulnerability_type=_normalise_vuln_type(e.get("vulnerability_type") or "use_after_free"),
-                severity=str(e.get("severity") or "high"), confidence=str(e.get("confidence") or "medium"),
-                source_function=fa.unique_name, source_file=fa.file_path, source_line=fa.line_number,
-                sink_function=fb.unique_name, sink_file=fb.file_path, sink_line=fb.line_number,
-                path=[fa.unique_name, fb.unique_name], description=str(e.get("description") or ""),
-                root_cause=str(e.get("root_cause") or ""), evidence=str(e.get("evidence") or ""),
-                analysis_type=analysis_type, primary_file=primary_file,
-                primary_function=primary_function, primary_line=primary_line,
-                canonical_key=canonical_key))
+            if not fa or not fb:
+                continue
+            primary_file, primary_function, primary_line, canonical_key = (
+                _canonical_fields(
+                    e,
+                    default_file=fb.file_path,
+                    default_function=fb.unique_name,
+                    default_line=fb.line_number,
+                )
+            )
+            results.append(
+                VulnerabilityFinding(
+                    id=uuid.uuid4().hex[:16],
+                    vulnerability_type=_normalise_vuln_type(
+                        e.get("vulnerability_type") or "use_after_free"
+                    ),
+                    severity=str(e.get("severity") or "high"),
+                    confidence=str(e.get("confidence") or "medium"),
+                    source_function=fa.unique_name,
+                    source_file=fa.file_path,
+                    source_line=fa.line_number,
+                    sink_function=fb.unique_name,
+                    sink_file=fb.file_path,
+                    sink_line=fb.line_number,
+                    path=[fa.unique_name, fb.unique_name],
+                    description=str(e.get("description") or ""),
+                    root_cause=str(e.get("root_cause") or ""),
+                    evidence=str(e.get("evidence") or ""),
+                    analysis_type=analysis_type,
+                    primary_file=primary_file,
+                    primary_function=primary_function,
+                    primary_line=primary_line,
+                    canonical_key=canonical_key,
+                )
+            )
         return results
 
     def _parse_semantic(self, raw, all_fns, analysis_type="semantic"):
         parsed = parse_json_output(raw)
-        if not isinstance(parsed, dict): return []
+        if not isinstance(parsed, dict):
+            return []
         fl = parsed.get("findings")
-        if not isinstance(fl, list): return []
-        bn = {fn.name: fn for fn in all_fns}; bu = {fn.unique_name: fn for fn in all_fns}
+        if not isinstance(fl, list):
+            return []
+        bn = {fn.name: fn for fn in all_fns}
+        bu = {fn.unique_name: fn for fn in all_fns}
         results = []
         for e in fl:
-            if not isinstance(e, dict): continue
+            if not isinstance(e, dict):
+                continue
             fn = _lookup_fn(str(e.get("function_name") or ""), bn, bu, all_fns)
             rf = _lookup_fn(str(e.get("related_function") or ""), bn, bu, all_fns)
-            if not fn: continue
+            if not fn:
+                continue
             src_fn = rf or fn
-            primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
-                e, default_file=fn.file_path, default_function=fn.unique_name, default_line=fn.line_number)
-            results.append(VulnerabilityFinding(
-                id=uuid.uuid4().hex[:16],
-                vulnerability_type=_normalise_vuln_type(e.get("vulnerability_type") or "other"),
-                severity=str(e.get("severity") or "medium"), confidence=str(e.get("confidence") or "medium"),
-                source_function=src_fn.unique_name, source_file=src_fn.file_path, source_line=src_fn.line_number,
-                sink_function=fn.unique_name, sink_file=fn.file_path, sink_line=fn.line_number,
-                path=[src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name],
-                description=str(e.get("description") or ""), root_cause=str(e.get("root_cause") or ""),
-                evidence=str(e.get("evidence") or ""), analysis_type=analysis_type,
-                primary_file=primary_file, primary_function=primary_function,
-                primary_line=primary_line, canonical_key=canonical_key))
+            primary_file, primary_function, primary_line, canonical_key = (
+                _canonical_fields(
+                    e,
+                    default_file=fn.file_path,
+                    default_function=fn.unique_name,
+                    default_line=fn.line_number,
+                )
+            )
+            results.append(
+                VulnerabilityFinding(
+                    id=uuid.uuid4().hex[:16],
+                    vulnerability_type=_normalise_vuln_type(
+                        e.get("vulnerability_type") or "other"
+                    ),
+                    severity=str(e.get("severity") or "medium"),
+                    confidence=str(e.get("confidence") or "medium"),
+                    source_function=src_fn.unique_name,
+                    source_file=src_fn.file_path,
+                    source_line=src_fn.line_number,
+                    sink_function=fn.unique_name,
+                    sink_file=fn.file_path,
+                    sink_line=fn.line_number,
+                    path=(
+                        [src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name]
+                    ),
+                    description=str(e.get("description") or ""),
+                    root_cause=str(e.get("root_cause") or ""),
+                    evidence=str(e.get("evidence") or ""),
+                    analysis_type=analysis_type,
+                    primary_file=primary_file,
+                    primary_function=primary_function,
+                    primary_line=primary_line,
+                    canonical_key=canonical_key,
+                )
+            )
         return results

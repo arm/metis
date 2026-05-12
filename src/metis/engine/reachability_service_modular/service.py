@@ -59,7 +59,9 @@ class TreeSitterReachabilityService:
         self._builder = None
         self._graph_cache = None
         self._paths_cache = None
-        self._supplementary_cache: dict[tuple[str, str, str, int], list[VulnerabilityFinding]] = {}
+        self._supplementary_cache: dict[
+            tuple[str, str, str, int], list[VulnerabilityFinding]
+        ] = {}
 
     def get_c_cpp_files(self):
         return c_cpp_files(self._repository.get_code_files())
@@ -76,7 +78,9 @@ class TreeSitterReachabilityService:
         return self.build_graph(files, progress_callback=progress_callback)
 
     def trace_paths(self, graph, *, max_path_length=25):
-        return SourceRootedPathTracer(graph, max_path_length=max_path_length).find_all_paths()
+        return SourceRootedPathTracer(
+            graph, max_path_length=max_path_length
+        ).find_all_paths()
 
     def select_confirmation_paths(self, paths, graph, *, max_paths=0):
         """Pick a bounded, representative set of source-rooted paths for AI confirmation.
@@ -100,7 +104,10 @@ class TreeSitterReachabilityService:
             endpoint_count = endpoint_counts.get(endpoint, 0)
             if endpoint_count >= _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT:
                 continue
-            if len(endpoint_counts) >= _AUTO_CONFIRMATION_MAX_ENDPOINTS and endpoint not in endpoint_counts:
+            if (
+                len(endpoint_counts) >= _AUTO_CONFIRMATION_MAX_ENDPOINTS
+                and endpoint not in endpoint_counts
+            ):
                 continue
             endpoint_counts[endpoint] = endpoint_count + 1
             selected.append((_idx, path))
@@ -214,14 +221,16 @@ class TreeSitterReachabilityService:
         source_to_file_paths = focus.incoming_paths
         outgoing_context_paths = focus.outgoing_context_paths
         if progress_callback:
-            progress_callback({
-                "event": "treesitter_file_paths_done",
-                "file": relative_target,
-                "paths": len(source_to_file_paths),
-                "source_to_file_paths": len(source_to_file_paths),
-                "outgoing_context_paths": len(outgoing_context_paths),
-                "focus_nodes": len(focus.node_names),
-            })
+            progress_callback(
+                {
+                    "event": "treesitter_file_paths_done",
+                    "file": relative_target,
+                    "paths": len(source_to_file_paths),
+                    "source_to_file_paths": len(source_to_file_paths),
+                    "outgoing_context_paths": len(outgoing_context_paths),
+                    "focus_nodes": len(focus.node_names),
+                }
+            )
 
         model = confirmation_model or self._config.llama_query_model
         focus_graph = self._build_graph_from_node_names(graph, focus.node_names)
@@ -262,13 +271,15 @@ class TreeSitterReachabilityService:
             source_to_file_paths,
         )
         if progress_callback:
-            progress_callback({
-                "event": "treesitter_file_review_done",
-                "file": relative_target,
-                "supplementary_findings": len(supplementary),
-                "path_findings": len(path_findings),
-                "deterministic_findings": len(deterministic_findings),
-            })
+            progress_callback(
+                {
+                    "event": "treesitter_file_review_done",
+                    "file": relative_target,
+                    "supplementary_findings": len(supplementary),
+                    "path_findings": len(path_findings),
+                    "deterministic_findings": len(deterministic_findings),
+                }
+            )
 
         all_findings = (
             self._findings_for_file(supplementary, relative_target, graph)
@@ -293,11 +304,15 @@ class TreeSitterReachabilityService:
             self._finding_to_review(finding, graph=graph, target_file=relative_target)
             for finding in deduped
         ]
-        reviews.sort(key=lambda item: (
-            {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(item.get("severity"), 4),
-            int(item.get("line_number") or 0),
-            str(item.get("issue") or ""),
-        ))
+        reviews.sort(
+            key=lambda item: (
+                {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(
+                    item.get("severity"), 4
+                ),
+                int(item.get("line_number") or 0),
+                str(item.get("issue") or ""),
+            )
+        )
         return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
     def review_codebase(
@@ -322,14 +337,18 @@ class TreeSitterReachabilityService:
             return []
         selected_paths = []
         if confirm_paths:
-            selected_paths = self.select_confirmation_paths(paths, graph, max_paths=max_paths)
+            selected_paths = self.select_confirmation_paths(
+                paths, graph, max_paths=max_paths
+            )
         if progress_callback:
-            progress_callback({
-                "event": "treesitter_paths_done",
-                "paths": len(paths),
-                "selected": len(selected_paths),
-                "confirmation_enabled": bool(confirm_paths),
-            })
+            progress_callback(
+                {
+                    "event": "treesitter_paths_done",
+                    "paths": len(paths),
+                    "selected": len(selected_paths),
+                    "confirmation_enabled": bool(confirm_paths),
+                }
+            )
 
         model = confirmation_model or self._config.llama_query_model
         supplementary = self._ensure_supplementary(
@@ -372,19 +391,20 @@ class TreeSitterReachabilityService:
 
         reviews = self._group_findings_as_reviews(deduped, graph)
         if progress_callback:
-            progress_callback({
-                "event": "treesitter_code_review_done",
-                "supplementary_findings": len(supplementary),
-                "path_findings": len(path_findings),
-                "raw_findings": total_before,
-                "deduped_findings": len(deduped),
-                "removed_findings": removed,
-                "files": len(reviews),
-            })
+            progress_callback(
+                {
+                    "event": "treesitter_code_review_done",
+                    "supplementary_findings": len(supplementary),
+                    "path_findings": len(path_findings),
+                    "raw_findings": total_before,
+                    "deduped_findings": len(deduped),
+                    "removed_findings": removed,
+                    "files": len(reviews),
+                }
+            )
         return reviews
 
     def review_single_file_from_codebase(self, file_path, **kwargs):
-        kwargs.pop("extraction_model", None)
         return self.review_file(file_path, **kwargs)
 
     def deduplicate_and_write(self, findings, output_path, *, max_paths_per_sink=3):
@@ -396,11 +416,15 @@ class TreeSitterReachabilityService:
         _write_jsonl(output_path, deduped)
         return deduped, len(findings), len(findings) - len(deduped)
 
-    def annotate_findings_with_source_paths(self, findings, graph, *, max_path_length=25):
+    def annotate_findings_with_source_paths(
+        self, findings, graph, *, max_path_length=25
+    ):
         annotated = []
         annotators = {}
         for finding in findings:
-            target_file = finding.primary_file or finding.sink_file or finding.source_file
+            target_file = (
+                finding.primary_file or finding.sink_file or finding.source_file
+            )
             if not target_file:
                 annotated.append(finding)
                 continue
@@ -416,7 +440,10 @@ class TreeSitterReachabilityService:
         return annotated
 
     def default_output_dir(self) -> Path:
-        return Path(os.path.abspath(self._config.codebase_path)) / DEFAULT_TREESITTER_OUTPUT_DIR
+        return (
+            Path(os.path.abspath(self._config.codebase_path))
+            / DEFAULT_TREESITTER_OUTPUT_DIR
+        )
 
     def _ensure_graph_and_paths(self, *, max_path_length=25, progress_callback=None):
         if self._graph_cache is not None and self._paths_cache is not None:
@@ -445,18 +472,35 @@ class TreeSitterReachabilityService:
         sink_count = sum(1 for node in nodes if node.is_sink)
         term_score = 0
         terms = (
-            "auth", "permission", "login", "dispatch", "parse", "import", "export",
-            "free", "close", "unref", "copy", "memcpy", "printf", "sanitize",
-            "callback", "notify", "session", "store",
+            "auth",
+            "permission",
+            "login",
+            "dispatch",
+            "parse",
+            "import",
+            "export",
+            "free",
+            "close",
+            "unref",
+            "copy",
+            "memcpy",
+            "printf",
+            "sanitize",
+            "callback",
+            "notify",
+            "session",
+            "store",
         )
         for node in nodes:
-            haystack = " ".join([
-                node.unique_name,
-                node.name,
-                node.sink_type,
-                node.sink_reason,
-                node.source_reason,
-            ]).lower()
+            haystack = " ".join(
+                [
+                    node.unique_name,
+                    node.name,
+                    node.sink_type,
+                    node.sink_reason,
+                    node.source_reason,
+                ]
+            ).lower()
             if any(term in haystack for term in terms):
                 term_score += 1
         source = graph.get_node(path.source)
@@ -474,7 +518,9 @@ class TreeSitterReachabilityService:
     def _group_findings_as_reviews(self, findings, graph):
         by_file = defaultdict(list)
         for finding in findings:
-            primary_file = finding.primary_file or finding.sink_file or finding.source_file
+            primary_file = (
+                finding.primary_file or finding.sink_file or finding.source_file
+            )
             if primary_file:
                 by_file[primary_file].append(finding)
 
@@ -484,17 +530,25 @@ class TreeSitterReachabilityService:
                 self._finding_to_review(finding, graph=graph, target_file=target_file)
                 for finding in by_file[target_file]
             ]
-            items.sort(key=lambda item: (
-                {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(item.get("severity"), 4),
-                int(item.get("line_number") or 0),
-                str(item.get("issue") or ""),
-            ))
+            items.sort(
+                key=lambda item: (
+                    {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(
+                        item.get("severity"), 4
+                    ),
+                    int(item.get("line_number") or 0),
+                    str(item.get("issue") or ""),
+                )
+            )
             if items:
-                reviews.append({
-                    "file": target_file,
-                    "file_path": os.path.join(self._config.codebase_path, target_file),
-                    "reviews": items,
-                })
+                reviews.append(
+                    {
+                        "file": target_file,
+                        "file_path": os.path.join(
+                            self._config.codebase_path, target_file
+                        ),
+                        "reviews": items,
+                    }
+                )
         return reviews
 
     def _ensure_graph(self, *, progress_callback=None):
@@ -561,19 +615,21 @@ class TreeSitterReachabilityService:
             node = graph.get_node(unique_name)
             if not node:
                 continue
-            focus.add_node(FunctionNode(
-                unique_name=node.unique_name,
-                file_path=node.file_path,
-                name=node.name,
-                line_number=node.line_number,
-                is_source=node.is_source,
-                is_sink=node.is_sink,
-                calls=list(node.calls or []),
-                resolved_calls=[],
-                source_reason=node.source_reason,
-                sink_type=node.sink_type,
-                sink_reason=node.sink_reason,
-            ))
+            focus.add_node(
+                FunctionNode(
+                    unique_name=node.unique_name,
+                    file_path=node.file_path,
+                    name=node.name,
+                    line_number=node.line_number,
+                    is_source=node.is_source,
+                    is_sink=node.is_sink,
+                    calls=list(node.calls or []),
+                    resolved_calls=[],
+                    source_reason=node.source_reason,
+                    sink_type=node.sink_type,
+                    sink_reason=node.sink_reason,
+                )
+            )
         needed_files = {node.file_path for node in focus.nodes.values()}
         for global_construct in graph.get_globals():
             if global_construct.file_path in needed_files:
@@ -583,7 +639,11 @@ class TreeSitterReachabilityService:
 
     def _normalize_target_file(self, file_path):
         base_path = os.path.abspath(self._config.codebase_path)
-        full = file_path if os.path.isabs(str(file_path)) else os.path.join(base_path, str(file_path))
+        full = (
+            file_path
+            if os.path.isabs(str(file_path))
+            else os.path.join(base_path, str(file_path))
+        )
         abs_target = os.path.abspath(full)
         rel_target = os.path.relpath(abs_target, base_path).replace("\\", "/")
         return abs_target, rel_target
@@ -615,16 +675,20 @@ class TreeSitterReachabilityService:
         return names
 
     def _finding_participates_in_file(self, finding, target_file, graph):
-        if any(self._same_file(file_name, target_file) for file_name in (
-            finding.primary_file,
-            finding.source_file,
-            finding.sink_file,
-        )):
-            return True
-        for node_name in (
-            list(finding.path or [])
-            + [finding.primary_function, finding.source_function, finding.sink_function]
+        if any(
+            self._same_file(file_name, target_file)
+            for file_name in (
+                finding.primary_file,
+                finding.source_file,
+                finding.sink_file,
+            )
         ):
+            return True
+        for node_name in list(finding.path or []) + [
+            finding.primary_function,
+            finding.source_function,
+            finding.sink_function,
+        ]:
             node = graph.get_node(node_name) if graph is not None else None
             if node and self._same_file(node.file_path, target_file):
                 return True
@@ -645,51 +709,82 @@ class TreeSitterReachabilityService:
     def _strict_file_findings(self, findings):
         keep = []
         important_types = {
-            "buffer_overflow", "out_of_bounds", "use_after_free", "double_free",
-            "double_close", "format_string", "integer_overflow", "type_confusion",
-            "info_leak", "stale_length", "missing_auth", "permission_mismatch",
-            "refcount_imbalance", "accounting_drift", "null_deref",
+            "buffer_overflow",
+            "out_of_bounds",
+            "use_after_free",
+            "double_free",
+            "double_close",
+            "format_string",
+            "integer_overflow",
+            "type_confusion",
+            "info_leak",
+            "stale_length",
+            "missing_auth",
+            "permission_mismatch",
+            "refcount_imbalance",
+            "accounting_drift",
+            "null_deref",
         }
         important_analysis = {
-            "reachability", "lifecycle", "ownership", "targeted_callback_lifecycle",
-            "targeted_refcount", "targeted_permission", "classic_c_sink",
-            "counter_symmetry", "deterministic_treesitter",
+            "reachability",
+            "lifecycle",
+            "ownership",
+            "targeted_callback_lifecycle",
+            "targeted_refcount",
+            "targeted_permission",
+            "classic_c_sink",
+            "counter_symmetry",
+            "deterministic_treesitter",
         }
         low_signal_null_markers = (
-            "caller-supplied", "pointer parameter", "parameters before",
-            "localtime", "calloc", "allocation result",
+            "caller-supplied",
+            "pointer parameter",
+            "parameters before",
+            "localtime",
+            "calloc",
+            "allocation result",
         )
         for finding in findings:
             vtype = _normalise_vuln_type(finding.vulnerability_type)
             severity = str(finding.severity or "").lower()
             confidence = str(finding.confidence or "").lower()
-            text = " ".join([
-                str(finding.description or ""),
-                str(finding.root_cause or ""),
-                str(finding.evidence or ""),
-            ]).lower()
+            text = " ".join(
+                [
+                    str(finding.description or ""),
+                    str(finding.root_cause or ""),
+                    str(finding.evidence or ""),
+                ]
+            ).lower()
 
             if finding.analysis_type == "deterministic_treesitter":
                 keep.append(finding)
                 continue
             if vtype == "null_deref" and severity != "high":
                 if finding.analysis_type != "classic_c_sink" or not any(
-                    marker in text for marker in ("before", "after", "lookup", "task_find")
+                    marker in text
+                    for marker in ("before", "after", "lookup", "task_find")
                 ):
                     if any(marker in text for marker in low_signal_null_markers):
                         continue
             if severity == "high":
                 keep.append(finding)
                 continue
-            if confidence == "high" and (vtype in important_types or finding.analysis_type in important_analysis):
+            if confidence == "high" and (
+                vtype in important_types or finding.analysis_type in important_analysis
+            ):
                 keep.append(finding)
         return keep
 
     def _finding_to_review(self, finding, *, graph=None, target_file=""):
-        line_number = int(finding.primary_line or finding.sink_line or finding.source_line or 1)
+        line_number = int(
+            finding.primary_line or finding.sink_line or finding.source_line or 1
+        )
         vtype = _normalise_vuln_type(finding.vulnerability_type)
         primary_fn = finding.primary_function or finding.sink_function
-        issue = str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
+        issue = (
+            str(finding.description).strip()
+            or f"{vtype.replace('_', ' ')} in {primary_fn}"
+        )
         primary_file = finding.primary_file or finding.sink_file or finding.source_file
         reasoning_parts = []
         if primary_file:
@@ -720,8 +815,13 @@ class TreeSitterReachabilityService:
             "primary_function": primary_fn,
             "analysis_type": finding.analysis_type,
             "path": list(finding.path or []),
-            "code_snippet": _read_line_context(self._config.codebase_path, target_file, line_number, context=2)
-            if target_file else "",
+            "code_snippet": (
+                _read_line_context(
+                    self._config.codebase_path, target_file, line_number, context=2
+                )
+                if target_file
+                else ""
+            ),
             "cwe": _VULN_TO_CWE.get(vtype),
             "severity": _severity_title(finding.severity, "Medium"),
             "confidence": _confidence_score(finding.confidence),
@@ -735,11 +835,13 @@ class TreeSitterReachabilityService:
         connected = []
         seen = set()
         candidates = list(finding.path or [])
-        candidates.extend([
-            finding.primary_function,
-            finding.source_function,
-            finding.sink_function,
-        ])
+        candidates.extend(
+            [
+                finding.primary_function,
+                finding.source_function,
+                finding.sink_function,
+            ]
+        )
         for node_name in candidates:
             node = graph.get_node(node_name)
             if not node:
@@ -760,10 +862,12 @@ class TreeSitterReachabilityService:
         match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
         if not match:
             return default
-        return text[:match.start()].count("\n") + 1
+        return text[: match.start()].count("\n") + 1
 
     def _function_for_line(self, graph, target_file, line):
-        nodes = sorted(graph.get_file_nodes(target_file), key=lambda item: item.line_number)
+        nodes = sorted(
+            graph.get_file_nodes(target_file), key=lambda item: item.line_number
+        )
         chosen = None
         for node in nodes:
             if node.line_number <= line:
@@ -812,90 +916,119 @@ class TreeSitterReachabilityService:
         )
 
     def _deterministic_file_findings(self, target_file, graph, target_paths):
-        content = read_file_content(os.path.join(self._config.codebase_path, target_file))
+        content = read_file_content(
+            os.path.join(self._config.codebase_path, target_file)
+        )
         if not content:
             return []
         path_names = self._path_node_names(target_paths)
         findings = []
 
         def add_if_path_relevant(finding):
-            if not path_names or finding.primary_function in path_names or finding.source_function in path_names:
+            if (
+                not path_names
+                or finding.primary_function in path_names
+                or finding.source_function in path_names
+            ):
                 findings.append(finding)
 
-        if re.search(r"\b\w+\s*\[\s*(?:MAX_[A-Z0-9_]+|\d+)\s*\]\s*;", content) and re.search(r"\[[^\]]*&\s*0x0?f\s*\]", content, re.IGNORECASE):
+        if re.search(
+            r"\b\w+\s*\[\s*(?:MAX_[A-Z0-9_]+|\d+)\s*\]\s*;", content
+        ) and re.search(r"\[[^\]]*&\s*0x0?f\s*\]", content, re.IGNORECASE):
             line = self._line_of(content, r"\[[^\]]*&\s*0x0?f\s*\]", 1)
-            add_if_path_relevant(self._deterministic_finding(
-                target_file=target_file,
-                graph=graph,
-                line=line,
-                vulnerability_type="out_of_bounds",
-                severity="high",
-                confidence="high",
-                description="A masked protocol-controlled index can exceed the fixed array bounds.",
-                root_cause="The mask permits values 0-15, but the target array is smaller than that range.",
-                evidence="Array indexing uses an expression like flags & 0x0F against a fixed-size array.",
-                token="masked_index_exceeds_array",
-            ))
+            add_if_path_relevant(
+                self._deterministic_finding(
+                    target_file=target_file,
+                    graph=graph,
+                    line=line,
+                    vulnerability_type="out_of_bounds",
+                    severity="high",
+                    confidence="high",
+                    description="A masked protocol-controlled index can exceed the fixed array bounds.",
+                    root_cause="The mask permits values 0-15, but the target array is smaller than that range.",
+                    evidence="Array indexing uses an expression like flags & 0x0F against a fixed-size array.",
+                    token="masked_index_exceeds_array",
+                )
+            )
 
-        if re.search(r"\(\s*\w+_t\s*\*\s*\)\s*store_get\s*\(", content) and "type_tag" not in content:
+        if (
+            re.search(r"\(\s*\w+_t\s*\*\s*\)\s*store_get\s*\(", content)
+            and "type_tag" not in content
+        ):
             line = self._line_of(content, r"\(\s*\w+_t\s*\*\s*\)\s*store_get\s*\(", 1)
-            add_if_path_relevant(self._deterministic_finding(
-                target_file=target_file,
-                graph=graph,
-                line=line,
-                vulnerability_type="type_confusion",
-                severity="high",
-                confidence="high",
-                description="A value returned from the generic store is cast to a concrete struct type without checking the stored type tag.",
-                root_cause="The code trusts a void* store lookup result as a specific object type without validating metadata such as type_tag.",
-                evidence="store_get(...) is directly cast to a typed pointer and dereferenced without a visible type check.",
-                token="store_get_cast_without_type_tag",
-            ))
+            add_if_path_relevant(
+                self._deterministic_finding(
+                    target_file=target_file,
+                    graph=graph,
+                    line=line,
+                    vulnerability_type="type_confusion",
+                    severity="high",
+                    confidence="high",
+                    description="A value returned from the generic store is cast to a concrete struct type without checking the stored type tag.",
+                    root_cause="The code trusts a void* store lookup result as a specific object type without validating metadata such as type_tag.",
+                    evidence="store_get(...) is directly cast to a typed pointer and dereferenced without a visible type check.",
+                    token="store_get_cast_without_type_tag",
+                )
+            )
 
-        if re.search(r"util_sanitize\s*\([^;]+payload_len[^;]*\)\s*;", content, re.DOTALL) and re.search(r"data_len\s*=\s*payload_len\s*;", content):
+        if re.search(
+            r"util_sanitize\s*\([^;]+payload_len[^;]*\)\s*;", content, re.DOTALL
+        ) and re.search(r"data_len\s*=\s*payload_len\s*;", content):
             line = self._line_of(content, r"data_len\s*=\s*payload_len\s*;", 1)
-            add_if_path_relevant(self._deterministic_finding(
-                target_file=target_file,
-                graph=graph,
-                line=line,
-                vulnerability_type="stale_length",
-                severity="high",
-                confidence="high",
-                description="The payload is sanitized before data_len is published, but the stored length remains the original pre-sanitization length.",
-                root_cause="Sanitization can shrink or rewrite the payload while callers continue to trust stale length metadata.",
-                evidence="util_sanitize(..., payload_len) is followed by msg->data_len = payload_len.",
-                token="sanitize_keeps_original_length",
-            ))
+            add_if_path_relevant(
+                self._deterministic_finding(
+                    target_file=target_file,
+                    graph=graph,
+                    line=line,
+                    vulnerability_type="stale_length",
+                    severity="high",
+                    confidence="high",
+                    description="The payload is sanitized before data_len is published, but the stored length remains the original pre-sanitization length.",
+                    root_cause="Sanitization can shrink or rewrite the payload while callers continue to trust stale length metadata.",
+                    evidence="util_sanitize(..., payload_len) is followed by msg->data_len = payload_len.",
+                    token="sanitize_keeps_original_length",
+                )
+            )
 
         if re.search(r"memcpy\s*\([^;]+sizeof\s*\(\s*\w+_t\s*\)", content, re.DOTALL):
-            line = self._line_of(content, r"memcpy\s*\([^;]+sizeof\s*\(\s*\w+_t\s*\)", 1)
-            add_if_path_relevant(self._deterministic_finding(
-                target_file=target_file,
-                graph=graph,
-                line=line,
-                vulnerability_type="info_leak",
-                severity="high",
-                confidence="high",
-                description="The response copies an entire C struct, which can expose padding or uninitialized internal fields.",
-                root_cause="Whole-struct serialization is used instead of field-by-field serialization of initialized, intended output fields.",
-                evidence="memcpy copies sizeof(struct_type) bytes into a response buffer.",
-                token="whole_struct_response_copy",
-            ))
+            line = self._line_of(
+                content, r"memcpy\s*\([^;]+sizeof\s*\(\s*\w+_t\s*\)", 1
+            )
+            add_if_path_relevant(
+                self._deterministic_finding(
+                    target_file=target_file,
+                    graph=graph,
+                    line=line,
+                    vulnerability_type="info_leak",
+                    severity="high",
+                    confidence="high",
+                    description="The response copies an entire C struct, which can expose padding or uninitialized internal fields.",
+                    root_cause="Whole-struct serialization is used instead of field-by-field serialization of initialized, intended output fields.",
+                    evidence="memcpy copies sizeof(struct_type) bytes into a response buffer.",
+                    token="whole_struct_response_copy",
+                )
+            )
 
-        if re.search(r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", content) and re.search(r"memcpy\s*\([^;]+title[^;]+title_len", content, re.DOTALL):
-            line = self._line_of(content, r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", 1)
-            add_if_path_relevant(self._deterministic_finding(
-                target_file=target_file,
-                graph=graph,
-                line=line,
-                vulnerability_type="stale_length",
-                severity="high",
-                confidence="high",
-                description="The stored title length includes an extra terminator byte and is later used as a serialization copy length.",
-                root_cause="A string length field is maintained as copied + 1, so later byte-oriented serialization can read one byte past the copied string data.",
-                evidence="task title length is assigned copied + 1 and later used in memcpy(..., t->title_len).",
-                token="title_len_copied_plus_one",
-            ))
+        if re.search(
+            r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", content
+        ) and re.search(r"memcpy\s*\([^;]+title[^;]+title_len", content, re.DOTALL):
+            line = self._line_of(
+                content, r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", 1
+            )
+            add_if_path_relevant(
+                self._deterministic_finding(
+                    target_file=target_file,
+                    graph=graph,
+                    line=line,
+                    vulnerability_type="stale_length",
+                    severity="high",
+                    confidence="high",
+                    description="The stored title length includes an extra terminator byte and is later used as a serialization copy length.",
+                    root_cause="A string length field is maintained as copied + 1, so later byte-oriented serialization can read one byte past the copied string data.",
+                    evidence="task title length is assigned copied + 1 and later used in memcpy(..., t->title_len).",
+                    token="title_len_copied_plus_one",
+                )
+            )
 
         return findings
 

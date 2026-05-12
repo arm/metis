@@ -557,7 +557,10 @@ def pretty_print_reviews(results, quiet=False):
         if isinstance(results, dict):
             errors = results.get("errors") or []
         if errors:
-            print_console("[bold red]Review failed before LLM analysis completed.[/bold red]", quiet)
+            print_console(
+                "[bold red]Review failed before LLM analysis completed.[/bold red]",
+                quiet,
+            )
             for err in errors[:8]:
                 print_console(f"  [red]{escape(str(err))}[/red]", quiet)
             if len(errors) > 8:
@@ -570,7 +573,9 @@ def pretty_print_reviews(results, quiet=False):
         file = file_review.get("file", "UNKNOWN FILE")
         errors = file_review.get("errors") or []
         if errors:
-            print_console(f"\n[bold red]Review failed for {escape(file)}[/bold red]", quiet)
+            print_console(
+                f"\n[bold red]Review failed for {escape(file)}[/bold red]", quiet
+            )
             for err in errors[:8]:
                 print_console(f"  [red]{escape(str(err))}[/red]", quiet)
             if len(errors) > 8:

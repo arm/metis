@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: F401
+
 """Shared data structures and scanners for partial reachability file review."""
 
 from __future__ import annotations
@@ -47,16 +49,52 @@ logger = logging.getLogger("metis")
 
 
 _C_CPP_EXTS = frozenset({".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"})
-_CONTROL_CALLS = frozenset({
-    "if", "for", "while", "switch", "return", "sizeof", "alignof", "_Generic",
-    "case", "do", "else", "typedef", "defined",
-})
-_COMMON_LIBC_CALLS = frozenset({
-    "malloc", "calloc", "realloc", "free", "memcpy", "memmove", "memset",
-    "strcpy", "strncpy", "strcat", "snprintf", "sprintf", "printf", "fprintf",
-    "vfprintf", "fopen", "open", "close", "read", "write", "stat", "lstat",
-    "access", "system", "popen",
-})
+_CONTROL_CALLS = frozenset(
+    {
+        "if",
+        "for",
+        "while",
+        "switch",
+        "return",
+        "sizeof",
+        "alignof",
+        "_Generic",
+        "case",
+        "do",
+        "else",
+        "typedef",
+        "defined",
+    }
+)
+_COMMON_LIBC_CALLS = frozenset(
+    {
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "memcpy",
+        "memmove",
+        "memset",
+        "strcpy",
+        "strncpy",
+        "strcat",
+        "snprintf",
+        "sprintf",
+        "printf",
+        "fprintf",
+        "vfprintf",
+        "fopen",
+        "open",
+        "close",
+        "read",
+        "write",
+        "stat",
+        "lstat",
+        "access",
+        "system",
+        "popen",
+    }
+)
 _SECURITY_API_RE = re.compile(
     r"\b(?:memcpy|memmove|strcpy|strcat|strncpy|sprintf|vsprintf|snprintf|"
     r"malloc|calloc|realloc|free|fopen|open|stat|lstat|access|unlink|rename|"
@@ -90,23 +128,95 @@ _FUNCTION_DEF_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*"
     r"(?:const\s*)?(?:noexcept\s*)?)\{"
 )
-_LIFECYCLE_WORDS = frozenset({
-    "create", "destroy", "alloc", "free", "init", "term", "setup", "cleanup",
-    "open", "release", "close", "flush", "get", "put", "ref", "unref", "map",
-    "unmap", "load", "unload", "reload", "enable", "disable", "start", "stop",
-    "register", "unregister", "add", "remove", "insert", "erase", "grow",
-    "shrink", "suspend", "resume", "schedule", "cancel", "arm", "disarm",
-})
-_CALLBACK_WORDS = frozenset({
-    "callback", "cb", "timer", "work", "worker", "watchdog", "fops", "ops",
-    "file_operations", "fn", "poll", "ioctl", "flush", "release",
-})
-_IMPORTANT_FIELDS = frozenset({
-    "nr_pages", "pages", "alias_count", "gpu_mappings", "gpu_mappings_total",
-    "ctx_count", "regions", "active", "ready", "state", "flags", "refcount",
-    "data", "len", "size", "raw_len", "data_len", "enabled", "loaded",
-    "initialized", "powered", "phys_addr", "fault_addr", "permission",
-})
+_LIFECYCLE_WORDS = frozenset(
+    {
+        "create",
+        "destroy",
+        "alloc",
+        "free",
+        "init",
+        "term",
+        "setup",
+        "cleanup",
+        "open",
+        "release",
+        "close",
+        "flush",
+        "get",
+        "put",
+        "ref",
+        "unref",
+        "map",
+        "unmap",
+        "load",
+        "unload",
+        "reload",
+        "enable",
+        "disable",
+        "start",
+        "stop",
+        "register",
+        "unregister",
+        "add",
+        "remove",
+        "insert",
+        "erase",
+        "grow",
+        "shrink",
+        "suspend",
+        "resume",
+        "schedule",
+        "cancel",
+        "arm",
+        "disarm",
+    }
+)
+_CALLBACK_WORDS = frozenset(
+    {
+        "callback",
+        "cb",
+        "timer",
+        "work",
+        "worker",
+        "watchdog",
+        "fops",
+        "ops",
+        "file_operations",
+        "fn",
+        "poll",
+        "ioctl",
+        "flush",
+        "release",
+    }
+)
+_IMPORTANT_FIELDS = frozenset(
+    {
+        "nr_pages",
+        "pages",
+        "alias_count",
+        "gpu_mappings",
+        "gpu_mappings_total",
+        "ctx_count",
+        "regions",
+        "active",
+        "ready",
+        "state",
+        "flags",
+        "refcount",
+        "data",
+        "len",
+        "size",
+        "raw_len",
+        "data_len",
+        "enabled",
+        "loaded",
+        "initialized",
+        "powered",
+        "phys_addr",
+        "fault_addr",
+        "permission",
+    }
+)
 _GENERIC_FIELDS = frozenset({"next", "prev", "list", "node", "data", "name", "id"})
 _VULN_TYPES = (
     "buffer_overflow, out_of_bounds, integer_overflow, use_after_free, "
@@ -139,35 +249,54 @@ _STATE_RESET_RE = re.compile(
     r"(?:0|false|FALSE|[A-Z0-9_]*(?:OFF|DISABLED|IDLE|INVALID)[A-Z0-9_]*)",
     re.IGNORECASE,
 )
-_ERROR_PATH_RE = re.compile(r"\b(?:return\s+(?:-\d+|NULL|nullptr)|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE)
+_ERROR_PATH_RE = re.compile(
+    r"\b(?:return\s+(?:-\d+|NULL|nullptr)|goto\s+(?:err|fail|out|cleanup)\w*)\b",
+    re.IGNORECASE,
+)
 _PUBLISH_CALL_RE = re.compile(
     r"\b(?:rb_link_node|list_add|hash_add|insert|register|publish|xarray_insert|"
     r"xa_insert|idr_alloc|id_alloc|add)\s*\(",
     re.IGNORECASE,
 )
-_ROLLBACK_CALL_RE = re.compile(r"\b(?:rb_erase|list_del|hash_del|unregister|remove|erase|delete|del)\s*\(", re.IGNORECASE)
+_ROLLBACK_CALL_RE = re.compile(
+    r"\b(?:rb_erase|list_del|hash_del|unregister|remove|erase|delete|del)\s*\(",
+    re.IGNORECASE,
+)
 _ALLOC_ARITH_RE = re.compile(
     r"\b(?:malloc|kmalloc|realloc|krealloc|calloc|kcalloc|vzalloc|kvcalloc)\s*\([^;\n]*"
     r"(?:\*|sizeof)\s*[^;\n]*\)|\b[A-Za-z_][A-Za-z0-9_]*(?:count|cap|num|nr|n|len|size)[A-Za-z0-9_]*\s*\*\s*sizeof\s*\(",
     re.IGNORECASE,
 )
-_OVERFLOW_GUARD_RE = re.compile(r"\b(?:SIZE_MAX|__builtin_mul_overflow|check_mul_overflow|array_size|struct_size|kmalloc_array|kcalloc|kvcalloc)\b|/\s*sizeof\s*\(", re.IGNORECASE)
+_OVERFLOW_GUARD_RE = re.compile(
+    r"\b(?:SIZE_MAX|__builtin_mul_overflow|check_mul_overflow|array_size|struct_size|kmalloc_array|kcalloc|kvcalloc)\b|/\s*sizeof\s*\(",
+    re.IGNORECASE,
+)
 _LOG_CALL_RE = re.compile(
     r"\b(?:fprintf|printf|snprintf|sprintf|vfprintf|util_log|debug_log|trace|printk|"
     r"dev_info|dev_warn|dev_err|gpu_debug_log|gpu_debug)\s*\(",
     re.IGNORECASE,
 )
-_SENSITIVE_TOKEN_RE = re.compile(r"\b(?:phys|phys_addr|paddr|dma|addr|fault_addr|pointer|token|key|secret)\b", re.IGNORECASE)
+_SENSITIVE_TOKEN_RE = re.compile(
+    r"\b(?:phys|phys_addr|paddr|dma|addr|fault_addr|pointer|token|key|secret)\b",
+    re.IGNORECASE,
+)
 _SENSITIVE_FORMAT_RE = re.compile(r"%(?:0?\d+)?(?:llx|lx|p|x)", re.IGNORECASE)
-_VARIADIC_WRAPPER_RE = re.compile(r"\b(?:vfprintf|vprintf|vsprintf|vsnprintf|printf|fprintf|sprintf|snprintf)\s*\(", re.IGNORECASE)
+_VARIADIC_WRAPPER_RE = re.compile(
+    r"\b(?:vfprintf|vprintf|vsprintf|vsnprintf|printf|fprintf|sprintf|snprintf)\s*\(",
+    re.IGNORECASE,
+)
 _LOCK_CALL_RE = re.compile(
     r"\b(?P<fn>pthread_mutex_lock|pthread_mutex_unlock|mutex_lock|mutex_unlock|"
     r"spin_lock(?:_irqsave|_irq)?|spin_unlock(?:_irqrestore|_irq)?)\s*\(\s*(?P<arg>[^,\)]+)",
     re.IGNORECASE,
 )
 _UNLOCK_WORD_RE = re.compile(r"unlock", re.IGNORECASE)
-_ASSIGN_FROM_FIELD_RE = re.compile(r"\b(?P<var>(?:cached|saved|old|tmp)[A-Za-z0-9_]*)\s*=\s*[^;\n]*(?:->|\.)[A-Za-z_][A-Za-z0-9_]*")
-_DISABLE_NAME_RE = re.compile(r"(?:disable|stop|clear|term|shutdown|release)", re.IGNORECASE)
+_ASSIGN_FROM_FIELD_RE = re.compile(
+    r"\b(?P<var>(?:cached|saved|old|tmp)[A-Za-z0-9_]*)\s*=\s*[^;\n]*(?:->|\.)[A-Za-z_][A-Za-z0-9_]*"
+)
+_DISABLE_NAME_RE = re.compile(
+    r"(?:disable|stop|clear|term|shutdown|release)", re.IGNORECASE
+)
 _DISABLE_STATE_RE = re.compile(
     r"\b(?:enabled|active|powered|ready|pending|state)\s*=\s*(?:0|false|FALSE|[A-Z0-9_]*(?:OFF|DISABLED|IDLE)[A-Z0-9_]*)",
     re.IGNORECASE,
@@ -177,15 +306,57 @@ _CALLBACK_STORE_RE = re.compile(
     r"(?:queue|alias|ctx|grp|obj|task|session)\s*(?:->|\.)\s*(?:ctx|pages|data|callback|work|timer)\s*=",
     re.IGNORECASE,
 )
-_CANCEL_OR_REF_RE = re.compile(r"\b(?:cancel|flush|drain|unregister|del_timer|destroy_workqueue|refcount|kref|get|put|pin|unpin|clear|NULL)\b", re.IGNORECASE)
-_PROTOCOL_TOKEN_WORDS = frozenset({
-    "protected", "protm", "active", "enable", "enabled", "disable", "disabled",
-    "enter", "entered", "exit", "ack", "wait", "flush", "ready", "pending",
-    "state", "resume", "suspend", "start", "stop", "mmu", "scheduler", "sched",
-    "firmware", "fw", "hwcnt", "counter", "clock", "clk", "power", "reset",
-    "doorbell", "gpu", "fault", "irq", "interrupt", "completion", "event",
-    "fence", "serialize", "serialise", "sync", "transition",
-})
+_CANCEL_OR_REF_RE = re.compile(
+    r"\b(?:cancel|flush|drain|unregister|del_timer|destroy_workqueue|refcount|kref|get|put|pin|unpin|clear|NULL)\b",
+    re.IGNORECASE,
+)
+_PROTOCOL_TOKEN_WORDS = frozenset(
+    {
+        "protected",
+        "protm",
+        "active",
+        "enable",
+        "enabled",
+        "disable",
+        "disabled",
+        "enter",
+        "entered",
+        "exit",
+        "ack",
+        "wait",
+        "flush",
+        "ready",
+        "pending",
+        "state",
+        "resume",
+        "suspend",
+        "start",
+        "stop",
+        "mmu",
+        "scheduler",
+        "sched",
+        "firmware",
+        "fw",
+        "hwcnt",
+        "counter",
+        "clock",
+        "clk",
+        "power",
+        "reset",
+        "doorbell",
+        "gpu",
+        "fault",
+        "irq",
+        "interrupt",
+        "completion",
+        "event",
+        "fence",
+        "serialize",
+        "serialise",
+        "sync",
+        "transition",
+    }
+)
 _PROTOCOL_TOKEN_ALIASES = {
     "enabled": "enable",
     "disabled": "disable",
@@ -197,19 +368,58 @@ _PROTOCOL_TOKEN_ALIASES = {
     "sync": "serialize",
 }
 _WAIT_ACK_TOKENS = frozenset({"wait", "ack", "completion", "event", "fence"})
-_STATE_VERIFY_TOKENS = frozenset({"active", "protected", "protm", "ready", "state", "enter", "enable"})
-_TRANSITION_TOKENS = frozenset({
-    "protected", "protm", "active", "enable", "disable", "enter", "exit",
-    "ready", "pending", "state", "resume", "suspend", "start", "stop",
-})
-_SUBSYSTEM_TOKENS = frozenset({
-    "mmu", "scheduler", "firmware", "hwcnt", "counter", "clock", "power",
-    "doorbell", "gpu", "irq", "interrupt",
-})
-_NOTIFIER_WORDS = frozenset({
-    "notifier", "notify", "notification", "event", "completion", "wait",
-    "ack", "irq", "interrupt", "workqueue", "work", "callback",
-})
+_STATE_VERIFY_TOKENS = frozenset(
+    {"active", "protected", "protm", "ready", "state", "enter", "enable"}
+)
+_TRANSITION_TOKENS = frozenset(
+    {
+        "protected",
+        "protm",
+        "active",
+        "enable",
+        "disable",
+        "enter",
+        "exit",
+        "ready",
+        "pending",
+        "state",
+        "resume",
+        "suspend",
+        "start",
+        "stop",
+    }
+)
+_SUBSYSTEM_TOKENS = frozenset(
+    {
+        "mmu",
+        "scheduler",
+        "firmware",
+        "hwcnt",
+        "counter",
+        "clock",
+        "power",
+        "doorbell",
+        "gpu",
+        "irq",
+        "interrupt",
+    }
+)
+_NOTIFIER_WORDS = frozenset(
+    {
+        "notifier",
+        "notify",
+        "notification",
+        "event",
+        "completion",
+        "wait",
+        "ack",
+        "irq",
+        "interrupt",
+        "workqueue",
+        "work",
+        "callback",
+    }
+)
 _PROTOCOL_TOKEN_RE = re.compile(
     r"\b(?:protected|protm|active|enabled?|disabled?|enter(?:ed)?|exit|ack|wait|"
     r"flush|ready|pending|state|resume|suspend|start|stop|mmu|sched(?:uler)?|"
@@ -221,36 +431,114 @@ _NOTIFIER_RE = re.compile(
     r"\b(?:notifier|notify|notification|event|completion|wait|ack|irq|interrupt|workqueue)\w*\b",
     re.IGNORECASE,
 )
-_COPY_CONTRACT_APIS = frozenset({
-    "memcpy", "memmove", "copy_to_user", "copy_from_user", "copy_in_user",
-    "read", "write", "kernel_read", "kernel_write", "simple_read_from_buffer",
-    "simple_write_to_buffer",
-})
+_COPY_CONTRACT_APIS = frozenset(
+    {
+        "memcpy",
+        "memmove",
+        "copy_to_user",
+        "copy_from_user",
+        "copy_in_user",
+        "read",
+        "write",
+        "kernel_read",
+        "kernel_write",
+        "simple_read_from_buffer",
+        "simple_write_to_buffer",
+    }
+)
 _COPY_API_RE = re.compile(
     r"\b(?:memcpy|memmove|copy_to_user|copy_from_user|copy_in_user|read|write|"
     r"kernel_read|kernel_write|simple_read_from_buffer|simple_write_to_buffer)\s*\(",
     re.IGNORECASE,
 )
-_COUNT_SIZE_WORDS = frozenset({
-    "count", "len", "length", "size", "bytes", "nbytes", "nr", "num", "nents",
-    "stride", "pages", "page_count", "groups", "offset",
-})
-_RESOURCE_WORDS = frozenset({
-    "doorbell", "mapping", "mappings", "map", "pages", "page", "token", "ctx",
-    "context", "session", "queue", "alias", "region", "gpu_va", "same_va",
-    "imported", "dma_buf", "exporter", "pfn", "mmu", "protected", "protm",
-})
-_POLICY_GUARD_WORDS = frozenset({
-    "imported", "same_va", "protected", "protm", "permission", "permissions",
-    "owner", "owned", "capable", "access", "allowed", "trusted", "exporter",
-    "importer", "dma_buf", "privileged", "user", "readonly", "writable",
-})
-_POLICY_SINK_APIS = frozenset({
-    "mmap", "vm_fault", "remap_pfn_range", "vm_insert_pfn", "vmf_insert_pfn",
-    "vm_insert_page", "copy_to_user", "copy_from_user", "dma_buf_mmap",
-    "dma_buf_map_attachment", "dma_buf_begin_cpu_access", "kbase_gpu_mmap",
-    "insert_pfn", "io_remap_pfn_range", "map", "import", "export",
-})
+_COUNT_SIZE_WORDS = frozenset(
+    {
+        "count",
+        "len",
+        "length",
+        "size",
+        "bytes",
+        "nbytes",
+        "nr",
+        "num",
+        "nents",
+        "stride",
+        "pages",
+        "page_count",
+        "groups",
+        "offset",
+    }
+)
+_RESOURCE_WORDS = frozenset(
+    {
+        "doorbell",
+        "mapping",
+        "mappings",
+        "map",
+        "pages",
+        "page",
+        "token",
+        "ctx",
+        "context",
+        "session",
+        "queue",
+        "alias",
+        "region",
+        "gpu_va",
+        "same_va",
+        "imported",
+        "dma_buf",
+        "exporter",
+        "pfn",
+        "mmu",
+        "protected",
+        "protm",
+    }
+)
+_POLICY_GUARD_WORDS = frozenset(
+    {
+        "imported",
+        "same_va",
+        "protected",
+        "protm",
+        "permission",
+        "permissions",
+        "owner",
+        "owned",
+        "capable",
+        "access",
+        "allowed",
+        "trusted",
+        "exporter",
+        "importer",
+        "dma_buf",
+        "privileged",
+        "user",
+        "readonly",
+        "writable",
+    }
+)
+_POLICY_SINK_APIS = frozenset(
+    {
+        "mmap",
+        "vm_fault",
+        "remap_pfn_range",
+        "vm_insert_pfn",
+        "vmf_insert_pfn",
+        "vm_insert_page",
+        "copy_to_user",
+        "copy_from_user",
+        "dma_buf_mmap",
+        "dma_buf_map_attachment",
+        "dma_buf_begin_cpu_access",
+        "kbase_gpu_mmap",
+        "insert_pfn",
+        "io_remap_pfn_range",
+        "map",
+        "import",
+        "export",
+    }
+)
 _GUARD_COMPARE_RE = re.compile(
     r"\b(?P<lhs>[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?)\s*"
     r"(?P<op><=|>=|<|>|==|!=)\s*(?P<rhs>[^;&|)]+)"
@@ -264,24 +552,84 @@ _UPDATE_FACT_RE = re.compile(
     r"(?P<op>\+\+|--|\+=|-=)"
 )
 _ARITH_EXPR_RE = re.compile(r"(\*|<<|>>|\bPAGE_SHIFT\b|\bsizeof\s*\()", re.IGNORECASE)
-_ERROR_OR_EXIT_RE = re.compile(r"\b(?:return|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE)
+_ERROR_OR_EXIT_RE = re.compile(
+    r"\b(?:return|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE
+)
 _NULL_CLEAR_RE = re.compile(r"\b(?:NULL|nullptr|0|false|FALSE|INVALID|invalid)\b")
-_QUEUE_LIVENESS_WORDS = frozenset({
-    "enabled", "enable", "alive", "terminated", "terminating", "active",
-    "drain_queue", "drain", "suspend", "suspended", "group_suspend", "stopped",
-})
-_TRACKER_WORDS = frozenset({"tracker", "tracking", "rbtree", "rb", "tree", "list", "node", "start_pfn", "inserted"})
-_PM_WORDS = frozenset({"pm", "runtime", "power", "clock", "clk", "regulator", "register", "gpu_power"})
-_SLOT_WORDS = frozenset({"slot", "slots", "atom", "atoms", "prio", "priority", "job", "jobs"})
-_SUSPEND_WORDS = frozenset({
-    "suspend", "suspended", "sus", "buf", "buffer", "pages", "nr_pages",
-    "normal", "group", "queue", "drain", "wait", "cqs", "same_va",
-})
-_MAPPING_POLICY_WORDS = frozenset({
-    "imported", "same_va", "dma_buf", "umm", "protected", "native",
-    "vmap", "vmap_prot", "mmap", "fault", "pfn", "softjob", "kcpu",
-})
-_METADATA_SOURCE_RE = re.compile(r"\b(?:page_private|folio_get_private|private|metadata|opaque|pfn|phys|addr)\b", re.IGNORECASE)
+_QUEUE_LIVENESS_WORDS = frozenset(
+    {
+        "enabled",
+        "enable",
+        "alive",
+        "terminated",
+        "terminating",
+        "active",
+        "drain_queue",
+        "drain",
+        "suspend",
+        "suspended",
+        "group_suspend",
+        "stopped",
+    }
+)
+_TRACKER_WORDS = frozenset(
+    {
+        "tracker",
+        "tracking",
+        "rbtree",
+        "rb",
+        "tree",
+        "list",
+        "node",
+        "start_pfn",
+        "inserted",
+    }
+)
+_PM_WORDS = frozenset(
+    {"pm", "runtime", "power", "clock", "clk", "regulator", "register", "gpu_power"}
+)
+_SLOT_WORDS = frozenset(
+    {"slot", "slots", "atom", "atoms", "prio", "priority", "job", "jobs"}
+)
+_SUSPEND_WORDS = frozenset(
+    {
+        "suspend",
+        "suspended",
+        "sus",
+        "buf",
+        "buffer",
+        "pages",
+        "nr_pages",
+        "normal",
+        "group",
+        "queue",
+        "drain",
+        "wait",
+        "cqs",
+        "same_va",
+    }
+)
+_MAPPING_POLICY_WORDS = frozenset(
+    {
+        "imported",
+        "same_va",
+        "dma_buf",
+        "umm",
+        "protected",
+        "native",
+        "vmap",
+        "vmap_prot",
+        "mmap",
+        "fault",
+        "pfn",
+        "softjob",
+        "kcpu",
+    }
+)
+_METADATA_SOURCE_RE = re.compile(
+    r"\b(?:page_private|folio_get_private|private|metadata|opaque|pfn|phys|addr)\b",
+    re.IGNORECASE,
+)
 _STRUCT_CAST_RE = re.compile(
     r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
     r"\((?P<type>(?:const\s+)?struct\s+[A-Za-z_][A-Za-z0-9_]*\s*\*)\)\s*(?P<src>[^;]+)"
@@ -291,8 +639,14 @@ _SENTINEL_COMPARE_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)?))\s*"
     r"(?P<op>==|!=)\s*(?P<value>0|NULL|nullptr)\b"
 )
-_PAGE_ROUND_RE = re.compile(r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|PAGE_ALIGN|round_up|round_down)\s*\(", re.IGNORECASE)
-_PM_RUNTIME_API_RE = re.compile(r"\b(?:pm_runtime_get_sync|pm_runtime_resume_and_get|pm_runtime_get_if_in_use|pm_runtime_get)\s*\(", re.IGNORECASE)
+_PAGE_ROUND_RE = re.compile(
+    r"\b(?:PFN_UP|PFN_DOWN|DIV_ROUND_UP|PAGE_ALIGN|round_up|round_down)\s*\(",
+    re.IGNORECASE,
+)
+_PM_RUNTIME_API_RE = re.compile(
+    r"\b(?:pm_runtime_get_sync|pm_runtime_resume_and_get|pm_runtime_get_if_in_use|pm_runtime_get)\s*\(",
+    re.IGNORECASE,
+)
 _PM_SENSITIVE_API_RE = re.compile(
     r"\b(?:enable_gpu_power_control|disable_gpu_power_control|clk_prepare_enable|clk_enable|regulator_enable|readl|writel|"
     r"regmap_read|regmap_write|kbase_reg_read|kbase_reg_write|reset_control_deassert)\s*\(",
@@ -303,7 +657,10 @@ _ASYNC_SCHEDULE_RE = re.compile(
     re.IGNORECASE,
 )
 _ASYNC_CLEAR_RE = re.compile(r"\b(?:clear|ack|reset)\w*\s*\(", re.IGNORECASE)
-_PROTECTED_ACTIVE_RE = re.compile(r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b", re.IGNORECASE)
+_PROTECTED_ACTIVE_RE = re.compile(
+    r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b",
+    re.IGNORECASE,
+)
 _FAULT_CLEAR_RE = re.compile(
     r"\b(?:GPU_COMMAND_CLEAR_FAULT|CLEAR_FAULT|clear[_\s-]*fault|fault[_\s-]*clear|ack[_\s-]*fault|"
     r"reset[_\s-]*fault|FAULT_CLEAR)\b|"
@@ -356,15 +713,27 @@ _POOL_ALLOC_RE = re.compile(
     r"kbase_alloc_phy_pages|kbase_mem_alloc_page|new_page|page_alloc)\w*\s*\(",
     re.IGNORECASE,
 )
-_USER_BUFFER_RE = re.compile(r"\b(?:USER_BUFFER|user_buffer|from_user_buffer|KBASE_MEM_TYPE_IMPORTED_USER_BUF)\b", re.IGNORECASE)
-_GUP_RE = re.compile(r"\b(?:get_user_pages|pin_user_pages|get_user_pages_fast|pin_user_pages_fast)\w*\s*\(", re.IGNORECASE)
-_GPU_WRITE_FLAG_RE = re.compile(r"\b(?:KBASE_REG_GPU_WR|GPU_WR|GPU.*WRITE|gpu_wr|gpu_write|KBASE_REG_CPU_WR|CPU_WR)\b", re.IGNORECASE)
+_USER_BUFFER_RE = re.compile(
+    r"\b(?:USER_BUFFER|user_buffer|from_user_buffer|KBASE_MEM_TYPE_IMPORTED_USER_BUF)\b",
+    re.IGNORECASE,
+)
+_GUP_RE = re.compile(
+    r"\b(?:get_user_pages|pin_user_pages|get_user_pages_fast|pin_user_pages_fast)\w*\s*\(",
+    re.IGNORECASE,
+)
+_GPU_WRITE_FLAG_RE = re.compile(
+    r"\b(?:KBASE_REG_GPU_WR|GPU_WR|GPU.*WRITE|gpu_wr|gpu_write|KBASE_REG_CPU_WR|CPU_WR)\b",
+    re.IGNORECASE,
+)
 _ZONE_SHRINK_RE = re.compile(
     r"\b(?:init_(?:jit|exec)|region_tracker_init|shrink|split|resize|trim|zone|free.*zone|"
     r"same_va|imported|dma_buf|user_buffer|overlap)\b",
     re.IGNORECASE,
 )
-_SUCCESS_FD_RE = re.compile(r"\b(?:anon_inode_getfd|get_unused_fd_flags|fd_install|sync_fence_fdget|fdget)\s*\(", re.IGNORECASE)
+_SUCCESS_FD_RE = re.compile(
+    r"\b(?:anon_inode_getfd|get_unused_fd_flags|fd_install|sync_fence_fdget|fdget)\s*\(",
+    re.IGNORECASE,
+)
 _JIT_STATE_RE = re.compile(
     r"\b(?:jit|jit_alloc|jit_free|jit_active|jit_pool|jit_list|evict_list|pending_alloc|"
     r"jit_allow_allocate|kbase_jit_(?:allocate|free))\b",
@@ -390,20 +759,73 @@ _BUS_FAULT_REPORT_RE = re.compile(
     r"fault->addr|fault\.addr|PA\s*0x|physical address)\b",
     re.IGNORECASE,
 )
-_DOMAIN_ROOT_TOKENS = frozenset({
-    "doorbell", "queue", "fault", "irq", "interrupt", "slot", "atom", "pm",
-    "runtime", "power", "clock", "clk", "same_va", "imported", "umm",
-    "dma_buf", "protected", "protm", "mmu", "page_private", "start_pfn", "tracker",
-    "hwaccess", "hwcnt", "backend", "suspend", "drain_queue", "group_suspend",
-    "cqs_wait", "alias", "nents", "stride", "pfn", "phys", "dma",
-    "sus_buf", "normal_suspend_buf", "clear_fault", "native", "vmap_prot",
-    "active_protm_grp", "zero_count",
-    "user_buffer", "zone", "jit", "mem_pool", "oom", "fd", "debugfs",
-    "tlstream", "bus_fault", "kcpu_queue",
-})
-_MMU_RECOVERY_WORDS = frozenset({"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"})
-_MMU_RECOVERY_LOOP_RE = re.compile(r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)", re.IGNORECASE)
-_MMU_RECOVERY_ACTION_RE = re.compile(r"\b(?:unmap|zap|clear|write|free|put|rollback|recover|pte|pgd|pfn|phys)\w*\s*\(", re.IGNORECASE)
+_DOMAIN_ROOT_TOKENS = frozenset(
+    {
+        "doorbell",
+        "queue",
+        "fault",
+        "irq",
+        "interrupt",
+        "slot",
+        "atom",
+        "pm",
+        "runtime",
+        "power",
+        "clock",
+        "clk",
+        "same_va",
+        "imported",
+        "umm",
+        "dma_buf",
+        "protected",
+        "protm",
+        "mmu",
+        "page_private",
+        "start_pfn",
+        "tracker",
+        "hwaccess",
+        "hwcnt",
+        "backend",
+        "suspend",
+        "drain_queue",
+        "group_suspend",
+        "cqs_wait",
+        "alias",
+        "nents",
+        "stride",
+        "pfn",
+        "phys",
+        "dma",
+        "sus_buf",
+        "normal_suspend_buf",
+        "clear_fault",
+        "native",
+        "vmap_prot",
+        "active_protm_grp",
+        "zero_count",
+        "user_buffer",
+        "zone",
+        "jit",
+        "mem_pool",
+        "oom",
+        "fd",
+        "debugfs",
+        "tlstream",
+        "bus_fault",
+        "kcpu_queue",
+    }
+)
+_MMU_RECOVERY_WORDS = frozenset(
+    {"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"}
+)
+_MMU_RECOVERY_LOOP_RE = re.compile(
+    r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)",
+    re.IGNORECASE,
+)
+_MMU_RECOVERY_ACTION_RE = re.compile(
+    r"\b(?:unmap|zap|clear|write|free|put|rollback|recover|pte|pgd|pfn|phys)\w*\s*\(",
+    re.IGNORECASE,
+)
 _PARTIAL_VULN_ALIASES = {
     "wrong_flag_semantic": "wrong_constant",
     "callback_lifecycle": "teardown_race",
@@ -703,7 +1125,9 @@ class SymbolIndex:
     globals: list[GlobalConstruct]
     files_indexed: int = 0
     defs_by_file: dict[str, list[SymbolDef]] = field(default_factory=dict)
-    defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = field(default_factory=dict)
+    defs_by_file_and_name: dict[tuple[str, str], SymbolDef] = field(
+        default_factory=dict
+    )
     calls_by_caller: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     field_uses_by_file: dict[str, list[FieldUse]] = field(default_factory=dict)
     locks_by_symbol: dict[str, list[str]] = field(default_factory=dict)
@@ -719,7 +1143,9 @@ class SymbolIndex:
     event_facts_by_symbol: dict[str, list[EventFact]] = field(default_factory=dict)
     formula_facts_by_symbol: dict[str, list[FormulaFact]] = field(default_factory=dict)
     cast_facts_by_symbol: dict[str, list[CastFact]] = field(default_factory=dict)
-    sentinel_facts_by_symbol: dict[str, list[SentinelFact]] = field(default_factory=dict)
+    sentinel_facts_by_symbol: dict[str, list[SentinelFact]] = field(
+        default_factory=dict
+    )
     symbols_by_guard_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     symbols_by_sink_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
     symbols_by_event_token: dict[str, list[SymbolDef]] = field(default_factory=dict)
@@ -803,27 +1229,56 @@ class PartialDetectorResult:
 
     def __post_init__(self):
         for name in (
-            "state_publication_notes", "publish_rollback_notes",
-            "allocation_arithmetic_notes", "format_notes", "info_leak_notes",
-            "fops_notes", "lock_order_notes", "stale_after_unlock_notes",
-            "disable_stale_notes", "callback_lifetime_notes",
-            "cross_file_lock_notes", "protocol_notes", "copy_contract_notes",
-            "cleanup_symmetry_notes", "accounting_drift_notes",
-            "arithmetic_chain_notes", "resource_binding_notes",
-            "policy_gate_notes", "resource_validation_notes",
-            "cleanup_ledger_notes", "async_order_notes", "size_propagation_notes",
-            "stale_tracker_notes", "metadata_type_confusion_notes", "pm_sequence_notes",
-            "secondary_omission_notes", "protected_mmu_notes", "mmu_recovery_notes",
+            "state_publication_notes",
+            "publish_rollback_notes",
+            "allocation_arithmetic_notes",
+            "format_notes",
+            "info_leak_notes",
+            "fops_notes",
+            "lock_order_notes",
+            "stale_after_unlock_notes",
+            "disable_stale_notes",
+            "callback_lifetime_notes",
+            "cross_file_lock_notes",
+            "protocol_notes",
+            "copy_contract_notes",
+            "cleanup_symmetry_notes",
+            "accounting_drift_notes",
+            "arithmetic_chain_notes",
+            "resource_binding_notes",
+            "policy_gate_notes",
+            "resource_validation_notes",
+            "cleanup_ledger_notes",
+            "async_order_notes",
+            "size_propagation_notes",
+            "stale_tracker_notes",
+            "metadata_type_confusion_notes",
+            "pm_sequence_notes",
+            "secondary_omission_notes",
+            "protected_mmu_notes",
+            "mmu_recovery_notes",
             "sentinel_misuse_notes",
-            "suspend_cleanup_ledger_notes", "suspend_size_sink_notes",
-            "fault_clear_order_notes", "pm_callback_order_notes",
-            "region_replace_erase_notes", "imported_mapping_policy_notes",
-            "alias_extent_mismatch_notes", "named_lock_inversion_notes",
-            "active_singleton_stale_notes", "zero_count_underflow_notes",
-            "owner_liveness_notes", "user_buffer_permission_notes", "zone_shrink_notes",
-            "success_path_cleanup_notes", "jit_lock_protocol_notes", "teardown_order_notes",
-            "queue_publish_init_notes", "fd_reuse_notes", "debugfs_permission_notes",
-            "nodes", "globals",
+            "suspend_cleanup_ledger_notes",
+            "suspend_size_sink_notes",
+            "fault_clear_order_notes",
+            "pm_callback_order_notes",
+            "region_replace_erase_notes",
+            "imported_mapping_policy_notes",
+            "alias_extent_mismatch_notes",
+            "named_lock_inversion_notes",
+            "active_singleton_stale_notes",
+            "zero_count_underflow_notes",
+            "owner_liveness_notes",
+            "user_buffer_permission_notes",
+            "zone_shrink_notes",
+            "success_path_cleanup_notes",
+            "jit_lock_protocol_notes",
+            "teardown_order_notes",
+            "queue_publish_init_notes",
+            "fd_reuse_notes",
+            "debugfs_permission_notes",
+            "nodes",
+            "globals",
         ):
             if getattr(self, name) is None:
                 setattr(self, name, [])
@@ -949,11 +1404,7 @@ def _notifier_related_text(text: str) -> bool:
 
 
 def _fact_tokens(text: str) -> set[str]:
-    return {
-        _canonical_protocol_token(t)
-        for t in _tokens(text)
-        if len(t) > 1
-    }
+    return {_canonical_protocol_token(t) for t in _tokens(text) if len(t) > 1}
 
 
 def _has_any_fact_token(text: str, words: frozenset[str] | set[str]) -> bool:
@@ -984,7 +1435,11 @@ def _normalise_formula_expr(expr: str) -> str:
     text = str(expr or "").lower()
     text = re.sub(r"/\*.*?\*/", "", text)
     text = re.sub(r"\bsizeof\s*\([^)]*\)", "sizeof", text)
-    text = re.sub(r"\b(?:pfn_up|pfn_down|div_round_up|page_align|round_up|round_down)\s*\(", "round(", text)
+    text = re.sub(
+        r"\b(?:pfn_up|pfn_down|div_round_up|page_align|round_up|round_down)\s*\(",
+        "round(",
+        text,
+    )
     text = re.sub(r"\bpage_shift\b", "page_shift", text)
     text = re.sub(r"0x[0-9a-f]+|\b\d+\b", "num", text)
     text = text.replace("->", ".")
@@ -992,7 +1447,9 @@ def _normalise_formula_expr(expr: str) -> str:
     return text[:180]
 
 
-def _function_body_from_symbol(codebase_path: str, sym: SymbolDef, max_chars: int = 5000) -> str:
+def _function_body_from_symbol(
+    codebase_path: str, sym: SymbolDef, max_chars: int = 5000
+) -> str:
     node = FunctionNode(
         unique_name=f"{sym.file_path}::{sym.name}",
         file_path=sym.file_path,
@@ -1065,9 +1522,18 @@ def _normalise_lock_expr(expr: str) -> str:
     if not expr:
         return ""
     for stable in (
-        "hwaccess_lock", "scheduler_lock", "clk_rtm.lock", "hwcnt.lock",
-        "backend.lock", "state_lock", "state.lock", "ctx.lock", "queue.lock",
-        "pm.lock", "mmu.lock", "mmu_hw_mutex",
+        "hwaccess_lock",
+        "scheduler_lock",
+        "clk_rtm.lock",
+        "hwcnt.lock",
+        "backend.lock",
+        "state_lock",
+        "state.lock",
+        "ctx.lock",
+        "queue.lock",
+        "pm.lock",
+        "mmu.lock",
+        "mmu_hw_mutex",
     ):
         if stable in expr:
             return stable
@@ -1088,7 +1554,8 @@ def _normalise_lock_expr(expr: str) -> str:
 
 def _partial_note_tokens(text: str) -> set[str]:
     return {
-        t for t in re.split(r"[^a-z0-9]+", str(text or "").lower())
+        t
+        for t in re.split(r"[^a-z0-9]+", str(text or "").lower())
         if len(t) > 2 and t not in {"the", "and", "for", "with", "from", "this", "that"}
     }
 
@@ -1113,7 +1580,11 @@ def _domain_root_tokens(text: str) -> set[str]:
         tokens.add("clear_fault")
     if "vmap" in tokens and "prot" in tokens:
         tokens.add("vmap_prot")
-    if "active" in tokens and ("protm" in tokens or "protected" in tokens) and ("grp" in tokens or "group" in tokens):
+    if (
+        "active" in tokens
+        and ("protm" in tokens or "protected" in tokens)
+        and ("grp" in tokens or "group" in tokens)
+    ):
         tokens.add("active_protm_grp")
     if "zero" in tokens and "count" in tokens:
         tokens.add("zero_count")
@@ -1172,11 +1643,19 @@ class PartialAnalysisCache:
         if sym.body_start > 0 and sym.body_end >= sym.body_start:
             start = max(0, sym.body_start - 1)
             end = min(len(lines), max(sym.body_end, sym.body_start))
-            return [(start + offset + 1, line) for offset, line in enumerate(lines[start:end])]
+            return [
+                (start + offset + 1, line)
+                for offset, line in enumerate(lines[start:end])
+            ]
         body = self.symbol_body(sym, max_chars=12000, numbered=False)
-        return [(sym.line_number + offset, line) for offset, line in enumerate(body.splitlines())]
+        return [
+            (sym.line_number + offset, line)
+            for offset, line in enumerate(body.splitlines())
+        ]
 
-    def symbol_body(self, sym: SymbolDef, max_chars: int | None = None, *, numbered: bool = False) -> str:
+    def symbol_body(
+        self, sym: SymbolDef, max_chars: int | None = None, *, numbered: bool = False
+    ) -> str:
         unique = _symbol_unique_name(sym)
         limit = -1 if max_chars is None else int(max_chars)
         key = (unique, limit, numbered)
@@ -1209,7 +1688,9 @@ class PartialAnalysisCache:
         with self._lock:
             return self._body_by_symbol.setdefault(key, body)
 
-    def symbol_for_node(self, index: SymbolIndex | None, node: FunctionNode) -> SymbolDef | None:
+    def symbol_for_node(
+        self, index: SymbolIndex | None, node: FunctionNode
+    ) -> SymbolDef | None:
         index = index or self._index
         if index is None:
             return None
@@ -1229,7 +1710,9 @@ class PartialAnalysisCache:
         with self._lock:
             return self._fallback_body_by_node.setdefault(key, body)
 
-    def node_for_symbol(self, index: SymbolIndex | None, sym: SymbolDef) -> FunctionNode:
+    def node_for_symbol(
+        self, index: SymbolIndex | None, sym: SymbolDef
+    ) -> FunctionNode:
         index = index or self._index
         unique = _symbol_unique_name(sym)
         with self._lock:
@@ -1247,7 +1730,9 @@ class PartialAnalysisCache:
             body = self.symbol_body(sym, max_chars=8000, numbered=False)
             match_text = f"{sym.name} {' '.join(calls)} {body}"
             is_source = bool(_SOURCE_RE.search(match_text))
-            is_sink = bool(_SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text))
+            is_sink = bool(
+                _SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text)
+            )
             sink_type = _sink_type_for_text(match_text) if is_sink else ""
         node = FunctionNode(
             unique_name=unique,
@@ -1257,9 +1742,15 @@ class PartialAnalysisCache:
             is_source=is_source,
             is_sink=is_sink,
             calls=calls,
-            source_reason="deterministic source-like entry or external input use" if is_source else "",
+            source_reason=(
+                "deterministic source-like entry or external input use"
+                if is_source
+                else ""
+            ),
             sink_type=sink_type,
-            sink_reason="deterministic sink-like API/state/lifecycle use" if is_sink else "",
+            sink_reason=(
+                "deterministic sink-like API/state/lifecycle use" if is_sink else ""
+            ),
         )
         with self._lock:
             return self._node_by_symbol.setdefault(unique, node)
@@ -1322,12 +1813,16 @@ class SymbolIndexBuilder:
                 defs_by_file[sym.file_path].append(sym)
                 defs_by_file_and_name.setdefault((sym.file_path, sym.name), sym)
                 body_lines = _body_lines_from_lines(file_lines, sym)
-                calls = self._extract_function_uses(body_lines, sym, callsites, field_uses, field_uses_by_file)
+                calls = self._extract_function_uses(
+                    body_lines, sym, callsites, field_uses, field_uses_by_file
+                )
                 caller_key = (sym.file_path, sym.name)
-                calls_by_caller[caller_key] = list(dict.fromkeys(
-                    calls_by_caller.get(caller_key, []) + calls
-                ))
-                locks, lock_edges, state_tokens = self._symbol_lock_and_protocol_metadata(sym, body_lines)
+                calls_by_caller[caller_key] = list(
+                    dict.fromkeys(calls_by_caller.get(caller_key, []) + calls)
+                )
+                locks, lock_edges, state_tokens = (
+                    self._symbol_lock_and_protocol_metadata(sym, body_lines)
+                )
                 unique = _symbol_unique_name(sym)
                 locks_by_symbol[unique] = locks
                 lock_edges_by_symbol[unique] = lock_edges
@@ -1337,8 +1832,15 @@ class SymbolIndexBuilder:
                 for token in state_tokens:
                     symbols_by_state_token[token].append(sym)
                 (
-                    copy_uses, guards, assignments, cleanup_facts, sinks,
-                    event_facts, formula_facts, cast_facts, sentinel_facts,
+                    copy_uses,
+                    guards,
+                    assignments,
+                    cleanup_facts,
+                    sinks,
+                    event_facts,
+                    formula_facts,
+                    cast_facts,
+                    sentinel_facts,
                 ) = self._extract_semantic_facts(sym, body_lines)
                 copy_uses_by_symbol[unique] = copy_uses
                 guards_by_symbol[unique] = guards
@@ -1415,17 +1917,21 @@ class SymbolIndexBuilder:
             line = _line_number_at(content, match.start())
             end_idx, end_line = _find_body_end(content, match.end() - 1)
             consumed_until = max(consumed_until, end_idx)
-            defs.append(SymbolDef(
-                name=name,
-                file_path=rel_file,
-                line_number=line,
-                signature=signature,
-                body_start=line,
-                body_end=end_line,
-            ))
+            defs.append(
+                SymbolDef(
+                    name=name,
+                    file_path=rel_file,
+                    line_number=line,
+                    signature=signature,
+                    body_start=line,
+                    body_end=end_line,
+                )
+            )
         return defs
 
-    def _extract_function_uses(self, lines, sym, callsites, field_uses, field_uses_by_file):
+    def _extract_function_uses(
+        self, lines, sym, callsites, field_uses, field_uses_by_file
+    ):
         calls = []
         for offset, line_text in enumerate(lines):
             line_number = sym.body_start + offset
@@ -1435,27 +1941,31 @@ class SymbolIndexBuilder:
                 if line_number == sym.body_start and call == sym.name:
                     continue
                 calls.append(call)
-                callsites[call].append(CallSite(
-                    caller_name=sym.name,
-                    caller_file=sym.file_path,
-                    caller_line=sym.line_number,
-                    callee_name=call,
-                    line_number=line_number,
-                    line_text=line_text.strip(),
-                ))
-            for field in _FIELD_RE.findall(line_text):
+                callsites[call].append(
+                    CallSite(
+                        caller_name=sym.name,
+                        caller_file=sym.file_path,
+                        caller_line=sym.line_number,
+                        callee_name=call,
+                        line_number=line_number,
+                        line_text=line_text.strip(),
+                    )
+                )
+            for field_name in _FIELD_RE.findall(line_text):
                 use = FieldUse(
-                    field=field,
+                    field=field_name,
                     file_path=sym.file_path,
                     function_name=sym.name,
                     line_number=line_number,
                     line_text=line_text.strip(),
                 )
-                field_uses[field].append(use)
+                field_uses[field_name].append(use)
                 field_uses_by_file[sym.file_path].append(use)
         return list(dict.fromkeys(calls))
 
-    def _symbol_lock_and_protocol_metadata(self, sym: SymbolDef, lines: list[str]) -> tuple[list[str], list[LockOrderEdge], list[str]]:
+    def _symbol_lock_and_protocol_metadata(
+        self, sym: SymbolDef, lines: list[str]
+    ) -> tuple[list[str], list[LockOrderEdge], list[str]]:
         locks = []
         edges: list[LockOrderEdge] = []
         held: list[str] = []
@@ -1473,14 +1983,16 @@ class SymbolIndexBuilder:
                 for prior in held:
                     if prior == lock:
                         continue
-                    edges.append(LockOrderEdge(
-                        first_lock=prior,
-                        second_lock=lock,
-                        file_path=sym.file_path,
-                        function_name=sym.name,
-                        line_number=line_number,
-                        line_text=line_text.strip(),
-                    ))
+                    edges.append(
+                        LockOrderEdge(
+                            first_lock=prior,
+                            second_lock=lock,
+                            file_path=sym.file_path,
+                            function_name=sym.name,
+                            line_number=line_number,
+                            line_text=line_text.strip(),
+                        )
+                    )
                 if lock not in held:
                     held.append(lock)
         text = f"{sym.name}\n{sym.signature}\n" + "\n".join(lines)
@@ -1492,8 +2004,15 @@ class SymbolIndexBuilder:
         sym: SymbolDef,
         lines: list[str],
     ) -> tuple[
-        list[CopyUse], list[GuardFact], list[AssignmentFact], list[CleanupFact], list[SinkFact],
-        list[EventFact], list[FormulaFact], list[CastFact], list[SentinelFact],
+        list[CopyUse],
+        list[GuardFact],
+        list[AssignmentFact],
+        list[CleanupFact],
+        list[SinkFact],
+        list[EventFact],
+        list[FormulaFact],
+        list[CastFact],
+        list[SentinelFact],
     ]:
         copy_uses: list[CopyUse] = []
         guards: list[GuardFact] = []
@@ -1522,14 +2041,26 @@ class SymbolIndexBuilder:
             cast_facts.extend(self._cast_facts_from_line(stripped, line_number))
             sentinel_facts.extend(self._sentinel_facts_from_line(stripped, line_number))
             if "return" in lower or "goto" in lower:
-                cleanup_facts.append(CleanupFact(
-                    action="exit",
-                    kind="exit",
-                    resource="return" if "return" in lower else "goto",
-                    line_number=line_number,
-                    line_text=stripped,
-                ))
-        return copy_uses, guards, assignments, cleanup_facts, sinks, event_facts, formula_facts, cast_facts, sentinel_facts
+                cleanup_facts.append(
+                    CleanupFact(
+                        action="exit",
+                        kind="exit",
+                        resource="return" if "return" in lower else "goto",
+                        line_number=line_number,
+                        line_text=stripped,
+                    )
+                )
+        return (
+            copy_uses,
+            guards,
+            assignments,
+            cleanup_facts,
+            sinks,
+            event_facts,
+            formula_facts,
+            cast_facts,
+            sentinel_facts,
+        )
 
     def _copy_uses_from_line(self, line: str, line_number: int) -> list[CopyUse]:
         uses = []
@@ -1546,14 +2077,16 @@ class SymbolIndexBuilder:
             if api_l in {"simple_read_from_buffer", "simple_write_to_buffer"}:
                 size = args[1] if len(args) > 1 else size
                 src = args[3] if len(args) > 3 else src
-            uses.append(CopyUse(
-                api=api_l,
-                line_number=line_number,
-                dst_expr=_short_expr(dst),
-                src_expr=_short_expr(src),
-                size_expr=_short_expr(size),
-                line_text=line,
-            ))
+            uses.append(
+                CopyUse(
+                    api=api_l,
+                    line_number=line_number,
+                    dst_expr=_short_expr(dst),
+                    src_expr=_short_expr(src),
+                    size_expr=_short_expr(size),
+                    line_text=line,
+                )
+            )
         return uses
 
     def _guards_from_line(self, line: str, line_number: int) -> list[GuardFact]:
@@ -1563,55 +2096,83 @@ class SymbolIndexBuilder:
             rhs = _short_expr(match.group("rhs"))
             op = match.group("op")
             tokens = _fact_tokens(f"{lhs} {rhs}")
-            interesting = tokens & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _POLICY_GUARD_WORDS | _PROTOCOL_TOKEN_WORDS)
+            interesting = tokens & (
+                _COUNT_SIZE_WORDS
+                | _RESOURCE_WORDS
+                | _POLICY_GUARD_WORDS
+                | _PROTOCOL_TOKEN_WORDS
+            )
             for token in sorted(interesting):
-                guards.append(GuardFact(
-                    token=token,
-                    lhs=lhs,
-                    op=op,
-                    rhs=rhs,
-                    line_number=line_number,
-                    line_text=line,
-                ))
+                guards.append(
+                    GuardFact(
+                        token=token,
+                        lhs=lhs,
+                        op=op,
+                        rhs=rhs,
+                        line_number=line_number,
+                        line_text=line,
+                    )
+                )
         return guards
 
-    def _assignments_from_line(self, line: str, line_number: int) -> list[AssignmentFact]:
+    def _assignments_from_line(
+        self, line: str, line_number: int
+    ) -> list[AssignmentFact]:
         facts = []
         for match in _ASSIGN_FACT_RE.finditer(line):
             lhs = _short_expr(match.group("lhs"))
             rhs = _short_expr(match.group("rhs"))
-            tokens = tuple(sorted(_fact_tokens(f"{lhs} {rhs}") & (
-                _COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS | _POLICY_GUARD_WORDS
-            )))
+            tokens = tuple(
+                sorted(
+                    _fact_tokens(f"{lhs} {rhs}")
+                    & (
+                        _COUNT_SIZE_WORDS
+                        | _RESOURCE_WORDS
+                        | _PROTOCOL_TOKEN_WORDS
+                        | _POLICY_GUARD_WORDS
+                    )
+                )
+            )
             if not tokens and not _ARITH_EXPR_RE.search(rhs):
                 continue
-            facts.append(AssignmentFact(
-                target=lhs,
-                value=rhs,
-                tokens=tokens,
-                line_number=line_number,
-                line_text=line,
-                is_field=("->" in lhs or "." in lhs),
-                is_arithmetic=bool(_ARITH_EXPR_RE.search(rhs)),
-            ))
+            facts.append(
+                AssignmentFact(
+                    target=lhs,
+                    value=rhs,
+                    tokens=tokens,
+                    line_number=line_number,
+                    line_text=line,
+                    is_field=("->" in lhs or "." in lhs),
+                    is_arithmetic=bool(_ARITH_EXPR_RE.search(rhs)),
+                )
+            )
         for match in _UPDATE_FACT_RE.finditer(line):
             target = _short_expr(match.group("target"))
             op = match.group("op")
-            tokens = tuple(sorted(_fact_tokens(target) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)))
+            tokens = tuple(
+                sorted(
+                    _fact_tokens(target)
+                    & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)
+                )
+            )
             if not tokens:
                 continue
-            facts.append(AssignmentFact(
-                target=target,
-                value=op,
-                tokens=tokens,
-                line_number=line_number,
-                line_text=line,
-                is_field=("->" in target or "." in target),
-                is_arithmetic=False,
-            ))
+            facts.append(
+                AssignmentFact(
+                    target=target,
+                    value=op,
+                    tokens=tokens,
+                    line_number=line_number,
+                    line_text=line,
+                    is_field=("->" in target or "." in target),
+                    is_arithmetic=False,
+                )
+            )
         return facts
 
-    def _cleanup_facts_from_line(self, line: str, line_number: int) -> list[CleanupFact]:
+    def _cleanup_facts_from_line(
+        self, line: str, line_number: int
+    ) -> list[CleanupFact]:
         facts = []
         for api in _CALL_RE.findall(line):
             api_l = api.lower()
@@ -1619,31 +2180,42 @@ class SymbolIndexBuilder:
             resource = _short_expr(args[0] if args else "")
             action, kind = self._cleanup_action(api_l)
             if action:
-                facts.append(CleanupFact(
-                    action=action,
-                    kind=kind,
-                    resource=resource or api_l,
-                    line_number=line_number,
-                    line_text=line,
-                ))
+                facts.append(
+                    CleanupFact(
+                        action=action,
+                        kind=kind,
+                        resource=resource or api_l,
+                        line_number=line_number,
+                        line_text=line,
+                    )
+                )
         for match in _UPDATE_FACT_RE.finditer(line):
             op = match.group("op")
             target = _short_expr(match.group("target"))
             tokens = _fact_tokens(target)
-            if not tokens & (_COUNT_SIZE_WORDS | {"refcount", "mappings", "pages", "groups"}):
+            if not tokens & (
+                _COUNT_SIZE_WORDS | {"refcount", "mappings", "pages", "groups"}
+            ):
                 continue
-            facts.append(CleanupFact(
-                action="inc" if op in {"++", "+="} else "dec",
-                kind="acquire" if op in {"++", "+="} else "release",
-                resource=target,
-                line_number=line_number,
-                line_text=line,
-            ))
+            facts.append(
+                CleanupFact(
+                    action="inc" if op in {"++", "+="} else "dec",
+                    kind="acquire" if op in {"++", "+="} else "release",
+                    resource=target,
+                    line_number=line_number,
+                    line_text=line,
+                )
+            )
         return facts
 
     def _cleanup_action(self, api: str) -> tuple[str, str]:
-        if re.search(r"(?:alloc|malloc|calloc|get|map|register|list_add|hash_add|insert|link_node|idr_alloc|xa_insert|enable)", api):
-            if re.search(r"(?:free|unmap|unregister|remove|erase|delete|del|disable)", api):
+        if re.search(
+            r"(?:alloc|malloc|calloc|get|map|register|list_add|hash_add|insert|link_node|idr_alloc|xa_insert|enable)",
+            api,
+        ):
+            if re.search(
+                r"(?:free|unmap|unregister|remove|erase|delete|del|disable)", api
+            ):
                 return "", ""
             if "get" in api and api in {"forget", "target"}:
                 return "", ""
@@ -1659,10 +2231,18 @@ class SymbolIndexBuilder:
                 return "register", "acquire"
             if "get" in api:
                 return "get", "acquire"
-            if "insert" in api or "add" in api or "link_node" in api or "idr_alloc" in api:
+            if (
+                "insert" in api
+                or "add" in api
+                or "link_node" in api
+                or "idr_alloc" in api
+            ):
                 return "insert", "acquire"
             return "alloc", "acquire"
-        if re.search(r"(?:free|put|unmap|unregister|list_del|hash_del|erase|remove|delete|del|idr_remove|xa_erase|disable)", api):
+        if re.search(
+            r"(?:free|put|unmap|unregister|list_del|hash_del|erase|remove|delete|del|idr_remove|xa_erase|disable)",
+            api,
+        ):
             if "disable" in api:
                 return "disable", "release"
             if "unmap" in api:
@@ -1680,79 +2260,197 @@ class SymbolIndexBuilder:
         facts = []
         for api in _CALL_RE.findall(line):
             api_l = api.lower()
-            if api_l not in _POLICY_SINK_APIS and not any(token in api_l for token in _POLICY_SINK_APIS):
+            if api_l not in _POLICY_SINK_APIS and not any(
+                token in api_l for token in _POLICY_SINK_APIS
+            ):
                 continue
-            tokens = _fact_tokens(f"{api_l} {line}") & (_POLICY_GUARD_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)
+            tokens = _fact_tokens(f"{api_l} {line}") & (
+                _POLICY_GUARD_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS
+            )
             token = sorted(tokens)[0] if tokens else api_l
-            facts.append(SinkFact(api=api_l, token=token, line_number=line_number, line_text=line))
+            facts.append(
+                SinkFact(
+                    api=api_l, token=token, line_number=line_number, line_text=line
+                )
+            )
         return facts
 
     def _event_facts_from_line(self, line: str, line_number: int) -> list[EventFact]:
         facts: list[EventFact] = []
         lower = line.lower()
         tokens = _fact_tokens(line)
-        resource_tokens = sorted(tokens & (_RESOURCE_WORDS | _QUEUE_LIVENESS_WORDS | _TRACKER_WORDS | _PM_WORDS | _SLOT_WORDS))
+        resource_tokens = sorted(
+            tokens
+            & (
+                _RESOURCE_WORDS
+                | _QUEUE_LIVENESS_WORDS
+                | _TRACKER_WORDS
+                | _PM_WORDS
+                | _SLOT_WORDS
+            )
+        )
 
-        if re.search(r"\bif\s*\(|\bWARN_ON\b|\bBUG_ON\b|\breturn\s+-", line) and resource_tokens:
+        if (
+            re.search(r"\bif\s*\(|\bWARN_ON\b|\bBUG_ON\b|\breturn\s+-", line)
+            and resource_tokens
+        ):
             for token in resource_tokens[:4]:
                 facts.append(EventFact("validation", token, line_number, line, "guard"))
 
         if tokens & _RESOURCE_WORDS:
             if _ASSIGN_FACT_RE.search(line) and not _NULL_CLEAR_RE.search(line):
                 for token in sorted(tokens & _RESOURCE_WORDS)[:4]:
-                    facts.append(EventFact("resource_bind", token, line_number, line, "assignment"))
-            if _NULL_CLEAR_RE.search(line) or re.search(r"\b(?:clear|reset|invalidate|unmap|unbind)\w*\s*\(", lower):
+                    facts.append(
+                        EventFact(
+                            "resource_bind", token, line_number, line, "assignment"
+                        )
+                    )
+            if _NULL_CLEAR_RE.search(line) or re.search(
+                r"\b(?:clear|reset|invalidate|unmap|unbind)\w*\s*\(", lower
+            ):
                 for token in sorted(tokens & _RESOURCE_WORDS)[:4]:
-                    facts.append(EventFact("resource_clear", token, line_number, line, "clear"))
+                    facts.append(
+                        EventFact("resource_clear", token, line_number, line, "clear")
+                    )
 
-        if _ASYNC_SCHEDULE_RE.search(line) and tokens & {"fault", "irq", "interrupt", "event", "work", "worker"}:
-            token = sorted(tokens & {"fault", "irq", "interrupt", "event", "work", "worker"})[0]
-            facts.append(EventFact("async_schedule", token, line_number, line, "schedule"))
-        if _ASYNC_CLEAR_RE.search(line) and tokens & {"fault", "irq", "interrupt", "event", "state"}:
+        if _ASYNC_SCHEDULE_RE.search(line) and tokens & {
+            "fault",
+            "irq",
+            "interrupt",
+            "event",
+            "work",
+            "worker",
+        }:
+            token = sorted(
+                tokens & {"fault", "irq", "interrupt", "event", "work", "worker"}
+            )[0]
+            facts.append(
+                EventFact("async_schedule", token, line_number, line, "schedule")
+            )
+        if _ASYNC_CLEAR_RE.search(line) and tokens & {
+            "fault",
+            "irq",
+            "interrupt",
+            "event",
+            "state",
+        }:
             token = sorted(tokens & {"fault", "irq", "interrupt", "event", "state"})[0]
             facts.append(EventFact("async_clear", token, line_number, line, "clear"))
         if _FAULT_CLEAR_RE.search(line):
-            facts.append(EventFact("fault_clear", "fault", line_number, line, "clear_fault"))
+            facts.append(
+                EventFact("fault_clear", "fault", line_number, line, "clear_fault")
+            )
 
         if _SUSPEND_SOURCE_RE.search(line):
-            for token in sorted(tokens & (_SUSPEND_WORDS | {"size", "pages", "nr"}))[:4]:
-                facts.append(EventFact("suspend_resource", token, line_number, line, "suspend"))
+            for token in sorted(tokens & (_SUSPEND_WORDS | {"size", "pages", "nr"}))[
+                :4
+            ]:
+                facts.append(
+                    EventFact("suspend_resource", token, line_number, line, "suspend")
+                )
 
         if _PM_RUNTIME_API_RE.search(line):
-            facts.append(EventFact("pm_runtime_get", "pm", line_number, line, "runtime"))
+            facts.append(
+                EventFact("pm_runtime_get", "pm", line_number, line, "runtime")
+            )
         if _PM_SENSITIVE_API_RE.search(line):
-            token = "register" if re.search(r"\b(?:readl|writel|regmap_|kbase_reg_)", lower) else "power"
-            facts.append(EventFact("pm_sensitive_action", token, line_number, line, "pm_sensitive"))
-        if re.search(r"\b(?:pm_runtime_put|pm_runtime_put_sync|disable_gpu_power_control|clk_disable|regulator_disable)\w*\s*\(", lower):
-            facts.append(EventFact("pm_runtime_put", "pm", line_number, line, "runtime"))
+            token = (
+                "register"
+                if re.search(r"\b(?:readl|writel|regmap_|kbase_reg_)", lower)
+                else "power"
+            )
+            facts.append(
+                EventFact(
+                    "pm_sensitive_action", token, line_number, line, "pm_sensitive"
+                )
+            )
+        if re.search(
+            r"\b(?:pm_runtime_put|pm_runtime_put_sync|disable_gpu_power_control|clk_disable|regulator_disable)\w*\s*\(",
+            lower,
+        ):
+            facts.append(
+                EventFact("pm_runtime_put", "pm", line_number, line, "runtime")
+            )
 
         if tokens & _TRACKER_WORDS:
-            if re.search(r"\b(?:rb_erase|list_del|delete|remove|erase|del)\w*\s*\(", lower):
-                facts.append(EventFact("tracker_remove", sorted(tokens & _TRACKER_WORDS)[0], line_number, line, "remove"))
-            if _NULL_CLEAR_RE.search(line) or re.search(r"\b(?:invalid|clear|reset)\b", lower):
-                facts.append(EventFact("tracker_invalidate", sorted(tokens & _TRACKER_WORDS)[0], line_number, line, "invalidate"))
+            if re.search(
+                r"\b(?:rb_erase|list_del|delete|remove|erase|del)\w*\s*\(", lower
+            ):
+                facts.append(
+                    EventFact(
+                        "tracker_remove",
+                        sorted(tokens & _TRACKER_WORDS)[0],
+                        line_number,
+                        line,
+                        "remove",
+                    )
+                )
+            if _NULL_CLEAR_RE.search(line) or re.search(
+                r"\b(?:invalid|clear|reset)\b", lower
+            ):
+                facts.append(
+                    EventFact(
+                        "tracker_invalidate",
+                        sorted(tokens & _TRACKER_WORDS)[0],
+                        line_number,
+                        line,
+                        "invalidate",
+                    )
+                )
 
         if tokens & _SLOT_WORDS:
-            if re.search(r"\[\s*0\s*\]|\bfirst\b|\bslot0\b|\bslot\s*=\s*0\b|\bkatom\b", lower):
-                facts.append(EventFact("slot_first", "slot", line_number, line, "first"))
-            if re.search(r"\[\s*1\s*\]|\bsecond\b|\bslot1\b|\bslot\s*\+\s*1\b|\bnext\b|\bother\b|\bpair", lower):
-                facts.append(EventFact("slot_second", "slot", line_number, line, "second"))
-            if re.search(r"\b(?:return|continue|break|goto)\b", lower) and ({"prio", "priority"} & tokens or re.search(r"!\s*katom|reset|stop|different", lower)):
-                facts.append(EventFact("slot_skip", "slot", line_number, line, "priority_skip"))
+            if re.search(
+                r"\[\s*0\s*\]|\bfirst\b|\bslot0\b|\bslot\s*=\s*0\b|\bkatom\b", lower
+            ):
+                facts.append(
+                    EventFact("slot_first", "slot", line_number, line, "first")
+                )
+            if re.search(
+                r"\[\s*1\s*\]|\bsecond\b|\bslot1\b|\bslot\s*\+\s*1\b|\bnext\b|\bother\b|\bpair",
+                lower,
+            ):
+                facts.append(
+                    EventFact("slot_second", "slot", line_number, line, "second")
+                )
+            if re.search(r"\b(?:return|continue|break|goto)\b", lower) and (
+                {"prio", "priority"} & tokens
+                or re.search(r"!\s*katom|reset|stop|different", lower)
+            ):
+                facts.append(
+                    EventFact("slot_skip", "slot", line_number, line, "priority_skip")
+                )
 
         if {"protected", "protm"} & tokens:
             if tokens & _WAIT_ACK_TOKENS:
-                facts.append(EventFact("protected_wait", "protected", line_number, line, "wait"))
-            if _PROTECTED_ACTIVE_RE.search(line) or re.search(r"\b(?:active|entered|enabled)\b", lower):
-                facts.append(EventFact("protected_verify", "protected", line_number, line, "verify"))
+                facts.append(
+                    EventFact("protected_wait", "protected", line_number, line, "wait")
+                )
+            if _PROTECTED_ACTIVE_RE.search(line) or re.search(
+                r"\b(?:active|entered|enabled)\b", lower
+            ):
+                facts.append(
+                    EventFact(
+                        "protected_verify", "protected", line_number, line, "verify"
+                    )
+                )
         if "mmu" in tokens and _LOCK_CALL_RE.search(line):
             facts.append(EventFact("mmu_lock", "mmu", line_number, line, "lock"))
         if _ACTIVE_SINGLETON_RE.search(line):
-            facts.append(EventFact("active_singleton", "active_protm_grp", line_number, line, "active_singleton"))
+            facts.append(
+                EventFact(
+                    "active_singleton",
+                    "active_protm_grp",
+                    line_number,
+                    line,
+                    "active_singleton",
+                )
+            )
 
         return facts
 
-    def _formula_facts_from_line(self, line: str, line_number: int) -> list[FormulaFact]:
+    def _formula_facts_from_line(
+        self, line: str, line_number: int
+    ) -> list[FormulaFact]:
         facts = []
         for match in _ASSIGN_FACT_RE.finditer(line):
             lhs = _short_expr(match.group("lhs"))
@@ -1760,16 +2458,23 @@ class SymbolIndexBuilder:
             operators = _formula_operators(rhs)
             if not operators:
                 continue
-            tokens = tuple(sorted(_fact_tokens(f"{lhs} {rhs}") & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)))
-            facts.append(FormulaFact(
-                target=lhs,
-                expr=rhs,
-                normalized=_normalise_formula_expr(rhs),
-                tokens=tokens,
-                operators=operators,
-                line_number=line_number,
-                line_text=line,
-            ))
+            tokens = tuple(
+                sorted(
+                    _fact_tokens(f"{lhs} {rhs}")
+                    & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS | _PROTOCOL_TOKEN_WORDS)
+                )
+            )
+            facts.append(
+                FormulaFact(
+                    target=lhs,
+                    expr=rhs,
+                    normalized=_normalise_formula_expr(rhs),
+                    tokens=tokens,
+                    operators=operators,
+                    line_number=line_number,
+                    line_text=line,
+                )
+            )
         return facts
 
     def _cast_facts_from_line(self, line: str, line_number: int) -> list[CastFact]:
@@ -1778,27 +2483,33 @@ class SymbolIndexBuilder:
             src = _short_expr(match.group("src"), limit=160)
             if not _METADATA_SOURCE_RE.search(src):
                 continue
-            facts.append(CastFact(
-                target=match.group("target"),
-                target_type=" ".join(match.group("type").split()),
-                source=src,
-                line_number=line_number,
-                line_text=line,
-            ))
+            facts.append(
+                CastFact(
+                    target=match.group("target"),
+                    target_type=" ".join(match.group("type").split()),
+                    source=src,
+                    line_number=line_number,
+                    line_text=line,
+                )
+            )
         if "container_of" in line and _METADATA_SOURCE_RE.search(line):
             args = _first_call_args(line, "container_of")
             if len(args) >= 2:
                 target = re.split(r"\s*=\s*", line, maxsplit=1)[0].strip().split()[-1]
-                facts.append(CastFact(
-                    target=target,
-                    target_type=_short_expr(args[1]),
-                    source=_short_expr(args[0], limit=160),
-                    line_number=line_number,
-                    line_text=line,
-                ))
+                facts.append(
+                    CastFact(
+                        target=target,
+                        target_type=_short_expr(args[1]),
+                        source=_short_expr(args[0], limit=160),
+                        line_number=line_number,
+                        line_text=line,
+                    )
+                )
         return facts
 
-    def _sentinel_facts_from_line(self, line: str, line_number: int) -> list[SentinelFact]:
+    def _sentinel_facts_from_line(
+        self, line: str, line_number: int
+    ) -> list[SentinelFact]:
         facts = []
         tokens = _fact_tokens(line)
         if not tokens & {"phys", "phys_addr", "pfn", "addr", "address", "dma", "pa"}:
@@ -1806,14 +2517,19 @@ class SymbolIndexBuilder:
         for match in _SENTINEL_COMPARE_RE.finditer(line):
             expr = _short_expr(match.group("expr"))
             expr_tokens = _fact_tokens(expr)
-            token = sorted((expr_tokens | tokens) & {"phys", "phys_addr", "pfn", "addr", "address", "dma", "pa"})[0]
-            facts.append(SentinelFact(
-                expr=expr,
-                value=match.group("value"),
-                token=token,
-                line_number=line_number,
-                line_text=line,
-            ))
+            token = sorted(
+                (expr_tokens | tokens)
+                & {"phys", "phys_addr", "pfn", "addr", "address", "dma", "pa"}
+            )[0]
+            facts.append(
+                SentinelFact(
+                    expr=expr,
+                    value=match.group("value"),
+                    token=token,
+                    line_number=line_number,
+                    line_text=line,
+                )
+            )
         return facts
 
     def _symbol_meta(
@@ -1827,10 +2543,9 @@ class SymbolIndexBuilder:
         match_text = f"{sym.name} {' '.join(calls)} {body}"
         call_text = " ".join(calls)
         has_security_api = bool(_SECURITY_API_RE.search(match_text))
-        has_lifecycle_words = (
-            _name_has_any(sym.name, _LIFECYCLE_WORDS)
-            or _name_has_any(call_text, _LIFECYCLE_WORDS)
-        )
+        has_lifecycle_words = _name_has_any(
+            sym.name, _LIFECYCLE_WORDS
+        ) or _name_has_any(call_text, _LIFECYCLE_WORDS)
         has_callback_words = (
             _name_has_any(sym.name, _CALLBACK_WORDS)
             or _name_has_any(call_text, _CALLBACK_WORDS)
@@ -1838,7 +2553,9 @@ class SymbolIndexBuilder:
         )
         has_lock_api = bool(locks)
         has_protocol_words = bool(state_tokens)
-        has_notifier_words = _name_has_any(sym.name, _NOTIFIER_WORDS) or _notifier_related_text(match_text)
+        has_notifier_words = _name_has_any(
+            sym.name, _NOTIFIER_WORDS
+        ) or _notifier_related_text(match_text)
         is_source_like = bool(_SOURCE_RE.search(match_text))
         is_sink_like = bool(_SINK_KIND_RE.search(match_text) or has_security_api)
         return SymbolMeta(
@@ -1882,15 +2599,17 @@ class SymbolIndexBuilder:
                     kind = "work"
                 elif "watchdog" in text.lower():
                     kind = "watchdog"
-                globals_.append(GlobalConstruct(
-                    unique_name=f"{rel_file}::{name}",
-                    file_path=rel_file,
-                    name=name,
-                    line_number=start + 1,
-                    kind=kind,
-                    initializer=text[:3000],
-                    referenced_functions=refs,
-                ))
+                globals_.append(
+                    GlobalConstruct(
+                        unique_name=f"{rel_file}::{name}",
+                        file_path=rel_file,
+                        name=name,
+                        line_number=start + 1,
+                        kind=kind,
+                        initializer=text[:3000],
+                        referenced_functions=refs,
+                    )
+                )
             idx += 1
         return globals_
 
@@ -1920,8 +2639,10 @@ def _symbols_for_file(index: SymbolIndex, file_path: str) -> list[SymbolDef]:
     if index.defs_by_file:
         return list(index.defs_by_file.get(file_path, []))
     return [
-        sym for defs in index.definitions.values()
-        for sym in defs if sym.file_path == file_path
+        sym
+        for defs in index.definitions.values()
+        for sym in defs
+        if sym.file_path == file_path
     ]
 
 
@@ -1946,8 +2667,10 @@ def _field_uses_for_file(index: SymbolIndex, file_path: str) -> list[FieldUse]:
     if index.field_uses_by_file:
         return list(index.field_uses_by_file.get(file_path, []))
     return [
-        use for uses in index.field_uses.values()
-        for use in uses if use.file_path == file_path
+        use
+        for uses in index.field_uses.values()
+        for use in uses
+        if use.file_path == file_path
     ]
 
 
@@ -1960,19 +2683,25 @@ def _all_symbols(index: SymbolIndex) -> list[SymbolDef]:
 def _lifecycle_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
     if index.lifecycle_symbols or index.meta_by_symbol:
         return list(index.lifecycle_symbols)
-    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _LIFECYCLE_WORDS)]
+    return [
+        sym for sym in _all_symbols(index) if _name_has_any(sym.name, _LIFECYCLE_WORDS)
+    ]
 
 
 def _callback_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
     if index.callback_symbols or index.meta_by_symbol:
         return list(index.callback_symbols)
-    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _CALLBACK_WORDS)]
+    return [
+        sym for sym in _all_symbols(index) if _name_has_any(sym.name, _CALLBACK_WORDS)
+    ]
 
 
 def _notifier_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
     if index.notifier_related_symbols or index.meta_by_symbol:
         return list(index.notifier_related_symbols)
-    return [sym for sym in _all_symbols(index) if _name_has_any(sym.name, _NOTIFIER_WORDS)]
+    return [
+        sym for sym in _all_symbols(index) if _name_has_any(sym.name, _NOTIFIER_WORDS)
+    ]
 
 
 def _security_symbol_candidates(index: SymbolIndex) -> list[SymbolDef]:
@@ -2066,7 +2795,9 @@ def _symbol_to_node(
         body = _function_body_from_symbol(codebase_path, sym, max_chars=8000)
         match_text = f"{sym.name} {' '.join(calls)} {body}"
         is_source = bool(_SOURCE_RE.search(match_text))
-        is_sink = bool(_SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text))
+        is_sink = bool(
+            _SINK_KIND_RE.search(match_text) or _SECURITY_API_RE.search(match_text)
+        )
         sink_type = _sink_type_for_text(match_text) if is_sink else ""
     return FunctionNode(
         unique_name=_symbol_unique_name(sym),
@@ -2076,11 +2807,14 @@ def _symbol_to_node(
         is_source=is_source,
         is_sink=is_sink,
         calls=calls,
-        source_reason="deterministic source-like entry or external input use" if is_source else "",
+        source_reason=(
+            "deterministic source-like entry or external input use" if is_source else ""
+        ),
         sink_type=sink_type,
-        sink_reason="deterministic sink-like API/state/lifecycle use" if is_sink else "",
+        sink_reason=(
+            "deterministic sink-like API/state/lifecycle use" if is_sink else ""
+        ),
     )
 
 
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [name for name in globals() if not name.startswith("__")]

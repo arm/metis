@@ -18,7 +18,9 @@ from metis.engine.reachability_service_modular.c_family import (
 )
 from metis.engine.reachability_service_modular.file_focus import FileFocusBuilder
 from metis.engine.reachability_service_modular.finding_paths import FindingPathAnnotator
-from metis.engine.reachability_service_modular.service import TreeSitterReachabilityService
+from metis.engine.reachability_service_modular.service import (
+    TreeSitterReachabilityService,
+)
 from metis.engine.reachability_common import VulnerabilityFinding
 
 
@@ -84,9 +86,7 @@ def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
         text="int main(int argc, char **argv) { foo(argv[1]); }",
         line=1,
         children=[foo_call],
-        fields={
-            "declarator": _Node("function_declarator", text="main", line=1)
-        },
+        fields={"declarator": _Node("function_declarator", text="main", line=1)},
     )
 
     memcpy_ident = _Node("identifier", text="memcpy", line=8)
@@ -96,9 +96,7 @@ def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
         text="void foo(char *src) { char dst[8]; memcpy(dst, src, 64); }",
         line=6,
         children=[memcpy_call],
-        fields={
-            "declarator": _Node("function_declarator", text="foo", line=6)
-        },
+        fields={"declarator": _Node("function_declarator", text="foo", line=6)},
     )
 
     root = _Node("translation_unit", children=[main_def, foo_def])
@@ -132,12 +130,14 @@ def test_source_rooted_tracer_keeps_maximal_non_sink_paths():
 
     paths = SourceRootedPathTracer(graph).find_all_paths()
 
-    assert [path.path for path in paths] == [[
-        "src/main.c::main",
-        "src/a.c::a",
-        "src/d.c::d",
-        "src/e.c::e",
-    ]]
+    assert [path.path for path in paths] == [
+        [
+            "src/main.c::main",
+            "src/a.c::a",
+            "src/d.c::d",
+            "src/e.c::e",
+        ]
+    ]
     assert paths[0].sink == "src/e.c::e"
     assert paths[0].sink_type == "reachable_endpoint"
 
@@ -154,11 +154,13 @@ def test_source_rooted_tracer_omits_recursive_loop():
 
     paths = SourceRootedPathTracer(graph).find_all_paths()
 
-    assert [path.path for path in paths] == [[
-        "src/main.c::main",
-        "src/a.c::a",
-        "src/b.c::b",
-    ]]
+    assert [path.path for path in paths] == [
+        [
+            "src/main.c::main",
+            "src/a.c::a",
+            "src/b.c::b",
+        ]
+    ]
 
 
 def test_reachability_service_auto_caps_confirmation_paths():
@@ -167,13 +169,15 @@ def test_reachability_service_auto_caps_confirmation_paths():
     graph.add_node(source)
     for idx in range(80):
         source.calls.append(f"leaf_{idx}")
-        graph.add_node(_fn(
-            f"src/leaf_{idx}.c::leaf_{idx}",
-            f"src/leaf_{idx}.c",
-            f"leaf_{idx}",
-            idx + 2,
-            sink=idx % 3 == 0,
-        ))
+        graph.add_node(
+            _fn(
+                f"src/leaf_{idx}.c::leaf_{idx}",
+                f"src/leaf_{idx}.c",
+                f"leaf_{idx}",
+                idx + 2,
+                sink=idx % 3 == 0,
+            )
+        )
     graph.resolve_all_calls()
     paths = SourceRootedPathTracer(graph).find_all_paths()
     service = object.__new__(TreeSitterReachabilityService)

@@ -1,17 +1,28 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: F403,F405
+
 """Partial-review post filters and root-cause dedupe."""
 
 from __future__ import annotations
 
 from .common import *
 
+
 def _partial_finding_text(finding: VulnerabilityFinding) -> str:
-    return " ".join(str(part or "") for part in (
-        finding.description, finding.root_cause, finding.evidence, finding.canonical_key,
-        finding.primary_function, finding.sink_function, finding.source_function,
-    ))
+    return " ".join(
+        str(part or "")
+        for part in (
+            finding.description,
+            finding.root_cause,
+            finding.evidence,
+            finding.canonical_key,
+            finding.primary_function,
+            finding.sink_function,
+            finding.source_function,
+        )
+    )
 
 
 def _partial_duplicate_family(vtype: str) -> str:
@@ -76,8 +87,19 @@ def _partial_duplicate_family(vtype: str) -> str:
 def _partial_canonical_key(key: str) -> str:
     text = re.sub(r"[^a-z0-9]+", "_", str(key or "").lower())
     noisy = {
-        "unchecked", "direct", "same", "path", "same_path", "same_path_input",
-        "input", "user", "attacker", "unsanitized", "untrusted", "source", "sink",
+        "unchecked",
+        "direct",
+        "same",
+        "path",
+        "same_path",
+        "same_path_input",
+        "input",
+        "user",
+        "attacker",
+        "unsanitized",
+        "untrusted",
+        "source",
+        "sink",
     }
     tokens = [t for t in text.split("_") if t and t not in noisy]
     return "_".join(tokens)
@@ -119,16 +141,21 @@ def _partial_same_root(a: VulnerabilityFinding, b: VulnerabilityFinding) -> bool
 def _pick_partial_best(findings: list[VulnerabilityFinding]) -> VulnerabilityFinding:
     sev = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
     conf = {"high": 0, "medium": 1, "low": 2}
-    return min(findings, key=lambda f: (
-        _PARTIAL_PASS_PRIORITY.get(f.analysis_type, 50),
-        sev.get(str(f.severity or "").lower(), 5),
-        conf.get(str(f.confidence or "").lower(), 3),
-        len(f.path or []),
-        -len(_partial_finding_text(f)),
-    ))
+    return min(
+        findings,
+        key=lambda f: (
+            _PARTIAL_PASS_PRIORITY.get(f.analysis_type, 50),
+            sev.get(str(f.severity or "").lower(), 5),
+            conf.get(str(f.confidence or "").lower(), 3),
+            len(f.path or []),
+            -len(_partial_finding_text(f)),
+        ),
+    )
 
 
-def _collapse_partial_duplicates(findings: list[VulnerabilityFinding]) -> list[VulnerabilityFinding]:
+def _collapse_partial_duplicates(
+    findings: list[VulnerabilityFinding],
+) -> list[VulnerabilityFinding]:
     clusters: list[list[VulnerabilityFinding]] = []
     for finding in findings:
         merged = False
@@ -142,7 +169,9 @@ def _collapse_partial_duplicates(findings: list[VulnerabilityFinding]) -> list[V
     return [_pick_partial_best(cluster) for cluster in clusters]
 
 
-def _dedupe_partial_findings(findings: list[VulnerabilityFinding], *, max_per_sink: int) -> list[VulnerabilityFinding]:
+def _dedupe_partial_findings(
+    findings: list[VulnerabilityFinding], *, max_per_sink: int
+) -> list[VulnerabilityFinding]:
     collapsed = _collapse_partial_duplicates(findings)
     deduped, _, _ = Deduplicator.deduplicate(collapsed, max_per_sink=max_per_sink)
     return _collapse_partial_duplicates(deduped)
@@ -150,35 +179,52 @@ def _dedupe_partial_findings(findings: list[VulnerabilityFinding], *, max_per_si
 
 def _is_external_entrypoint_finding(finding: VulnerabilityFinding) -> bool:
     text = _partial_finding_text(finding).lower()
-    fn = str(finding.primary_function or finding.sink_function or finding.source_function or "").lower()
-    return bool(re.search(
-        r"\b(ioctl|dispatch|sysfs|debugfs|netlink|fops|file_operations|open|read|write|"
-        r"poll|flush|release|callback|handler|irq|interrupt|user|copy_from_user|main)\b",
-        f"{fn} {text}",
-    ))
+    fn = str(
+        finding.primary_function
+        or finding.sink_function
+        or finding.source_function
+        or ""
+    ).lower()
+    return bool(
+        re.search(
+            r"\b(ioctl|dispatch|sysfs|debugfs|netlink|fops|file_operations|open|read|write|"
+            r"poll|flush|release|callback|handler|irq|interrupt|user|copy_from_user|main)\b",
+            f"{fn} {text}",
+        )
+    )
 
 
 def _suppress_generic_null(finding: VulnerabilityFinding) -> bool:
     if _normalise_partial_vuln_type(finding.vulnerability_type) != "null_deref":
         return False
     text = _partial_finding_text(finding).lower()
-    if re.search(r"\b(lookup|find|malloc|calloc|realloc|returns?\s+null|no matching|after loop|task_find|session_get|store_get|get_)\b", text):
+    if re.search(
+        r"\b(lookup|find|malloc|calloc|realloc|returns?\s+null|no matching|after loop|task_find|session_get|store_get|get_)\b",
+        text,
+    ):
         return False
     if _is_external_entrypoint_finding(finding):
         return False
-    return bool(re.search(
-        r"(missing\s+null\s+check|missing\s+null-check|caller-supplied pointer|"
-        r"inbound pointer contract|missing validation of .* pointer|missing null check on "
-        r"(?:dev|ctx|queue|obj|session|task|region))",
-        text,
-    ))
+    return bool(
+        re.search(
+            r"(missing\s+null\s+check|missing\s+null-check|caller-supplied pointer|"
+            r"inbound pointer contract|missing validation of .* pointer|missing null check on "
+            r"(?:dev|ctx|queue|obj|session|task|region))",
+            text,
+        )
+    )
 
 
-def _suppress_generic_missing_lock(finding: VulnerabilityFinding, detector_result: PartialDetectorResult) -> bool:
+def _suppress_generic_missing_lock(
+    finding: VulnerabilityFinding, detector_result: PartialDetectorResult
+) -> bool:
     if _normalise_partial_vuln_type(finding.vulnerability_type) != "missing_lock":
         return False
     text = _partial_finding_text(finding).lower()
-    concrete = re.search(r"\b(free|destroy|teardown|release|callback|work|timer|fops|poll|ioctl|use-after-free|uaf|corrupt)\b", text)
+    concrete = re.search(
+        r"\b(free|destroy|teardown|release|callback|work|timer|fops|poll|ioctl|use-after-free|uaf|corrupt)\b",
+        text,
+    )
     if concrete:
         return False
     notes = " ".join(
@@ -196,63 +242,89 @@ def _suppress_generic_partial(finding: VulnerabilityFinding) -> bool:
     text = _partial_finding_text(finding).lower()
     severity = str(finding.severity or "").lower()
     vtype = _normalise_partial_vuln_type(finding.vulnerability_type)
-    if ("overwrites global file handle" in text or "repeated init" in text) and severity not in {"high", "critical"}:
-        if not re.search(r"\b(double|use-after-free|uaf|security|attacker|external)\b", text):
+    if (
+        "overwrites global file handle" in text or "repeated init" in text
+    ) and severity not in {"high", "critical"}:
+        if not re.search(
+            r"\b(double|use-after-free|uaf|security|attacker|external)\b", text
+        ):
             return True
-    if vtype in {"missing_auth", "permission_mismatch"} and not _is_external_entrypoint_finding(finding):
-        if re.search(r"\b(primitive|helper|low-level|lacks built-in authorization|caller authorization)\b", text):
+    if vtype in {
+        "missing_auth",
+        "permission_mismatch",
+    } and not _is_external_entrypoint_finding(finding):
+        if re.search(
+            r"\b(primitive|helper|low-level|lacks built-in authorization|caller authorization)\b",
+            text,
+        ):
             return True
     return False
 
 
-_EXACT_PARTIAL_ANALYSIS_TYPES = frozenset({
-    "partial_copy_contract",
-    "partial_cleanup_symmetry",
-    "partial_accounting_drift",
-    "partial_arithmetic_chain_mismatch",
-    "partial_resource_binding_order",
-    "partial_policy_gate_before_sink",
-    "partial_cross_file_lock_cycle",
-    "partial_state_transition_protocol",
-    "partial_resource_validation_order",
-    "partial_cleanup_ledger",
-    "partial_suspend_cleanup_ledger",
-    "partial_suspend_size_sink",
-    "partial_async_event_order",
-    "partial_fault_clear_order",
-    "partial_size_propagation",
-    "partial_alias_extent_mismatch",
-    "partial_stale_tracker_state",
-    "partial_region_replace_erase",
-    "partial_metadata_type_confusion",
-    "partial_pm_runtime_sequence",
-    "partial_pm_callback_order",
-    "partial_secondary_element_omission",
-    "partial_zero_count_underflow",
-    "partial_owner_liveness_allocation",
-    "partial_user_buffer_permission",
-    "partial_zone_shrink_validation",
-    "partial_success_path_cleanup",
-    "partial_jit_lock_protocol",
-    "partial_teardown_order",
-    "partial_queue_publish_init",
-    "partial_fd_reuse_race",
-    "partial_debugfs_permission",
-    "partial_protected_mmu_protocol",
-    "partial_active_singleton_stale",
-    "partial_mmu_recovery_rollback",
-    "partial_sentinel_misuse",
-    "partial_imported_mapping_policy",
-    "partial_named_lock_inversion",
-})
-_WEAK_GENERIC_VTYPES = frozenset({
-    "null_deref", "missing_lock", "teardown_race", "callback_lifecycle",
-    "deferred_uaf", "integer_overflow", "buffer_overflow", "lock_order",
-    "state_order", "ordering_gap", "info_leak", "format_string", "other",
-})
+_EXACT_PARTIAL_ANALYSIS_TYPES = frozenset(
+    {
+        "partial_copy_contract",
+        "partial_cleanup_symmetry",
+        "partial_accounting_drift",
+        "partial_arithmetic_chain_mismatch",
+        "partial_resource_binding_order",
+        "partial_policy_gate_before_sink",
+        "partial_cross_file_lock_cycle",
+        "partial_state_transition_protocol",
+        "partial_resource_validation_order",
+        "partial_cleanup_ledger",
+        "partial_suspend_cleanup_ledger",
+        "partial_suspend_size_sink",
+        "partial_async_event_order",
+        "partial_fault_clear_order",
+        "partial_size_propagation",
+        "partial_alias_extent_mismatch",
+        "partial_stale_tracker_state",
+        "partial_region_replace_erase",
+        "partial_metadata_type_confusion",
+        "partial_pm_runtime_sequence",
+        "partial_pm_callback_order",
+        "partial_secondary_element_omission",
+        "partial_zero_count_underflow",
+        "partial_owner_liveness_allocation",
+        "partial_user_buffer_permission",
+        "partial_zone_shrink_validation",
+        "partial_success_path_cleanup",
+        "partial_jit_lock_protocol",
+        "partial_teardown_order",
+        "partial_queue_publish_init",
+        "partial_fd_reuse_race",
+        "partial_debugfs_permission",
+        "partial_protected_mmu_protocol",
+        "partial_active_singleton_stale",
+        "partial_mmu_recovery_rollback",
+        "partial_sentinel_misuse",
+        "partial_imported_mapping_policy",
+        "partial_named_lock_inversion",
+    }
+)
+_WEAK_GENERIC_VTYPES = frozenset(
+    {
+        "null_deref",
+        "missing_lock",
+        "teardown_race",
+        "callback_lifecycle",
+        "deferred_uaf",
+        "integer_overflow",
+        "buffer_overflow",
+        "lock_order",
+        "state_order",
+        "ordering_gap",
+        "info_leak",
+        "format_string",
+        "other",
+    }
+)
 
 
-def _prefer_exact_partial_findings(findings: list[VulnerabilityFinding]) -> list[VulnerabilityFinding]:
+def _prefer_exact_partial_findings(
+    findings: list[VulnerabilityFinding],
+) -> list[VulnerabilityFinding]:
     exact = [f for f in findings if f.analysis_type in _EXACT_PARTIAL_ANALYSIS_TYPES]
     if not exact:
         return findings
@@ -268,20 +340,29 @@ def _prefer_exact_partial_findings(findings: list[VulnerabilityFinding]) -> list
     return kept
 
 
-def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]) -> bool:
+def _is_weaker_exact_adjacent_to_stronger(
+    finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]
+) -> bool:
     weaker = {
-        "partial_cross_file_lock_cycle", "partial_state_transition_protocol",
-        "partial_resource_binding_order", "partial_allocation_arithmetic",
-        "partial_async_event_order", "partial_cleanup_ledger",
-        "partial_arithmetic_chain_mismatch", "partial_size_propagation",
-        "partial_policy_gate_before_sink", "partial_stale_tracker_state",
+        "partial_cross_file_lock_cycle",
+        "partial_state_transition_protocol",
+        "partial_resource_binding_order",
+        "partial_allocation_arithmetic",
+        "partial_async_event_order",
+        "partial_cleanup_ledger",
+        "partial_arithmetic_chain_mismatch",
+        "partial_size_propagation",
+        "partial_policy_gate_before_sink",
+        "partial_stale_tracker_state",
         "partial_pm_runtime_sequence",
     }
     if finding.analysis_type not in weaker:
         return False
     own_priority = _PARTIAL_PASS_PRIORITY.get(finding.analysis_type, 50)
     fn = finding.primary_function or finding.sink_function or finding.source_function
-    line = _safe_int(finding.primary_line or finding.sink_line or finding.source_line, 0)
+    line = _safe_int(
+        finding.primary_line or finding.sink_line or finding.source_line, 0
+    )
     text = _partial_finding_text(finding).lower()
     finding_file = finding.primary_file or finding.sink_file or finding.source_file
     finding_domains = _domain_root_tokens(text)
@@ -293,8 +374,12 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
         exact_file = exact.primary_file or exact.sink_file or exact.source_file
         if finding_file and exact_file and finding_file != exact_file:
             continue
-        exact_fn = exact.primary_function or exact.sink_function or exact.source_function
-        exact_line = _safe_int(exact.primary_line or exact.sink_line or exact.source_line, 0)
+        exact_fn = (
+            exact.primary_function or exact.sink_function or exact.source_function
+        )
+        exact_line = _safe_int(
+            exact.primary_line or exact.sink_line or exact.source_line, 0
+        )
         exact_text = _partial_finding_text(exact).lower()
         exact_domains = _domain_root_tokens(exact_text)
         if not (finding_domains & exact_domains):
@@ -306,12 +391,18 @@ def _is_weaker_exact_adjacent_to_stronger(finding: VulnerabilityFinding, exact_f
     return False
 
 
-def _is_weaker_adjacent_to_exact(finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]) -> bool:
+def _is_weaker_adjacent_to_exact(
+    finding: VulnerabilityFinding, exact_findings: list[VulnerabilityFinding]
+) -> bool:
     vtype = _normalise_partial_vuln_type(finding.vulnerability_type)
-    if vtype not in _WEAK_GENERIC_VTYPES and not finding.analysis_type.endswith(("target_intra", "concurrency", "lifecycle")):
+    if vtype not in _WEAK_GENERIC_VTYPES and not finding.analysis_type.endswith(
+        ("target_intra", "concurrency", "lifecycle")
+    ):
         return False
     fn = finding.primary_function or finding.sink_function or finding.source_function
-    line = _safe_int(finding.primary_line or finding.sink_line or finding.source_line, 0)
+    line = _safe_int(
+        finding.primary_line or finding.sink_line or finding.source_line, 0
+    )
     weak_text = _partial_finding_text(finding).lower()
     weak_domains = _domain_root_tokens(weak_text)
     finding_file = finding.primary_file or finding.sink_file or finding.source_file
@@ -323,12 +414,20 @@ def _is_weaker_adjacent_to_exact(finding: VulnerabilityFinding, exact_findings: 
         exact_domains = _domain_root_tokens(exact_text)
         if not (weak_domains & exact_domains):
             continue
-        exact_fn = exact.primary_function or exact.sink_function or exact.source_function
-        exact_line = _safe_int(exact.primary_line or exact.sink_line or exact.source_line, 0)
+        exact_fn = (
+            exact.primary_function or exact.sink_function or exact.source_function
+        )
+        exact_line = _safe_int(
+            exact.primary_line or exact.sink_line or exact.source_line, 0
+        )
         same_fn = bool(fn and exact_fn and fn == exact_fn)
         tight_line = bool(
             (line and exact_line and abs(line - exact_line) <= 10)
-            or (exact.sink_line and finding.sink_line and abs(exact.sink_line - finding.sink_line) <= 10)
+            or (
+                exact.sink_line
+                and finding.sink_line
+                and abs(exact.sink_line - finding.sink_line) <= 10
+            )
         )
         if same_fn or tight_line:
             return True
@@ -344,7 +443,9 @@ def _post_filter_partial_findings(
     stats = PartialPostFilterStats()
     kept: list[VulnerabilityFinding] = []
     for finding in findings:
-        finding.vulnerability_type = _normalise_partial_vuln_type(finding.vulnerability_type)
+        finding.vulnerability_type = _normalise_partial_vuln_type(
+            finding.vulnerability_type
+        )
         primary = finding.primary_file or finding.sink_file or finding.source_file
         if not primary or not _same_file_ref(primary, target_file, codebase_path):
             stats.suppressed_non_target += 1
@@ -368,9 +469,12 @@ def _partial_cwe(vtype: str, finding: VulnerabilityFinding) -> str | None:
     normal = _normalise_partial_vuln_type(vtype)
     if normal == "info_leak":
         text = _partial_finding_text(finding).lower()
-        return "CWE-532" if re.search(r"\b(log|printf|debug|trace|printk)\b", text) else "CWE-200"
+        return (
+            "CWE-532"
+            if re.search(r"\b(log|printf|debug|trace|printk)\b", text)
+            else "CWE-200"
+        )
     return _PARTIAL_CWE_OVERRIDES.get(normal) or _VULN_TO_CWE.get(normal)
 
 
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [name for name in globals() if not name.startswith("__")]

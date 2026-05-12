@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from metis.cli import entry
-from metis.cli import commands
 from metis.cli import command_registry
-from metis.cli.command_runtime import CommandRuntime
 
 
-def test_determine_output_file_regenerates_auto_output_per_command(tmp_path, monkeypatch):
+def test_determine_output_file_regenerates_auto_output_per_command(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     args = SimpleNamespace(output_file=None)
     cmd_args = []

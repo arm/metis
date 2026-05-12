@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 
 from .models import ReachabilityPath
 from .utils import _dedupe_paths
+
 _EXTRACTION_SYSTEM_PROMPT = """\
 You are a C and C++ static analysis tool. Analyze the following source file and \
 extract ALL function definitions with their security relevant metadata.
@@ -73,33 +74,56 @@ class PathTracer:
     """Trace source-to-labeled-sink paths for legacy confirmation flows."""
 
     def __init__(self, graph, *, max_path_length=25, max_paths_per_source=200):
-        self._g = graph; self._ml = max_path_length; self._mp = max_paths_per_source
+        self._g = graph
+        self._ml = max_path_length
+        self._mp = max_paths_per_source
 
     def find_all_paths(self):
         sources = self._g.get_sources()
         sinks = {n.unique_name for n in self._g.get_sinks()}
-        if not sources or not sinks: return []
+        if not sources or not sinks:
+            return []
         paths = []
         for s in sources:
             if s.unique_name in sinks:
-                paths.append(ReachabilityPath(source=s.unique_name, sink=s.unique_name, path=[s.unique_name], sink_type=s.sink_type))
+                paths.append(
+                    ReachabilityPath(
+                        source=s.unique_name,
+                        sink=s.unique_name,
+                        path=[s.unique_name],
+                        sink_type=s.sink_type,
+                    )
+                )
             paths.extend(self._bfs(s.unique_name, sinks))
         return paths
 
     def _bfs(self, src, sinks):
         results, q = [], deque([[src]])
         while q and len(results) < self._mp:
-            path = q.popleft(); node = self._g.get_node(path[-1])
-            if not node: continue
+            path = q.popleft()
+            node = self._g.get_node(path[-1])
+            if not node:
+                continue
             for c in node.resolved_calls:
-                if c in path: continue
+                if c in path:
+                    continue
                 np = path + [c]
                 if c in sinks:
                     sn = self._g.get_node(c)
-                    results.append(ReachabilityPath(source=src, sink=c, path=list(np), sink_type=sn.sink_type if sn else ""))
-                    if len(results) >= self._mp: break
-                    if len(np) < self._ml: q.append(np)
-                elif len(np) < self._ml: q.append(np)
+                    results.append(
+                        ReachabilityPath(
+                            source=src,
+                            sink=c,
+                            path=list(np),
+                            sink_type=sn.sink_type if sn else "",
+                        )
+                    )
+                    if len(results) >= self._mp:
+                        break
+                    if len(np) < self._ml:
+                        q.append(np)
+                elif len(np) < self._ml:
+                    q.append(np)
         return results
 
 
@@ -146,7 +170,11 @@ class SourceRootedPathTracer:
             source=source_name,
             sink=endpoint_name,
             path=list(path),
-            sink_type=endpoint.sink_type if endpoint and endpoint.is_sink else "reachable_endpoint",
+            sink_type=(
+                endpoint.sink_type
+                if endpoint and endpoint.is_sink
+                else "reachable_endpoint"
+            ),
         )
 
     def _drop_strict_prefix_paths(self, paths):
@@ -160,7 +188,7 @@ class SourceRootedPathTracer:
             for path, path_tuple in tuples:
                 if any(
                     len(other_tuple) > len(path_tuple)
-                    and other_tuple[:len(path_tuple)] == path_tuple
+                    and other_tuple[: len(path_tuple)] == path_tuple
                     for _other, other_tuple in tuples
                 ):
                     continue

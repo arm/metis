@@ -74,7 +74,9 @@ class ReviewService:
                 )
         return list(self._reachability_cache)
 
-    def uses_reachability_for_code_review(self, review_file_func=None, get_code_files_func=None):
+    def uses_reachability_for_code_review(
+        self, review_file_func=None, get_code_files_func=None
+    ):
         files = (get_code_files_func or self.get_code_files)()
         c_cpp_files = [path for path in files if self._is_c_cpp_file(path)]
         return (
@@ -143,8 +145,12 @@ class ReviewService:
                 try:
                     result = self._treesitter_reachability_service.review_file(
                         file_path,
-                        confirmation_model=self._reachability_settings.get("confirmation_model"),
-                        max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                        confirmation_model=self._reachability_settings.get(
+                            "confirmation_model"
+                        ),
+                        max_workers=int(
+                            self._reachability_settings.get("max_workers", 8)
+                        ),
                         max_paths=int(self._reachability_settings.get("max_paths", 0)),
                         max_paths_per_sink=int(
                             self._reachability_settings.get("max_paths_per_sink", 3)
@@ -152,7 +158,9 @@ class ReviewService:
                         max_path_length=int(
                             self._reachability_settings.get("max_path_length", 25)
                         ),
-                        reasoning_effort=self._reachability_settings.get("reasoning_effort"),
+                        reasoning_effort=self._reachability_settings.get(
+                            "reasoning_effort"
+                        ),
                         progress_callback=progress_callback,
                     )
                 except Exception as e:
@@ -172,16 +180,19 @@ class ReviewService:
                 try:
                     result = partial_file_service.review_file(
                         file_path,
-                        extraction_model=self._reachability_settings.get(
-                            "extraction_model", "gpt-4.1-mini"
+                        review_model=self._reachability_settings.get(
+                            "confirmation_model"
                         ),
-                        review_model=self._reachability_settings.get("confirmation_model"),
-                        max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                        max_workers=int(
+                            self._reachability_settings.get("max_workers", 8)
+                        ),
                         context_budget=context_budget or 250,
                         max_paths_per_sink=int(
                             self._reachability_settings.get("max_paths_per_sink", 3)
                         ),
-                        reasoning_effort=self._reachability_settings.get("reasoning_effort"),
+                        reasoning_effort=self._reachability_settings.get(
+                            "reasoning_effort"
+                        ),
                         progress_callback=progress_callback,
                     )
                 except Exception as e:
@@ -197,10 +208,7 @@ class ReviewService:
                 else:
                     if result is not None:
                         return result
-        if (
-            self._use_reachability_for_review
-            and self._reachability_service is not None
-        ):
+        if self._use_reachability_for_review and self._reachability_service is not None:
             return self._find_reachability_review_for_file(file_path)
         qe_code = qe_docs = None
         if options.use_retrieval_context:
@@ -255,7 +263,14 @@ class ReviewService:
 
     def _is_c_cpp_file(self, file_path):
         return os.path.splitext(str(file_path))[1].lower() in {
-            ".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"
+            ".c",
+            ".h",
+            ".cc",
+            ".cpp",
+            ".hpp",
+            ".hh",
+            ".hxx",
+            ".cxx",
         }
 
     def _invoke_review_file(
@@ -263,6 +278,8 @@ class ReviewService:
         review_fn,
         path: str,
         options: ReviewOptions,
+        *,
+        force_classic: bool = False,
     ):
         try:
             signature = inspect.signature(review_fn)
@@ -271,15 +288,18 @@ class ReviewService:
 
         if signature is not None:
             params = signature.parameters
-            if "options" in params or any(
+            accepts_kwargs = any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-            ):
-                return review_fn(path, options=options)
+            )
+            kwargs = {}
+            if "options" in params or accepts_kwargs:
+                kwargs["options"] = options
             if "use_retrieval_context" in params:
-                return review_fn(
-                    path,
-                    use_retrieval_context=options.use_retrieval_context,
-                )
+                kwargs["use_retrieval_context"] = options.use_retrieval_context
+            if force_classic and ("mode" in params or accepts_kwargs):
+                kwargs["mode"] = "classic"
+            if kwargs:
+                return review_fn(path, **kwargs)
 
         if options.use_retrieval_context:
             return review_fn(path)
@@ -324,18 +344,16 @@ class ReviewService:
             get_code_files_func=lambda: files,
         )
         if use_reachability:
-            results = self._get_reachability_reviews(progress_callback=progress_callback)
+            results = self._get_reachability_reviews(
+                progress_callback=progress_callback
+            )
             for result in results:
                 yield result
             files = [path for path in files if not self._is_c_cpp_file(path)]
             if not files:
                 return
 
-        if review_file_func is None:
-            def review_fn(path, *, options=None):
-                return self.review_file(path, options=options, mode="classic")
-        else:
-            review_fn = review_file_func
+        review_fn = self.review_file if review_file_func is None else review_file_func
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
@@ -344,6 +362,7 @@ class ReviewService:
                     review_fn,
                     path,
                     options,
+                    force_classic=review_file_func is None,
                 ): path
                 for path in files
             }

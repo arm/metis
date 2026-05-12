@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 import re
-from typing import Any
 
 from metis.engine.analysis.c_family_analyzer_common import (
     _identifier_from_node,
@@ -63,7 +62,9 @@ class CFamilyTreeSitterExtractor:
 
         source = bytes(parsed.text, "utf-8")
         root = parsed.tree.root_node
-        global_constructs, entrypoint_refs = self._collect_globals(root, source, rel_path)
+        global_constructs, entrypoint_refs = self._collect_globals(
+            root, source, rel_path
+        )
         nodes = self._collect_functions(root, source, rel_path, entrypoint_refs)
         return ParsedFileGraph(nodes=nodes, globals=global_constructs)
 
@@ -107,7 +108,9 @@ class CFamilyTreeSitterExtractor:
                                 sink_reason=sink_reason,
                             )
                         )
-        return sorted(nodes, key=lambda item: (item.file_path, item.line_number, item.name))
+        return sorted(
+            nodes, key=lambda item: (item.file_path, item.line_number, item.name)
+        )
 
     def _function_name(self, node, source: bytes) -> str:
         declarator = self._field(node, "declarator")
@@ -150,7 +153,9 @@ class CFamilyTreeSitterExtractor:
                 text = _node_text(node, source)
                 refs = self._entrypoint_references(text)
                 if refs:
-                    name = self._global_name(node, source) or f"global_{_node_line(node)}"
+                    name = (
+                        self._global_name(node, source) or f"global_{_node_line(node)}"
+                    )
                     unique = f"{rel_path}::{name}"
                     if unique not in seen:
                         seen.add(unique)
@@ -182,11 +187,11 @@ class CFamilyTreeSitterExtractor:
     def _entrypoint_references(self, text: str) -> list[str]:
         refs: list[str] = []
         seen: set[str] = set()
-        for field, ref in re.findall(
+        for field_name, ref in re.findall(
             r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)",
             text or "",
         ):
-            if field not in ENTRYPOINT_FIELDS:
+            if field_name not in ENTRYPOINT_FIELDS:
                 continue
             if ref in seen:
                 continue

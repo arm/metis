@@ -264,7 +264,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
     )
     reachability_keys = (
         "use_reachability_for_review",
-        "reachability_extraction_model",
         "reachability_confirmation_model",
         "reachability_workers",
         "reachability_max_paths",

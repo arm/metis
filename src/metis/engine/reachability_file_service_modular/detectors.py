@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: F403,F405
+
 """Cheap static detectors that seed targeted partial-review prompts."""
 
 from __future__ import annotations
 
 from .common import *
+
 
 class PartialCandidateDetector:
     """Collect exact signals before the LLM reviews the selected context."""
@@ -61,7 +64,9 @@ class PartialCandidateDetector:
         self._detect_queue_publish_init(index, result, target_syms)
         self._detect_fd_reuse_race(index, result, target_syms)
         self._detect_debugfs_permission(index, result, target_syms)
-        wrappers = self._detect_format_wrappers(index, result, target_syms, target_prefixes)
+        wrappers = self._detect_format_wrappers(
+            index, result, target_syms, target_prefixes
+        )
         self._detect_info_leaks(index, result, target_syms)
         self._detect_fops(index, result, target_file, target_names)
         self._detect_lock_order(index, result, context_syms, target_file)
@@ -70,7 +75,9 @@ class PartialCandidateDetector:
         self._detect_stale_after_unlock(index, result, target_syms)
         self._detect_disable_stale(index, result, target_syms)
         self._detect_callback_lifetime(index, result, target_syms, target_prefixes)
-        self._detect_state_transition_protocol(index, result, target_syms, context, target_file)
+        self._detect_state_transition_protocol(
+            index, result, target_syms, context, target_file
+        )
         self._detect_protected_mmu_protocol(index, result, target_syms, context)
         self._detect_active_singleton_stale(index, result, target_syms, context)
         self._detect_mmu_recovery_rollback(index, result, target_syms, context)
@@ -92,7 +99,9 @@ class PartialCandidateDetector:
     def _node(self, index: SymbolIndex, sym: SymbolDef) -> FunctionNode:
         return _symbol_to_node(index, self._cb, sym, self._cache)
 
-    def _add_node(self, index: SymbolIndex, result: PartialDetectorResult, sym: SymbolDef | None):
+    def _add_node(
+        self, index: SymbolIndex, result: PartialDetectorResult, sym: SymbolDef | None
+    ):
         if sym:
             result.nodes.append(self._node(index, sym))
 
@@ -105,15 +114,21 @@ class PartialCandidateDetector:
             out.append(node)
         return out
 
-    def _symbol_for_function(self, index: SymbolIndex, file_path: str, name: str) -> SymbolDef | None:
+    def _symbol_for_function(
+        self, index: SymbolIndex, file_path: str, name: str
+    ) -> SymbolDef | None:
         return _lookup_symbol(index, file_path, name)
 
     def _context_symbols(self, index, context, target_syms):
         syms = {f"{sym.file_path}::{sym.name}": sym for sym in target_syms}
         for node in (
-            context.target_nodes + context.inbound_callers + context.outbound_callees
-            + context.shared_state_nodes + context.lifecycle_pair_nodes
-            + context.callback_nodes + context.companion_nodes
+            context.target_nodes
+            + context.inbound_callers
+            + context.outbound_callees
+            + context.shared_state_nodes
+            + context.lifecycle_pair_nodes
+            + context.callback_nodes
+            + context.companion_nodes
         ):
             sym = self._symbol_for_function(index, node.file_path, node.name)
             if sym:
@@ -134,12 +149,17 @@ class PartialCandidateDetector:
             for idx, (line_no, line) in enumerate(lines):
                 if not _STATE_FIELD_RE.search(line):
                     continue
-                later = lines[idx + 1:idx + 45]
-                error = next(((ln, txt) for ln, txt in later if _ERROR_PATH_RE.search(txt)), None)
+                later = lines[idx + 1 : idx + 45]
+                error = next(
+                    ((ln, txt) for ln, txt in later if _ERROR_PATH_RE.search(txt)), None
+                )
                 if not error:
                     continue
                 field = self._field_name_from_state_write(line)
-                rollback = any(_STATE_RESET_RE.search(txt) and field.lower() in txt.lower() for _, txt in later)
+                rollback = any(
+                    _STATE_RESET_RE.search(txt) and field.lower() in txt.lower()
+                    for _, txt in later
+                )
                 if rollback:
                     continue
                 result.state_publication_notes.append(
@@ -148,24 +168,50 @@ class PartialCandidateDetector:
                 )
                 self._add_node(index, result, sym)
                 for use in index.field_uses.get(field, [])[:30]:
-                    other = self._symbol_for_function(index, use.file_path, use.function_name)
+                    other = self._symbol_for_function(
+                        index, use.file_path, use.function_name
+                    )
                     if other and other.file_path != sym.file_path:
                         self._add_node(index, result, other)
-                for candidate in self._paired_lifecycle_symbols(index, sym.name, target_prefixes, {"disable", "shutdown", "term", "destroy", "unload"}):
+                for candidate in self._paired_lifecycle_symbols(
+                    index,
+                    sym.name,
+                    target_prefixes,
+                    {"disable", "shutdown", "term", "destroy", "unload"},
+                ):
                     self._add_node(index, result, candidate)
 
     def _detect_publish_rollback(self, index, result, target_syms):
-        rollback_names = {"rb_erase", "list_del", "hash_del", "unregister", "remove", "erase"}
+        rollback_names = {
+            "rb_erase",
+            "list_del",
+            "hash_del",
+            "unregister",
+            "remove",
+            "erase",
+        }
         for sym in target_syms:
             lines = self._lines(sym)
             for idx, (line_no, line) in enumerate(lines):
                 if not _PUBLISH_CALL_RE.search(line):
                     continue
-                later = lines[idx + 1:idx + 60]
-                error = next(((ln, txt) for ln, txt in later if _ERROR_PATH_RE.search(txt) or "capacity" in txt.lower() or "fail" in txt.lower()), None)
+                later = lines[idx + 1 : idx + 60]
+                error = next(
+                    (
+                        (ln, txt)
+                        for ln, txt in later
+                        if _ERROR_PATH_RE.search(txt)
+                        or "capacity" in txt.lower()
+                        or "fail" in txt.lower()
+                    ),
+                    None,
+                )
                 if not error:
                     continue
-                rollback = any(_ROLLBACK_CALL_RE.search(txt) for _, txt in later[:max(1, error[0] - line_no)])
+                rollback = any(
+                    _ROLLBACK_CALL_RE.search(txt)
+                    for _, txt in later[: max(1, error[0] - line_no)]
+                )
                 if rollback:
                     continue
                 result.publish_rollback_notes.append(
@@ -183,7 +229,7 @@ class PartialCandidateDetector:
             for idx, (line_no, line) in enumerate(lines):
                 if not _ALLOC_ARITH_RE.search(line):
                     continue
-                window = "\n".join(txt for _, txt in lines[max(0, idx - 6):idx + 4])
+                window = "\n".join(txt for _, txt in lines[max(0, idx - 6) : idx + 4])
                 if _OVERFLOW_GUARD_RE.search(window):
                     continue
                 result.allocation_arithmetic_notes.append(
@@ -195,12 +241,19 @@ class PartialCandidateDetector:
     def _detect_copy_contracts(self, index, result, target_syms):
         for sym in target_syms:
             guards = _symbol_guards(index, sym)
-            count_tokens = self._count_tokens_for_symbol(sym, _symbol_assignments(index, sym))
+            count_tokens = self._count_tokens_for_symbol(
+                sym, _symbol_assignments(index, sym)
+            )
             for use in _symbol_copy_uses(index, sym):
                 size_tokens = _fact_tokens(use.size_expr)
-                if not size_tokens & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS) and not self._copy_size_is_fixed(use.size_expr):
+                if not size_tokens & (
+                    _COUNT_SIZE_WORDS | _RESOURCE_WORDS
+                ) and not self._copy_size_is_fixed(use.size_expr):
                     continue
-                if self._copy_result_ignored(use) and (self._copy_size_is_fixed(use.size_expr) or size_tokens & _COUNT_SIZE_WORDS):
+                if self._copy_result_ignored(use) and (
+                    self._copy_size_is_fixed(use.size_expr)
+                    or size_tokens & _COUNT_SIZE_WORDS
+                ):
                     result.copy_contract_notes.append(
                         f"{sym.file_path}::{sym.name} line {use.line_number} calls {use.api} "
                         f"with size/count `{_short_expr(use.size_expr)}` but ignores short-copy/short-transfer result: "
@@ -212,7 +265,9 @@ class PartialCandidateDetector:
                     continue
                 if self._copy_has_nearby_guard(guards, use, count_tokens):
                     continue
-                if use.api in {"read", "write"} and not (size_tokens & _COUNT_SIZE_WORDS):
+                if use.api in {"read", "write"} and not (
+                    size_tokens & _COUNT_SIZE_WORDS
+                ):
                     continue
                 missing = self._copy_missing_guard_text(use, count_tokens)
                 result.copy_contract_notes.append(
@@ -223,14 +278,18 @@ class PartialCandidateDetector:
                 if len(result.copy_contract_notes) >= 20:
                     return
 
-    def _count_tokens_for_symbol(self, sym: SymbolDef, assignments: list[AssignmentFact]) -> set[str]:
+    def _count_tokens_for_symbol(
+        self, sym: SymbolDef, assignments: list[AssignmentFact]
+    ) -> set[str]:
         text = sym.signature
         for assign in assignments[:80]:
             text += f" {assign.target} {assign.value}"
         tokens = _fact_tokens(text)
         return tokens & _COUNT_SIZE_WORDS
 
-    def _copy_has_nearby_guard(self, guards: list[GuardFact], use: CopyUse, count_tokens: set[str]) -> bool:
+    def _copy_has_nearby_guard(
+        self, guards: list[GuardFact], use: CopyUse, count_tokens: set[str]
+    ) -> bool:
         size_tokens = _fact_tokens(use.size_expr)
         wanted = (size_tokens | count_tokens) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS)
         if not wanted and self._copy_size_is_fixed(use.size_expr):
@@ -243,7 +302,11 @@ class PartialCandidateDetector:
             guard_text = f"{guard.lhs} {guard.rhs}"
             if guard.token in wanted:
                 if self._copy_size_is_fixed(use.size_expr):
-                    if re.search(r"\bsizeof\s*\(|\bmin\s*\(|\bclamp\b", guard.line_text, re.IGNORECASE):
+                    if re.search(
+                        r"\bsizeof\s*\(|\bmin\s*\(|\bclamp\b",
+                        guard.line_text,
+                        re.IGNORECASE,
+                    ):
                         return True
                     if use.size_expr and _short_expr(use.size_expr) in guard_text:
                         return True
@@ -255,7 +318,9 @@ class PartialCandidateDetector:
 
     def _copy_size_is_fixed(self, expr: str) -> bool:
         expr_l = str(expr or "").lower()
-        return bool(re.search(r"\bsizeof\s*\(|^\s*\d+\s*$|^[A-Z0-9_]+$", expr_l, re.IGNORECASE))
+        return bool(
+            re.search(r"\bsizeof\s*\(|^\s*\d+\s*$|^[A-Z0-9_]+$", expr_l, re.IGNORECASE)
+        )
 
     def _copy_missing_guard_text(self, use: CopyUse, count_tokens: set[str]) -> str:
         if self._copy_size_is_fixed(use.size_expr) and count_tokens:
@@ -265,7 +330,15 @@ class PartialCandidateDetector:
         return "no nearby contract guard is visible"
 
     def _copy_result_ignored(self, use: CopyUse) -> bool:
-        if use.api not in {"copy_to_user", "copy_from_user", "copy_in_user", "read", "write", "kernel_read", "kernel_write"}:
+        if use.api not in {
+            "copy_to_user",
+            "copy_from_user",
+            "copy_in_user",
+            "read",
+            "write",
+            "kernel_read",
+            "kernel_write",
+        }:
             return False
         prefix = use.line_text.split(use.api, 1)[0]
         if re.search(r"\b(?:if|return|ret|err|rc|res|copied|remaining)\b", prefix):
@@ -287,7 +360,8 @@ class PartialCandidateDetector:
                 if not expected:
                     continue
                 later_releases = [
-                    rel for rel in releases
+                    rel
+                    for rel in releases
                     if rel.line_number > acquire.line_number and rel.action in expected
                 ]
                 for exit_fact in exits:
@@ -295,7 +369,10 @@ class PartialCandidateDetector:
                         continue
                     if exit_fact.line_number - acquire.line_number > 90:
                         continue
-                    if any(acquire.line_number < rel.line_number < exit_fact.line_number for rel in later_releases):
+                    if any(
+                        acquire.line_number < rel.line_number < exit_fact.line_number
+                        for rel in later_releases
+                    ):
                         continue
                     if "goto" in exit_fact.line_text.lower() and later_releases:
                         continue
@@ -332,14 +409,18 @@ class PartialCandidateDetector:
             for inc in incs[:20]:
                 resource_tokens = _fact_tokens(inc.resource)
                 matching_decs = [
-                    dec for dec in decs
+                    dec
+                    for dec in decs
                     if resource_tokens & _fact_tokens(dec.resource)
                     and dec.line_number > inc.line_number
                 ]
                 for exit_fact in exits:
                     if exit_fact.line_number <= inc.line_number:
                         continue
-                    if any(inc.line_number < dec.line_number < exit_fact.line_number for dec in matching_decs):
+                    if any(
+                        inc.line_number < dec.line_number < exit_fact.line_number
+                        for dec in matching_decs
+                    ):
                         continue
                     result.accounting_drift_notes.append(
                         f"{sym.file_path}::{sym.name} line {inc.line_number} updates counter/resource "
@@ -353,7 +434,11 @@ class PartialCandidateDetector:
 
     def _detect_arithmetic_chain_mismatch(self, index, result, target_syms):
         for sym in target_syms:
-            assigns = [assign for assign in _symbol_assignments(index, sym) if assign.is_arithmetic]
+            assigns = [
+                assign
+                for assign in _symbol_assignments(index, sym)
+                if assign.is_arithmetic
+            ]
             formulas = _symbol_formula_facts(index, sym)
             if len(assigns) < 1 and len(formulas) < 1:
                 continue
@@ -370,7 +455,9 @@ class PartialCandidateDetector:
                 for sink in sinks
             )
             for assign in assigns[:20]:
-                assign_tokens = set(assign.tokens) | (_fact_tokens(assign.value) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS))
+                assign_tokens = set(assign.tokens) | (
+                    _fact_tokens(assign.value) & (_COUNT_SIZE_WORDS | _RESOURCE_WORDS)
+                )
                 if not assign_tokens:
                     continue
                 for line_no, expr, line_text, api in consumers[:30]:
@@ -396,7 +483,9 @@ class PartialCandidateDetector:
                     break
             for producer in formulas[:20]:
                 producer_tokens = set(producer.tokens)
-                if not producer_tokens or not {"mul", "shift", "round"} & set(producer.operators):
+                if not producer_tokens or not {"mul", "shift", "round"} & set(
+                    producer.operators
+                ):
                     continue
                 for consumer in formulas[:30]:
                     if consumer.line_number <= producer.line_number:
@@ -406,9 +495,14 @@ class PartialCandidateDetector:
                         continue
                     if producer.normalized == consumer.normalized:
                         continue
-                    if set(producer.operators) == set(consumer.operators) and "sizeof" in producer.operators:
+                    if (
+                        set(producer.operators) == set(consumer.operators)
+                        and "sizeof" in producer.operators
+                    ):
                         continue
-                    if self._has_formula_consistency_guard(guards, producer, consumer.line_number):
+                    if self._has_formula_consistency_guard(
+                        guards, producer, consumer.line_number
+                    ):
                         continue
                     result.arithmetic_chain_notes.append(
                         f"{sym.file_path}::{sym.name} line {producer.line_number} derives `{producer.target} = {_short_expr(producer.expr)}` "
@@ -424,21 +518,45 @@ class PartialCandidateDetector:
     def _same_arithmetic_expr(self, a: str, b: str) -> bool:
         ta = _fact_tokens(a)
         tb = _fact_tokens(b)
-        return bool(ta and tb and ta == tb and _ARITH_EXPR_RE.search(a) and _ARITH_EXPR_RE.search(b))
+        return bool(
+            ta
+            and tb
+            and ta == tb
+            and _ARITH_EXPR_RE.search(a)
+            and _ARITH_EXPR_RE.search(b)
+        )
 
-    def _has_consistency_guard(self, guards: list[GuardFact], assign: AssignmentFact, consumer_line: int) -> bool:
-        assign_tokens = set(assign.tokens) | _fact_tokens(assign.target) | _fact_tokens(assign.value)
+    def _has_consistency_guard(
+        self, guards: list[GuardFact], assign: AssignmentFact, consumer_line: int
+    ) -> bool:
+        assign_tokens = (
+            set(assign.tokens)
+            | _fact_tokens(assign.target)
+            | _fact_tokens(assign.value)
+        )
         for guard in guards:
-            if guard.line_number < assign.line_number or guard.line_number > consumer_line:
+            if (
+                guard.line_number < assign.line_number
+                or guard.line_number > consumer_line
+            ):
                 continue
             if guard.token in assign_tokens:
                 return True
         return False
 
-    def _has_formula_consistency_guard(self, guards: list[GuardFact], formula: FormulaFact, consumer_line: int) -> bool:
-        tokens = set(formula.tokens) | _fact_tokens(formula.target) | _fact_tokens(formula.expr)
+    def _has_formula_consistency_guard(
+        self, guards: list[GuardFact], formula: FormulaFact, consumer_line: int
+    ) -> bool:
+        tokens = (
+            set(formula.tokens)
+            | _fact_tokens(formula.target)
+            | _fact_tokens(formula.expr)
+        )
         for guard in guards:
-            if guard.line_number < formula.line_number or guard.line_number > consumer_line:
+            if (
+                guard.line_number < formula.line_number
+                or guard.line_number > consumer_line
+            ):
                 continue
             if guard.token in tokens and guard.op in {"<", "<=", ">", ">=", "=="}:
                 return True
@@ -448,30 +566,51 @@ class PartialCandidateDetector:
         for sym in target_syms:
             assigns = _symbol_assignments(index, sym)
             resource_assigns = [
-                assign for assign in assigns
-                if set(assign.tokens) & _RESOURCE_WORDS
+                assign for assign in assigns if set(assign.tokens) & _RESOURCE_WORDS
             ]
             state_assigns = [
-                assign for assign in assigns
+                assign
+                for assign in assigns
                 if set(assign.tokens) & _TRANSITION_TOKENS
                 or _STATE_FIELD_RE.search(assign.line_text)
             ]
             if not resource_assigns and not state_assigns:
                 continue
-            self._detect_enable_before_bind(index, result, sym, resource_assigns, state_assigns)
-            self._detect_disable_leaves_resource(index, result, sym, resource_assigns, state_assigns)
+            self._detect_enable_before_bind(
+                index, result, sym, resource_assigns, state_assigns
+            )
+            self._detect_disable_leaves_resource(
+                index, result, sym, resource_assigns, state_assigns
+            )
             if len(result.resource_binding_notes) >= 20:
                 return
 
-    def _detect_enable_before_bind(self, index, result, sym, resource_assigns, state_assigns):
-        if not _name_has_any(sym.name, {"enable", "start", "enter", "resume", "init", "setup"}):
+    def _detect_enable_before_bind(
+        self, index, result, sym, resource_assigns, state_assigns
+    ):
+        if not _name_has_any(
+            sym.name, {"enable", "start", "enter", "resume", "init", "setup"}
+        ):
             return
-        first_resource = min((assign.line_number for assign in resource_assigns), default=0)
+        first_resource = min(
+            (assign.line_number for assign in resource_assigns), default=0
+        )
         for state in state_assigns:
-            if not re.search(r"\b(?:1|true|TRUE|ON|ACTIVE|READY|ENABLED|POWERED)\b", state.value, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:1|true|TRUE|ON|ACTIVE|READY|ENABLED|POWERED)\b",
+                state.value,
+                re.IGNORECASE,
+            ):
                 continue
             if first_resource and state.line_number < first_resource:
-                resource = next((assign for assign in resource_assigns if assign.line_number == first_resource), None)
+                resource = next(
+                    (
+                        assign
+                        for assign in resource_assigns
+                        if assign.line_number == first_resource
+                    ),
+                    None,
+                )
                 result.resource_binding_notes.append(
                     f"{sym.file_path}::{sym.name} line {state.line_number} publishes state "
                     f"`{_line_excerpt(state.line_text)}` before resource binding line {first_resource} "
@@ -480,16 +619,34 @@ class PartialCandidateDetector:
                 self._add_node(index, result, sym)
                 return
 
-    def _detect_disable_leaves_resource(self, index, result, sym, resource_assigns, state_assigns):
-        if not _name_has_any(sym.name, {"disable", "stop", "clear", "term", "shutdown", "release", "reset"}):
+    def _detect_disable_leaves_resource(
+        self, index, result, sym, resource_assigns, state_assigns
+    ):
+        if not _name_has_any(
+            sym.name,
+            {"disable", "stop", "clear", "term", "shutdown", "release", "reset"},
+        ):
             return
-        clears_state = any(_STATE_RESET_RE.search(assign.line_text) for assign in state_assigns)
+        clears_state = any(
+            _STATE_RESET_RE.search(assign.line_text) for assign in state_assigns
+        )
         if not clears_state or not resource_assigns:
             return
-        clears_resource = any(_NULL_CLEAR_RE.search(assign.value) for assign in resource_assigns)
+        clears_resource = any(
+            _NULL_CLEAR_RE.search(assign.value) for assign in resource_assigns
+        )
         if clears_resource:
             return
-        resources = ", ".join(sorted({token for assign in resource_assigns for token in assign.tokens if token in _RESOURCE_WORDS})[:4])
+        resources = ", ".join(
+            sorted(
+                {
+                    token
+                    for assign in resource_assigns
+                    for token in assign.tokens
+                    if token in _RESOURCE_WORDS
+                }
+            )[:4]
+        )
         result.resource_binding_notes.append(
             f"{sym.file_path}::{sym.name} clears/tears down state but leaves paired resource token(s) "
             f"{resources or 'resource'} without a visible NULL/invalid reset."
@@ -497,7 +654,15 @@ class PartialCandidateDetector:
         self._add_node(index, result, sym)
 
     def _detect_resource_validation_order(self, index, result, target_syms):
-        liveness_tokens = {"enable", "enabled", "alive", "terminated", "terminating", "stopped", "active"}
+        liveness_tokens = {
+            "enable",
+            "enabled",
+            "alive",
+            "terminated",
+            "terminating",
+            "stopped",
+            "active",
+        }
         for sym in target_syms:
             name_l = sym.name.lower()
             if not (
@@ -508,26 +673,48 @@ class PartialCandidateDetector:
                 continue
             events = _symbol_event_facts(index, sym)
             binds = [
-                event for event in events
+                event
+                for event in events
                 if event.kind == "resource_bind"
                 and event.token in {"doorbell", "queue", "gpu_va"}
-                and re.search(r"\b(?:doorbell|real|hw|hardware|gpu_va|program|assign|queue)\b", event.line_text, re.IGNORECASE)
+                and re.search(
+                    r"\b(?:doorbell|real|hw|hardware|gpu_va|program|assign|queue)\b",
+                    event.line_text,
+                    re.IGNORECASE,
+                )
             ]
             validations = [
-                event for event in events
-                if event.kind == "validation" and event.token in liveness_tokens
-                and re.search(r"\b(?:enabled?|alive|terminated|terminating|stopped|active)\b", event.line_text, re.IGNORECASE)
+                event
+                for event in events
+                if event.kind == "validation"
+                and event.token in liveness_tokens
+                and re.search(
+                    r"\b(?:enabled?|alive|terminated|terminating|stopped|active)\b",
+                    event.line_text,
+                    re.IGNORECASE,
+                )
             ]
             if binds:
                 for bind in binds[:10]:
-                    later_validation = next((event for event in validations if event.line_number > bind.line_number), None)
-                    prior_final_validation = any(0 <= bind.line_number - event.line_number <= 6 for event in validations)
+                    later_validation = next(
+                        (
+                            event
+                            for event in validations
+                            if event.line_number > bind.line_number
+                        ),
+                        None,
+                    )
+                    prior_final_validation = any(
+                        0 <= bind.line_number - event.line_number <= 6
+                        for event in validations
+                    )
                     if not later_validation and prior_final_validation:
                         continue
                     validation_text = (
                         f"before final liveness validation line {later_validation.line_number} "
                         f"`{_line_excerpt(later_validation.line_text)}`"
-                        if later_validation else "without a nearby queue enabled/alive/not-terminated validation"
+                        if later_validation
+                        else "without a nearby queue enabled/alive/not-terminated validation"
                     )
                     result.resource_validation_notes.append(
                         f"{sym.file_path}::{sym.name} line {bind.line_number} binds real resource `{_line_excerpt(bind.line_text)}` "
@@ -540,7 +727,9 @@ class PartialCandidateDetector:
             if len(result.resource_validation_notes) >= 12:
                 return
 
-    def _detect_doorbell_liveness_order(self, index, result, sym: SymbolDef, liveness_tokens: set[str]):
+    def _detect_doorbell_liveness_order(
+        self, index, result, sym: SymbolDef, liveness_tokens: set[str]
+    ):
         name_l = sym.name.lower()
         lines = self._lines(sym)
         body_text = "\n".join(line for _, line in lines)
@@ -549,33 +738,61 @@ class PartialCandidateDetector:
             and (
                 "program_cs" in name_l
                 or "assign_user_doorbell" in name_l
-                or _name_has_any(sym.name, {"assign", "doorbell", "queue", "program", "bind"})
+                or _name_has_any(
+                    sym.name, {"assign", "doorbell", "queue", "program", "bind"}
+                )
             )
         ):
             return
-        bind_line = next((
-            (line_no, line) for line_no, line in lines
-            if _DOORBELL_BIND_RE.search(line)
-            and not re.search(r"\b(?:if|return|WARN_ON|BUG_ON)\b", line)
-            and re.search(r"\b(?:=|assign|program|map|bind|write|doorbell)\b", line, re.IGNORECASE)
-        ), None)
+        bind_line = next(
+            (
+                (line_no, line)
+                for line_no, line in lines
+                if _DOORBELL_BIND_RE.search(line)
+                and not re.search(r"\b(?:if|return|WARN_ON|BUG_ON)\b", line)
+                and re.search(
+                    r"\b(?:=|assign|program|map|bind|write|doorbell)\b",
+                    line,
+                    re.IGNORECASE,
+                )
+            ),
+            None,
+        )
         if not bind_line:
             return
         validations = [
-            (line_no, line) for line_no, line in lines
+            (line_no, line)
+            for line_no, line in lines
             if (
-                (_QUEUE_LIVENESS_RE.search(line) or (_fact_tokens(line) & liveness_tokens))
+                (
+                    _QUEUE_LIVENESS_RE.search(line)
+                    or (_fact_tokens(line) & liveness_tokens)
+                )
                 and re.search(r"\b(?:if|WARN_ON|BUG_ON|return|goto)\b", line)
-                and re.search(r"\b(?:queue|doorbell|enabled?|alive|terminat(?:ed|ing)|stopped|active)\b", line, re.IGNORECASE)
+                and re.search(
+                    r"\b(?:queue|doorbell|enabled?|alive|terminat(?:ed|ing)|stopped|active)\b",
+                    line,
+                    re.IGNORECASE,
+                )
             )
         ]
-        prior_final = any(0 <= bind_line[0] - line_no <= 8 for line_no, _ in validations)
-        later = next(((line_no, line) for line_no, line in validations if line_no > bind_line[0]), None)
+        prior_final = any(
+            0 <= bind_line[0] - line_no <= 8 for line_no, _ in validations
+        )
+        later = next(
+            (
+                (line_no, line)
+                for line_no, line in validations
+                if line_no > bind_line[0]
+            ),
+            None,
+        )
         if prior_final and not later:
             return
         validation_text = (
             f"before later liveness predicate line {later[0]} `{_line_excerpt(later[1])}`"
-            if later else "without a nearby final queue enabled/alive/not-terminated predicate"
+            if later
+            else "without a nearby final queue enabled/alive/not-terminated predicate"
         )
         result.resource_validation_notes.append(
             f"{sym.file_path}::{sym.name} line {bind_line[0]} assigns/programs a real hardware doorbell "
@@ -595,28 +812,49 @@ class PartialCandidateDetector:
             if not (name_tokens & event_family):
                 continue
             events = _symbol_event_facts(index, sym)
-            clears = [event for event in events if event.kind == "async_clear" and event.token in event_family]
-            schedules = [event for event in events if event.kind == "async_schedule" and event.token in event_family]
+            clears = [
+                event
+                for event in events
+                if event.kind == "async_clear" and event.token in event_family
+            ]
+            schedules = [
+                event
+                for event in events
+                if event.kind == "async_schedule" and event.token in event_family
+            ]
             if not clears or not schedules:
                 continue
             locks = _symbol_locks(index, sym)
             for schedule in schedules[:8]:
                 nearby_clears = [
-                    clear for clear in clears
+                    clear
+                    for clear in clears
                     if abs(clear.line_number - schedule.line_number) <= 16
-                    and (clear.token == schedule.token or {clear.token, schedule.token} & {"fault", "irq", "interrupt"})
+                    and (
+                        clear.token == schedule.token
+                        or {clear.token, schedule.token} & {"fault", "irq", "interrupt"}
+                    )
                 ]
                 for clear in nearby_clears:
                     start, end = sorted((clear.line_number, schedule.line_number))
                     window = "\n".join(
-                        line for line_no, line in self._lines(sym)
+                        line
+                        for line_no, line in self._lines(sym)
                         if start <= line_no <= end + 10
                     )
-                    if re.search(r"\b(?:handled|complete|done|processed|synchronize_irq|flush_work|cancel_work_sync)\b", window, re.IGNORECASE):
+                    if re.search(
+                        r"\b(?:handled|complete|done|processed|synchronize_irq|flush_work|cancel_work_sync)\b",
+                        window,
+                        re.IGNORECASE,
+                    ):
                         continue
                     if locks and re.search(r"\b(?:mutex_lock|spin_lock)", window):
                         continue
-                    if re.search(r"\b(?:pm_runtime|power|clock|clk|regulator)\b", window, re.IGNORECASE):
+                    if re.search(
+                        r"\b(?:pm_runtime|power|clock|clk|regulator)\b",
+                        window,
+                        re.IGNORECASE,
+                    ):
                         continue
                     result.async_order_notes.append(
                         f"{sym.file_path}::{sym.name} schedules async handling at line {schedule.line_number} "
@@ -630,8 +868,10 @@ class PartialCandidateDetector:
     def _detect_fault_clear_order(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
         workers = [
-            sym for sym in context_syms
-            if _fact_tokens(sym.name) & {"fault", "work", "worker", "handler", "irq", "interrupt"}
+            sym
+            for sym in context_syms
+            if _fact_tokens(sym.name)
+            & {"fault", "work", "worker", "handler", "irq", "interrupt"}
             and "fault" in _fact_tokens(self._body_text(sym)[:8000])
         ][:32]
         for sym in target_syms:
@@ -639,28 +879,56 @@ class PartialCandidateDetector:
             if not (_fact_tokens(sym_text) & {"fault", "irq", "interrupt"}):
                 continue
             lines = self._lines(sym)
-            clear_line = next(((line_no, line) for line_no, line in lines if _FAULT_CLEAR_RE.search(line)), None)
+            clear_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _FAULT_CLEAR_RE.search(line)
+                ),
+                None,
+            )
             if not clear_line:
                 continue
-            schedule_line = next((
-                (line_no, line) for line_no, line in lines
-                if line_no >= clear_line[0] - 12
-                and line_no <= clear_line[0] + 24
-                and _ASYNC_SCHEDULE_RE.search(line)
-                and re.search(r"\b(?:fault|irq|interrupt|work|worker)\b", line, re.IGNORECASE)
-            ), None)
-            worker = next((candidate for candidate in workers if candidate.file_path != sym.file_path), None)
+            schedule_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if line_no >= clear_line[0] - 12
+                    and line_no <= clear_line[0] + 24
+                    and _ASYNC_SCHEDULE_RE.search(line)
+                    and re.search(
+                        r"\b(?:fault|irq|interrupt|work|worker)\b", line, re.IGNORECASE
+                    )
+                ),
+                None,
+            )
+            worker = next(
+                (
+                    candidate
+                    for candidate in workers
+                    if candidate.file_path != sym.file_path
+                ),
+                None,
+            )
             if not schedule_line and not worker:
                 continue
             window = "\n".join(
-                line for line_no, line in lines
-                if clear_line[0] <= line_no <= min(clear_line[0] + 24, sym.body_end or clear_line[0] + 24)
+                line
+                for line_no, line in lines
+                if clear_line[0]
+                <= line_no
+                <= min(clear_line[0] + 24, sym.body_end or clear_line[0] + 24)
             )
-            if re.search(r"\b(?:fault_handled|handled|processed|complete|flush_work|cancel_work_sync|synchronize_irq)\b", window, re.IGNORECASE):
+            if re.search(
+                r"\b(?:fault_handled|handled|processed|complete|flush_work|cancel_work_sync|synchronize_irq)\b",
+                window,
+                re.IGNORECASE,
+            ):
                 continue
             note_tail = (
                 f"scheduled async consumer line {schedule_line[0]} `{_line_excerpt(schedule_line[1])}`"
-                if schedule_line else f"selected async consumer {worker.file_path}::{worker.name}"
+                if schedule_line
+                else f"selected async consumer {worker.file_path}::{worker.name}"
             )
             result.fault_clear_order_notes.append(
                 f"{sym.file_path}::{sym.name} line {clear_line[0]} clears/acks fault state "
@@ -677,23 +945,41 @@ class PartialCandidateDetector:
         for sym in target_syms:
             events = _symbol_event_facts(index, sym)
             removes = [event for event in events if event.kind == "tracker_remove"]
-            invalidates = [event for event in events if event.kind == "tracker_invalidate"]
+            invalidates = [
+                event for event in events if event.kind == "tracker_invalidate"
+            ]
             if not removes:
                 continue
             lines = self._lines(sym)
             for remove in removes[:8]:
                 later_invalidate = any(
-                    0 < inv.line_number - remove.line_number <= 12 for inv in invalidates
+                    0 < inv.line_number - remove.line_number <= 12
+                    for inv in invalidates
                 )
-                later_remove = next((event for event in removes if event.line_number > remove.line_number), None)
+                later_remove = next(
+                    (
+                        event
+                        for event in removes
+                        if event.line_number > remove.line_number
+                    ),
+                    None,
+                )
                 if later_invalidate:
                     continue
-                stale_state_line = next((
-                    (line_no, line) for line_no, line in lines
-                    if line_no > remove.line_number
-                    and line_no - remove.line_number <= 18
-                    and re.search(r"\b(?:start_pfn|inserted|tracker|node|rbtree|rb_node)\b", line, re.IGNORECASE)
-                ), None)
+                stale_state_line = next(
+                    (
+                        (line_no, line)
+                        for line_no, line in lines
+                        if line_no > remove.line_number
+                        and line_no - remove.line_number <= 18
+                        and re.search(
+                            r"\b(?:start_pfn|inserted|tracker|node|rbtree|rb_node)\b",
+                            line,
+                            re.IGNORECASE,
+                        )
+                    ),
+                    None,
+                )
                 if not stale_state_line and not later_remove:
                     continue
                 result.stale_tracker_notes.append(
@@ -707,32 +993,69 @@ class PartialCandidateDetector:
 
     def _detect_region_replace_erase(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
-        free_companion = next((
-            sym for sym in context_syms
-            if sym.file_path not in {target.file_path for target in target_syms}
-            and re.search(r"\b(?:region_refcnt_free|free|release)\b", f"{sym.name} {self._body_text(sym)[:8000]}", re.IGNORECASE)
-            and "region" in _fact_tokens(f"{sym.name} {self._body_text(sym)[:4000]}")
-        ), None)
+        free_companion = next(
+            (
+                sym
+                for sym in context_syms
+                if sym.file_path not in {target.file_path for target in target_syms}
+                and re.search(
+                    r"\b(?:region_refcnt_free|free|release)\b",
+                    f"{sym.name} {self._body_text(sym)[:8000]}",
+                    re.IGNORECASE,
+                )
+                and "region"
+                in _fact_tokens(f"{sym.name} {self._body_text(sym)[:4000]}")
+            ),
+            None,
+        )
         for sym in target_syms:
             body = self._body_text(sym)[:18000]
-            if not (_REGION_REPLACE_RE.search(body) and _name_has_any(sym.name, {"region", "remove", "replace", "merge", "insert"})):
+            if not (
+                _REGION_REPLACE_RE.search(body)
+                and _name_has_any(
+                    sym.name, {"region", "remove", "replace", "merge", "insert"}
+                )
+            ):
                 continue
-            if not re.search(r"\b(?:ENOMEM|alloc|new|replace|exact|merge|split)\b", body, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:ENOMEM|alloc|new|replace|exact|merge|split)\b",
+                body,
+                re.IGNORECASE,
+            ):
                 continue
             lines = self._lines(sym)
-            failure = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:ENOMEM|ERR_PTR|return\s+-ENOMEM|goto\s+(?:err|fail|out))\b", line, re.IGNORECASE)
-            ), None)
-            free_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:region_refcnt_free|kbase_free_alloced_region|free|kfree)\w*\s*\(", line, re.IGNORECASE)
-            ), None)
+            failure = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:ENOMEM|ERR_PTR|return\s+-ENOMEM|goto\s+(?:err|fail|out))\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
+            free_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:region_refcnt_free|kbase_free_alloced_region|free|kfree)\w*\s*\(",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not failure or not free_line:
                 continue
             path_window = "\n".join(
-                line for line_no, line in lines
-                if min(failure[0], free_line[0]) <= line_no <= max(failure[0], free_line[0])
+                line
+                for line_no, line in lines
+                if min(failure[0], free_line[0])
+                <= line_no
+                <= max(failure[0], free_line[0])
             )
             exact_replacement_path = re.search(
                 r"\b(?:ENOMEM|replace|replacement|exact|descriptor|alloc|merge)\b",
@@ -771,22 +1094,38 @@ class PartialCandidateDetector:
             lines = self._lines(sym)
             for cast in casts[:8]:
                 cast_text = f"{cast.target_type} {cast.source} {cast.line_text} {sym.name}".lower()
-                if not ("page_private" in cast_text or "folio_get_private" in cast_text):
+                if not (
+                    "page_private" in cast_text or "folio_get_private" in cast_text
+                ):
                     continue
-                if not re.search(r"\b(?:kbase_page_metadata|page_metadata|metadata)\b", cast_text):
+                if not re.search(
+                    r"\b(?:kbase_page_metadata|page_metadata|metadata)\b", cast_text
+                ):
                     continue
-                deref = next((
-                    (line_no, line) for line_no, line in lines
-                    if 0 < line_no - cast.line_number <= 10
-                    and re.search(r"\b" + re.escape(cast.target) + r"\s*(?:->|\.)", line)
-                ), None)
+                deref = next(
+                    (
+                        (line_no, line)
+                        for line_no, line in lines
+                        if 0 < line_no - cast.line_number <= 10
+                        and re.search(
+                            r"\b" + re.escape(cast.target) + r"\s*(?:->|\.)", line
+                        )
+                    ),
+                    None,
+                )
                 if not deref:
                     continue
                 context_text = "\n".join(
-                    line for line_no, line in lines
-                    if max(sym.line_number, cast.line_number - 8) <= line_no <= cast.line_number + 14
+                    line
+                    for line_no, line in lines
+                    if max(sym.line_number, cast.line_number - 8)
+                    <= line_no
+                    <= cast.line_number + 14
                 ).lower()
-                if not re.search(r"\b(?:huge|2mb|2m|migration|recover|recovery|cleanup|metadata|page_private)\b", context_text):
+                if not re.search(
+                    r"\b(?:huge|2mb|2m|migration|recover|recovery|cleanup|metadata|page_private)\b",
+                    context_text,
+                ):
                     continue
                 result.metadata_type_confusion_notes.append(
                     f"{sym.file_path}::{sym.name} line {cast.line_number} reinterprets opaque metadata "
@@ -797,30 +1136,45 @@ class PartialCandidateDetector:
                 if len(result.metadata_type_confusion_notes) >= 10:
                     return
 
-    def _detect_direct_page_private_metadata_cast(self, index, result, sym: SymbolDef) -> bool:
+    def _detect_direct_page_private_metadata_cast(
+        self, index, result, sym: SymbolDef
+    ) -> bool:
         lines = self._lines(sym)
         for line_no, line in lines:
             if not (
                 re.search(r"\bpage_private\s*\(", line)
                 and re.search(r"\bkbase_page_metadata\b|page_metadata", line)
-                and re.search(r"\(\s*(?:struct\s+)?[A-Za-z_]*page_metadata[A-Za-z0-9_\s]*\*", line)
+                and re.search(
+                    r"\(\s*(?:struct\s+)?[A-Za-z_]*page_metadata[A-Za-z0-9_\s]*\*", line
+                )
             ):
                 continue
-            match = re.search(r"(?:struct\s+\w+\s*\*\s*)?(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            match = re.search(
+                r"(?:struct\s+\w+\s*\*\s*)?(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=", line
+            )
             target = match.group("target") if match else ""
-            deref = next((
-                (later_no, later) for later_no, later in lines
-                if 0 < later_no - line_no <= 14
-                and target
-                and re.search(r"\b" + re.escape(target) + r"\s*(?:->|\.)", later)
-            ), None)
+            deref = next(
+                (
+                    (later_no, later)
+                    for later_no, later in lines
+                    if 0 < later_no - line_no <= 14
+                    and target
+                    and re.search(r"\b" + re.escape(target) + r"\s*(?:->|\.)", later)
+                ),
+                None,
+            )
             if not deref:
                 continue
             context_text = "\n".join(
-                later for later_no, later in lines
+                later
+                for later_no, later in lines
                 if max(sym.line_number, line_no - 10) <= later_no <= line_no + 18
             )
-            if not re.search(r"\b(?:huge|2mb|2m|migration|recover|recovery|dma_addr_t|page_private|compound)\b", context_text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:huge|2mb|2m|migration|recover|recovery|dma_addr_t|page_private|compound)\b",
+                context_text,
+                re.IGNORECASE,
+            ):
                 continue
             result.metadata_type_confusion_notes.append(
                 f"{sym.file_path}::{sym.name} line {line_no} casts opaque page_private metadata "
@@ -834,19 +1188,31 @@ class PartialCandidateDetector:
     def _detect_pm_runtime_sequence(self, index, result, target_syms):
         for sym in target_syms:
             events = _symbol_event_facts(index, sym)
-            sensitive = [event for event in events if event.kind == "pm_sensitive_action"]
+            sensitive = [
+                event for event in events if event.kind == "pm_sensitive_action"
+            ]
             runtime_gets = [event for event in events if event.kind == "pm_runtime_get"]
             if not sensitive:
                 continue
             first_get = min((event.line_number for event in runtime_gets), default=0)
             name_l = sym.name.lower()
-            pm_name = _name_has_any(sym.name, {"pm", "power", "runtime", "clock", "clk", "resume", "gpu"})
+            pm_name = _name_has_any(
+                sym.name, {"pm", "power", "runtime", "clock", "clk", "resume", "gpu"}
+            )
             power_control = [
-                event for event in sensitive
-                if re.search(r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(", event.line_text)
+                event
+                for event in sensitive
+                if re.search(
+                    r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(",
+                    event.line_text,
+                )
             ]
             if "runtime_on" in name_l or ("runtime" in name_l and "resume" in name_l):
-                duplicate_enable = [event for event in power_control if "enable_gpu_power_control" in event.line_text]
+                duplicate_enable = [
+                    event
+                    for event in power_control
+                    if "enable_gpu_power_control" in event.line_text
+                ]
                 if len(duplicate_enable) >= 1 and not _symbol_locks(index, sym):
                     event = duplicate_enable[0]
                     result.pm_sequence_notes.append(
@@ -858,8 +1224,16 @@ class PartialCandidateDetector:
                         return
                     continue
             if "runtime_off" in name_l or ("runtime" in name_l and "suspend" in name_l):
-                disable = [event for event in power_control if "disable_gpu_power_control" in event.line_text]
-                enable = [event for event in power_control if "enable_gpu_power_control" in event.line_text]
+                disable = [
+                    event
+                    for event in power_control
+                    if "disable_gpu_power_control" in event.line_text
+                ]
+                enable = [
+                    event
+                    for event in power_control
+                    if "enable_gpu_power_control" in event.line_text
+                ]
                 if enable or (len(disable) > 1 and not _symbol_locks(index, sym)):
                     event = (enable or disable)[0]
                     result.pm_sequence_notes.append(
@@ -885,33 +1259,66 @@ class PartialCandidateDetector:
 
     def _detect_pm_callback_order(self, index, result, target_syms):
         power_owner = [
-            sym for sym in target_syms
+            sym
+            for sym in target_syms
             if re.search(r"pm_callback_power_(?:on|off)", sym.name, re.IGNORECASE)
-            and re.search(r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(", self._body_text(sym), re.IGNORECASE)
+            and re.search(
+                r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(",
+                self._body_text(sym),
+                re.IGNORECASE,
+            )
         ]
         for sym in target_syms:
             name_l = sym.name.lower()
             if not (
                 "pm_callback" in name_l
-                or ("runtime" in name_l and ("on" in name_l or "off" in name_l or "resume" in name_l or "suspend" in name_l))
+                or (
+                    "runtime" in name_l
+                    and (
+                        "on" in name_l
+                        or "off" in name_l
+                        or "resume" in name_l
+                        or "suspend" in name_l
+                    )
+                )
                 or ("power" in name_l and ("on" in name_l or "off" in name_l))
             ):
                 continue
             lines = self._lines(sym)
-            runtime_get = next(((line_no, line) for line_no, line in lines if _PM_RUNTIME_API_RE.search(line)), None)
-            runtime_put = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:pm_runtime_put|pm_runtime_put_sync|pm_runtime_put_autosuspend)\w*\s*\(", line)
-            ), None)
+            runtime_get = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _PM_RUNTIME_API_RE.search(line)
+                ),
+                None,
+            )
+            runtime_put = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:pm_runtime_put|pm_runtime_put_sync|pm_runtime_put_autosuspend)\w*\s*\(",
+                        line,
+                    )
+                ),
+                None,
+            )
             power_lines = [
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(", line)
+                (line_no, line)
+                for line_no, line in lines
+                if re.search(
+                    r"\b(?:enable_gpu_power_control|disable_gpu_power_control)\s*\(",
+                    line,
+                )
             ]
             if not power_lines:
                 continue
             first_power = power_lines[0]
             if "runtime" in name_l and power_owner:
-                owner_names = ", ".join(f"{owner.file_path}::{owner.name}" for owner in power_owner[:2])
+                owner_names = ", ".join(
+                    f"{owner.file_path}::{owner.name}" for owner in power_owner[:2]
+                )
                 result.pm_callback_order_notes.append(
                     f"{sym.file_path}::{sym.name} line {first_power[0]} performs runtime-callback GPU power-control "
                     f"`{_line_excerpt(first_power[1])}` while power callback path(s) {owner_names} also own "
@@ -923,7 +1330,9 @@ class PartialCandidateDetector:
                 if len(result.pm_callback_order_notes) >= 8:
                     return
                 continue
-            if "enable_gpu_power_control" in first_power[1] and (not runtime_get or first_power[0] < runtime_get[0]):
+            if "enable_gpu_power_control" in first_power[1] and (
+                not runtime_get or first_power[0] < runtime_get[0]
+            ):
                 result.pm_callback_order_notes.append(
                     f"{sym.file_path}::{sym.name} line {first_power[0]} enables GPU power control "
                     f"`{_line_excerpt(first_power[1])}` before a visible successful runtime-PM ownership point"
@@ -934,9 +1343,15 @@ class PartialCandidateDetector:
                     return
                 continue
             if "runtime" in name_l and ("off" in name_l or "suspend" in name_l):
-                disable_count = sum(1 for _, line in power_lines if "disable_gpu_power_control" in line)
-                enable_count = sum(1 for _, line in power_lines if "enable_gpu_power_control" in line)
-                if enable_count or (disable_count > 1 and not _symbol_locks(index, sym)):
+                disable_count = sum(
+                    1 for _, line in power_lines if "disable_gpu_power_control" in line
+                )
+                enable_count = sum(
+                    1 for _, line in power_lines if "enable_gpu_power_control" in line
+                )
+                if enable_count or (
+                    disable_count > 1 and not _symbol_locks(index, sym)
+                ):
                     result.pm_callback_order_notes.append(
                         f"{sym.file_path}::{sym.name} has runtime-off power-control sequence "
                         f"`{_line_excerpt(first_power[1])}` without a balanced serialized runtime ownership pair"
@@ -961,11 +1376,23 @@ class PartialCandidateDetector:
             if not firsts or not skips:
                 continue
             for first in firsts[:6]:
-                skip = next((event for event in skips if 0 < event.line_number - first.line_number <= 24), None)
+                skip = next(
+                    (
+                        event
+                        for event in skips
+                        if 0 < event.line_number - first.line_number <= 24
+                    ),
+                    None,
+                )
                 if not skip:
                     continue
-                has_second_before_skip = any(first.line_number < event.line_number < skip.line_number for event in seconds)
-                has_second_after = any(0 < event.line_number - skip.line_number <= 24 for event in seconds)
+                has_second_before_skip = any(
+                    first.line_number < event.line_number < skip.line_number
+                    for event in seconds
+                )
+                has_second_after = any(
+                    0 < event.line_number - skip.line_number <= 24 for event in seconds
+                )
                 if has_second_before_skip or not has_second_after:
                     continue
                 result.secondary_omission_notes.append(
@@ -976,20 +1403,46 @@ class PartialCandidateDetector:
                 if len(result.secondary_omission_notes) >= 8:
                     return
 
-    def _detect_head_next_priority_omission(self, index, result, sym: SymbolDef) -> bool:
+    def _detect_head_next_priority_omission(
+        self, index, result, sym: SymbolDef
+    ) -> bool:
         body = self._body_text(sym)[:16000]
-        if not re.search(r"\b(?:JS_HEAD|HEAD_NEXT|head_next|slot|soft_hard_stop|reset|stop)\b", f"{sym.name} {body}", re.IGNORECASE):
+        if not re.search(
+            r"\b(?:JS_HEAD|HEAD_NEXT|head_next|slot|soft_hard_stop|reset|stop)\b",
+            f"{sym.name} {body}",
+            re.IGNORECASE,
+        ):
             return False
         if not re.search(r"\b(?:prio|priority)\b", body, re.IGNORECASE):
             return False
         lines = self._lines(sym)
-        head_line = next(((line_no, line) for line_no, line in lines if re.search(r"\b(?:JS_HEAD|head)\b", line, re.IGNORECASE)), None)
-        next_line = next(((line_no, line) for line_no, line in lines if re.search(r"\b(?:JS_HEAD_NEXT|HEAD_NEXT|next)\b", line, re.IGNORECASE)), None)
-        skip_line = next((
-            (line_no, line) for line_no, line in lines
-            if re.search(r"\b(?:prio|priority)\b", line, re.IGNORECASE)
-            and re.search(r"\b(?:return|continue|break|goto)\b|!=|<|>", line)
-        ), None)
+        head_line = next(
+            (
+                (line_no, line)
+                for line_no, line in lines
+                if re.search(r"\b(?:JS_HEAD|head)\b", line, re.IGNORECASE)
+            ),
+            None,
+        )
+        next_line = next(
+            (
+                (line_no, line)
+                for line_no, line in lines
+                if re.search(
+                    r"\b(?:JS_HEAD_NEXT|HEAD_NEXT|next)\b", line, re.IGNORECASE
+                )
+            ),
+            None,
+        )
+        skip_line = next(
+            (
+                (line_no, line)
+                for line_no, line in lines
+                if re.search(r"\b(?:prio|priority)\b", line, re.IGNORECASE)
+                and re.search(r"\b(?:return|continue|break|goto)\b|!=|<|>", line)
+            ),
+            None,
+        )
         if not head_line or not skip_line:
             return False
         if next_line and next_line[0] < skip_line[0]:
@@ -1005,8 +1458,13 @@ class PartialCandidateDetector:
 
     def _detect_zero_count_underflow(self, index, result, target_syms):
         for sym in target_syms:
-            body_tokens = _fact_tokens(f"{sym.name} {sym.signature} {self._body_text(sym)[:12000]}")
-            if not (body_tokens & {"count", "nr", "num"} and body_tokens & {"jit", "id", "dup", "alloc", "scan"}):
+            body_tokens = _fact_tokens(
+                f"{sym.name} {sym.signature} {self._body_text(sym)[:12000]}"
+            )
+            if not (
+                body_tokens & {"count", "nr", "num"}
+                and body_tokens & {"jit", "id", "dup", "alloc", "scan"}
+            ):
                 continue
             lines = self._lines(sym)
             for idx, (line_no, line) in enumerate(lines):
@@ -1015,8 +1473,11 @@ class PartialCandidateDetector:
                 line_tokens = _fact_tokens(line)
                 if not (line_tokens & {"count", "nr", "num", "id", "dup", "duplicate"}):
                     continue
-                prior = "\n".join(txt for _, txt in lines[max(0, idx - 12):idx])
-                if re.search(r"\b(?:count|nr|num)\s*(?:==|<=)\s*0\b|\b!\s*(?:count|nr|num)\b", prior):
+                prior = "\n".join(txt for _, txt in lines[max(0, idx - 12) : idx])
+                if re.search(
+                    r"\b(?:count|nr|num)\s*(?:==|<=)\s*0\b|\b!\s*(?:count|nr|num)\b",
+                    prior,
+                ):
                     continue
                 result.zero_count_underflow_notes.append(
                     f"{sym.file_path}::{sym.name} line {line_no} uses reverse/count-derived index "
@@ -1029,21 +1490,41 @@ class PartialCandidateDetector:
     def _detect_owner_liveness_allocation(self, index, result, target_syms):
         for sym in target_syms:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
-            if not re.search(r"\b(?:mem_pool|pool|grow|alloc_pages)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:mem_pool|pool|grow|alloc_pages)\b", text, re.IGNORECASE
+            ):
                 continue
-            if not (_POOL_ALLOC_RE.search(text) and re.search(r"\b(?:for|while|do\s*\{)\b", text)):
+            if not (
+                _POOL_ALLOC_RE.search(text)
+                and re.search(r"\b(?:for|while|do\s*\{)\b", text)
+            ):
                 continue
-            if not re.search(r"\b(?:kctx|current|task|process|user|oom|dying|worker|workqueue|owner)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:kctx|current|task|process|user|oom|dying|worker|workqueue|owner)\b",
+                text,
+                re.IGNORECASE,
+            ):
                 continue
             if _OWNER_LIVENESS_RE.search(text):
                 continue
             lines = self._lines(sym)
-            alloc_line = next(((line_no, line) for line_no, line in lines if _POOL_ALLOC_RE.search(line)), None)
-            loop_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:for|while|do)\b", line)
-                and re.search(r"\b(?:page|pool|alloc|grow)\b", line, re.IGNORECASE)
-            ), None)
+            alloc_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _POOL_ALLOC_RE.search(line)
+                ),
+                None,
+            )
+            loop_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(r"\b(?:for|while|do)\b", line)
+                    and re.search(r"\b(?:page|pool|alloc|grow)\b", line, re.IGNORECASE)
+                ),
+                None,
+            )
             if not alloc_line:
                 continue
             result.owner_liveness_notes.append(
@@ -1059,13 +1540,29 @@ class PartialCandidateDetector:
     def _detect_user_buffer_permission(self, index, result, target_syms):
         for sym in target_syms:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
-            if not (_USER_BUFFER_RE.search(text) and _GUP_RE.search(text) and _GPU_WRITE_FLAG_RE.search(text)):
+            if not (
+                _USER_BUFFER_RE.search(text)
+                and _GUP_RE.search(text)
+                and _GPU_WRITE_FLAG_RE.search(text)
+            ):
                 continue
-            if not _name_has_any(sym.name, {"user", "buffer", "import", "from_user", "mem"}):
+            if not _name_has_any(
+                sym.name, {"user", "buffer", "import", "from_user", "mem"}
+            ):
                 continue
             lines = self._lines(sym)
-            gup_line = next(((line_no, line) for line_no, line in lines if _GUP_RE.search(line)), None)
-            flag_line = next(((line_no, line) for line_no, line in lines if _GPU_WRITE_FLAG_RE.search(line)), None)
+            gup_line = next(
+                ((line_no, line) for line_no, line in lines if _GUP_RE.search(line)),
+                None,
+            )
+            flag_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _GPU_WRITE_FLAG_RE.search(line)
+                ),
+                None,
+            )
             if not gup_line:
                 continue
             prior = "\n".join(line for line_no, line in lines if line_no <= gup_line[0])
@@ -1074,7 +1571,11 @@ class PartialCandidateDetector:
                 prior,
                 re.IGNORECASE,
             )
-            has_gpu_only_gate = re.search(r"\b(?:KBASE_REG_GPU_WR|GPU_WR|gpu_wr|GPU.*WRITE)\b", prior, re.IGNORECASE)
+            has_gpu_only_gate = re.search(
+                r"\b(?:KBASE_REG_GPU_WR|GPU_WR|gpu_wr|GPU.*WRITE)\b",
+                prior,
+                re.IGNORECASE,
+            )
             if has_cpu_write_gate and not has_gpu_only_gate:
                 continue
             result.user_buffer_permission_notes.append(
@@ -1092,20 +1593,42 @@ class PartialCandidateDetector:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
             if not _ZONE_SHRINK_RE.search(text):
                 continue
-            if not re.search(r"\b(?:init_jit|init_exec|region_tracker_init|jit|exec|zone)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:init_jit|init_exec|region_tracker_init|jit|exec|zone)\b",
+                text,
+                re.IGNORECASE,
+            ):
                 continue
-            if not re.search(r"\b(?:shrink|split|resize|trim|replace)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:shrink|split|resize|trim|replace)\b", text, re.IGNORECASE
+            ):
                 continue
-            if re.search(r"\b(?:entire(?:ly)?\s+free|fully\s+free|zone.*free.*check|overlap.*check|is_region_free)\b", text, re.IGNORECASE):
+            if re.search(
+                r"\b(?:entire(?:ly)?\s+free|fully\s+free|zone.*free.*check|overlap.*check|is_region_free)\b",
+                text,
+                re.IGNORECASE,
+            ):
                 continue
             lines = self._lines(sym)
-            shrink_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:shrink|split|resize|trim|replace|zone)\b", line, re.IGNORECASE)
-            ), None)
+            shrink_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:shrink|split|resize|trim|replace|zone)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not shrink_line:
                 continue
-            imported_context = re.search(r"\b(?:imported|dma_buf|user_buffer|same_va|overlap|mapping)\b", text, re.IGNORECASE)
+            imported_context = re.search(
+                r"\b(?:imported|dma_buf|user_buffer|same_va|overlap|mapping)\b",
+                text,
+                re.IGNORECASE,
+            )
             result.zone_shrink_notes.append(
                 f"{sym.file_path}::{sym.name} line {shrink_line[0]} shrinks/splits an existing VA zone "
                 f"`{_line_excerpt(shrink_line[1])}` without a visible validation that the source zone is still entirely free"
@@ -1121,24 +1644,50 @@ class PartialCandidateDetector:
             if not (re.search(r"\breq_arr\b", text) and _SUCCESS_FD_RE.search(text)):
                 continue
             lines = self._lines(sym)
-            alloc_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\breq_arr\b", line)
-                and re.search(r"\b(?:alloc|calloc|kmalloc|kcalloc|kvmalloc|vzalloc)\b", line)
-            ), None)
-            fd_line = next(((line_no, line) for line_no, line in lines if re.search(r"\banon_inode_getfd\s*\(", line)), None)
+            alloc_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(r"\breq_arr\b", line)
+                    and re.search(
+                        r"\b(?:alloc|calloc|kmalloc|kcalloc|kvmalloc|vzalloc)\b", line
+                    )
+                ),
+                None,
+            )
+            fd_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(r"\banon_inode_getfd\s*\(", line)
+                ),
+                None,
+            )
             if not alloc_line or not fd_line:
                 continue
-            return_line = next((
-                (line_no, line) for line_no, line in lines
-                if line_no > fd_line[0]
-                and line_no - fd_line[0] <= 24
-                and re.search(r"\breturn\s+(?:fd|ret|[A-Za-z_][A-Za-z0-9_]*)\b", line)
-            ), None)
+            return_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if line_no > fd_line[0]
+                    and line_no - fd_line[0] <= 24
+                    and re.search(
+                        r"\breturn\s+(?:fd|ret|[A-Za-z_][A-Za-z0-9_]*)\b", line
+                    )
+                ),
+                None,
+            )
             if not return_line:
                 continue
-            between = "\n".join(line for line_no, line in lines if fd_line[0] <= line_no <= return_line[0])
-            if re.search(r"\b(?:kfree|kvfree|vfree|free)\s*\(\s*req_arr\b|goto\s+free_buf", between):
+            between = "\n".join(
+                line
+                for line_no, line in lines
+                if fd_line[0] <= line_no <= return_line[0]
+            )
+            if re.search(
+                r"\b(?:kfree|kvfree|vfree|free)\s*\(\s*req_arr\b|goto\s+free_buf",
+                between,
+            ):
                 continue
             result.success_path_cleanup_notes.append(
                 f"{sym.file_path}::{sym.name} allocates temporary `req_arr` at line {alloc_line[0]} "
@@ -1153,7 +1702,8 @@ class PartialCandidateDetector:
         context_syms = self._context_symbols(index, context, target_syms)
         target_uniques = {_symbol_unique_name(target) for target in target_syms}
         jit_companions = [
-            sym for sym in context_syms
+            sym
+            for sym in context_syms
             if _symbol_unique_name(sym) not in target_uniques
             and _JIT_STATE_RE.search(f"{sym.name} {self._body_text(sym)[:8000]}")
         ][:40]
@@ -1161,25 +1711,47 @@ class PartialCandidateDetector:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
             if not _JIT_STATE_RE.search(text):
                 continue
-            if not re.search(r"\b(?:allocate|alloc|free|process|finish|allow)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:allocate|alloc|free|process|finish|allow)\b", text, re.IGNORECASE
+            ):
                 continue
-            if not re.search(r"\b(?:list_add|list_del|limit|usage|count|evict|pool|alloc)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:list_add|list_del|limit|usage|count|evict|pool|alloc)\b",
+                text,
+                re.IGNORECASE,
+            ):
                 continue
             locks = _symbol_locks(index, sym)
             has_jit_lock = any(
-                re.search(r"\b(?:jit|kctx|ctx|csf).*(?:lock|mutex)|(?:lock|mutex).*(?:jit|kctx|ctx|csf)\b", lock)
+                re.search(
+                    r"\b(?:jit|kctx|ctx|csf).*(?:lock|mutex)|(?:lock|mutex).*(?:jit|kctx|ctx|csf)\b",
+                    lock,
+                )
                 for lock in locks
             )
             if has_jit_lock:
                 continue
-            companion = next((
-                candidate for candidate in jit_companions
-                if bool(re.search(r"\bfree\b", candidate.name, re.IGNORECASE)) != bool(re.search(r"\bfree\b", sym.name, re.IGNORECASE))
-            ), jit_companions[0] if jit_companions else None)
-            state_line = next((
-                (line_no, line) for line_no, line in self._lines(sym)
-                if re.search(r"\b(?:jit|list_add|list_del|limit|usage|alloc|free|evict)\b", line, re.IGNORECASE)
-            ), None)
+            companion = next(
+                (
+                    candidate
+                    for candidate in jit_companions
+                    if bool(re.search(r"\bfree\b", candidate.name, re.IGNORECASE))
+                    != bool(re.search(r"\bfree\b", sym.name, re.IGNORECASE))
+                ),
+                jit_companions[0] if jit_companions else None,
+            )
+            state_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in self._lines(sym)
+                    if re.search(
+                        r"\b(?:jit|list_add|list_del|limit|usage|alloc|free|evict)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not state_line:
                 continue
             result.jit_lock_protocol_notes.append(
@@ -1195,31 +1767,55 @@ class PartialCandidateDetector:
 
     def _detect_teardown_order(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
-        schedule_companion = next((
-            sym for sym in context_syms
-            if re.search(
-                r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|address.*space)\b",
-                f"{sym.name} {self._body_text(sym)[:8000]}",
-                re.IGNORECASE,
-            )
-        ), None)
+        schedule_companion = next(
+            (
+                sym
+                for sym in context_syms
+                if re.search(
+                    r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|address.*space)\b",
+                    f"{sym.name} {self._body_text(sym)[:8000]}",
+                    re.IGNORECASE,
+                )
+            ),
+            None,
+        )
         for sym in target_syms:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
             if not _TEARDOWN_ORDER_RE.search(text):
                 continue
-            if not re.search(r"\b(?:term|teardown|destroy|free|release|region_tracker|mmu)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:term|teardown|destroy|free|release|region_tracker|mmu)\b",
+                text,
+                re.IGNORECASE,
+            ):
                 continue
             lines = self._lines(sym)
-            free_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:region_tracker_term|kbase_mmu_term|free.*region|kbase_free_alloced_region|rb_erase|mmu.*term)\b", line, re.IGNORECASE)
-            ), None)
+            free_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:region_tracker_term|kbase_mmu_term|free.*region|kbase_free_alloced_region|rb_erase|mmu.*term)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not free_line:
                 continue
-            schedule_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|mmu_disable|address.*space)\b", line, re.IGNORECASE)
-            ), None)
+            schedule_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:schedule_out|sched.*out|disable.*as|as.*disable|mmu_disable|address.*space)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if schedule_line and schedule_line[0] < free_line[0]:
                 continue
             result.teardown_order_notes.append(
@@ -1237,26 +1833,45 @@ class PartialCandidateDetector:
     def _detect_queue_publish_init(self, index, result, target_syms):
         for sym in target_syms:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
-            if not (_QUEUE_PUBLISH_RE.search(text) and _name_has_any(sym.name, {"queue", "new", "create", "alloc"})):
+            if not (
+                _QUEUE_PUBLISH_RE.search(text)
+                and _name_has_any(sym.name, {"queue", "new", "create", "alloc"})
+            ):
                 continue
             lines = self._lines(sym)
-            publish_line = next((
-                (line_no, line) for line_no, line in lines
-                if _QUEUE_PUBLISH_RE.search(line)
-                and re.search(r"\b(?:=|set_bit|bitmap_set|atomic_set)\b", line)
-            ), None)
+            publish_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _QUEUE_PUBLISH_RE.search(line)
+                    and re.search(r"\b(?:=|set_bit|bitmap_set|atomic_set)\b", line)
+                ),
+                None,
+            )
             if not publish_line:
                 continue
-            fail_line = next((
-                (line_no, line) for line_no, line in lines
-                if line_no > publish_line[0]
-                and line_no - publish_line[0] <= 90
-                and _ERROR_PATH_RE.search(line)
-            ), None)
+            fail_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if line_no > publish_line[0]
+                    and line_no - publish_line[0] <= 90
+                    and _ERROR_PATH_RE.search(line)
+                ),
+                None,
+            )
             if not fail_line:
                 continue
-            unwind = "\n".join(line for line_no, line in lines if publish_line[0] < line_no < fail_line[0])
-            if re.search(r"\b(?:clear_bit|bitmap_clear|array.*=\s*NULL|in_use.*=\s*0|queue.*=\s*NULL)\b", unwind, re.IGNORECASE):
+            unwind = "\n".join(
+                line
+                for line_no, line in lines
+                if publish_line[0] < line_no < fail_line[0]
+            )
+            if re.search(
+                r"\b(?:clear_bit|bitmap_clear|array.*=\s*NULL|in_use.*=\s*0|queue.*=\s*NULL)\b",
+                unwind,
+                re.IGNORECASE,
+            ):
                 continue
             result.queue_publish_init_notes.append(
                 f"{sym.file_path}::{sym.name} line {publish_line[0]} publishes queue pointer/in-use state "
@@ -1272,19 +1887,38 @@ class PartialCandidateDetector:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
             if not re.search(r"\b(?:sync_fence|fence|fd)\b", text, re.IGNORECASE):
                 continue
-            if not (_SUCCESS_FD_RE.search(text) and re.search(r"\b(?:fd_install|copy_to_user|return\s+fd|put_user)\b", text, re.IGNORECASE)):
+            if not (
+                _SUCCESS_FD_RE.search(text)
+                and re.search(
+                    r"\b(?:fd_install|copy_to_user|return\s+fd|put_user)\b",
+                    text,
+                    re.IGNORECASE,
+                )
+            ):
                 continue
             lines = self._lines(sym)
-            publish_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:fd_install|copy_to_user|put_user|return\s+fd)\b", line, re.IGNORECASE)
-            ), None)
-            lookup_line = next((
-                (line_no, line) for line_no, line in lines
-                if publish_line
-                and line_no > publish_line[0]
-                and re.search(r"\b(?:sync_fence_fdget|fdget|fget)\s*\(", line)
-            ), None)
+            publish_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:fd_install|copy_to_user|put_user|return\s+fd)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
+            lookup_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if publish_line
+                    and line_no > publish_line[0]
+                    and re.search(r"\b(?:sync_fence_fdget|fdget|fget)\s*\(", line)
+                ),
+                None,
+            )
             if not publish_line or not lookup_line:
                 continue
             result.fd_reuse_notes.append(
@@ -1301,22 +1935,47 @@ class PartialCandidateDetector:
             text = f"{sym.name} {sym.signature} {self._body_text(sym)[:18000]}"
             if not _DEBUGFS_AUTH_RE.search(text):
                 continue
-            if not re.search(r"\b(?:debugfs|timeline|tlstream|profil)\b", text, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:debugfs|timeline|tlstream|profil)\b", text, re.IGNORECASE
+            ):
                 continue
             lines = self._lines(sym)
-            create_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\bdebugfs_create_file\s*\(", line)
-                and re.search(r"\b(?:0444|S_IRUGO|S_IROTH|S_IRUSR\s*\|\s*S_IRGRP\s*\|\s*S_IROTH)\b", line)
-            ), None)
-            acquire_line = next((
-                (line_no, line) for line_no, line in lines
-                if re.search(r"\b(?:\w*timeline_io_acquire|tlstream\w*|profil\w*)\s*\(", line, re.IGNORECASE)
-            ), None)
+            create_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(r"\bdebugfs_create_file\s*\(", line)
+                    and re.search(
+                        r"\b(?:0444|S_IRUGO|S_IROTH|S_IRUSR\s*\|\s*S_IRGRP\s*\|\s*S_IROTH)\b",
+                        line,
+                    )
+                ),
+                None,
+            )
+            acquire_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if re.search(
+                        r"\b(?:\w*timeline_io_acquire|tlstream\w*|profil\w*)\s*\(",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not create_line and not acquire_line:
                 continue
-            prior = "\n".join(line for line_no, line in lines if not acquire_line or line_no <= acquire_line[0])
-            if re.search(r"\b(?:capable|ptrace_may_access|uid_eq|permission|0600|S_IWUSR)\b", prior, re.IGNORECASE):
+            prior = "\n".join(
+                line
+                for line_no, line in lines
+                if not acquire_line or line_no <= acquire_line[0]
+            )
+            if re.search(
+                r"\b(?:capable|ptrace_may_access|uid_eq|permission|0600|S_IWUSR)\b",
+                prior,
+                re.IGNORECASE,
+            ):
                 continue
             line_no, line = acquire_line or create_line
             result.debugfs_permission_notes.append(
@@ -1327,42 +1986,112 @@ class PartialCandidateDetector:
             if len(result.debugfs_permission_notes) >= 8:
                 return
 
-    def _detect_interprocedural_cleanup_ledger(self, index, result, target_syms, context):
+    def _detect_interprocedural_cleanup_ledger(
+        self, index, result, target_syms, context
+    ):
         context_syms = self._context_symbols(index, context, target_syms)
         related = [
-            sym for sym in context_syms
-            if _name_has_any(sym.name, {"suspend", "drain", "delete", "cleanup", "release", "queue", "group", "kcpu"})
+            sym
+            for sym in context_syms
+            if _name_has_any(
+                sym.name,
+                {
+                    "suspend",
+                    "drain",
+                    "delete",
+                    "cleanup",
+                    "release",
+                    "queue",
+                    "group",
+                    "kcpu",
+                },
+            )
         ][:80]
         acquire_tokens: set[str] = set()
         acquire_sites: dict[str, SymbolDef] = {}
         for sym in related:
             for fact in _symbol_cleanup_facts(index, sym):
-                fact_tokens = _fact_tokens(f"{fact.resource} {fact.line_text} {sym.name}")
+                fact_tokens = _fact_tokens(
+                    f"{fact.resource} {fact.line_text} {sym.name}"
+                )
                 if fact.kind == "acquire" and (
-                    fact_tokens & {"pages", "page", "mapping", "refcount", "groups", "suspend", "cqs_wait", "group_suspend"}
-                    or re.search(r"\b(?:kbase_mem_phy_alloc_kernel_unmapped|get_page|pin_user_pages|alloc_pages)\b", fact.line_text)
+                    fact_tokens
+                    & {
+                        "pages",
+                        "page",
+                        "mapping",
+                        "refcount",
+                        "groups",
+                        "suspend",
+                        "cqs_wait",
+                        "group_suspend",
+                    }
+                    or re.search(
+                        r"\b(?:kbase_mem_phy_alloc_kernel_unmapped|get_page|pin_user_pages|alloc_pages)\b",
+                        fact.line_text,
+                    )
                 ):
-                    for token in fact_tokens & (_RESOURCE_WORDS | {"pages", "mapping", "refcount", "groups", "suspend", "cqs_wait", "group_suspend"}):
+                    for token in fact_tokens & (
+                        _RESOURCE_WORDS
+                        | {
+                            "pages",
+                            "mapping",
+                            "refcount",
+                            "groups",
+                            "suspend",
+                            "cqs_wait",
+                            "group_suspend",
+                        }
+                    ):
                         acquire_tokens.add(token)
                         acquire_sites.setdefault(token, sym)
         if not acquire_tokens:
             return
         for sym in target_syms:
-            if not _name_has_any(sym.name, {"suspend", "drain", "delete", "cleanup", "release", "queue", "group", "kcpu"}):
+            if not _name_has_any(
+                sym.name,
+                {
+                    "suspend",
+                    "drain",
+                    "delete",
+                    "cleanup",
+                    "release",
+                    "queue",
+                    "group",
+                    "kcpu",
+                },
+            ):
                 continue
             body = self._body_text(sym)[:16000]
-            branch_tokens = _fact_tokens(body) & {"drain_queue", "drain", "suspend", "group_suspend", "cqs_wait", "groups", "pages", "mapping"}
-            if not branch_tokens and not re.search(r"\b(?:GROUP_SUSPEND|CQS_WAIT|drain_queue|delete_queue|kcpu_queue_process)\b", body):
+            branch_tokens = _fact_tokens(body) & {
+                "drain_queue",
+                "drain",
+                "suspend",
+                "group_suspend",
+                "cqs_wait",
+                "groups",
+                "pages",
+                "mapping",
+            }
+            if not branch_tokens and not re.search(
+                r"\b(?:GROUP_SUSPEND|CQS_WAIT|drain_queue|delete_queue|kcpu_queue_process)\b",
+                body,
+            ):
                 continue
             facts = _symbol_cleanup_facts(index, sym)
             releases = [fact for fact in facts if fact.kind == "release"]
             exits = [fact for fact in facts if fact.kind == "exit"]
             if not exits or not branch_tokens:
                 continue
-            for token in sorted(acquire_tokens & (branch_tokens | {"pages", "mapping", "groups"}))[:6]:
+            for token in sorted(
+                acquire_tokens & (branch_tokens | {"pages", "mapping", "groups"})
+            )[:6]:
                 matching_release = any(
                     token in _fact_tokens(rel.resource + " " + rel.line_text)
-                    or re.search(r"\b(?:put_page|kbase_mem_phy_alloc_put|free_pages|unmap)\b", rel.line_text)
+                    or re.search(
+                        r"\b(?:put_page|kbase_mem_phy_alloc_put|free_pages|unmap)\b",
+                        rel.line_text,
+                    )
                     for rel in releases
                 )
                 if matching_release:
@@ -1392,50 +2121,94 @@ class PartialCandidateDetector:
             if (
                 {"suspend", "queue", "group"} & tokens
                 and _SUSPEND_SOURCE_RE.search(text)
-                and re.search(r"\b(?:get_user_pages|pin_user_pages|normal_suspend_buf|sus_buf|nr_pages|PFN_UP)\b", text)
+                and re.search(
+                    r"\b(?:get_user_pages|pin_user_pages|normal_suspend_buf|sus_buf|nr_pages|PFN_UP)\b",
+                    text,
+                )
             ):
                 sources.append(sym)
-            if (
-                {"suspend", "queue", "group", "drain"} & tokens
-                and re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete|cleanup|release|kcpu|wait)\b", text, re.IGNORECASE)
+            if {"suspend", "queue", "group", "drain"} & tokens and re.search(
+                r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete|cleanup|release|kcpu|wait)\b",
+                text,
+                re.IGNORECASE,
             ):
                 sinks.append(sym)
         if not sources or not sinks:
             return
-        sinks = sorted(sinks[:40], key=lambda sym: (
-            0 if _name_has_any(sym.name, {"delete", "drain", "process", "kcpu", "cleanup"}) else 1,
-            sym.file_path,
-            sym.line_number,
-        ))
+        sinks = sorted(
+            sinks[:40],
+            key=lambda sym: (
+                (
+                    0
+                    if _name_has_any(
+                        sym.name, {"delete", "drain", "process", "kcpu", "cleanup"}
+                    )
+                    else 1
+                ),
+                sym.file_path,
+                sym.line_number,
+            ),
+        )
         for sink in sinks[:24]:
             sink_body = self._body_text(sink)[:16000]
-            branch_line = next((
-                (line_no, line) for line_no, line in self._lines(sink)
-                if re.search(r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete_queue|kcpu_queue_process|delete|cleanup|release|wait)\b", line)
-            ), None)
+            branch_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in self._lines(sink)
+                    if re.search(
+                        r"\b(?:drain_queue|GROUP_SUSPEND|CQS_WAIT|delete_queue|kcpu_queue_process|delete|cleanup|release|wait)\b",
+                        line,
+                    )
+                ),
+                None,
+            )
             if not branch_line:
                 continue
             sink_lines = self._lines(sink)
             branch_window = "\n".join(
-                line for line_no, line in sink_lines
+                line
+                for line_no, line in sink_lines
                 if branch_line[0] <= line_no <= branch_line[0] + 70
             )
             if _SUSPEND_RELEASE_RE.search(branch_window):
                 continue
-            branch_tokens = _fact_tokens(f"{sink.name} {branch_line[1]} {sink_body[:4000]}")
+            branch_tokens = _fact_tokens(
+                f"{sink.name} {branch_line[1]} {sink_body[:4000]}"
+            )
             if not (
-                branch_tokens & {"drain_queue", "drain", "group_suspend", "cqs_wait", "suspend", "queue", "wait"}
-                or re.search(r"\b(?:GROUP_SUSPEND|CQS_WAIT|drain_queue|delete_queue|kcpu_queue_process)\b", branch_window)
+                branch_tokens
+                & {
+                    "drain_queue",
+                    "drain",
+                    "group_suspend",
+                    "cqs_wait",
+                    "suspend",
+                    "queue",
+                    "wait",
+                }
+                or re.search(
+                    r"\b(?:GROUP_SUSPEND|CQS_WAIT|drain_queue|delete_queue|kcpu_queue_process)\b",
+                    branch_window,
+                )
             ):
                 continue
             for source in sources[:24]:
                 if _symbol_unique_name(source) == _symbol_unique_name(sink):
                     continue
-                source_tokens = _fact_tokens(f"{source.name} {self._body_text(source)[:6000]}")
+                source_tokens = _fact_tokens(
+                    f"{source.name} {self._body_text(source)[:6000]}"
+                )
                 sink_tokens = _fact_tokens(f"{sink.name} {sink_body}")
-                if not (source_tokens & sink_tokens & {"suspend", "queue", "group", "pages", "buf"}):
+                if not (
+                    source_tokens
+                    & sink_tokens
+                    & {"suspend", "queue", "group", "pages", "buf"}
+                ):
                     continue
-                if source.file_path not in target_files and sink.file_path not in target_files:
+                if (
+                    source.file_path not in target_files
+                    and sink.file_path not in target_files
+                ):
                     continue
                 result.suspend_cleanup_ledger_notes.append(
                     f"{sink.file_path}::{sink.name} line {branch_line[0]} owns branch-specific suspend cleanup "
@@ -1467,13 +2240,26 @@ class PartialCandidateDetector:
                     consumers.append((sym, line_no, line))
         if not consumers:
             return
-        consumers = sorted(consumers, key=lambda item: (
-            0 if re.search(r"\b(?:group_copy_suspend_buf|normal_suspend_buf|PFN_UP|phy\s*\[)\b", f"{item[0].name} {item[2]}", re.IGNORECASE) else 1,
-            item[0].file_path,
-            item[1],
-        ))
+        consumers = sorted(
+            consumers,
+            key=lambda item: (
+                (
+                    0
+                    if re.search(
+                        r"\b(?:group_copy_suspend_buf|normal_suspend_buf|PFN_UP|phy\s*\[)\b",
+                        f"{item[0].name} {item[2]}",
+                        re.IGNORECASE,
+                    )
+                    else 1
+                ),
+                item[0].file_path,
+                item[1],
+            ),
+        )
         for producer in context_syms:
-            if producer.file_path not in target_files and not _name_has_any(producer.name, {"suspend", "queue", "group"}):
+            if producer.file_path not in target_files and not _name_has_any(
+                producer.name, {"suspend", "queue", "group"}
+            ):
                 continue
             assigns = _symbol_assignments(index, producer)
             guards = _symbol_guards(index, producer)
@@ -1482,19 +2268,35 @@ class PartialCandidateDetector:
                 assign_tokens = _fact_tokens(assign_text)
                 if not (
                     assign_tokens & {"suspend", "sus", "buf", "size", "nr", "pages"}
-                    and re.search(r"\b(?:sus_buf|suspend_buf|normal_suspend_buf|nr_pages|size|end_addr)\b", assign_text)
+                    and re.search(
+                        r"\b(?:sus_buf|suspend_buf|normal_suspend_buf|nr_pages|size|end_addr)\b",
+                        assign_text,
+                    )
                 ):
                     continue
-                if self._has_size_upper_bound_guard(guards, assign.line_number, assign_tokens):
+                if self._has_size_upper_bound_guard(
+                    guards, assign.line_number, assign_tokens
+                ):
                     continue
                 for consumer, consumer_line, consumer_text in consumers[:40]:
                     consumer_tokens = _fact_tokens(f"{consumer.name} {consumer_text}")
-                    if not (assign_tokens & consumer_tokens & {"suspend", "buf", "size", "pages", "nr", "group"}):
+                    if not (
+                        assign_tokens
+                        & consumer_tokens
+                        & {"suspend", "buf", "size", "pages", "nr", "group"}
+                    ):
                         continue
-                    if producer.file_path not in target_files and consumer.file_path not in target_files:
+                    if (
+                        producer.file_path not in target_files
+                        and consumer.file_path not in target_files
+                    ):
                         continue
                     exact_page_array_sink = bool(
-                        re.search(r"(PFN_UP|normal_suspend_buf|phy\s*\[)", consumer_text, re.IGNORECASE)
+                        re.search(
+                            r"(PFN_UP|normal_suspend_buf|phy\s*\[)",
+                            consumer_text,
+                            re.IGNORECASE,
+                        )
                     )
                     result.suspend_size_sink_notes.append(
                         f"{producer.file_path}::{producer.name} line {assign.line_number} propagates suspend size/page "
@@ -1518,22 +2320,38 @@ class PartialCandidateDetector:
             for use in _symbol_copy_uses(index, sym):
                 tokens = _fact_tokens(use.size_expr + " " + use.line_text)
                 if tokens & {"size", "pages", "nr", "count", "len"}:
-                    consumers.append((sym, use.line_number, use.size_expr, use.line_text))
+                    consumers.append(
+                        (sym, use.line_number, use.size_expr, use.line_text)
+                    )
             for formula in _symbol_formula_facts(index, sym):
                 if set(formula.tokens) & {"size", "pages", "nr", "count", "len"}:
-                    consumers.append((sym, formula.line_number, formula.expr, formula.line_text))
+                    consumers.append(
+                        (sym, formula.line_number, formula.expr, formula.line_text)
+                    )
         if not consumers:
             return
         for sym in target_syms:
             assignments = _symbol_assignments(index, sym)
             guards = _symbol_guards(index, sym)
             for assign in assignments[:60]:
-                tokens = set(assign.tokens) | _fact_tokens(assign.target + " " + assign.value)
-                if not (tokens & {"size", "pages", "nr", "count", "len"} and tokens & {"sus", "suspend", "buffer", "buf", "pages"}):
+                tokens = set(assign.tokens) | _fact_tokens(
+                    assign.target + " " + assign.value
+                )
+                if not (
+                    tokens & {"size", "pages", "nr", "count", "len"}
+                    and tokens & {"sus", "suspend", "buffer", "buf", "pages"}
+                ):
                     continue
                 if self._has_size_upper_bound_guard(guards, assign.line_number, tokens):
                     continue
-                companion = next((item for item in consumers if tokens & _fact_tokens(item[2] + " " + item[3])), None)
+                companion = next(
+                    (
+                        item
+                        for item in consumers
+                        if tokens & _fact_tokens(item[2] + " " + item[3])
+                    ),
+                    None,
+                )
                 if not companion:
                     continue
                 comp_sym, line_no, expr, line_text = companion
@@ -1548,7 +2366,9 @@ class PartialCandidateDetector:
                 if len(result.size_propagation_notes) >= 10:
                     return
 
-    def _has_size_upper_bound_guard(self, guards: list[GuardFact], line_number: int, tokens: set[str]) -> bool:
+    def _has_size_upper_bound_guard(
+        self, guards: list[GuardFact], line_number: int, tokens: set[str]
+    ) -> bool:
         wanted = tokens & (_COUNT_SIZE_WORDS | {"pages", "size", "len", "count", "nr"})
         for guard in guards:
             if guard.line_number > line_number:
@@ -1564,7 +2384,9 @@ class PartialCandidateDetector:
         companion_consumers = []
         for sym in context_syms:
             for formula in _symbol_formula_facts(index, sym):
-                formula_tokens = set(formula.tokens) | _fact_tokens(formula.expr + " " + formula.target)
+                formula_tokens = set(formula.tokens) | _fact_tokens(
+                    formula.expr + " " + formula.target
+                )
                 if {"alias", "pages", "region"} & formula_tokens:
                     companion_consumers.append((sym, formula))
             for use in _symbol_copy_uses(index, sym):
@@ -1576,24 +2398,42 @@ class PartialCandidateDetector:
                 continue
             formulas = _symbol_formula_facts(index, sym)
             guards = _symbol_guards(index, sym)
-            producer = next((
-                formula for formula in formulas
-                if {"nents", "stride"} <= (_fact_tokens(formula.expr) | set(formula.tokens))
-                and "mul" in formula.operators
-            ), None)
+            producer = next(
+                (
+                    formula
+                    for formula in formulas
+                    if {"nents", "stride"}
+                    <= (_fact_tokens(formula.expr) | set(formula.tokens))
+                    and "mul" in formula.operators
+                ),
+                None,
+            )
             if not producer:
                 continue
-            if self._has_formula_consistency_guard(guards, producer, producer.line_number + 20):
+            if self._has_formula_consistency_guard(
+                guards, producer, producer.line_number + 20
+            ):
                 continue
-            consumer = next((
-                item for item in companion_consumers
-                if item[0] is not sym
-                and {"alias", "pages", "region", "gpu_va"} & _fact_tokens(getattr(item[1], "expr", getattr(item[1], "size_expr", "")) + " " + getattr(item[1], "line_text", ""))
-            ), None)
+            consumer = next(
+                (
+                    item
+                    for item in companion_consumers
+                    if item[0] is not sym
+                    and {"alias", "pages", "region", "gpu_va"}
+                    & _fact_tokens(
+                        getattr(item[1], "expr", getattr(item[1], "size_expr", ""))
+                        + " "
+                        + getattr(item[1], "line_text", "")
+                    )
+                ),
+                None,
+            )
             if not consumer:
                 continue
             consumer_sym, consumer_fact = consumer
-            consumer_expr = getattr(consumer_fact, "expr", getattr(consumer_fact, "size_expr", ""))
+            consumer_expr = getattr(
+                consumer_fact, "expr", getattr(consumer_fact, "size_expr", "")
+            )
             result.arithmetic_chain_notes.append(
                 f"{sym.file_path}::{sym.name} line {producer.line_number} computes alias extent `{producer.target} = {_short_expr(producer.expr)}` "
                 "from nents*stride without an overflow/consistency guard; companion "
@@ -1610,7 +2450,11 @@ class PartialCandidateDetector:
         consumers = []
         for sym in context_syms:
             for line_no, line in self._lines(sym):
-                if not re.search(r"\b(?:alias|gpu_va|region|num_pages|nr_pages|va_pages|map|mmap|insert)\b", line, re.IGNORECASE):
+                if not re.search(
+                    r"\b(?:alias|gpu_va|region|num_pages|nr_pages|va_pages|map|mmap|insert)\b",
+                    line,
+                    re.IGNORECASE,
+                ):
                     continue
                 tokens = _fact_tokens(f"{sym.name} {line}")
                 if tokens & {"alias", "region", "pages", "gpu_va"}:
@@ -1623,36 +2467,61 @@ class PartialCandidateDetector:
                 continue
             formulas = _symbol_formula_facts(index, sym)
             guards = _symbol_guards(index, sym)
-            extent = next((
-                formula for formula in formulas
-                if "mul" in formula.operators
-                and {"nents", "stride"} <= (_fact_tokens(formula.expr) | set(formula.tokens))
-            ), None)
+            extent = next(
+                (
+                    formula
+                    for formula in formulas
+                    if "mul" in formula.operators
+                    and {"nents", "stride"}
+                    <= (_fact_tokens(formula.expr) | set(formula.tokens))
+                ),
+                None,
+            )
             extent_line = None
             if not extent:
-                extent_line = next((
-                    (line_no, line) for line_no, line in self._lines(sym)
-                    if re.search(r"\b(?:num_pages|nr_pages|va_pages|extent|size)\b", line, re.IGNORECASE)
-                    and re.search(r"\bnents\b", line, re.IGNORECASE)
-                    and re.search(r"\bstride\b", line, re.IGNORECASE)
-                    and "*" in line
-                ), None)
+                extent_line = next(
+                    (
+                        (line_no, line)
+                        for line_no, line in self._lines(sym)
+                        if re.search(
+                            r"\b(?:num_pages|nr_pages|va_pages|extent|size)\b",
+                            line,
+                            re.IGNORECASE,
+                        )
+                        and re.search(r"\bnents\b", line, re.IGNORECASE)
+                        and re.search(r"\bstride\b", line, re.IGNORECASE)
+                        and "*" in line
+                    ),
+                    None,
+                )
             if not extent and not extent_line:
                 continue
             extent_number = extent.line_number if extent else extent_line[0]
             extent_text = extent.line_text if extent else extent_line[1]
-            if extent and self._has_formula_consistency_guard(guards, extent, extent.line_number + 24):
+            if extent and self._has_formula_consistency_guard(
+                guards, extent, extent.line_number + 24
+            ):
                 continue
-            reservation = next((
-                formula for formula in formulas
-                if formula.line_number > extent_number
-                and {"pages", "region", "gpu_va"} & (set(formula.tokens) | _fact_tokens(formula.target))
-                and (not extent or formula.normalized != extent.normalized)
-            ), None)
-            consumer = next((
-                item for item in consumers
-                if item[0].file_path == sym.file_path or _module_stem(item[0].name) == _module_stem(sym.name)
-            ), None) or (consumers[0] if consumers else None)
+            reservation = next(
+                (
+                    formula
+                    for formula in formulas
+                    if formula.line_number > extent_number
+                    and {"pages", "region", "gpu_va"}
+                    & (set(formula.tokens) | _fact_tokens(formula.target))
+                    and (not extent or formula.normalized != extent.normalized)
+                ),
+                None,
+            )
+            consumer = next(
+                (
+                    item
+                    for item in consumers
+                    if item[0].file_path == sym.file_path
+                    or _module_stem(item[0].name) == _module_stem(sym.name)
+                ),
+                None,
+            ) or (consumers[0] if consumers else None)
             if not consumer:
                 continue
             consumer_sym, consumer_line, consumer_text = consumer
@@ -1672,18 +2541,32 @@ class PartialCandidateDetector:
     def _detect_info_leaks(self, index, result, target_syms):
         reporter_notes = []
         for sym in target_syms:
-            if not re.search(r"\b(?:report_bus_fault|bus_fault|fault_and_kill)\b", sym.name, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:report_bus_fault|bus_fault|fault_and_kill)\b",
+                sym.name,
+                re.IGNORECASE,
+            ):
                 continue
             for line_no, line in self._lines(sym):
-                if not (_LOG_CALL_RE.search(line) and _BUS_FAULT_REPORT_RE.search(f"{sym.name} {line}")):
+                if not (
+                    _LOG_CALL_RE.search(line)
+                    and _BUS_FAULT_REPORT_RE.search(f"{sym.name} {line}")
+                ):
                     continue
-                if not (_SENSITIVE_FORMAT_RE.search(line) or re.search(r"\b(?:PA|phys|physical|fault->addr|fault\.addr)\b", line)):
+                if not (
+                    _SENSITIVE_FORMAT_RE.search(line)
+                    or re.search(
+                        r"\b(?:PA|phys|physical|fault->addr|fault\.addr)\b", line
+                    )
+                ):
                     continue
-                reporter_notes.append((
-                    sym,
-                    f"{sym.file_path}::{sym.name} line {line_no} logs hardware-supplied bus-fault physical address "
-                    f"`{_line_excerpt(line)}`; bus/cacheability/shareability fault reporters should not expose PA/fault->addr."
-                ))
+                reporter_notes.append(
+                    (
+                        sym,
+                        f"{sym.file_path}::{sym.name} line {line_no} logs hardware-supplied bus-fault physical address "
+                        f"`{_line_excerpt(line)}`; bus/cacheability/shareability fault reporters should not expose PA/fault->addr.",
+                    )
+                )
         if reporter_notes:
             for sym, note in reporter_notes[:8]:
                 result.info_leak_notes.append(note)
@@ -1695,7 +2578,12 @@ class PartialCandidateDetector:
                     continue
                 if not _SENSITIVE_TOKEN_RE.search(line):
                     continue
-                if not (_SENSITIVE_FORMAT_RE.search(line) or "phys" in line.lower() or "token" in line.lower() or "secret" in line.lower()):
+                if not (
+                    _SENSITIVE_FORMAT_RE.search(line)
+                    or "phys" in line.lower()
+                    or "token" in line.lower()
+                    or "secret" in line.lower()
+                ):
                     continue
                 result.info_leak_notes.append(
                     f"{sym.file_path}::{sym.name} line {line_no} logs sensitive-looking data `{_line_excerpt(line)}`."
@@ -1704,17 +2592,26 @@ class PartialCandidateDetector:
 
     def _detect_format_wrappers(self, index, result, target_syms, target_prefixes):
         wrappers: dict[str, SymbolDef] = {}
-        target_dir = str(Path(target_syms[0].file_path).parent).replace("\\", "/") if target_syms else ""
+        target_dir = (
+            str(Path(target_syms[0].file_path).parent).replace("\\", "/")
+            if target_syms
+            else ""
+        )
         for sym in _security_symbol_candidates(index):
             same_module = (
                 sym.file_path == (target_syms[0].file_path if target_syms else "")
                 or str(Path(sym.file_path).parent).replace("\\", "/") == target_dir
                 or _module_stem(sym.name) in target_prefixes
             )
-            if not same_module and not _name_has_any(sym.name, {"log", "debug", "trace"}):
+            if not same_module and not _name_has_any(
+                sym.name, {"log", "debug", "trace"}
+            ):
                 continue
             signature = sym.signature.lower()
-            if not re.search(r"(const\s+char\s*\*\s*(?:fmt|format|msg)|char\s*\*\s*(?:fmt|format|msg))", signature):
+            if not re.search(
+                r"(const\s+char\s*\*\s*(?:fmt|format|msg)|char\s*\*\s*(?:fmt|format|msg))",
+                signature,
+            ):
                 continue
             body = self._body_text(sym)
             if not _VARIADIC_WRAPPER_RE.search(body):
@@ -1753,11 +2650,17 @@ class PartialCandidateDetector:
             refs = set(g.referenced_functions)
             if g.file_path != target_file and not refs & target_names:
                 continue
-            if "file_operations" not in lower and "fops" not in lower and ".release" not in lower:
+            if (
+                "file_operations" not in lower
+                and "fops" not in lower
+                and ".release" not in lower
+            ):
                 continue
             has_open = ".open" in lower
             has_release = ".release" in lower
-            has_activity = any(token in lower for token in (".poll", ".ioctl", ".read", ".write"))
+            has_activity = any(
+                token in lower for token in (".poll", ".ioctl", ".read", ".write")
+            )
             has_flush = ".flush" in lower
             if has_open and has_release and has_activity and not has_flush:
                 result.fops_notes.append(
@@ -1795,9 +2698,21 @@ class PartialCandidateDetector:
                 for sym_b, line_b in reverse_edges:
                     if sym_a.name == sym_b.name and sym_a.file_path == sym_b.file_path:
                         continue
-                    if sym_a.file_path != target_file and sym_b.file_path != target_file:
+                    if (
+                        sym_a.file_path != target_file
+                        and sym_b.file_path != target_file
+                    ):
                         continue
-                    key = tuple(sorted((f"{sym_a.file_path}::{sym_a.name}", f"{sym_b.file_path}::{sym_b.name}", a, b)))
+                    key = tuple(
+                        sorted(
+                            (
+                                f"{sym_a.file_path}::{sym_a.name}",
+                                f"{sym_b.file_path}::{sym_b.name}",
+                                a,
+                                b,
+                            )
+                        )
+                    )
                     if key in seen:
                         continue
                     seen.add(key)
@@ -1811,7 +2726,9 @@ class PartialCandidateDetector:
                         return
 
     def _detect_cross_file_lock_cycles(self, index, result, context, target_file):
-        syms = self._context_symbols(index, context, _symbols_for_file(index, target_file))
+        syms = self._context_symbols(
+            index, context, _symbols_for_file(index, target_file)
+        )
         edge_map: dict[tuple[str, str], list[LockOrderEdge]] = defaultdict(list)
         for sym in syms:
             for edge in _symbol_lock_edges(index, sym):
@@ -1833,14 +2750,20 @@ class PartialCandidateDetector:
                         continue
                     if not self._lock_cycle_has_async_or_named_path(index, [e1, e2]):
                         continue
-                    key = tuple(sorted((
-                        f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
-                        f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
-                    )))
+                    key = tuple(
+                        sorted(
+                            (
+                                f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                                f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                            )
+                        )
+                    )
                     if key in seen:
                         continue
                     seen.add(key)
-                    result.cross_file_lock_notes.append(self._lock_cycle_note(index, [e1, e2], target_file))
+                    result.cross_file_lock_notes.append(
+                        self._lock_cycle_note(index, [e1, e2], target_file)
+                    )
                     self._add_edge_nodes(index, result, [e1, e2])
                     if len(result.cross_file_lock_notes) >= 16:
                         return
@@ -1852,30 +2775,48 @@ class PartialCandidateDetector:
                 for c in locks:
                     if c in {a, b}:
                         continue
-                    if not (edge_map.get((a, b)) and edge_map.get((b, c)) and edge_map.get((c, a))):
+                    if not (
+                        edge_map.get((a, b))
+                        and edge_map.get((b, c))
+                        and edge_map.get((c, a))
+                    ):
                         continue
                     for e1 in edge_map[(a, b)]:
                         for e2 in edge_map[(b, c)]:
                             for e3 in edge_map[(c, a)]:
-                                if not self._cross_file_cycle_is_relevant(e1, e2, target_file, extra=e3):
+                                if not self._cross_file_cycle_is_relevant(
+                                    e1, e2, target_file, extra=e3
+                                ):
                                     continue
-                                if not self._lock_cycle_has_async_or_named_path(index, [e1, e2, e3]):
+                                if not self._lock_cycle_has_async_or_named_path(
+                                    index, [e1, e2, e3]
+                                ):
                                     continue
-                                key = tuple(sorted((
-                                    f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
-                                    f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
-                                    f"{e3.file_path}:{e3.function_name}:{e3.first_lock}>{e3.second_lock}",
-                                )))
+                                key = tuple(
+                                    sorted(
+                                        (
+                                            f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                                            f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                                            f"{e3.file_path}:{e3.function_name}:{e3.first_lock}>{e3.second_lock}",
+                                        )
+                                    )
+                                )
                                 if key in seen:
                                     continue
                                 seen.add(key)
-                                result.cross_file_lock_notes.append(self._lock_cycle_note(index, [e1, e2, e3], target_file))
+                                result.cross_file_lock_notes.append(
+                                    self._lock_cycle_note(
+                                        index, [e1, e2, e3], target_file
+                                    )
+                                )
                                 self._add_edge_nodes(index, result, [e1, e2, e3])
                                 if len(result.cross_file_lock_notes) >= 16:
                                     return
 
     def _detect_named_lock_inversion(self, index, result, context, target_file):
-        syms = self._context_symbols(index, context, _symbols_for_file(index, target_file))
+        syms = self._context_symbols(
+            index, context, _symbols_for_file(index, target_file)
+        )
         edge_map: dict[tuple[str, str], list[LockOrderEdge]] = defaultdict(list)
         for sym in syms:
             for edge in _symbol_lock_edges(index, sym):
@@ -1901,10 +2842,14 @@ class PartialCandidateDetector:
                         continue
                     if not self._lock_cycle_has_async_or_named_path(index, [e1, e2]):
                         continue
-                    key = tuple(sorted((
-                        f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
-                        f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
-                    )))
+                    key = tuple(
+                        sorted(
+                            (
+                                f"{e1.file_path}:{e1.function_name}:{e1.first_lock}>{e1.second_lock}",
+                                f"{e2.file_path}:{e2.function_name}:{e2.first_lock}>{e2.second_lock}",
+                            )
+                        )
+                    )
                     if key in seen:
                         continue
                     seen.add(key)
@@ -1918,7 +2863,14 @@ class PartialCandidateDetector:
                     if len(result.named_lock_inversion_notes) >= 8:
                         return
 
-    def _cross_file_cycle_is_relevant(self, first: LockOrderEdge, second: LockOrderEdge, target_file: str, *, extra: LockOrderEdge | None = None) -> bool:
+    def _cross_file_cycle_is_relevant(
+        self,
+        first: LockOrderEdge,
+        second: LockOrderEdge,
+        target_file: str,
+        *,
+        extra: LockOrderEdge | None = None,
+    ) -> bool:
         edges = [first, second] + ([extra] if extra else [])
         files = {edge.file_path for edge in edges}
         if target_file not in files or len(files) < 2:
@@ -1937,15 +2889,29 @@ class PartialCandidateDetector:
 
     def _named_lock_edge(self, edge: LockOrderEdge) -> bool:
         text = f"{edge.first_lock} {edge.second_lock} {edge.function_name} {edge.line_text}".lower()
-        return bool(re.search(r"\b(?:hwaccess|clk|clock|rtm|hwcnt|backend|state|fw|mmu|scheduler)\b", text))
+        return bool(
+            re.search(
+                r"\b(?:hwaccess|clk|clock|rtm|hwcnt|backend|state|fw|mmu|scheduler)\b",
+                text,
+            )
+        )
 
-    def _lock_cycle_has_async_or_named_path(self, index: SymbolIndex, edges: list[LockOrderEdge]) -> bool:
+    def _lock_cycle_has_async_or_named_path(
+        self, index: SymbolIndex, edges: list[LockOrderEdge]
+    ) -> bool:
         text = " ".join(
             f"{edge.file_path} {edge.function_name} {edge.line_text} {edge.first_lock} {edge.second_lock}"
             for edge in edges
         ).lower()
-        has_async = bool(re.search(r"\b(?:callback|notifier|notify|clock|clk|hwcnt|counter|backend|irq|interrupt|work)\b", text))
-        has_named_lock = bool(re.search(r"\b(?:hwaccess|clk|clock|hwcnt|backend|state|ctx|rtm)\b", text))
+        has_async = bool(
+            re.search(
+                r"\b(?:callback|notifier|notify|clock|clk|hwcnt|counter|backend|irq|interrupt|work)\b",
+                text,
+            )
+        )
+        has_named_lock = bool(
+            re.search(r"\b(?:hwaccess|clk|clock|hwcnt|backend|state|ctx|rtm)\b", text)
+        )
         for edge in edges:
             sym = _lookup_symbol(index, edge.file_path, edge.function_name)
             meta = index.meta_by_symbol.get(_symbol_unique_name(sym)) if sym else None
@@ -1953,26 +2919,41 @@ class PartialCandidateDetector:
                 has_async = True
         return has_async and has_named_lock
 
-    def _lock_cycle_note(self, index: SymbolIndex, edges: list[LockOrderEdge], target_file: str) -> str:
+    def _lock_cycle_note(
+        self, index: SymbolIndex, edges: list[LockOrderEdge], target_file: str
+    ) -> str:
         parts = []
         async_hint = False
         for edge in edges:
             sym = _lookup_symbol(index, edge.file_path, edge.function_name)
             meta = index.meta_by_symbol.get(_symbol_unique_name(sym)) if sym else None
-            async_hint = async_hint or bool(meta and (meta.has_callback_words or meta.has_notifier_words))
+            async_hint = async_hint or bool(
+                meta and (meta.has_callback_words or meta.has_notifier_words)
+            )
             role = "target" if edge.file_path == target_file else "companion"
             parts.append(
                 f"{edge.first_lock}->{edge.second_lock} in {role} "
                 f"{edge.file_path}::{edge.function_name} line {edge.line_number}"
             )
-        suffix = " Callback/notifier/asynchronous linkage is present." if async_hint else ""
+        suffix = (
+            " Callback/notifier/asynchronous linkage is present." if async_hint else ""
+        )
         return "Cross-file lock cycle candidate: " + "; ".join(parts) + "." + suffix
 
-    def _add_edge_nodes(self, index: SymbolIndex, result: PartialDetectorResult, edges: list[LockOrderEdge]):
+    def _add_edge_nodes(
+        self,
+        index: SymbolIndex,
+        result: PartialDetectorResult,
+        edges: list[LockOrderEdge],
+    ):
         for edge in edges:
-            self._add_node(index, result, _lookup_symbol(index, edge.file_path, edge.function_name))
+            self._add_node(
+                index, result, _lookup_symbol(index, edge.file_path, edge.function_name)
+            )
 
-    def _interprocedural_lock_edges(self, index: SymbolIndex, syms: list[SymbolDef]) -> list[LockOrderEdge]:
+    def _interprocedural_lock_edges(
+        self, index: SymbolIndex, syms: list[SymbolDef]
+    ) -> list[LockOrderEdge]:
         selected_by_name: dict[str, list[SymbolDef]] = defaultdict(list)
         selected_unique = {_symbol_unique_name(sym) for sym in syms}
         for sym in syms:
@@ -2003,14 +2984,16 @@ class PartialCandidateDetector:
                             for callee_lock in sorted(callee_locks)[:4]:
                                 if held_lock == callee_lock:
                                     continue
-                                edges.append(LockOrderEdge(
-                                    first_lock=held_lock,
-                                    second_lock=callee_lock,
-                                    file_path=sym.file_path,
-                                    function_name=sym.name,
-                                    line_number=line_no,
-                                    line_text=f"{_line_excerpt(line)} -> {callee.file_path}::{callee.name}",
-                                ))
+                                edges.append(
+                                    LockOrderEdge(
+                                        first_lock=held_lock,
+                                        second_lock=callee_lock,
+                                        file_path=sym.file_path,
+                                        function_name=sym.name,
+                                        line_number=line_no,
+                                        line_text=f"{_line_excerpt(line)} -> {callee.file_path}::{callee.name}",
+                                    )
+                                )
         return edges[:160]
 
     def _detect_stale_after_unlock(self, index, result, target_syms):
@@ -2053,7 +3036,9 @@ class PartialCandidateDetector:
                 stale_bits.append("doorbell")
             if "pending" in lower and not re.search(r"pending\s*=\s*0", lower):
                 stale_bits.append("pending")
-            if ("callback" in lower or "work" in lower or "timer" in lower) and not _CANCEL_OR_REF_RE.search(lower):
+            if (
+                "callback" in lower or "work" in lower or "timer" in lower
+            ) and not _CANCEL_OR_REF_RE.search(lower):
                 stale_bits.append("callback/work/timer")
             if not stale_bits:
                 continue
@@ -2069,7 +3054,14 @@ class PartialCandidateDetector:
                 continue
             if _CANCEL_OR_REF_RE.search(body):
                 continue
-            note_line = next((item for item in self._lines(sym) if _CALLBACK_STORE_RE.search(item[1])), None)
+            note_line = next(
+                (
+                    item
+                    for item in self._lines(sym)
+                    if _CALLBACK_STORE_RE.search(item[1])
+                ),
+                None,
+            )
             if not note_line:
                 continue
             result.callback_lifetime_notes.append(
@@ -2077,10 +3069,17 @@ class PartialCandidateDetector:
                 "without nearby refcount, unregister, cancel, or clear evidence."
             )
             self._add_node(index, result, sym)
-            for candidate in self._paired_lifecycle_symbols(index, sym.name, target_prefixes, {"destroy", "release", "term", "shutdown", "disable"}):
+            for candidate in self._paired_lifecycle_symbols(
+                index,
+                sym.name,
+                target_prefixes,
+                {"destroy", "release", "term", "shutdown", "disable"},
+            ):
                 self._add_node(index, result, candidate)
 
-    def _detect_state_transition_protocol(self, index, result, target_syms, context, target_file):
+    def _detect_state_transition_protocol(
+        self, index, result, target_syms, context, target_file
+    ):
         context_syms = self._context_symbols(index, context, target_syms)
         companions = [sym for sym in context_syms if sym.file_path != target_file]
         companion_by_token: dict[str, list[SymbolDef]] = defaultdict(list)
@@ -2097,7 +3096,9 @@ class PartialCandidateDetector:
             if len(result.protocol_notes) >= 24:
                 return
 
-    def _detect_wait_ack_without_verify(self, index, result, sym: SymbolDef, companions: list[SymbolDef]):
+    def _detect_wait_ack_without_verify(
+        self, index, result, sym: SymbolDef, companions: list[SymbolDef]
+    ):
         tokens = _symbol_state_tokens(index, sym)
         if not (tokens & _WAIT_ACK_TOKENS):
             return
@@ -2108,9 +3109,11 @@ class PartialCandidateDetector:
             lower = line.lower()
             if not any(token in lower for token in _WAIT_ACK_TOKENS):
                 continue
-            later = "\n".join(txt for _, txt in lines[idx + 1:idx + 16])
+            later = "\n".join(txt for _, txt in lines[idx + 1 : idx + 16])
             later_tokens = set(_protocol_tokens_from_text(later))
-            if (later_tokens and (_STATE_VERIFY_TOKENS & later_tokens)) or self._has_state_verify_guard_after(index, sym, line_no):
+            if (
+                later_tokens and (_STATE_VERIFY_TOKENS & later_tokens)
+            ) or self._has_state_verify_guard_after(index, sym, line_no):
                 continue
             companion = self._best_protocol_companion(index, sym, companions)
             note = (
@@ -2124,7 +3127,9 @@ class PartialCandidateDetector:
             self._add_node(index, result, sym)
             return
 
-    def _has_state_verify_guard_after(self, index, sym: SymbolDef, line_number: int) -> bool:
+    def _has_state_verify_guard_after(
+        self, index, sym: SymbolDef, line_number: int
+    ) -> bool:
         for guard in _symbol_guards(index, sym):
             if guard.line_number <= line_number:
                 continue
@@ -2134,7 +3139,13 @@ class PartialCandidateDetector:
                 return True
         return False
 
-    def _detect_protocol_lock_mismatch(self, index, result, sym: SymbolDef, companion_by_token: dict[str, list[SymbolDef]]):
+    def _detect_protocol_lock_mismatch(
+        self,
+        index,
+        result,
+        sym: SymbolDef,
+        companion_by_token: dict[str, list[SymbolDef]],
+    ):
         tokens = _symbol_state_tokens(index, sym)
         if not (tokens & (_TRANSITION_TOKENS | _SUBSYSTEM_TOKENS)):
             return
@@ -2163,7 +3174,9 @@ class PartialCandidateDetector:
                 if checked >= 4:
                     return
 
-    def _best_protocol_companion(self, index, sym: SymbolDef, companions: list[SymbolDef]) -> SymbolDef | None:
+    def _best_protocol_companion(
+        self, index, sym: SymbolDef, companions: list[SymbolDef]
+    ) -> SymbolDef | None:
         sym_tokens = _symbol_state_tokens(index, sym)
         candidates = []
         for companion in companions:
@@ -2177,8 +3190,20 @@ class PartialCandidateDetector:
                 score += 2
             if _symbol_locks(index, companion):
                 score += 2
-            candidates.append((-score, companion.file_path, companion.line_number, companion.name, companion))
-        return sorted(candidates, key=lambda item: item[:-1])[0][-1] if candidates else None
+            candidates.append(
+                (
+                    -score,
+                    companion.file_path,
+                    companion.line_number,
+                    companion.name,
+                    companion,
+                )
+            )
+        return (
+            sorted(candidates, key=lambda item: item[:-1])[0][-1]
+            if candidates
+            else None
+        )
 
     def _same_protocol_area(self, a: SymbolDef, b: SymbolDef) -> bool:
         dir_a = str(Path(a.file_path).parent).replace("\\", "/")
@@ -2187,21 +3212,37 @@ class PartialCandidateDetector:
             return True
         stem_a = _module_stem(a.name)
         stem_b = _module_stem(b.name)
-        return bool(stem_a and stem_b and (stem_a.startswith(stem_b) or stem_b.startswith(stem_a)))
+        return bool(
+            stem_a
+            and stem_b
+            and (stem_a.startswith(stem_b) or stem_b.startswith(stem_a))
+        )
 
     def _detect_protected_mmu_protocol(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
         target_uniques = {_symbol_unique_name(target) for target in target_syms}
         companion_mmu = [
-            sym for sym in context_syms
+            sym
+            for sym in context_syms
             if _symbol_unique_name(sym) not in target_uniques
             and (
                 "mmu" in _symbol_state_tokens(index, sym)
-                or re.search(r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b", self._body_text(sym)[:8000], re.IGNORECASE)
+                or re.search(
+                    r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b",
+                    self._body_text(sym)[:8000],
+                    re.IGNORECASE,
+                )
             )
             and (
-                any(self._is_mmu_serialization_lock(lock) for lock in _symbol_locks(index, sym))
-                or re.search(r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b", self._body_text(sym)[:8000], re.IGNORECASE)
+                any(
+                    self._is_mmu_serialization_lock(lock)
+                    for lock in _symbol_locks(index, sym)
+                )
+                or re.search(
+                    r"\bmmu_hw_mutex|mmu.*lock|hw_mutex\b",
+                    self._body_text(sym)[:8000],
+                    re.IGNORECASE,
+                )
             )
         ][:40]
         if not companion_mmu:
@@ -2228,26 +3269,53 @@ class PartialCandidateDetector:
             if waits:
                 wait_line = (waits[0].line_number, waits[0].line_text)
             else:
-                wait_line = next((
-                    (line_no, line) for line_no, line in self._lines(sym)
-                    if re.search(r"\b(?:wait.*protected|protected.*wait|ack|completion|event|fence)\b", line, re.IGNORECASE)
-                ), None)
+                wait_line = next(
+                    (
+                        (line_no, line)
+                        for line_no, line in self._lines(sym)
+                        if re.search(
+                            r"\b(?:wait.*protected|protected.*wait|ack|completion|event|fence)\b",
+                            line,
+                            re.IGNORECASE,
+                        )
+                    ),
+                    None,
+                )
             if not wait_line:
                 continue
             verifies = [event for event in events if event.kind == "protected_verify"]
             sym_locks = _symbol_locks(index, sym)
-            companion = self._best_protocol_companion(index, sym, companion_mmu) or companion_mmu[0]
+            companion = (
+                self._best_protocol_companion(index, sym, companion_mmu)
+                or companion_mmu[0]
+            )
             if not self._same_protocol_area(sym, companion):
                 continue
             companion_locks = set(_symbol_locks(index, companion))
-            if re.search(r"\bmmu_hw_mutex\b", self._body_text(companion)[:8000], re.IGNORECASE):
+            if re.search(
+                r"\bmmu_hw_mutex\b", self._body_text(companion)[:8000], re.IGNORECASE
+            ):
                 companion_locks.add("mmu_hw_mutex")
-            mmu_locks = {lock for lock in companion_locks if self._is_mmu_serialization_lock(lock)}
+            mmu_locks = {
+                lock
+                for lock in companion_locks
+                if self._is_mmu_serialization_lock(lock)
+            }
             missing_mmu_lock = bool(mmu_locks and not (sym_locks & mmu_locks))
-            missing_verify = not any(0 < verify.line_number - wait_line[0] <= 24 for verify in verifies)
+            missing_verify = not any(
+                0 < verify.line_number - wait_line[0] <= 24 for verify in verifies
+            )
             if not missing_verify:
-                later = "\n".join(line for line_no, line in self._lines(sym) if wait_line[0] < line_no <= wait_line[0] + 24)
-                missing_verify = not re.search(r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b", later, re.IGNORECASE)
+                later = "\n".join(
+                    line
+                    for line_no, line in self._lines(sym)
+                    if wait_line[0] < line_no <= wait_line[0] + 24
+                )
+                missing_verify = not re.search(
+                    r"\b(?:protected|protm)[A-Za-z0-9_]*(?:->|\.)?(?:active|entered|enabled|state)\b",
+                    later,
+                    re.IGNORECASE,
+                )
             if not (missing_mmu_lock and missing_verify):
                 continue
             result.protected_mmu_notes.append(
@@ -2263,33 +3331,59 @@ class PartialCandidateDetector:
 
     def _detect_active_singleton_stale(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
-        fault_companion = next((
-            sym for sym in context_syms
-            if sym.file_path not in {target.file_path for target in target_syms}
-            and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}") & {"protected", "fault", "protm"}
-        ), None)
+        fault_companion = next(
+            (
+                sym
+                for sym in context_syms
+                if sym.file_path not in {target.file_path for target in target_syms}
+                and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}")
+                & {"protected", "fault", "protm"}
+            ),
+            None,
+        )
         for sym in target_syms:
             body = self._body_text(sym)[:16000]
             if not _ACTIVE_SINGLETON_RE.search(body):
                 continue
-            if not re.search(r"\b(?:remove|free|release|timeout|stop|teardown|destroy|fault|runnable)\b", f"{sym.name} {body}", re.IGNORECASE):
+            if not re.search(
+                r"\b(?:remove|free|release|timeout|stop|teardown|destroy|fault|runnable)\b",
+                f"{sym.name} {body}",
+                re.IGNORECASE,
+            ):
                 continue
             lines = self._lines(sym)
-            singleton_line = next(((line_no, line) for line_no, line in lines if _ACTIVE_SINGLETON_RE.search(line)), None)
+            singleton_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _ACTIVE_SINGLETON_RE.search(line)
+                ),
+                None,
+            )
             if not singleton_line:
                 continue
             clears_singleton = any(
                 _ACTIVE_SINGLETON_RE.search(line)
-                and re.search(r"=\s*(?:NULL|nullptr|0)\b|clear|reset", line, re.IGNORECASE)
+                and re.search(
+                    r"=\s*(?:NULL|nullptr|0)\b|clear|reset", line, re.IGNORECASE
+                )
                 for _, line in lines
             )
             if clears_singleton:
                 continue
-            teardown_line = next((
-                (line_no, line) for line_no, line in lines
-                if line_no >= singleton_line[0]
-                and re.search(r"\b(?:remove|free|release|timeout|stop|destroy|fault)\w*\b", line, re.IGNORECASE)
-            ), singleton_line)
+            teardown_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if line_no >= singleton_line[0]
+                    and re.search(
+                        r"\b(?:remove|free|release|timeout|stop|destroy|fault)\w*\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                singleton_line,
+            )
             result.active_singleton_stale_notes.append(
                 f"{sym.file_path}::{sym.name} line {singleton_line[0]} references active protected singleton "
                 f"`{_line_excerpt(singleton_line[1])}`, but teardown/removal path line {teardown_line[0]} "
@@ -2304,7 +3398,9 @@ class PartialCandidateDetector:
 
     def _is_mmu_serialization_lock(self, lock: str) -> bool:
         lock_l = str(lock or "").lower()
-        return bool(re.search(r"\bmmu\b|mmu_.*mutex|hw_mutex|mmu\.lock|mmu_lock", lock_l))
+        return bool(
+            re.search(r"\bmmu\b|mmu_.*mutex|hw_mutex|mmu\.lock|mmu_lock", lock_l)
+        )
 
     def _detect_mmu_recovery_rollback(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
@@ -2314,24 +3410,62 @@ class PartialCandidateDetector:
                 continue
             body = self._body_text(sym)[:18000]
             body_tokens = _fact_tokens(body)
-            if not ({"mmu", "pages"} <= body_tokens and {"recovery", "rollback", "failure"} & body_tokens):
+            if not (
+                {"mmu", "pages"} <= body_tokens
+                and {"recovery", "rollback", "failure"} & body_tokens
+            ):
                 continue
             lines = self._lines(sym)
             formulas = _symbol_formula_facts(index, sym)
-            loop_line = next(((line_no, line) for line_no, line in lines if _MMU_RECOVERY_LOOP_RE.search(line)), None)
-            action_line = next(((line_no, line) for line_no, line in lines if _MMU_RECOVERY_ACTION_RE.search(line)), None)
+            loop_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _MMU_RECOVERY_LOOP_RE.search(line)
+                ),
+                None,
+            )
+            action_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in lines
+                    if _MMU_RECOVERY_ACTION_RE.search(line)
+                ),
+                None,
+            )
             if not loop_line or not action_line:
                 continue
-            phys_formula = next((
-                formula for formula in formulas
-                if {"phys", "pages"} & set(formula.tokens)
-                and {"add", "mul", "shift"} & set(formula.operators)
-            ), None)
-            bounds_text = "\n".join(line for _, line in lines[max(0, loop_line[0] - sym.line_number - 4):loop_line[0] - sym.line_number + 8])
+            phys_formula = next(
+                (
+                    formula
+                    for formula in formulas
+                    if {"phys", "pages"} & set(formula.tokens)
+                    and {"add", "mul", "shift"} & set(formula.operators)
+                ),
+                None,
+            )
+            bounds_text = "\n".join(
+                line
+                for _, line in lines[
+                    max(0, loop_line[0] - sym.line_number - 4) : loop_line[0]
+                    - sym.line_number
+                    + 8
+                ]
+            )
             mismatch = (
-                bool(re.search(r"\b(?:nr|count|pages|remaining|inserted|i)\b", bounds_text, re.IGNORECASE))
+                bool(
+                    re.search(
+                        r"\b(?:nr|count|pages|remaining|inserted|i)\b",
+                        bounds_text,
+                        re.IGNORECASE,
+                    )
+                )
                 and bool(re.search(r"\b(?:phys|pfn|base|start)\b", body, re.IGNORECASE))
-                and not re.search(r"\b(?:min|max|clamp|WARN_ON|BUG_ON|assert|if\s*\([^)]*(?:nr|count|pages)[^)]*(?:phys|pfn|base))", bounds_text, re.IGNORECASE)
+                and not re.search(
+                    r"\b(?:min|max|clamp|WARN_ON|BUG_ON|assert|if\s*\([^)]*(?:nr|count|pages)[^)]*(?:phys|pfn|base))",
+                    bounds_text,
+                    re.IGNORECASE,
+                )
             )
             if not mismatch:
                 continue
@@ -2356,27 +3490,37 @@ class PartialCandidateDetector:
             if len(result.mmu_recovery_notes) >= 8:
                 return
 
-    def _advanced_phys_pointer_caller(self, index: SymbolIndex, callee: SymbolDef, context_syms: list[SymbolDef]):
+    def _advanced_phys_pointer_caller(
+        self, index: SymbolIndex, callee: SymbolDef, context_syms: list[SymbolDef]
+    ):
         for sym in context_syms[:120]:
             if _symbol_unique_name(sym) == _symbol_unique_name(callee):
                 continue
             for line_no, line in self._lines(sym):
                 if not re.search(r"\b" + re.escape(callee.name) + r"\s*\(", line):
                     continue
-                if re.search(r"\b(?:phys|pfn|base)\s*(?:\+|\+=|\+\+)|&\s*(?:phys|pfn|base)\s*\[|(?:phys|pfn|base)\s*\+\s*(?:nr|count|pages|inserted|i)\b", line, re.IGNORECASE):
+                if re.search(
+                    r"\b(?:phys|pfn|base)\s*(?:\+|\+=|\+\+)|&\s*(?:phys|pfn|base)\s*\[|(?:phys|pfn|base)\s*\+\s*(?:nr|count|pages|inserted|i)\b",
+                    line,
+                    re.IGNORECASE,
+                ):
                     return sym, line_no, line
         return None
 
     def _detect_policy_gate_before_sink(self, index, result, target_syms, context):
         context_syms = self._context_symbols(index, context, target_syms)
-        companion_guards = self._companion_policy_guards(index, context_syms, {sym.file_path for sym in target_syms})
+        companion_guards = self._companion_policy_guards(
+            index, context_syms, {sym.file_path for sym in target_syms}
+        )
         for sym in target_syms:
             sinks = _symbol_sink_facts(index, sym)
             if not sinks:
                 continue
             guards = _symbol_guards(index, sym)
             for sink in sinks:
-                required = self._required_policy_tokens_for_sink(sink, sym, companion_guards)
+                required = self._required_policy_tokens_for_sink(
+                    sink, sym, companion_guards
+                )
                 if not required:
                     continue
                 if self._has_policy_guard_before(guards, sink.line_number, required):
@@ -2399,20 +3543,39 @@ class PartialCandidateDetector:
                 if len(result.policy_gate_notes) >= 16:
                     return
 
-    def _companion_policy_guards(self, index, syms: list[SymbolDef], target_files: set[str]) -> dict[str, SymbolDef]:
+    def _companion_policy_guards(
+        self, index, syms: list[SymbolDef], target_files: set[str]
+    ) -> dict[str, SymbolDef]:
         guards = {}
         for sym in syms:
             if sym.file_path in target_files:
                 continue
             for guard in _symbol_guards(index, sym):
-                if guard.token in _POLICY_GUARD_WORDS or guard.token in {"protected", "protm", "same_va", "imported"}:
+                if guard.token in _POLICY_GUARD_WORDS or guard.token in {
+                    "protected",
+                    "protm",
+                    "same_va",
+                    "imported",
+                }:
                     guards.setdefault(guard.token, sym)
         return guards
 
-    def _required_policy_tokens_for_sink(self, sink: SinkFact, sym: SymbolDef, companion_guards: dict[str, SymbolDef]) -> set[str]:
+    def _required_policy_tokens_for_sink(
+        self, sink: SinkFact, sym: SymbolDef, companion_guards: dict[str, SymbolDef]
+    ) -> set[str]:
         sink_tokens = _fact_tokens(f"{sink.api} {sink.line_text} {sym.name}")
-        required = sink_tokens & (_POLICY_GUARD_WORDS | {"protected", "protm", "same_va", "imported"})
-        if sink.api in {"mmap", "vm_fault", "remap_pfn_range", "vm_insert_pfn", "vmf_insert_pfn", "insert_pfn", "io_remap_pfn_range"}:
+        required = sink_tokens & (
+            _POLICY_GUARD_WORDS | {"protected", "protm", "same_va", "imported"}
+        )
+        if sink.api in {
+            "mmap",
+            "vm_fault",
+            "remap_pfn_range",
+            "vm_insert_pfn",
+            "vmf_insert_pfn",
+            "insert_pfn",
+            "io_remap_pfn_range",
+        }:
             required |= {"permission"} if "permission" in companion_guards else set()
             required |= {"same_va"} if "same_va" in companion_guards else set()
             required |= {"imported"} if "imported" in companion_guards else set()
@@ -2420,9 +3583,15 @@ class PartialCandidateDetector:
         if "dma_buf" in sink.api or "import" in sink.api or "export" in sink.api:
             required |= {"imported"} if "imported" in companion_guards else set()
             required |= {"owner"} if "owner" in companion_guards else set()
-        return {token for token in required if token in companion_guards or token in sink_tokens}
+        return {
+            token
+            for token in required
+            if token in companion_guards or token in sink_tokens
+        }
 
-    def _has_policy_guard_before(self, guards: list[GuardFact], line_number: int, required: set[str]) -> bool:
+    def _has_policy_guard_before(
+        self, guards: list[GuardFact], line_number: int, required: set[str]
+    ) -> bool:
         for guard in guards:
             if guard.line_number > line_number:
                 continue
@@ -2432,26 +3601,45 @@ class PartialCandidateDetector:
                 return True
         return False
 
-    def _detect_imported_same_va_fault_policy(self, index, result, target_syms, context):
+    def _detect_imported_same_va_fault_policy(
+        self, index, result, target_syms, context
+    ):
         context_syms = self._context_symbols(index, context, target_syms)
-        companion_guards = self._companion_policy_guards(index, context_syms, {sym.file_path for sym in target_syms})
+        companion_guards = self._companion_policy_guards(
+            index, context_syms, {sym.file_path for sym in target_syms}
+        )
         for sym in target_syms:
             if not _name_has_any(sym.name, {"mmap", "fault", "pfn", "vm"}):
                 continue
             body_tokens = _domain_root_tokens(self._body_text(sym)[:16000])
             provenance_tokens = body_tokens | set(companion_guards)
-            if not ({"imported", "same_va"} <= provenance_tokens and ({"umm", "dma_buf", "imported"} & provenance_tokens)):
+            if not (
+                {"imported", "same_va"} <= provenance_tokens
+                and ({"umm", "dma_buf", "imported"} & provenance_tokens)
+            ):
                 continue
             sinks = [
-                sink for sink in _symbol_sink_facts(index, sym)
-                if sink.api in {"vm_fault", "vm_insert_pfn", "vmf_insert_pfn", "insert_pfn", "remap_pfn_range", "io_remap_pfn_range", "mmap"}
+                sink
+                for sink in _symbol_sink_facts(index, sym)
+                if sink.api
+                in {
+                    "vm_fault",
+                    "vm_insert_pfn",
+                    "vmf_insert_pfn",
+                    "insert_pfn",
+                    "remap_pfn_range",
+                    "io_remap_pfn_range",
+                    "mmap",
+                }
                 or re.search(r"\b(?:fault|pfn|mmap)\b", sink.line_text, re.IGNORECASE)
             ]
             if not sinks:
                 continue
             guards = _symbol_guards(index, sym)
             for sink in sinks[:8]:
-                if self._has_policy_guard_before(guards, sink.line_number, {"imported", "same_va"}):
+                if self._has_policy_guard_before(
+                    guards, sink.line_number, {"imported", "same_va"}
+                ):
                     continue
                 result.policy_gate_notes.append(
                     f"{sym.file_path}::{sym.name} line {sink.line_number} reaches CPU fault/PFN mapping sink "
@@ -2470,37 +3658,76 @@ class PartialCandidateDetector:
         target_files = {target.file_path for target in target_syms}
         context_provenance: set[str] = set()
         for ctx_sym in context_syms[:120]:
-            ctx_text = f"{ctx_sym.name} {ctx_sym.signature} {self._body_text(ctx_sym)[:8000]}"
+            ctx_text = (
+                f"{ctx_sym.name} {ctx_sym.signature} {self._body_text(ctx_sym)[:8000]}"
+            )
             context_provenance.update(_domain_root_tokens(ctx_text))
-            context_provenance.update(_fact_tokens(ctx_text) & {"imported", "same_va", "same", "va", "dma", "buf", "umm", "protected", "native"})
-        companion = next((
-            sym for sym in context_syms
-            if sym.file_path not in target_files
-            and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}") & {"imported", "same_va", "dma", "umm", "native"}
-        ), None)
+            context_provenance.update(
+                _fact_tokens(ctx_text)
+                & {
+                    "imported",
+                    "same_va",
+                    "same",
+                    "va",
+                    "dma",
+                    "buf",
+                    "umm",
+                    "protected",
+                    "native",
+                }
+            )
+        companion = next(
+            (
+                sym
+                for sym in context_syms
+                if sym.file_path not in target_files
+                and _fact_tokens(f"{sym.name} {self._body_text(sym)[:8000]}")
+                & {"imported", "same_va", "dma", "umm", "native"}
+            ),
+            None,
+        )
         for sym in target_syms:
             body = self._body_text(sym)[:18000]
             text = f"{sym.name} {sym.signature} {body}"
             tokens = _fact_tokens(text)
-            provenance = (tokens | context_provenance) & (_MAPPING_POLICY_WORDS | {"same", "va", "dma", "buf", "type"})
-            if not ({"imported", "protected"} & provenance or {"dma", "buf"} <= provenance or {"same", "va"} <= provenance):
+            provenance = (tokens | context_provenance) & (
+                _MAPPING_POLICY_WORDS | {"same", "va", "dma", "buf", "type"}
+            )
+            if not (
+                {"imported", "protected"} & provenance
+                or {"dma", "buf"} <= provenance
+                or {"same", "va"} <= provenance
+            ):
                 continue
-            if not (provenance & {"native", "imported", "protected", "umm", "dma", "buf", "same", "va"}):
+            if not (
+                provenance
+                & {"native", "imported", "protected", "umm", "dma", "buf", "same", "va"}
+            ):
                 continue
-            sink_line = next((
-                (line_no, line) for line_no, line in self._lines(sym)
-                if re.search(
-                    r"\b(?:vmap_prot|vmap|kmap|mmap|vm_fault|vm_insert_pfn|vmf_insert_pfn|"
-                    r"remap_pfn_range|copy_to_user|copy_from_user|softjob|kcpu|cpu_vm_fault|reg_mmap|context_mmap)\b",
-                    line,
-                    re.IGNORECASE,
-                )
-            ), None)
+            sink_line = next(
+                (
+                    (line_no, line)
+                    for line_no, line in self._lines(sym)
+                    if re.search(
+                        r"\b(?:vmap_prot|vmap|kmap|mmap|vm_fault|vm_insert_pfn|vmf_insert_pfn|"
+                        r"remap_pfn_range|copy_to_user|copy_from_user|softjob|kcpu|cpu_vm_fault|reg_mmap|context_mmap)\b",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
             if not sink_line:
                 continue
-            prior = "\n".join(line for line_no, line in self._lines(sym) if line_no <= sink_line[0])
-            has_native_gate = re.search(r"\b(?:KBASE_MEM_TYPE_NATIVE|MEM_TYPE_NATIVE)\b", prior, re.IGNORECASE)
-            if has_native_gate and re.search(r"\b(?:if|WARN_ON|BUG_ON|return|goto)\b", prior, re.IGNORECASE):
+            prior = "\n".join(
+                line for line_no, line in self._lines(sym) if line_no <= sink_line[0]
+            )
+            has_native_gate = re.search(
+                r"\b(?:KBASE_MEM_TYPE_NATIVE|MEM_TYPE_NATIVE)\b", prior, re.IGNORECASE
+            )
+            if has_native_gate and re.search(
+                r"\b(?:if|WARN_ON|BUG_ON|return|goto)\b", prior, re.IGNORECASE
+            ):
                 continue
             result.imported_mapping_policy_notes.append(
                 f"{sym.file_path}::{sym.name} line {sink_line[0]} reaches CPU mapping/access sink "
@@ -2527,13 +3754,25 @@ class PartialCandidateDetector:
             if exact_phys_context:
                 for sentinel in sentinels[:8]:
                     sentinel_text = f"{sentinel.expr} {sentinel.line_text}"
-                    if not re.search(r"\b(?:phys|phys_addr|dma|pfn|pa)\b", sentinel_text, re.IGNORECASE):
+                    if not re.search(
+                        r"\b(?:phys|phys_addr|dma|pfn|pa)\b",
+                        sentinel_text,
+                        re.IGNORECASE,
+                    ):
                         continue
-                    downstream = next((
-                        (line_no, line) for line_no, line in lines
-                        if 0 < line_no - sentinel.line_number <= 24
-                        and re.search(r"\b(?:sync|cache|flush|clean|invalidate|pool|free|add|release|skip|page)\b", line, re.IGNORECASE)
-                    ), None)
+                    downstream = next(
+                        (
+                            (line_no, line)
+                            for line_no, line in lines
+                            if 0 < line_no - sentinel.line_number <= 24
+                            and re.search(
+                                r"\b(?:sync|cache|flush|clean|invalidate|pool|free|add|release|skip|page)\b",
+                                line,
+                                re.IGNORECASE,
+                            )
+                        ),
+                        None,
+                    )
                     if not downstream:
                         continue
                     result.sentinel_misuse_notes.append(
@@ -2547,11 +3786,19 @@ class PartialCandidateDetector:
                 if result.sentinel_misuse_notes:
                     continue
             for sentinel in sentinels[:8]:
-                downstream = next((
-                    (line_no, line) for line_no, line in lines
-                    if 0 < line_no - sentinel.line_number <= 18
-                    and re.search(r"\b(?:sync|free|cache|pool|release|remove|skip|present|valid|page)\b", line, re.IGNORECASE)
-                ), None)
+                downstream = next(
+                    (
+                        (line_no, line)
+                        for line_no, line in lines
+                        if 0 < line_no - sentinel.line_number <= 18
+                        and re.search(
+                            r"\b(?:sync|free|cache|pool|release|remove|skip|present|valid|page)\b",
+                            line,
+                            re.IGNORECASE,
+                        )
+                    ),
+                    None,
+                )
                 if not downstream:
                     continue
                 result.sentinel_misuse_notes.append(
@@ -2570,11 +3817,17 @@ class PartialCandidateDetector:
             if not any(action in sym_l for action in wanted_actions):
                 continue
             sym_stem = _module_stem(sym.name)
-            if sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem) or sym_stem in target_prefixes:
+            if (
+                sym_stem == stem
+                or sym_stem.startswith(stem)
+                or stem.startswith(sym_stem)
+                or sym_stem in target_prefixes
+            ):
                 yield sym
 
 
-_PARTIAL_REVIEW_SYS = """\
+_PARTIAL_REVIEW_SYS = (
+    """\
 You are a conservative C/C++ security reviewer.
 Review ONLY the target file for the requested pass.
 Other files are evidence and context only.
@@ -2586,7 +3839,9 @@ Use canonical ownership fields for every finding:
 "primary_line": 123,
 "canonical_key": "src/example.c:example_function:vulnerability_family:root_cause_token"}}
 Report each distinct root cause once. Be conservative.
-vulnerability_type must be one of: """ + _VULN_TYPES + """.
+vulnerability_type must be one of: """
+    + _VULN_TYPES
+    + """.
 Return ONLY valid JSON:
 {{"findings": [{{"is_vulnerable": true, "vulnerability_type": "buffer_overflow",
 "severity": "high", "confidence": "high", "function_name": "target_fn",
@@ -2596,6 +3851,7 @@ Return ONLY valid JSON:
 "canonical_key": "src/target.c:target_fn:memory_bounds:size_check"}}]}}
 Return {{"findings": []}} if none found.
 """
+)
 
 _PARTIAL_REVIEW_USR = """\
 Target file: {target_file}
@@ -2834,5 +4090,4 @@ _PASS_FOCI = {
 }
 
 
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [name for name in globals() if not name.startswith("__")]

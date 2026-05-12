@@ -17,7 +17,9 @@ class TreeSitterReachabilityGraphBuilder:
     def __init__(self):
         self._extractor = CFamilyTreeSitterExtractor()
 
-    def build(self, files, codebase_path: str, *, progress_callback=None) -> ReachabilityGraph:
+    def build(
+        self, files, codebase_path: str, *, progress_callback=None
+    ) -> ReachabilityGraph:
         graph = ReachabilityGraph()
         files = sorted(str(file) for file in files)
         total = len(files)
@@ -36,35 +38,37 @@ class TreeSitterReachabilityGraphBuilder:
             for global_construct in parsed.globals:
                 graph.add_global(global_construct)
             if progress_callback:
-                progress_callback({
-                    "event": "treesitter_graph_progress",
-                    "completed": completed,
-                    "total": total,
-                    "file": file_path,
-                    "functions": len(parsed.nodes),
-                    "globals": len(parsed.globals),
-                    "errors": len(parsed.errors),
-                    "error_messages": parsed.errors[:3],
-                })
+                progress_callback(
+                    {
+                        "event": "treesitter_graph_progress",
+                        "completed": completed,
+                        "total": total,
+                        "file": file_path,
+                        "functions": len(parsed.nodes),
+                        "globals": len(parsed.globals),
+                        "errors": len(parsed.errors),
+                        "error_messages": parsed.errors[:3],
+                    }
+                )
 
         graph.resolve_all_calls()
         if progress_callback:
-            progress_callback({
-                "event": "treesitter_graph_done",
-                "nodes": graph.node_count(),
-                "edges": graph.edge_count(),
-                "sources": len(graph.get_sources()),
-                "sinks": len(graph.get_sinks()),
-                "globals": len(graph.get_globals()),
-                "errors": errors,
-            })
+            progress_callback(
+                {
+                    "event": "treesitter_graph_done",
+                    "nodes": graph.node_count(),
+                    "edges": graph.edge_count(),
+                    "sources": len(graph.get_sources()),
+                    "sinks": len(graph.get_sinks()),
+                    "globals": len(graph.get_globals()),
+                    "errors": errors,
+                }
+            )
         return graph
 
 
 def c_cpp_files(files) -> list[str]:
     allowed = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
     return [
-        str(path)
-        for path in files
-        if os.path.splitext(str(path))[1].lower() in allowed
+        str(path) for path in files if os.path.splitext(str(path))[1].lower() in allowed
     ]

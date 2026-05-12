@@ -52,10 +52,14 @@ class FileFocusBuilder:
         if max_incoming_paths is None:
             max_incoming_paths = DEFAULT_MAX_SOURCE_TO_FILE_PATHS
         self._max_incoming_paths = max(0, int(max_incoming_paths or 0))
-        self._max_incoming_paths_per_target = max(1, int(max_incoming_paths_per_target or 1))
+        self._max_incoming_paths_per_target = max(
+            1, int(max_incoming_paths_per_target or 1)
+        )
         self._max_path_variants = max(1, int(max_path_variants_per_source_target or 1))
         self._max_outgoing_paths = max(0, int(max_outgoing_context_paths or 0))
-        self._max_outgoing_paths_per_target = max(1, int(max_outgoing_paths_per_target or 1))
+        self._max_outgoing_paths_per_target = max(
+            1, int(max_outgoing_paths_per_target or 1)
+        )
         self._reverse_edges = self._build_reverse_edges()
 
     def build(self, target_file: str) -> FileFocus:
@@ -177,7 +181,9 @@ class FileFocusBuilder:
             current = self._graph.get_node(current_name)
             if not current or len(path) >= self._max_path_length:
                 continue
-            for callee_name in sorted(current.resolved_calls or [], key=self._node_sort_key):
+            for callee_name in sorted(
+                current.resolved_calls or [], key=self._node_sort_key
+            ):
                 if callee_name in path:
                     continue
                 callee = self._graph.get_node(callee_name)
@@ -202,7 +208,9 @@ class FileFocusBuilder:
             max_total=self._max_outgoing_paths_per_target,
         )
 
-    def _focus_node_names(self, target_nodes, incoming_paths, outgoing_paths) -> set[str]:
+    def _focus_node_names(
+        self, target_nodes, incoming_paths, outgoing_paths
+    ) -> set[str]:
         needed = {node.unique_name for node in target_nodes}
         for path in list(incoming_paths or []) + list(outgoing_paths or []):
             needed.update(path.path or [])
@@ -214,7 +222,9 @@ class FileFocusBuilder:
                 needed.add(caller_name)
         return needed
 
-    def _dedupe_and_rank_paths(self, paths, *, max_total: int) -> list[ReachabilityPath]:
+    def _dedupe_and_rank_paths(
+        self, paths, *, max_total: int
+    ) -> list[ReachabilityPath]:
         exact_seen = set()
         grouped: dict[tuple[str, str], list[ReachabilityPath]] = defaultdict(list)
         for path in paths:

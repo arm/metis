@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-#cli/entry.py
+# cli/entry.py
 
 import argparse
 from datetime import datetime
@@ -139,11 +139,6 @@ def build_engine(args, runtime):
             "use_reachability_for_review",
             "use_reachability_for_review",
             False,
-        ),
-        reachability_extraction_model=_reachability_value(
-            "reachability_extraction_model",
-            "reachability_extraction_model",
-            "gpt-4.1-mini",
         ),
         reachability_confirmation_model=_reachability_value(
             "reachability_confirmation_model",
@@ -522,12 +517,6 @@ def main():
     )
 
     parser.add_argument(
-        "--reachability-extraction-model",
-        type=str,
-        default=None,
-        help="Deprecated; graph extraction now uses deterministic tree-sitter.",
-    )
-    parser.add_argument(
         "--reachability-confirmation-model",
         type=str,
         default=None,
@@ -574,7 +563,6 @@ def main():
         default=None,
         help="Use reachability-backed review_code/review_file when available.",
     )
-
 
     args = parser.parse_args()
 

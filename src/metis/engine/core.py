@@ -94,9 +94,6 @@ class MetisEngine:
             kwargs.get("use_reachability_for_review"), False
         )
         self.reachability_settings = {
-            "extraction_model": kwargs.get(
-                "reachability_extraction_model", "gpt-4.1-mini"
-            ),
             "confirmation_model": kwargs.get("reachability_confirmation_model"),
             "max_workers": _int_setting(
                 kwargs.get("reachability_workers"), self.max_workers

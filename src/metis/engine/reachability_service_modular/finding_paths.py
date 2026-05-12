@@ -81,7 +81,9 @@ class FindingPathAnnotator:
         matches = [node for node in matches if node is not None]
         if wanted_file:
             same_file = [
-                node for node in matches if self._norm_file(node.file_path) == wanted_file
+                node
+                for node in matches
+                if self._norm_file(node.file_path) == wanted_file
             ]
             if same_file:
                 return sorted(same_file, key=self._node_sort_key)[0]

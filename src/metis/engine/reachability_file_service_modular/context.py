@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: F403,F405
+
 """Context selection for partial single-file reachability review."""
 
 from __future__ import annotations
 
 from .common import *
+
 
 class PartialContextBuilder:
     """Select callers, callees, shared state, lifecycle peers, and callbacks."""
@@ -30,7 +33,9 @@ class PartialContextBuilder:
         self._cache.bind_index(symbol_index)
         target_symbols = _symbols_for_file(symbol_index, target_file)
         if not target_nodes:
-            target_nodes = [self._node_for_symbol(symbol_index, sym) for sym in target_symbols]
+            target_nodes = [
+                self._node_for_symbol(symbol_index, sym) for sym in target_symbols
+            ]
 
         target_names = {node.name for node in target_nodes}
         target_calls = self._target_calls(target_nodes, symbol_index, target_symbols)
@@ -39,26 +44,40 @@ class PartialContextBuilder:
         target_dir = str(Path(target_file).parent).replace("\\", "/")
 
         outbound_syms = self._cap_ranked_symbols(
-            self._outbound_callees(target_calls, symbol_index, target_file, target_dir, target_prefixes),
+            self._outbound_callees(
+                target_calls, symbol_index, target_file, target_dir, target_prefixes
+            ),
             self._caps.max_outbound,
         )
         inbound_syms = self._cap_ranked_symbols(
-            self._inbound_callers(target_names, symbol_index, target_file, target_dir, target_prefixes),
+            self._inbound_callers(
+                target_names, symbol_index, target_file, target_dir, target_prefixes
+            ),
             self._caps.max_inbound,
         )
         shared_syms = self._cap_ranked_symbols(
-            self._shared_state_nodes(target_fields, symbol_index, target_file, target_dir, target_prefixes),
+            self._shared_state_nodes(
+                target_fields, symbol_index, target_file, target_dir, target_prefixes
+            ),
             self._caps.max_shared,
         )
         lifecycle_syms = self._cap_ranked_symbols(
-            self._lifecycle_pair_nodes(target_names, symbol_index, target_file, target_dir, target_prefixes),
+            self._lifecycle_pair_nodes(
+                target_names, symbol_index, target_file, target_dir, target_prefixes
+            ),
             self._caps.max_lifecycle,
         )
         callback_ranked, globals_ = self._callback_context(
-            target_file, target_names, symbol_index, target_dir, target_prefixes)
-        callback_syms = self._cap_ranked_symbols(callback_ranked, self._caps.max_callbacks)
-        inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms = self._cap_total_symbols(
-            inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms)
+            target_file, target_names, symbol_index, target_dir, target_prefixes
+        )
+        callback_syms = self._cap_ranked_symbols(
+            callback_ranked, self._caps.max_callbacks
+        )
+        inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms = (
+            self._cap_total_symbols(
+                inbound_syms, outbound_syms, shared_syms, lifecycle_syms, callback_syms
+            )
+        )
 
         inbound = self._materialize_symbols(symbol_index, inbound_syms)
         outbound = self._materialize_symbols(symbol_index, outbound_syms)
@@ -66,7 +85,9 @@ class PartialContextBuilder:
         lifecycle = self._materialize_symbols(symbol_index, lifecycle_syms)
         callbacks = self._materialize_symbols(symbol_index, callback_syms)
 
-        paths = self._candidate_paths(target_nodes, inbound, outbound, shared, lifecycle, callbacks)
+        paths = self._candidate_paths(
+            target_nodes, inbound, outbound, shared, lifecycle, callbacks
+        )
         return PartialReviewContext(
             target_file=target_file,
             target_nodes=target_nodes,
@@ -87,41 +108,62 @@ class PartialContextBuilder:
         *,
         progress_callback=None,
     ) -> int:
-        selected = {_symbol_unique_name(sym): sym for sym in _symbols_for_file(index, context.target_file)}
-        selected.update({_symbol_unique_name(sym): sym for sym in self._context_symbols(index, context)})
+        selected = {
+            _symbol_unique_name(sym): sym
+            for sym in _symbols_for_file(index, context.target_file)
+        }
+        selected.update(
+            {
+                _symbol_unique_name(sym): sym
+                for sym in self._context_symbols(index, context)
+            }
+        )
         selected_syms = list(selected.values())
         signal = self._companion_signal(index, context, selected_syms)
         if not signal["enabled"]:
             return 0
         if progress_callback:
-            progress_callback({
-                "event": "partial_companion_expansion_start",
-                "locks": len(signal["locks"]),
-                "state_tokens": len(signal["state_tokens"]),
-                "event_tokens": len(signal.get("event_tokens", set())),
-                "callback_or_notifier": bool(signal["callback_or_notifier"]),
-            })
+            progress_callback(
+                {
+                    "event": "partial_companion_expansion_start",
+                    "locks": len(signal["locks"]),
+                    "state_tokens": len(signal["state_tokens"]),
+                    "event_tokens": len(signal.get("event_tokens", set())),
+                    "callback_or_notifier": bool(signal["callback_or_notifier"]),
+                }
+            )
         ranked = self._companion_candidates(index, context, signal)
-        remaining = max(0, self._caps.max_total_context_functions - len(self._all_context_nodes(context)))
+        remaining = max(
+            0,
+            self._caps.max_total_context_functions
+            - len(self._all_context_nodes(context)),
+        )
         limit = min(max(0, int(self._caps.max_companions or 0)), remaining)
         companions = self._cap_ranked_symbols(ranked, limit)
         existing = {node.unique_name for node in self._all_context_nodes(context)}
-        companions = [sym for sym in companions if _symbol_unique_name(sym) not in existing]
+        companions = [
+            sym for sym in companions if _symbol_unique_name(sym) not in existing
+        ]
         context.companion_nodes = self._dedupe_nodes(
-            list(context.companion_nodes or []) + self._materialize_symbols(index, companions)
+            list(context.companion_nodes or [])
+            + self._materialize_symbols(index, companions)
         )
         context.candidate_paths = _dedupe_paths(
             list(context.candidate_paths or []) + self._companion_paths(index, context)
         )
         if progress_callback:
-            progress_callback({
-                "event": "partial_companion_expansion_done",
-                "companions": len(context.companion_nodes),
-                "candidate_symbols": len(ranked),
-            })
+            progress_callback(
+                {
+                    "event": "partial_companion_expansion_done",
+                    "companions": len(context.companion_nodes),
+                    "candidate_symbols": len(ranked),
+                }
+            )
         return len(context.companion_nodes)
 
-    def _context_symbols(self, index: SymbolIndex, context: PartialReviewContext) -> list[SymbolDef]:
+    def _context_symbols(
+        self, index: SymbolIndex, context: PartialReviewContext
+    ) -> list[SymbolDef]:
         symbols = {}
         for node in self._all_context_nodes(context):
             sym = _lookup_symbol(index, node.file_path, node.name)
@@ -132,15 +174,24 @@ class PartialContextBuilder:
     def _all_context_nodes(self, context: PartialReviewContext) -> list[FunctionNode]:
         nodes = {}
         for group in (
-            context.target_nodes, context.inbound_callers, context.outbound_callees,
-            context.shared_state_nodes, context.lifecycle_pair_nodes,
-            context.callback_nodes, context.companion_nodes,
+            context.target_nodes,
+            context.inbound_callers,
+            context.outbound_callees,
+            context.shared_state_nodes,
+            context.lifecycle_pair_nodes,
+            context.callback_nodes,
+            context.companion_nodes,
         ):
             for node in group or []:
                 nodes[node.unique_name] = node
         return list(nodes.values())
 
-    def _companion_signal(self, index: SymbolIndex, context: PartialReviewContext, symbols: list[SymbolDef]) -> dict:
+    def _companion_signal(
+        self,
+        index: SymbolIndex,
+        context: PartialReviewContext,
+        symbols: list[SymbolDef],
+    ) -> dict:
         locks: set[str] = set()
         state_tokens: set[str] = set()
         event_tokens: set[str] = set()
@@ -157,12 +208,24 @@ class PartialContextBuilder:
             locks.update(sym_locks)
             state_tokens.update(sym_tokens)
             event_tokens.update(
-                event.token for event in sym_events
-                if event.kind in {
-                    "resource_bind", "resource_clear", "async_schedule", "async_clear",
-                    "pm_sensitive_action", "pm_runtime_get", "tracker_remove",
-                    "tracker_invalidate", "slot_first", "slot_second", "protected_wait",
-                    "fault_clear", "suspend_resource", "active_singleton",
+                event.token
+                for event in sym_events
+                if event.kind
+                in {
+                    "resource_bind",
+                    "resource_clear",
+                    "async_schedule",
+                    "async_clear",
+                    "pm_sensitive_action",
+                    "pm_runtime_get",
+                    "tracker_remove",
+                    "tracker_invalidate",
+                    "slot_first",
+                    "slot_second",
+                    "protected_wait",
+                    "fault_clear",
+                    "suspend_resource",
+                    "active_singleton",
                 }
                 and event.token not in {"register", "power", "pm", "slot"}
             )
@@ -172,10 +235,20 @@ class PartialContextBuilder:
                 meta and (meta.has_callback_words or meta.has_notifier_words)
             )
             lifecycle_concurrency = lifecycle_concurrency or bool(
-                meta and meta.has_lifecycle_words and (sym_locks or (sym_tokens & _TRANSITION_TOKENS))
+                meta
+                and meta.has_lifecycle_words
+                and (sym_locks or (sym_tokens & _TRANSITION_TOKENS))
             )
-        strong_protocol = bool(state_tokens & (_WAIT_ACK_TOKENS | _STATE_VERIFY_TOKENS | _SUBSYSTEM_TOKENS))
-        enabled = bool(has_lock_edges or callback_or_notifier or strong_protocol or lifecycle_concurrency or exact_ordering)
+        strong_protocol = bool(
+            state_tokens & (_WAIT_ACK_TOKENS | _STATE_VERIFY_TOKENS | _SUBSYSTEM_TOKENS)
+        )
+        enabled = bool(
+            has_lock_edges
+            or callback_or_notifier
+            or strong_protocol
+            or lifecycle_concurrency
+            or exact_ordering
+        )
         return {
             "enabled": enabled,
             "locks": locks,
@@ -187,7 +260,9 @@ class PartialContextBuilder:
             "exact_ordering": exact_ordering,
         }
 
-    def _companion_candidates(self, index: SymbolIndex, context: PartialReviewContext, signal: dict) -> list:
+    def _companion_candidates(
+        self, index: SymbolIndex, context: PartialReviewContext, signal: dict
+    ) -> list:
         target_file = context.target_file
         target_dir = str(Path(target_file).parent).replace("\\", "/")
         target_names = {node.name for node in context.target_nodes}
@@ -198,32 +273,69 @@ class PartialContextBuilder:
         for lock in signal["locks"]:
             for sym in index.symbols_by_lock.get(lock, [])[:160]:
                 self._remember_companion_candidate(
-                    ranked, index, sym, target_file, target_dir, target_prefixes,
-                    signal, existing, bonus=42,
+                    ranked,
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    signal,
+                    existing,
+                    bonus=42,
                 )
         for token in signal["state_tokens"]:
             for sym in index.symbols_by_state_token.get(token, [])[:180]:
                 self._remember_companion_candidate(
-                    ranked, index, sym, target_file, target_dir, target_prefixes,
-                    signal, existing, bonus=32,
+                    ranked,
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    signal,
+                    existing,
+                    bonus=32,
                 )
         for token in signal.get("event_tokens", set()):
             for sym in index.symbols_by_event_token.get(token, [])[:140]:
                 self._remember_companion_candidate(
-                    ranked, index, sym, target_file, target_dir, target_prefixes,
-                    signal, existing, bonus=36,
+                    ranked,
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    signal,
+                    existing,
+                    bonus=36,
                 )
         if signal["callback_or_notifier"]:
-            for sym in (_callback_symbol_candidates(index) + _notifier_symbol_candidates(index))[:220]:
+            for sym in (
+                _callback_symbol_candidates(index) + _notifier_symbol_candidates(index)
+            )[:220]:
                 self._remember_companion_candidate(
-                    ranked, index, sym, target_file, target_dir, target_prefixes,
-                    signal, existing, bonus=26,
+                    ranked,
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    signal,
+                    existing,
+                    bonus=26,
                 )
         if signal["lifecycle_concurrency"]:
             for sym in _lifecycle_symbol_candidates(index)[:220]:
                 self._remember_companion_candidate(
-                    ranked, index, sym, target_file, target_dir, target_prefixes,
-                    signal, existing, bonus=18,
+                    ranked,
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    signal,
+                    existing,
+                    bonus=18,
                 )
         return list(ranked.values())
 
@@ -247,31 +359,52 @@ class PartialContextBuilder:
         sym_stem = _module_stem(sym.name)
         lock_overlap = len(_symbol_locks(index, sym) & signal["locks"])
         token_overlap = len(_symbol_state_tokens(index, sym) & signal["state_tokens"])
-        event_overlap = len({event.token for event in _symbol_event_facts(index, sym)} & signal.get("event_tokens", set()))
-        if not lock_overlap and not token_overlap and not event_overlap and sym_dir != target_dir and sym_stem not in target_prefixes:
+        event_overlap = len(
+            {event.token for event in _symbol_event_facts(index, sym)}
+            & signal.get("event_tokens", set())
+        )
+        if (
+            not lock_overlap
+            and not token_overlap
+            and not event_overlap
+            and sym_dir != target_dir
+            and sym_stem not in target_prefixes
+        ):
             return
-        score_bonus = bonus + min(30, lock_overlap * 12) + min(24, token_overlap * 8) + min(24, event_overlap * 8)
+        score_bonus = (
+            bonus
+            + min(30, lock_overlap * 12)
+            + min(24, token_overlap * 8)
+            + min(24, event_overlap * 8)
+        )
         if sym_dir == target_dir:
             score_bonus += 28
         elif sym_dir.startswith(target_dir) or target_dir.startswith(sym_dir):
             score_bonus += 14
         if sym_stem in target_prefixes or any(
             sym_stem.startswith(prefix) or prefix.startswith(sym_stem)
-            for prefix in target_prefixes if prefix
+            for prefix in target_prefixes
+            if prefix
         ):
             score_bonus += 18
         meta = index.meta_by_symbol.get(unique)
         if meta and (meta.has_callback_words or meta.has_notifier_words):
             score_bonus += 10
-        rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=score_bonus)
+        rank = self._rank_symbol(
+            index, sym, target_file, target_dir, target_prefixes, bonus=score_bonus
+        )
         self._remember_ranked_symbol(ranked_by_unique, rank, sym)
 
-    def _companion_paths(self, index: SymbolIndex, context: PartialReviewContext) -> list[ReachabilityPath]:
+    def _companion_paths(
+        self, index: SymbolIndex, context: PartialReviewContext
+    ) -> list[ReachabilityPath]:
         paths = []
         for target_node in context.target_nodes:
             target_sym = _lookup_symbol(index, target_node.file_path, target_node.name)
             target_locks = _symbol_locks(index, target_sym) if target_sym else set()
-            target_tokens = _symbol_state_tokens(index, target_sym) if target_sym else set()
+            target_tokens = (
+                _symbol_state_tokens(index, target_sym) if target_sym else set()
+            )
             for node in context.companion_nodes:
                 sym = _lookup_symbol(index, node.file_path, node.name)
                 if not sym:
@@ -283,12 +416,14 @@ class PartialContextBuilder:
                     or target_tokens & _symbol_state_tokens(index, sym)
                     or _module_stem(target_node.name) == _module_stem(node.name)
                 ):
-                    paths.append(ReachabilityPath(
-                        target_node.unique_name,
-                        node.unique_name,
-                        [target_node.unique_name, node.unique_name],
-                        node.sink_type,
-                    ))
+                    paths.append(
+                        ReachabilityPath(
+                            target_node.unique_name,
+                            node.unique_name,
+                            [target_node.unique_name, node.unique_name],
+                            node.sink_type,
+                        )
+                    )
         return paths
 
     def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
@@ -311,24 +446,39 @@ class PartialContextBuilder:
     def _target_fields(self, target_file, index):
         return {use.field for use in _field_uses_for_file(index, target_file)}
 
-    def _rank_symbol(self, index: SymbolIndex, sym: SymbolDef, target_file, target_dir, target_prefixes, bonus=0):
+    def _rank_symbol(
+        self,
+        index: SymbolIndex,
+        sym: SymbolDef,
+        target_file,
+        target_dir,
+        target_prefixes,
+        bonus=0,
+    ):
         score = bonus
         if sym.file_path == target_file:
             score += 100
         if str(Path(sym.file_path).parent).replace("\\", "/") == target_dir:
             score += 45
         stem = _module_stem(sym.name)
-        if stem in target_prefixes or any(stem.startswith(p) or p.startswith(stem) for p in target_prefixes if p):
+        if stem in target_prefixes or any(
+            stem.startswith(p) or p.startswith(stem) for p in target_prefixes if p
+        ):
             score += 30
         calls = _symbol_calls(index, sym)
         meta = index.meta_by_symbol.get(_symbol_unique_name(sym))
         if (meta and meta.has_security_api) or any(
-            _SECURITY_API_RE.search(f"{call}(") or call in _COMMON_LIBC_CALLS for call in calls
+            _SECURITY_API_RE.search(f"{call}(") or call in _COMMON_LIBC_CALLS
+            for call in calls
         ):
             score += 12
-        if (meta and meta.has_lifecycle_words) or _name_has_any(sym.name, _LIFECYCLE_WORDS):
+        if (meta and meta.has_lifecycle_words) or _name_has_any(
+            sym.name, _LIFECYCLE_WORDS
+        ):
             score += 8
-        if (meta and meta.has_callback_words) or _name_has_any(sym.name, _CALLBACK_WORDS):
+        if (meta and meta.has_callback_words) or _name_has_any(
+            sym.name, _CALLBACK_WORDS
+        ):
             score += 10
         if "\\test\\" in sym.file_path.lower() or "/test/" in sym.file_path.lower():
             score -= 15
@@ -366,7 +516,9 @@ class PartialContextBuilder:
             output.append(kept)
         return output
 
-    def _materialize_symbols(self, index: SymbolIndex, symbols: list[SymbolDef]) -> list[FunctionNode]:
+    def _materialize_symbols(
+        self, index: SymbolIndex, symbols: list[SymbolDef]
+    ) -> list[FunctionNode]:
         return [self._node_for_symbol(index, sym) for sym in symbols]
 
     def _node_for_symbol(self, index: SymbolIndex, sym: SymbolDef) -> FunctionNode:
@@ -384,28 +536,41 @@ class PartialContextBuilder:
             if call in _COMMON_LIBC_CALLS:
                 continue
             for sym in index.definitions.get(call, []):
-                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=20)
+                rank = self._rank_symbol(
+                    index, sym, target_file, target_dir, target_prefixes, bonus=20
+                )
                 self._remember_ranked_symbol(ranked, rank, sym)
         return list(ranked.values())
 
-    def _caller_symbol_for_site(self, site: CallSite, index: SymbolIndex) -> SymbolDef | None:
+    def _caller_symbol_for_site(
+        self, site: CallSite, index: SymbolIndex
+    ) -> SymbolDef | None:
         for sym in _symbols_for_file(index, site.caller_file):
-            if sym.name == site.caller_name and sym.body_start <= site.line_number <= sym.body_end:
+            if (
+                sym.name == site.caller_name
+                and sym.body_start <= site.line_number <= sym.body_end
+            ):
                 return sym
         return _lookup_symbol(index, site.caller_file, site.caller_name)
 
-    def _inbound_callers(self, target_names, index, target_file, target_dir, target_prefixes):
+    def _inbound_callers(
+        self, target_names, index, target_file, target_dir, target_prefixes
+    ):
         ranked = {}
         for name in target_names:
             for site in index.callsites.get(name, []):
                 sym = self._caller_symbol_for_site(site, index)
                 if not sym:
                     continue
-                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=35)
+                rank = self._rank_symbol(
+                    index, sym, target_file, target_dir, target_prefixes, bonus=35
+                )
                 self._remember_ranked_symbol(ranked, rank, sym)
         return list(ranked.values())
 
-    def _shared_state_nodes(self, fields, index, target_file, target_dir, target_prefixes):
+    def _shared_state_nodes(
+        self, fields, index, target_file, target_dir, target_prefixes
+    ):
         ranked = {}
         for field_name in fields:
             if field_name in _GENERIC_FIELDS and field_name not in _IMPORTANT_FIELDS:
@@ -419,14 +584,23 @@ class PartialContextBuilder:
                 sym = self._symbol_for_function(index, use.file_path, use.function_name)
                 if not sym:
                     continue
-                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=rarity_bonus)
+                rank = self._rank_symbol(
+                    index,
+                    sym,
+                    target_file,
+                    target_dir,
+                    target_prefixes,
+                    bonus=rarity_bonus,
+                )
                 self._remember_ranked_symbol(ranked, rank, sym)
         return list(ranked.values())
 
     def _symbol_for_function(self, index, file_path, name):
         return _lookup_symbol(index, file_path, name)
 
-    def _lifecycle_pair_nodes(self, target_names, index, target_file, target_dir, target_prefixes):
+    def _lifecycle_pair_nodes(
+        self, target_names, index, target_file, target_dir, target_prefixes
+    ):
         wanted = set()
         for name in target_names:
             parts = _tokens(name)
@@ -442,8 +616,14 @@ class PartialContextBuilder:
             sym_l = sym.name.lower()
             sym_stem = _module_stem(sym.name)
             for stem, action in wanted:
-                if action in sym_l and (sym_stem == stem or sym_stem.startswith(stem) or stem.startswith(sym_stem)):
-                    rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=28)
+                if action in sym_l and (
+                    sym_stem == stem
+                    or sym_stem.startswith(stem)
+                    or stem.startswith(sym_stem)
+                ):
+                    rank = self._rank_symbol(
+                        index, sym, target_file, target_dir, target_prefixes, bonus=28
+                    )
                     self._remember_ranked_symbol(ranked, rank, sym)
                     break
         return list(ranked.values())
@@ -491,7 +671,9 @@ class PartialContextBuilder:
         }
         return pairs.get(action, ())
 
-    def _callback_context(self, target_file, target_names, index, target_dir, target_prefixes):
+    def _callback_context(
+        self, target_file, target_names, index, target_dir, target_prefixes
+    ):
         ranked = {}
         globals_ = []
         selected_names = set(target_names)
@@ -500,42 +682,88 @@ class PartialContextBuilder:
             refs_target = bool(set(g.referenced_functions) & target_names)
             same_file = g.file_path == target_file
             if same_file or refs_target or any(word in gl for word in _CALLBACK_WORDS):
-                if same_file or refs_target or str(Path(g.file_path).parent).replace("\\", "/") == target_dir:
+                if (
+                    same_file
+                    or refs_target
+                    or str(Path(g.file_path).parent).replace("\\", "/") == target_dir
+                ):
                     globals_.append(g)
                     selected_names.update(g.referenced_functions)
         for name in selected_names:
             for sym in index.definitions.get(name, []):
-                rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=30)
+                rank = self._rank_symbol(
+                    index, sym, target_file, target_dir, target_prefixes, bonus=30
+                )
                 self._remember_ranked_symbol(ranked, rank, sym)
-        for sym in _callback_symbol_candidates(index) + _lifecycle_symbol_candidates(index):
-            if str(Path(sym.file_path).parent).replace("\\", "/") != target_dir and sym.file_path != target_file:
+        for sym in _callback_symbol_candidates(index) + _lifecycle_symbol_candidates(
+            index
+        ):
+            if (
+                str(Path(sym.file_path).parent).replace("\\", "/") != target_dir
+                and sym.file_path != target_file
+            ):
                 continue
-            rank = self._rank_symbol(index, sym, target_file, target_dir, target_prefixes, bonus=18)
+            rank = self._rank_symbol(
+                index, sym, target_file, target_dir, target_prefixes, bonus=18
+            )
             self._remember_ranked_symbol(ranked, rank, sym)
         return list(ranked.values()), globals_[:40]
 
-    def _candidate_paths(self, target_nodes, inbound, outbound, shared, lifecycle, callbacks):
+    def _candidate_paths(
+        self, target_nodes, inbound, outbound, shared, lifecycle, callbacks
+    ):
         target_by_name = {n.name: n for n in target_nodes}
         paths = []
         for caller in inbound:
             for target in target_nodes:
                 if target.name in caller.calls:
-                    paths.append(ReachabilityPath(caller.unique_name, target.unique_name, [caller.unique_name, target.unique_name], target.sink_type))
+                    paths.append(
+                        ReachabilityPath(
+                            caller.unique_name,
+                            target.unique_name,
+                            [caller.unique_name, target.unique_name],
+                            target.sink_type,
+                        )
+                    )
         for target in target_nodes:
             for callee in outbound:
                 if callee.name in target.calls:
-                    paths.append(ReachabilityPath(target.unique_name, callee.unique_name, [target.unique_name, callee.unique_name], callee.sink_type))
+                    paths.append(
+                        ReachabilityPath(
+                            target.unique_name,
+                            callee.unique_name,
+                            [target.unique_name, callee.unique_name],
+                            callee.sink_type,
+                        )
+                    )
         related = shared + lifecycle + callbacks
         for target in target_nodes:
             for node in related:
                 if node.unique_name == target.unique_name:
                     continue
-                if _module_stem(node.name) == _module_stem(target.name) or target.name in node.calls or node.name in target.calls:
-                    paths.append(ReachabilityPath(target.unique_name, node.unique_name, [target.unique_name, node.unique_name], node.sink_type))
+                if (
+                    _module_stem(node.name) == _module_stem(target.name)
+                    or target.name in node.calls
+                    or node.name in target.calls
+                ):
+                    paths.append(
+                        ReachabilityPath(
+                            target.unique_name,
+                            node.unique_name,
+                            [target.unique_name, node.unique_name],
+                            node.sink_type,
+                        )
+                    )
                     if node.name in target_by_name:
-                        paths.append(ReachabilityPath(node.unique_name, target.unique_name, [node.unique_name, target.unique_name], target.sink_type))
+                        paths.append(
+                            ReachabilityPath(
+                                node.unique_name,
+                                target.unique_name,
+                                [node.unique_name, target.unique_name],
+                                target.sink_type,
+                            )
+                        )
         return _dedupe_paths(paths)
 
 
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [name for name in globals() if not name.startswith("__")]
