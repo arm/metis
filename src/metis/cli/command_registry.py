@@ -73,7 +73,7 @@ class CommandSpec:
             return False
         if ignore_index_requested and self.index_policy != "optional":
             print_console(
-                "[red]Error:[/red] --ignore-index can only be used with review_code, review_file, review_patch, or triage.",
+                "[red]Error:[/red] --ignore-index can only be used with review_code, review_file, review_patch, reachability, or triage.",
                 args.quiet,
             )
             return False
@@ -165,7 +165,7 @@ COMMANDS = {
         tracked=True,
         invocation_mode="args",
         prepares_output_file=False,
-        index_policy="none",
+        index_policy="optional",
     ),
     "help": CommandSpec(show_help, invocation_mode="meta"),
     "version": CommandSpec(show_version, invocation_mode="meta"),

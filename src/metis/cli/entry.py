@@ -49,6 +49,10 @@ InMemoryHistory = None
 def determine_output_file(cmd, args, cmd_args):
     """Set args.output_file list if not provided, or extract from cmd_args."""
     existing_outputs = list(args.output_file or [])
+    auto_outputs = list(getattr(args, "_metis_auto_output_file", []) or [])
+    if auto_outputs and existing_outputs == auto_outputs:
+        existing_outputs = []
+        args.output_file = None
     overrides: list[str] = []
 
     while "--output-file" in cmd_args:
@@ -59,6 +63,7 @@ def determine_output_file(cmd, args, cmd_args):
 
     if overrides:
         args.output_file = overrides
+        args._metis_auto_output_file = []
         return
 
     if cmd == "triage":
@@ -67,11 +72,13 @@ def determine_output_file(cmd, args, cmd_args):
 
     if existing_outputs:
         args.output_file = existing_outputs
+        args._metis_auto_output_file = []
         return
 
     Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     args.output_file = [f"results/{cmd}_{timestamp}.json"]
+    args._metis_auto_output_file = list(args.output_file)
 
 
 def resolve_custom_prompt(args):
@@ -551,13 +558,17 @@ def main():
         "--reachability-max-paths",
         type=int,
         default=None,
-        help="Max paths to analyze (0 = all, interactive mode will prompt). Default: 0",
+        help=(
+            "Max source-rooted paths to confirm. At 0, reachability uses an "
+            "automatic representative cap and review_code skips path confirmation. "
+            "Default: 0"
+        ),
     )
     parser.add_argument(
         "--reachability-max-path-length",
         type=int,
         default=None,
-        help="Maximum source-to-sink path length for reachability tracing (default: 25)",
+        help="Maximum source-rooted path length for reachability tracing (default: 25)",
     )
     parser.add_argument(
         "--use-reachability-for-review",

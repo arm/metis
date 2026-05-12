@@ -14,9 +14,58 @@ def test_review_code_runs(engine):
     engine.review.review_file = Mock(
         return_value={"file": "test.py", "reviews": ["Issue"]}
     )
-    results = list(engine.review.review_code())
+    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.py"]))
     assert len(results) >= 1
     assert all("reviews" in r for r in results)
+
+
+def test_review_code_uses_reachability_for_c_cpp(engine):
+    reachability = Mock()
+    reachability.review_codebase.return_value = [
+        {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
+    ]
+    engine.review._reachability_service = reachability
+    engine.review._reachability_cache = None
+    engine.review.review_file = Mock(
+        return_value={"file": "test.c", "reviews": ["legacy"]}
+    )
+
+    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
+
+    assert results == [
+        {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
+    ]
+    reachability.review_codebase.assert_called_once()
+    assert reachability.review_codebase.call_args.kwargs["analysis_profile"] == "review"
+    assert reachability.review_codebase.call_args.kwargs["confirm_paths"] is False
+    engine.review.review_file.assert_not_called()
+
+
+def test_review_code_uses_legacy_for_non_c_cpp_even_when_reachability_enabled(engine):
+    reachability = Mock()
+    reachability.review_codebase.return_value = [
+        {"file": "ignored.c", "reviews": [{"issue": "Issue"}]}
+    ]
+    engine.review._use_reachability_for_review = True
+    engine.review._reachability_service = reachability
+    engine.review._reachability_cache = None
+    engine.review.review_file = Mock(
+        return_value={"file": "test.py", "reviews": ["legacy"]}
+    )
+
+    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.py"]))
+
+    assert results == [{"file": "test.py", "reviews": ["legacy"]}]
+    reachability.review_codebase.assert_not_called()
+    engine.review.review_file.assert_called_once()
+
+
+def test_review_code_reports_when_no_supported_files(engine):
+    results = list(engine.review.review_code(get_code_files_func=lambda: []))
+
+    assert len(results) == 1
+    assert results[0]["reviews"] == []
+    assert "No supported code files found" in results[0]["errors"][0]
 
 
 def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):

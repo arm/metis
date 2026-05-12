@@ -57,16 +57,31 @@ class ReviewService:
             include_suffixed_sources=not options.use_retrieval_context
         )
 
-    def _get_reachability_reviews(self):
+    def _get_reachability_reviews(self, *, progress_callback=None):
         if self._reachability_cache is not None:
             return list(self._reachability_cache)
 
         with self._reachability_lock:
             if self._reachability_cache is None:
+                settings = dict(self._reachability_settings)
+                settings.setdefault("analysis_profile", "review")
+                if not int(settings.get("max_paths") or 0):
+                    settings.setdefault("confirm_paths", False)
+                if progress_callback is not None:
+                    settings["progress_callback"] = progress_callback
                 self._reachability_cache = self._reachability_service.review_codebase(
-                    **self._reachability_settings
+                    **settings
                 )
         return list(self._reachability_cache)
+
+    def uses_reachability_for_code_review(self, review_file_func=None, get_code_files_func=None):
+        files = (get_code_files_func or self.get_code_files)()
+        c_cpp_files = [path for path in files if self._is_c_cpp_file(path)]
+        return (
+            self._reachability_service is not None
+            and review_file_func is None
+            and bool(c_cpp_files)
+        )
 
     def _find_reachability_review_for_file(self, file_path):
         return self._reachability_service.review_single_file_from_codebase(
@@ -281,30 +296,41 @@ class ReviewService:
         options: ReviewOptions | None = None,
         *,
         use_retrieval_context: bool | None = None,
+        progress_callback=None,
     ) -> Iterator[dict | None]:
         options = coerce_review_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
-        if (
-            self._use_reachability_for_review
-            and self._reachability_service is not None
-            and review_file_func is None
-            and get_code_files_func is None
-        ):
-            results = self._get_reachability_reviews()
-            if not results:
-                return
-            for result in results:
-                yield result
-            return
         files = (
             get_code_files_func()
             if get_code_files_func is not None
             else self.get_code_files(options=options)
         )
         if not files:
+            yield {
+                "file": "",
+                "file_path": self._config.codebase_path,
+                "reviews": [],
+                "errors": [
+                    "No supported code files found under codebase_path. "
+                    "Check --codebase-path and the configured language plugins."
+                ],
+            }
             return
+
+        use_reachability = self.uses_reachability_for_code_review(
+            review_file_func=review_file_func,
+            get_code_files_func=lambda: files,
+        )
+        if use_reachability:
+            results = self._get_reachability_reviews(progress_callback=progress_callback)
+            for result in results:
+                yield result
+            files = [path for path in files if not self._is_c_cpp_file(path)]
+            if not files:
+                return
+
         if review_file_func is None:
             def review_fn(path, *, options=None):
                 return self.review_file(path, options=options, mode="classic")

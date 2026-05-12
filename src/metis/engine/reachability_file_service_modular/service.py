@@ -352,7 +352,7 @@ class PartialReachabilityFileService:
             "code_snippet": code_snippet,
             "cwe": _partial_cwe(vtype, finding),
             "severity": _severity_title(finding.severity, "Medium"),
-            "confidence": _severity_title(finding.confidence, "Medium"),
+            "confidence": _confidence_score(finding.confidence),
             "reasoning": "\n".join(reasoning_parts),
             "mitigation": str(finding.root_cause or "").strip(),
         }

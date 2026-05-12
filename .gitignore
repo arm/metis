@@ -7,6 +7,7 @@ dist/
 *.DS_Store
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
 .python-version
 uv.lock
 results/

@@ -28,6 +28,7 @@ from ..reachability_common import (
     ReachabilityPath,
     VulnerabilityFinding,
     _VULN_TO_CWE,
+    _confidence_score,
     _dedupe_paths,
     _normalise_vuln_type,
     _post_filter_findings,

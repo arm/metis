@@ -13,12 +13,40 @@ from metis.cli import command_registry
 from metis.cli.command_runtime import CommandRuntime
 
 
+def test_determine_output_file_regenerates_auto_output_per_command(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    args = SimpleNamespace(output_file=None)
+    cmd_args = []
+
+    entry.determine_output_file("review_code", args, cmd_args)
+    first = list(args.output_file)
+
+    entry.determine_output_file("reachability", args, cmd_args)
+    second = list(args.output_file)
+
+    assert first != second
+    assert first[0].startswith("results/review_code_")
+    assert second[0].startswith("results/reachability_")
+
+
+def test_determine_output_file_preserves_user_output(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    args = SimpleNamespace(output_file=["custom.json"])
+    cmd_args = []
+
+    entry.determine_output_file("review_code", args, cmd_args)
+    entry.determine_output_file("reachability", args, cmd_args)
+
+    assert args.output_file == ["custom.json"]
+
+
 @pytest.mark.parametrize(
     "cmd",
     [
         "review_file",
         "review_code",
         "review_patch",
+        "reachability",
         "triage",
     ],
 )

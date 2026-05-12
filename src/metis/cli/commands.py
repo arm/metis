@@ -116,7 +116,7 @@ Options:
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
-    --ignore-index             Allow review_file, review_code, review_patch, and triage to run without index-backed context.
+    --ignore-index             Allow review_file, review_code, review_patch, reachability, and triage to run without index-backed context.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -126,7 +126,8 @@ Options:
     --reachability-reasoning-effort LEVEL    Reasoning effort when supported: none|minimal|low|medium|high (default: high).
     --reachability-max-paths-per-sink N      Max diverse paths per root-cause sink (default: 3)
     --reachability-workers N                 Parallel workers (default: 8)
-    --reachability-max-path N                Max paths to analyze, 0=all (default: 0)
+    --reachability-max-path N                Max paths to confirm; reachability uses auto cap at 0,
+                                             review_code skips path confirmation at 0 (default: 0)
     review_file options: --mode partial|full, --full, --context-budget N
     review_file, review_code, and reachability use tree-sitter for graph construction and AI confirmation.
 """
@@ -318,22 +319,105 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
+    use_reachability = False
+    uses_reachability_fn = getattr(engine.review, "uses_reachability_for_code_review", None)
+    if callable(uses_reachability_fn):
+        use_reachability = bool(uses_reachability_fn())
+
+    def _progress(event):
+        if not args.verbose:
+            return
+        ev = str(event.get("event", ""))
+        if ev == "treesitter_graph_start":
+            print_console(
+                f"[cyan]Building tree-sitter reachability graph for {event.get('total', 0)} C/C++ files...[/cyan]",
+                args.quiet,
+            )
+        elif ev == "treesitter_graph_done":
+            print_console(
+                f"[green]Tree-sitter graph: {event.get('nodes', 0)} functions, "
+                f"{event.get('edges', 0)} edges, {event.get('sources', 0)} sources, "
+                f"{event.get('sinks', 0)} sinks[/green]",
+                args.quiet,
+            )
+        elif ev == "treesitter_paths_done":
+            enabled = event.get("confirmation_enabled")
+            suffix = (
+                f"| selected for confirmation={event.get('selected', 0)}"
+                if enabled is not False
+                else "| path confirmation skipped"
+            )
+            print_console(
+                f"[green]Tree-sitter source-rooted paths: {event.get('paths', 0)} "
+                f"{suffix}[/green]",
+                args.quiet,
+            )
+        elif ev == "confirmation_start":
+            print_console(
+                f"[cyan]Confirming selected paths across {event.get('total', 0)} endpoints...[/cyan]",
+                args.quiet,
+            )
+        elif ev.endswith("_start"):
+            count = event.get("functions") or event.get("files") or event.get("globals") or 0
+            print_console(
+                f"[cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
+                args.quiet,
+            )
+        elif ev.endswith("_done") and ev not in {"treesitter_graph_done", "treesitter_code_review_done"}:
+            if "findings" in event:
+                print_console(
+                    f"[green]{escape(ev.replace('_', ' '))}: "
+                    f"{event.get('findings', 0)} finding(s)[/green]",
+                    args.quiet,
+                )
+        elif ev == "confirmation_progress" and args.verbose:
+            print_console(
+                f"[bright_black]  confirmed endpoint {event.get('completed', 0)}/"
+                f"{event.get('total', 0)}[/bright_black]",
+                args.quiet,
+            )
+        elif ev == "confirmation_done":
+            print_console(
+                f"[green]Path confirmation findings: {event.get('confirmed', 0)}[/green]",
+                args.quiet,
+            )
+        elif ev == "treesitter_code_review_done":
+            print_console(
+                f"[green]Tree-sitter code review: supplementary={event.get('supplementary_findings', 0)}, "
+                f"paths={event.get('path_findings', 0)}, raw={event.get('raw_findings', 0)}, "
+                f"deduped={event.get('deduped_findings', 0)}, files={event.get('files', 0)}[/green]",
+                args.quiet,
+            )
+
     if args.verbose:
-        print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-        total = len(engine.review.get_code_files(options=options))
-        file_reviews = iterate_with_progress(
-            total,
-            engine.review.review_code(options=options),
-        )
+        if use_reachability:
+            print_console("[cyan]Reviewing C/C++ codebase with tree-sitter reachability...[/cyan]", args.quiet)
+            file_reviews = [
+                r for r in engine.review.review_code(options=options, progress_callback=_progress) if r
+            ]
+        else:
+            print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
+            total = len(engine.review.get_code_files(options=options))
+            file_reviews = iterate_with_progress(
+                total,
+                engine.review.review_code(options=options),
+            )
         results = {"reviews": file_reviews}
     else:
-        results = with_spinner(
-            "Reviewing codebase...",
-            collect_reviews,
-            engine,
-            options=options,
-            quiet=args.quiet,
-        )
+        if use_reachability:
+            results = {
+                "reviews": [
+                    r for r in engine.review.review_code(options=options, progress_callback=_progress) if r
+                ]
+            }
+        else:
+            results = with_spinner(
+                "Reviewing codebase...",
+                collect_reviews,
+                engine,
+                options=options,
+                quiet=args.quiet,
+            )
     _finalize_review_output(engine, results, args, runtime)
 
 
@@ -435,6 +519,10 @@ def _write_paths_jsonl(paths, graph, output_path: Path):
                 "source": path.source,
                 "source_file": source.file_path if source else "",
                 "source_line": source.line_number if source else 0,
+                "endpoint": path.sink,
+                "endpoint_file": sink.file_path if sink else "",
+                "endpoint_line": sink.line_number if sink else 0,
+                "endpoint_type": path.sink_type,
                 "sink": path.sink,
                 "sink_file": sink.file_path if sink else "",
                 "sink_line": sink.line_number if sink else 0,
@@ -571,15 +659,18 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     graph.save_jsonl(graph_path, include_globals=True)
     print_console(f"  Graph saved: {escape(str(graph_path))}", q)
 
-    print_console("\n[cyan]Phase 2/5 - Tracing source-to-sink paths[/cyan]", q)
+    print_console("\n[cyan]Phase 2/5 - Tracing source-rooted paths[/cyan]", q)
     paths = engine.reachability.trace_paths(graph)
-    if max_paths_limit > 0:
-        paths_to_analyze = paths[:max_paths_limit]
-    else:
-        paths_to_analyze = paths
+    paths_to_analyze = engine.reachability.select_confirmation_paths(
+        paths,
+        graph,
+        max_paths=max_paths_limit,
+    )
     _write_paths_jsonl(paths, graph, paths_path)
+    selection_note = "explicit limit" if max_paths_limit and max_paths_limit > 0 else "auto cap"
     print_console(
-        f"  Paths: [bold]{len(paths)}[/bold] | Selected: [bold]{len(paths_to_analyze)}[/bold]\n"
+        f"  Paths: [bold]{len(paths)}[/bold] | Selected: [bold]{len(paths_to_analyze)}[/bold] "
+        f"({selection_note})\n"
         f"  Paths saved: {escape(str(paths_path))}",
         q,
     )
@@ -619,7 +710,7 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     _write_jsonl(str(supplementary_findings_path), supplementary_findings)
 
     if not paths_to_analyze:
-        print_console("[yellow]No source-to-sink paths selected for AI path review.[/yellow]", q)
+        print_console("[yellow]No source-rooted paths selected for AI path review.[/yellow]", q)
         findings = []
     else:
         findings = None
@@ -627,15 +718,17 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     def _confirm_cb(event):
         ev = event.get("event", "")
         if ev == "confirmation_start":
-            print_console(f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} sinks[/cyan]", q)
+            print_console(f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} endpoints[/cyan]", q)
         elif ev == "confirmation_progress" and args.verbose:
+            endpoint = event.get("endpoint", event.get("sink", ""))
             print_console(
-                f"  [{event['completed']}/{event['total']}] {escape(str(event.get('sink', '')))}",
+                f"  [{event['completed']}/{event['total']}] {escape(str(endpoint))}",
                 q,
             )
         elif ev == "confirmation_error":
+            endpoint = event.get("endpoint", event.get("sink", ""))
             print_console(
-                f"  [red]LLM error for {escape(str(event.get('sink', '')))}: "
+                f"  [red]LLM error for {escape(str(endpoint))}: "
                 f"{escape(str(event.get('error', 'unknown error')))}[/red]",
                 q,
             )
@@ -654,7 +747,10 @@ def run_reachability(engine, args, runtime: CommandRuntime):
                 reasoning_effort=reasoning_effort,
             )
 
-    all_findings = list(supplementary_findings) + list(findings)
+    all_findings = engine.reachability.annotate_findings_with_source_paths(
+        list(supplementary_findings) + list(findings),
+        graph,
+    )
     print_console("\n[cyan]Phase 5/5 - Deduplicating findings[/cyan]", q)
     if not all_findings:
         print_console(
