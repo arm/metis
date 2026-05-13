@@ -25,12 +25,6 @@ def _chat_model_kwargs(usage_runtime, *, reasoning_effort=None):
     return kwargs
 
 
-def _number_lines(content):
-    lines = content.splitlines()
-    w = len(str(len(lines)))
-    return "\n".join(f"{i+1:>{w}}: {line}" for i, line in enumerate(lines))
-
-
 def _read_function_body(codebase_path, node, max_chars=3000):
     content = read_file_content(os.path.join(codebase_path, node.file_path))
     if not content:
@@ -51,39 +45,6 @@ def _read_function_body(codebase_path, node, max_chars=3000):
             break
     snippet = "\n".join(f"{start+1+j}: {fl[start+j]}" for j in range(end - start))
     return snippet[:max_chars] + "\n" if len(snippet) > max_chars else snippet
-
-
-def _build_all_code(codebase_path, nodes, max_chars=3000):
-    bodies = []
-    for fn in nodes:
-        body = _read_function_body(codebase_path, fn, max_chars)
-        if body:
-            bodies.append(
-                f"Function {fn.unique_name} (line {fn.line_number} in {fn.file_path}):\n{body}"
-            )
-    return "\n\n".join(bodies)
-
-
-def _build_chunked_code(codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000):
-    """Build code text for nodes, chunking into groups that fit context limits."""
-    chunks = []
-    current_chunk = []
-    current_size = 0
-    for fn in nodes:
-        body = _read_function_body(codebase_path, fn, per_fn_chars)
-        if not body:
-            continue
-        entry = f"Function {fn.unique_name} (line {fn.line_number} in {fn.file_path}):\n{body}"
-        entry_size = len(entry)
-        if current_size + entry_size > max_total_chars and current_chunk:
-            chunks.append("\n\n".join(current_chunk))
-            current_chunk = []
-            current_size = 0
-        current_chunk.append(entry)
-        current_size += entry_size
-    if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
-    return chunks
 
 
 def _build_file_grouped_chunks(
@@ -324,14 +285,6 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _string_list(value):
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _path_key(path):

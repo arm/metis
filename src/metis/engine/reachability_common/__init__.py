@@ -26,8 +26,6 @@ from .utils import (
     _VTYPE_FAMILY,
     _VULN_TO_CWE,
     _VULN_TYPE_ALIASES,
-    _build_all_code,
-    _build_chunked_code,
     _build_file_grouped_chunks,
     _build_file_grouped_node_chunks,
     _build_globals_code,
@@ -43,7 +41,6 @@ from .utils import (
     _finding_text,
     _lookup_fn,
     _normalise_vuln_type,
-    _number_lines,
     _path_key,
     _post_filter_findings,
     _read_function_body,
@@ -51,7 +48,6 @@ from .utils import (
     _safe_int,
     _same_file_ref,
     _severity_title,
-    _string_list,
 )
 
 __all__ = [
@@ -71,8 +67,6 @@ __all__ = [
     "_VTYPE_FAMILY",
     "_VULN_TO_CWE",
     "_VULN_TYPE_ALIASES",
-    "_build_all_code",
-    "_build_chunked_code",
     "_build_file_grouped_chunks",
     "_build_file_grouped_node_chunks",
     "_build_globals_code",
@@ -88,7 +82,6 @@ __all__ = [
     "_finding_text",
     "_lookup_fn",
     "_normalise_vuln_type",
-    "_number_lines",
     "_path_key",
     "_post_filter_findings",
     "_read_function_body",
@@ -96,5 +89,4 @@ __all__ = [
     "_safe_int",
     "_same_file_ref",
     "_severity_title",
-    "_string_list",
 ]

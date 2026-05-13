@@ -24,21 +24,6 @@ class FunctionNode:
     sink_type: str = ""
     sink_reason: str = ""
 
-    def to_dict(self) -> dict:
-        return {
-            "unique_name": self.unique_name,
-            "file_path": self.file_path,
-            "name": self.name,
-            "line_number": self.line_number,
-            "is_source": self.is_source,
-            "is_sink": self.is_sink,
-            "calls": self.calls,
-            "resolved_calls": self.resolved_calls,
-            "source_reason": self.source_reason,
-            "sink_type": self.sink_type,
-            "sink_reason": self.sink_reason,
-        }
-
 
 @dataclass
 class GlobalConstruct:
@@ -49,17 +34,6 @@ class GlobalConstruct:
     kind: str
     initializer: str = ""
     referenced_functions: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "unique_name": self.unique_name,
-            "file_path": self.file_path,
-            "name": self.name,
-            "line_number": self.line_number,
-            "kind": self.kind,
-            "initializer": self.initializer,
-            "referenced_functions": self.referenced_functions,
-        }
 
 
 @dataclass
@@ -101,29 +75,6 @@ class VulnerabilityFinding:
             self.primary_function = self.sink_function or self.source_function
         if not self.primary_line:
             self.primary_line = self.sink_line or self.source_line or 0
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "vulnerability_type": self.vulnerability_type,
-            "severity": self.severity,
-            "confidence": self.confidence,
-            "source_function": self.source_function,
-            "source_file": self.source_file,
-            "source_line": self.source_line,
-            "sink_function": self.sink_function,
-            "sink_file": self.sink_file,
-            "sink_line": self.sink_line,
-            "path": self.path,
-            "description": self.description,
-            "root_cause": self.root_cause,
-            "evidence": self.evidence,
-            "analysis_type": self.analysis_type,
-            "primary_file": self.primary_file,
-            "primary_function": self.primary_function,
-            "primary_line": self.primary_line,
-            "canonical_key": self.canonical_key,
-        }
 
 
 class ReachabilityGraph:

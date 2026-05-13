@@ -328,18 +328,6 @@ class MetisEngine:
     def _get_plugin_for_extension(self, extension):
         return self.repository.get_plugin_for_extension(extension)
 
-    def _get_all_supported_code_extensions(self):
-        return self.repository.get_all_supported_code_extensions()
-
-    def _get_splitter_cached(self, plugin):
-        return self.repository.get_splitter_cached(plugin)
-
-    def _get_doc_splitter(self):
-        return self.repository.get_doc_splitter()
-
-    def _rel_to_base(self, path):
-        return self.repository.rel_to_base(path)
-
     def ask_question(self, question):
         qe_code, qe_docs = self._init_and_get_query_engines()
         logger.info("Querying codebase for your question...")
