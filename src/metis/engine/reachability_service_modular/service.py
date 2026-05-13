@@ -9,7 +9,6 @@ import os
 import re
 import uuid
 from collections import defaultdict
-from pathlib import Path
 
 from metis.utils import read_file_content
 
@@ -28,13 +27,10 @@ from ..reachability_common import (
     _post_filter_findings,
     _read_line_context,
     _severity_title,
-    _write_jsonl,
 )
 from .file_focus import FileFocusBuilder
 from .finding_paths import FindingPathAnnotator
 
-DEFAULT_OUTPUT_DIR = "metis_reachability_results"
-DEFAULT_TREESITTER_OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
@@ -75,9 +71,6 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
         )
 
-    def build_graph_interactive(self, files=None, *, progress_callback=None, **_kwargs):
-        return self.build_graph(files, progress_callback=progress_callback)
-
     def trace_paths(self, graph, *, max_path_length=25):
         return SourceRootedPathTracer(
             graph, max_path_length=max_path_length
@@ -117,56 +110,6 @@ class TreeSitterReachabilityService:
 
         selected.sort(key=lambda item: item[0])
         return [path for _idx, path in selected]
-
-    def confirm_paths(
-        self,
-        paths,
-        graph,
-        *,
-        confirmation_model=None,
-        max_workers=8,
-        output_path=None,
-        progress_callback=None,
-        reasoning_effort=None,
-    ):
-        model = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(
-            self._llm_provider,
-            model,
-            self._usage_runtime,
-            self._config.codebase_path,
-            reasoning_effort=reasoning_effort,
-        ).confirm_parallel(
-            paths,
-            graph,
-            max_workers=max_workers,
-            output_path=output_path,
-            progress_callback=progress_callback,
-        )
-
-    def confirm_paths_streaming(
-        self,
-        paths,
-        graph,
-        *,
-        confirmation_model=None,
-        output_path=None,
-        progress_callback=None,
-        reasoning_effort=None,
-    ):
-        model = confirmation_model or self._config.llama_query_model
-        return VulnerabilityConfirmer(
-            self._llm_provider,
-            model,
-            self._usage_runtime,
-            self._config.codebase_path,
-            reasoning_effort=reasoning_effort,
-        ).confirm_streaming(
-            paths,
-            graph,
-            output_path=output_path,
-            progress_callback=progress_callback,
-        )
 
     def run_supplementary_analysis(
         self,
@@ -409,15 +352,6 @@ class TreeSitterReachabilityService:
     def review_single_file_from_codebase(self, file_path, **kwargs):
         return self.review_file(file_path, **kwargs)
 
-    def deduplicate_and_write(self, findings, output_path, *, max_paths_per_sink=3):
-        filtered_findings = _post_filter_findings(findings, self._config.codebase_path)
-        deduped, _total, _removed = Deduplicator.deduplicate(
-            filtered_findings,
-            max_per_sink=max_paths_per_sink,
-        )
-        _write_jsonl(output_path, deduped)
-        return deduped, len(findings), len(findings) - len(deduped)
-
     def annotate_findings_with_source_paths(
         self, findings, graph, *, max_path_length=25
     ):
@@ -440,12 +374,6 @@ class TreeSitterReachabilityService:
                 annotators[target_file] = annotator
             annotated.append(annotator.annotate_one(finding))
         return annotated
-
-    def default_output_dir(self) -> Path:
-        return (
-            Path(os.path.abspath(self._config.codebase_path))
-            / DEFAULT_TREESITTER_OUTPUT_DIR
-        )
 
     def get_codebase_graph_and_paths(
         self, *, max_path_length=25, progress_callback=None
@@ -602,24 +530,6 @@ class TreeSitterReachabilityService:
         self._supplementary_cache[key] = list(findings)
         return list(findings)
 
-    def _build_focus_graph(self, graph, target_paths):
-        needed = self._path_node_names(target_paths)
-        return self._build_graph_from_node_names(graph, needed)
-
-    def _build_file_focus_graph(self, graph, target_file):
-        needed = {node.unique_name for node in graph.get_file_nodes(target_file)}
-        if not needed:
-            return ReachabilityGraph()
-
-        for node_name in list(needed):
-            node = graph.get_node(node_name)
-            if not node:
-                continue
-            needed.update(node.resolved_calls or [])
-            for caller in graph.get_callers(node_name):
-                needed.add(caller.unique_name)
-        return self._build_graph_from_node_names(graph, needed)
-
     def _build_graph_from_node_names(self, graph, needed):
         focus = ReachabilityGraph()
         for unique_name in sorted(needed):
@@ -658,26 +568,6 @@ class TreeSitterReachabilityService:
         abs_target = os.path.abspath(full)
         rel_target = os.path.relpath(abs_target, base_path).replace("\\", "/")
         return abs_target, rel_target
-
-    def _paths_touching_file(self, graph, paths, target_file):
-        selected = []
-        for path in paths:
-            for node_name in path.path:
-                node = graph.get_node(node_name)
-                if node and node.file_path == target_file:
-                    selected.append(path)
-                    break
-        return selected
-
-    def _split_paths_for_file(self, graph, paths, target_file):
-        inbound, cross_file = [], []
-        for path in paths:
-            sink = graph.get_node(path.sink)
-            if sink and sink.file_path == target_file:
-                inbound.append(path)
-            else:
-                cross_file.append(path)
-        return inbound, cross_file
 
     def _path_node_names(self, paths):
         names = set()

@@ -422,16 +422,6 @@ class PartialReachabilityFileService:
                 seen[node.unique_name] = node
         return list(seen.values())
 
-    def _filter_target_findings(self, findings, target_file):
-        result = []
-        for finding in findings:
-            primary = finding.primary_file or finding.sink_file or finding.source_file
-            if primary and _same_file_ref(
-                primary, target_file, self._config.codebase_path
-            ):
-                result.append(finding)
-        return result
-
     def _finding_to_review(self, finding):
         line_number = int(
             finding.primary_line or finding.sink_line or finding.source_line or 1

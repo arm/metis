@@ -1,13 +1,11 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Small graph and finding records shared by reachability implementations."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
 @dataclass
@@ -173,70 +171,6 @@ class ReachabilityGraph:
     def edge_count(self):
         return sum(len(n.resolved_calls) for n in self.nodes.values())
 
-    def get_callers(self, target_unique_name):
-        """Return nodes that have target in their resolved_calls."""
-        return [
-            n for n in self.nodes.values() if target_unique_name in n.resolved_calls
-        ]
-
     def get_file_nodes(self, file_path):
         """Return all nodes in a given file."""
         return [n for n in self.nodes.values() if n.file_path == file_path]
-
-    def save_jsonl(self, path, *, include_globals=False):
-        out = Path(path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("w", encoding="utf-8") as fh:
-            for n in self.nodes.values():
-                row = n.to_dict()
-                if include_globals:
-                    row["record_type"] = "function"
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-            if include_globals:
-                for g in self.globals.values():
-                    row = g.to_dict()
-                    row["record_type"] = "global"
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-    @classmethod
-    def load_jsonl(cls, path):
-        """Load a previously saved graph from JSONL."""
-        graph = cls()
-        p = Path(path)
-        if not p.exists():
-            return graph
-        with p.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                d = json.loads(line)
-                if d.get("record_type") == "global":
-                    graph.add_global(
-                        GlobalConstruct(
-                            unique_name=d["unique_name"],
-                            file_path=d["file_path"],
-                            name=d["name"],
-                            line_number=d["line_number"],
-                            kind=d.get("kind", ""),
-                            initializer=d.get("initializer", ""),
-                            referenced_functions=d.get("referenced_functions", []),
-                        )
-                    )
-                    continue
-                node = FunctionNode(
-                    unique_name=d["unique_name"],
-                    file_path=d["file_path"],
-                    name=d["name"],
-                    line_number=d["line_number"],
-                    is_source=d["is_source"],
-                    is_sink=d["is_sink"],
-                    calls=d.get("calls", []),
-                    resolved_calls=d.get("resolved_calls", []),
-                    source_reason=d.get("source_reason", ""),
-                    sink_type=d.get("sink_type", ""),
-                    sink_reason=d.get("sink_reason", ""),
-                )
-                graph.add_node(node)
-        # resolved_calls are already loaded; rebuild name_index only
-        return graph

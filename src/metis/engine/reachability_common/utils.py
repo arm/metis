@@ -1,14 +1,12 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared formatting, context-window, and finding-normalization helpers."""
 
 from __future__ import annotations
-import json
 import os
 import re
 from collections import defaultdict
-from pathlib import Path
 
 from metis.utils import read_file_content
 
@@ -850,11 +848,3 @@ def _post_filter_findings(findings, codebase_path):
 
 
 _C_CPP_EXTS = frozenset({".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"})
-
-
-def _write_jsonl(path, findings):
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", encoding="utf-8") as fh:
-        for f in findings:
-            fh.write(json.dumps(f.to_dict(), ensure_ascii=False) + "\n")

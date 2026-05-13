@@ -552,9 +552,6 @@ _UPDATE_FACT_RE = re.compile(
     r"(?P<op>\+\+|--|\+=|-=)"
 )
 _ARITH_EXPR_RE = re.compile(r"(\*|<<|>>|\bPAGE_SHIFT\b|\bsizeof\s*\()", re.IGNORECASE)
-_ERROR_OR_EXIT_RE = re.compile(
-    r"\b(?:return|goto\s+(?:err|fail|out|cleanup)\w*)\b", re.IGNORECASE
-)
 _NULL_CLEAR_RE = re.compile(r"\b(?:NULL|nullptr|0|false|FALSE|INVALID|invalid)\b")
 _QUEUE_LIVENESS_WORDS = frozenset(
     {
@@ -814,9 +811,6 @@ _DOMAIN_ROOT_TOKENS = frozenset(
         "bus_fault",
         "kcpu_queue",
     }
-)
-_MMU_RECOVERY_WORDS = frozenset(
-    {"mmu", "insert", "pages", "recovery", "rollback", "failure", "phys", "unmap"}
 )
 _MMU_RECOVERY_LOOP_RE = re.compile(
     r"\b(?:for|while)\s*\([^)]*(?:i|idx|page|count|nr|remain)[^)]*(?:<|>|<=|>=|--|\+\+)",
@@ -1348,11 +1342,6 @@ def _find_body_end(text: str, open_brace_index: int) -> tuple[int, int]:
     return len(text), text.count("\n") + 1
 
 
-def _body_lines(content: str, sym: SymbolDef) -> list[str]:
-    lines = content.splitlines()
-    return _body_lines_from_lines(lines, sym)
-
-
 def _body_lines_from_lines(lines: list[str], sym: SymbolDef) -> list[str]:
     start = max(0, sym.body_start - 1)
     end = min(len(lines), max(sym.body_end, sym.body_start))
@@ -1405,10 +1394,6 @@ def _notifier_related_text(text: str) -> bool:
 
 def _fact_tokens(text: str) -> set[str]:
     return {_canonical_protocol_token(t) for t in _tokens(text) if len(t) > 1}
-
-
-def _has_any_fact_token(text: str, words: frozenset[str] | set[str]) -> bool:
-    return bool(_fact_tokens(text) & set(words))
 
 
 def _short_expr(expr: str, limit: int = 90) -> str:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Root-cause deduplication for findings from multiple reachability passes."""
@@ -16,21 +16,6 @@ from .utils import (
     _normalise_vuln_type,
     _safe_int,
 )
-
-
-def _finding_signature(f):
-    """
-    Produce a canonical key that identifies the root cause, not the path.
-    Canonical keys are intentionally not privileged here because independent
-    passes often invent different keys for the same defect.
-    """
-    family = _dedupe_family(f)
-    file = _finding_file(f)
-    fn = _finding_function(f)
-    line = _finding_line(f)
-    line_bucket = line // 10
-
-    return (file, fn, family, line_bucket)
 
 
 _DEDUP_NOISY_CANONICAL_TOKENS = frozenset(
@@ -151,15 +136,6 @@ _DEDUP_TOKEN_ALIASES = {
     "sweeping": "sweep",
     "maintenance": "maintain",
 }
-_CALLBACK_TEARDOWN_TYPES = frozenset(
-    {
-        "teardown_race",
-        "callback_uaf",
-        "deferred_uaf",
-        "cleanup_symmetry",
-        "file_ops_lifecycle_gap",
-    }
-)
 _CALLBACK_LIFECYCLE_TYPES = frozenset(
     {
         "teardown_race",
@@ -266,31 +242,6 @@ _LOCAL_METADATA_BOUNDS_TYPES = frozenset(
         "buffer_overflow",
         "type_confusion",
         "wrong_struct_field",
-    }
-)
-_CALLBACK_OBJECT_TOKENS = frozenset(
-    {
-        "callback",
-        "cb",
-        "work",
-        "worker",
-        "workqueue",
-        "timer",
-        "watchdog",
-        "flush",
-        "cancel",
-        "release",
-        "reset",
-        "poll",
-        "ioctl",
-        "file",
-        "fops",
-        "notify",
-        "register",
-        "unregister",
-        "ctx",
-        "context",
-        "active",
     }
 )
 _CALLBACK_LIFECYCLE_STRONG_TOKENS = frozenset(

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared compatibility surface for full and partial reachability review."""
@@ -52,7 +52,6 @@ from .utils import (
     _same_file_ref,
     _severity_title,
     _string_list,
-    _write_jsonl,
 )
 
 __all__ = [
@@ -98,5 +97,4 @@ __all__ = [
     "_same_file_ref",
     "_severity_title",
     "_string_list",
-    "_write_jsonl",
 ]

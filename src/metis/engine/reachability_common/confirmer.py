@@ -1,17 +1,15 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """LLM confirmation for deterministic reachability paths."""
 
 from __future__ import annotations
-import json
 import logging
 import os
 import threading
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -180,9 +178,7 @@ class VulnerabilityConfirmer:
 
     # --- Bulk confirmation for full-codebase reachability review ---
 
-    def confirm_parallel(
-        self, paths, graph, *, max_workers=8, output_path=None, progress_callback=None
-    ):
+    def confirm_parallel(self, paths, graph, *, max_workers=8, progress_callback=None):
         if not paths:
             return []
         groups = defaultdict(list)
@@ -194,143 +190,40 @@ class VulnerabilityConfirmer:
         done = [0]
         if progress_callback:
             progress_callback({"event": "confirmation_start", "total": total})
-        fh = None
-        if output_path:
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            fh = open(output_path, "w", encoding="utf-8")
-        try:
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                futs = {
-                    submit_with_current_context(ex, self._group, sn, gp, graph): sn
-                    for sn, gp in groups.items()
-                }
-                for fut in as_completed(futs):
-                    sn = futs[fut]
-                    try:
-                        findings = fut.result()
-                        with lock:
-                            all_f.extend(findings)
-                            if fh:
-                                for f in findings:
-                                    fh.write(
-                                        json.dumps(f.to_dict(), ensure_ascii=False)
-                                        + "\n"
-                                    )
-                                fh.flush()
-                    except Exception as e:
-                        logger.warning("Confirm fail %s: %s", sn, e)
-                        if progress_callback:
-                            progress_callback(
-                                {
-                                    "event": "confirmation_error",
-                                    "sink": sn,
-                                    "endpoint": sn,
-                                    "error": f"{type(e).__name__}: {e}",
-                                }
-                            )
-                    with lock:
-                        done[0] += 1
-                    if progress_callback:
-                        progress_callback(
-                            {
-                                "event": "confirmation_progress",
-                                "completed": done[0],
-                                "total": total,
-                                "sink": sn,
-                                "endpoint": sn,
-                            }
-                        )
-        finally:
-            if fh:
-                fh.close()
-        if progress_callback:
-            progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
-        return all_f
-
-    def confirm_streaming(
-        self, paths, graph, *, output_path=None, progress_callback=None
-    ):
-        """Confirm paths one sink at a time and flush findings as soon as they arrive."""
-        if not paths:
-            return []
-        groups = defaultdict(list)
-        for p in paths:
-            groups[p.sink].append(p)
-        items = list(groups.items())
-        total = len(items)
-        all_f = []
-        if progress_callback:
-            progress_callback(
-                {"event": "confirmation_start", "total": total, "paths": len(paths)}
-            )
-        fh = None
-        if output_path:
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            fh = open(output_path, "w", encoding="utf-8")
-        try:
-            for done, (sn, gp) in enumerate(items, start=1):
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {
+                submit_with_current_context(ex, self._group, sn, gp, graph): sn
+                for sn, gp in groups.items()
+            }
+            for fut in as_completed(futs):
+                sn = futs[fut]
                 try:
-                    findings = self._group(sn, gp, graph)
-                except KeyboardInterrupt:
-                    if progress_callback:
-                        progress_callback(
-                            {
-                                "event": "confirmation_cancelled",
-                                "completed": done - 1,
-                                "total": total,
-                                "sink": sn,
-                            }
-                        )
-                    raise
+                    findings = fut.result()
+                    with lock:
+                        all_f.extend(findings)
                 except Exception as e:
                     logger.warning("Confirm fail %s: %s", sn, e)
                     if progress_callback:
                         progress_callback(
                             {
                                 "event": "confirmation_error",
-                                "completed": done - 1,
-                                "total": total,
                                 "sink": sn,
                                 "endpoint": sn,
                                 "error": f"{type(e).__name__}: {e}",
                             }
                         )
-                    findings = []
-                if findings:
-                    all_f.extend(findings)
-                    if fh:
-                        for f in findings:
-                            fh.write(json.dumps(f.to_dict(), ensure_ascii=False) + "\n")
-                        fh.flush()
-                        try:
-                            os.fsync(fh.fileno())
-                        except OSError:
-                            pass
-                    if progress_callback:
-                        progress_callback(
-                            {
-                                "event": "confirmation_findings",
-                                "completed": done,
-                                "total": total,
-                                "sink": sn,
-                                "endpoint": sn,
-                                "findings": len(findings),
-                                "confirmed": len(all_f),
-                            }
-                        )
+                with lock:
+                    done[0] += 1
                 if progress_callback:
                     progress_callback(
                         {
                             "event": "confirmation_progress",
-                            "completed": done,
+                            "completed": done[0],
                             "total": total,
                             "sink": sn,
                             "endpoint": sn,
                         }
                     )
-        finally:
-            if fh:
-                fh.close()
         if progress_callback:
             progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
         return all_f

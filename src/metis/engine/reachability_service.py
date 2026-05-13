@@ -19,10 +19,7 @@ from .reachability_common import (  # noqa: F401
     _safe_int,
     _same_file_ref,
     _severity_title,
-    _write_jsonl,
 )
 from .reachability_service_modular.service import (  # noqa: F401
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_TREESITTER_OUTPUT_DIR,
     TreeSitterReachabilityService as ReachabilityService,
 )
