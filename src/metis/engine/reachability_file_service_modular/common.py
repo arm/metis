@@ -47,8 +47,6 @@ from ..runtime import EngineConfig
 
 logger = logging.getLogger("metis")
 
-
-_C_CPP_EXTS = frozenset({".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"})
 _CONTROL_CALLS = frozenset(
     {
         "if",
@@ -1785,8 +1783,6 @@ class SymbolIndexBuilder:
 
         for file_path in files:
             rel = _rel_path(file_path, codebase_path)
-            if os.path.splitext(rel)[1].lower() not in _C_CPP_EXTS:
-                continue
             content = read_file_content(_abs_path(file_path, codebase_path))
             if not content:
                 continue

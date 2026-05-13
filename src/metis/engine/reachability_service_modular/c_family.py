@@ -15,6 +15,7 @@ from metis.engine.analysis.c_family_analyzer_common import (
     _node_text,
 )
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
+from metis.plugins.cpp_plugin import CppPlugin
 
 from ..reachability_common import FunctionNode, GlobalConstruct
 from .heuristics import (
@@ -23,6 +24,8 @@ from .heuristics import (
     is_sink_function,
     is_source_function,
 )
+
+_CPP_EXTENSIONS = frozenset(CppPlugin.DEFAULT_EXTENSIONS)
 
 
 @dataclass
@@ -223,7 +226,7 @@ class CFamilyTreeSitterExtractor:
 
     def _language_for_file(self, path: str) -> str:
         ext = os.path.splitext(path)[1].lower()
-        if ext in {".cpp", ".hpp", ".hh", ".hxx", ".cxx", ".cc"}:
+        if ext in _CPP_EXTENSIONS:
             return "cpp"
         return "c"
 

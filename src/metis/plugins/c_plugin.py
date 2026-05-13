@@ -6,7 +6,7 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CPlugin(ConfigBackedLanguagePlugin):
     NAME = "c"
-    DEFAULT_EXTENSIONS = [".c", ".h", ".cc"]
+    DEFAULT_EXTENSIONS = [".c", ".h"]
 
     def get_triage_analyzer_factory(self):
         from metis.engine.analysis.c_family_analyzer import (

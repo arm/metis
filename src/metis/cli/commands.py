@@ -79,8 +79,6 @@ Options:
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
-    Reachability tuning is configured in metis.yaml under metis_engine.
-    review_file and review_code use tree-sitter reachability for C/C++ analysis.
 """
     )
 

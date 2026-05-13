@@ -6,6 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from metis.plugins.c_plugin import CPlugin
+from metis.plugins.cpp_plugin import CppPlugin
+
 from .c_family_analyzer_common import (
     _CrossFileHit,
     _node_child_by_field_name,
@@ -192,7 +195,9 @@ class CFamilyMacroMixin:
         return "unknown"
 
 
-_C_FAMILY_EXTENSIONS = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
+_C_FAMILY_EXTENSIONS = frozenset(
+    CPlugin.DEFAULT_EXTENSIONS + CppPlugin.DEFAULT_EXTENSIONS
+)
 
 
 def is_c_family_file_path(file_path: str) -> bool:

@@ -24,6 +24,7 @@ from .repository import EngineRepository
 from .runtime import EngineConfig
 
 logger = logging.getLogger("metis")
+_C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
 
 
 class ReviewService:
@@ -262,16 +263,9 @@ class ReviewService:
             return False
 
     def _is_c_cpp_file(self, file_path):
-        return os.path.splitext(str(file_path))[1].lower() in {
-            ".c",
-            ".h",
-            ".cc",
-            ".cpp",
-            ".hpp",
-            ".hh",
-            ".hxx",
-            ".cxx",
-        }
+        return self._repository.is_path_supported_by_plugins(
+            str(file_path), _C_FAMILY_PLUGIN_NAMES
+        )
 
     def _invoke_review_file(
         self,

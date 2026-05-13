@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 
 from metis.engine.analysis.c_family_macro import (
@@ -164,8 +163,7 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     max_sections = C.MAX_SECTIONS
 
     analyzer_symbols: list[str] = []
-    ext = os.path.splitext(file_path or "")[1].lower()
-    if ext in {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}:
+    if is_c_family_file_path(file_path):
         analyzer_symbols = extract_c_family_seed_symbols(
             state.get("finding_snippet", "") or "",
             state.get("finding_rule_id", "") or "",

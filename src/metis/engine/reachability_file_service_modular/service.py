@@ -16,6 +16,9 @@ from .reviewer import *
 from .filters import *
 
 
+_C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
+
+
 class PartialReachabilityFileService:
     """Coordinate indexing, context selection, detectors, LLM review, and output."""
 
@@ -45,7 +48,7 @@ class PartialReachabilityFileService:
         progress_callback=None,
     ):
         abs_target, rel_target = self._normalize_target_file(file_path)
-        if os.path.splitext(rel_target)[1].lower() not in _C_CPP_EXTS:
+        if not self._is_c_cpp_file(rel_target):
             return None
 
         index = self._ensure_symbol_index(progress_callback=progress_callback)
@@ -358,11 +361,12 @@ class PartialReachabilityFileService:
         return abs_target, rel_target
 
     def _c_cpp_files(self):
-        return [
-            f
-            for f in self._repository.get_code_files()
-            if os.path.splitext(f)[1].lower() in _C_CPP_EXTS
-        ]
+        return [f for f in self._repository.get_code_files() if self._is_c_cpp_file(f)]
+
+    def _is_c_cpp_file(self, file_path):
+        return self._repository.is_path_supported_by_plugins(
+            str(file_path), _C_FAMILY_PLUGIN_NAMES
+        )
 
     def _merge_globals(self, a, b):
         seen = {}

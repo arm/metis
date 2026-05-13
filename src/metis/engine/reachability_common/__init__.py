@@ -22,7 +22,6 @@ from .tracing import (
     _EXTRACTION_USER_TEMPLATE,
 )
 from .utils import (
-    _C_CPP_EXTS,
     _VTYPE_FAMILY,
     _VULN_TO_CWE,
     _VULN_TYPE_ALIASES,
@@ -61,7 +60,6 @@ __all__ = [
     "SupplementaryAnalyzer",
     "VulnerabilityConfirmer",
     "VulnerabilityFinding",
-    "_C_CPP_EXTS",
     "_EXTRACTION_SYSTEM_PROMPT",
     "_EXTRACTION_USER_TEMPLATE",
     "_VTYPE_FAMILY",

@@ -20,7 +20,6 @@ from ..reachability_common import (
     SupplementaryAnalyzer,
     VulnerabilityFinding,
     VulnerabilityConfirmer,
-    _C_CPP_EXTS,
     _VULN_TO_CWE,
     _confidence_score,
     _normalise_vuln_type,
@@ -34,14 +33,7 @@ from .finding_paths import FindingPathAnnotator
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
-
-
-def c_cpp_files(files) -> list[str]:
-    return [
-        str(path)
-        for path in files
-        if os.path.splitext(str(path))[1].lower() in _C_CPP_EXTS
-    ]
+_C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
 
 
 class TreeSitterReachabilityService:
@@ -61,15 +53,26 @@ class TreeSitterReachabilityService:
         ] = {}
 
     def get_c_cpp_files(self):
-        return c_cpp_files(self._repository.get_code_files())
+        return self._c_cpp_files(self._repository.get_code_files())
 
     def build_graph(self, files=None, *, progress_callback=None):
-        selected = c_cpp_files(files if files is not None else self.get_c_cpp_files())
+        selected = self._c_cpp_files(
+            files if files is not None else self.get_c_cpp_files()
+        )
         return self._get_builder().build(
             selected,
             self._config.codebase_path,
             progress_callback=progress_callback,
         )
+
+    def _c_cpp_files(self, files) -> list[str]:
+        return [
+            str(path)
+            for path in files
+            if self._repository.is_path_supported_by_plugins(
+                str(path), _C_FAMILY_PLUGIN_NAMES
+            )
+        ]
 
     def trace_paths(self, graph, *, max_path_length=25):
         return SourceRootedPathTracer(

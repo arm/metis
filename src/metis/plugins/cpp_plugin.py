@@ -6,7 +6,7 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CppPlugin(ConfigBackedLanguagePlugin):
     NAME = "cpp"
-    DEFAULT_EXTENSIONS = [".cpp", ".hpp"]
+    DEFAULT_EXTENSIONS = [".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"]
 
     def get_triage_analyzer_factory(self):
         from metis.engine.analysis.c_family_analyzer import (

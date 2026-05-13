@@ -798,6 +798,3 @@ def _post_filter_findings(findings, codebase_path):
 
         filtered.append(finding)
     return filtered
-
-
-_C_CPP_EXTS = frozenset({".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"})
