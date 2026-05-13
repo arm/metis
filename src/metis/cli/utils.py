@@ -258,6 +258,7 @@ def build_standard_progress(*, transient: bool):
         SpinnerColumn(style="cyan"),
         BarColumn(bar_width=None, complete_style="green", finished_style="green"),
         TaskProgressColumn(),
+        TextColumn("{task.description}"),
         TextColumn("[bright_black]elapsed"),
         TimeElapsedColumn(),
         TextColumn("[bright_black]eta"),

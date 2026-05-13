@@ -21,6 +21,7 @@ from ..reachability_common import (
     SupplementaryAnalyzer,
     VulnerabilityFinding,
     VulnerabilityConfirmer,
+    _C_CPP_EXTS,
     _VULN_TO_CWE,
     _confidence_score,
     _normalise_vuln_type,
@@ -34,7 +35,6 @@ from .finding_paths import FindingPathAnnotator
 
 DEFAULT_OUTPUT_DIR = "metis_reachability_results"
 DEFAULT_TREESITTER_OUTPUT_DIR = DEFAULT_OUTPUT_DIR
-_C_CPP_EXTENSIONS = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
@@ -44,7 +44,7 @@ def c_cpp_files(files) -> list[str]:
     return [
         str(path)
         for path in files
-        if os.path.splitext(str(path))[1].lower() in _C_CPP_EXTENSIONS
+        if os.path.splitext(str(path))[1].lower() in _C_CPP_EXTS
     ]
 
 

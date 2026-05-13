@@ -4,6 +4,7 @@
 
 import importlib
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from rich.markup import escape
@@ -20,11 +21,14 @@ from .utils import (
     with_timer,
     collect_reviews,
     iterate_with_progress,
+    build_standard_progress,
     count_index_items,
     pretty_print_reviews,
     save_output,
     print_console,
 )
+
+logger = logging.getLogger("metis")
 
 
 def _print_no_index_warning(args, runtime: CommandRuntime):
@@ -187,101 +191,7 @@ def _run_file_review_with(
     mode, context_budget = _parse_review_file_options(runtime)
 
     def _progress(event):
-        if not args.verbose:
-            return
-        ev = event.get("event", "")
-        if ev == "treesitter_graph_start":
-            print_console(
-                f"[cyan]Building tree-sitter reachability graph for {event.get('total', 0)} C/C++ files...[/cyan]",
-                args.quiet,
-            )
-        elif ev == "treesitter_graph_done":
-            print_console(
-                f"[green]Tree-sitter graph: {event.get('nodes', 0)} functions, "
-                f"{event.get('edges', 0)} edges, {event.get('sources', 0)} sources, "
-                f"{event.get('sinks', 0)} sinks[/green]",
-                args.quiet,
-            )
-        elif ev == "treesitter_file_paths_done":
-            print_console(
-                f"[green]Tree-sitter source-to-file paths for {escape(str(event.get('file', '')))}: "
-                f"{event.get('source_to_file_paths', event.get('paths', 0))}"
-                f" | outgoing context={event.get('outgoing_context_paths', 0)}"
-                f" | focus nodes={event.get('focus_nodes', 0)}[/green]",
-                args.quiet,
-            )
-        elif ev == "treesitter_file_review_done":
-            print_console(
-                f"[green]Tree-sitter file review: supplementary={event.get('supplementary_findings', 0)}, "
-                f"paths={event.get('path_findings', 0)}, deterministic={event.get('deterministic_findings', 0)}[/green]",
-                args.quiet,
-            )
-        elif ev == "treesitter_file_review_error":
-            print_console(
-                f"[red]Tree-sitter file review error in {escape(str(event.get('file', 'unknown')))}: "
-                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
-                args.quiet,
-            )
-        elif ev.endswith("_start"):
-            count = (
-                event.get("functions")
-                or event.get("files")
-                or event.get("globals")
-                or 0
-            )
-            print_console(
-                f"[cyan]{escape(str(ev).replace('_', ' '))}: {count} candidate(s)[/cyan]",
-                args.quiet,
-            )
-        elif ev.endswith("_done") and ev != "treesitter_file_review_done":
-            if "findings" in event:
-                print_console(
-                    f"[green]{escape(str(ev).replace('_', ' '))}: "
-                    f"{event.get('findings', 0)} finding(s)[/green]",
-                    args.quiet,
-                )
-        elif ev == "partial_symbol_index_start":
-            print_console(
-                f"[cyan]Building symbol index for {event.get('files', 0)} C/C++ files...[/cyan]",
-                args.quiet,
-            )
-        elif ev == "partial_symbol_index_done":
-            print_console(
-                f"[green]Symbol index: {event.get('definitions', 0)} functions, "
-                f"{event.get('callsites', 0)} callsites[/green]",
-                args.quiet,
-            )
-        elif ev == "partial_target_extract_start":
-            print_console(
-                f"[cyan]Extracting target anchors from {escape(str(event.get('file', '')))}...[/cyan]",
-                args.quiet,
-            )
-        elif ev == "partial_context_done":
-            print_console(
-                f"[green]Partial context: target={event.get('target_nodes', 0)}, "
-                f"inbound={event.get('inbound', 0)}, outbound={event.get('outbound', 0)}, "
-                f"shared={event.get('shared', 0)}, lifecycle={event.get('lifecycle', 0)}, "
-                f"callbacks={event.get('callbacks', 0)}[/green]",
-                args.quiet,
-            )
-        elif ev == "partial_graph_done":
-            print_console(
-                f"[green]Partial graph: {event.get('nodes', 0)} nodes, "
-                f"{event.get('edges', 0)} edges, {event.get('paths', 0)} paths[/green]",
-                args.quiet,
-            )
-        elif ev == "partial_review_done" and "deduped_findings" in event:
-            print_console(
-                f"[green]Partial review: {event.get('deduped_findings', 0)} findings "
-                f"after filtering[/green]",
-                args.quiet,
-            )
-        elif ev == "partial_review_error":
-            print_console(
-                f"[red]Partial review LLM error in {escape(str(event.get('pass', 'unknown')))}: "
-                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
-                args.quiet,
-            )
+        logger.debug("reachability progress event: %r", event)
 
     mode_label = f"{mode} mode"
     try:
@@ -337,77 +247,7 @@ def run_review_code(engine, args, runtime: CommandRuntime):
         use_reachability = bool(uses_reachability_fn())
 
     def _progress(event):
-        if not args.verbose:
-            return
-        ev = str(event.get("event", ""))
-        if ev == "treesitter_graph_start":
-            print_console(
-                f"[cyan]Building tree-sitter reachability graph for {event.get('total', 0)} C/C++ files...[/cyan]",
-                args.quiet,
-            )
-        elif ev == "treesitter_graph_done":
-            print_console(
-                f"[green]Tree-sitter graph: {event.get('nodes', 0)} functions, "
-                f"{event.get('edges', 0)} edges, {event.get('sources', 0)} sources, "
-                f"{event.get('sinks', 0)} sinks[/green]",
-                args.quiet,
-            )
-        elif ev == "treesitter_paths_done":
-            enabled = event.get("confirmation_enabled")
-            suffix = (
-                f"| selected for confirmation={event.get('selected', 0)}"
-                if enabled is not False
-                else "| path confirmation skipped"
-            )
-            print_console(
-                f"[green]Tree-sitter source-rooted paths: {event.get('paths', 0)} "
-                f"{suffix}[/green]",
-                args.quiet,
-            )
-        elif ev == "confirmation_start":
-            print_console(
-                f"[cyan]Confirming selected paths across {event.get('total', 0)} endpoints...[/cyan]",
-                args.quiet,
-            )
-        elif ev.endswith("_start"):
-            count = (
-                event.get("functions")
-                or event.get("files")
-                or event.get("globals")
-                or 0
-            )
-            print_console(
-                f"[cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
-                args.quiet,
-            )
-        elif ev.endswith("_done") and ev not in {
-            "treesitter_graph_done",
-            "treesitter_code_review_done",
-        }:
-            if "findings" in event:
-                print_console(
-                    f"[green]{escape(ev.replace('_', ' '))}: "
-                    f"{event.get('findings', 0)} finding(s)[/green]",
-                    args.quiet,
-                )
-        elif ev == "confirmation_progress" and args.verbose:
-            print_console(
-                f"[bright_black]  confirmed endpoint {event.get('completed', 0)}/"
-                f"{event.get('total', 0)}[/bright_black]",
-                args.quiet,
-            )
-        elif ev == "confirmation_done":
-            print_console(
-                f"[green]Path confirmation findings: {event.get('confirmed', 0)}[/green]",
-                args.quiet,
-            )
-        elif ev == "treesitter_code_review_done":
-            print_console(
-                f"[green]Tree-sitter code review: supplementary={event.get('supplementary_findings', 0)}, "
-                f"paths={event.get('path_findings', 0)}, raw={event.get('raw_findings', 0)}, "
-                f"deduped={event.get('deduped_findings', 0)}, files={event.get('files', 0)}[/green]",
-                args.quiet,
-            )
+        logger.debug("reachability progress event: %r", event)
 
     if args.verbose:
         if use_reachability:
@@ -600,10 +440,6 @@ def _finalize_review_output(engine, results, args, runtime: CommandRuntime):
 
 
 def run_reachability(engine, args, runtime: CommandRuntime):
-    from metis.engine.reachability_service_modular.service import (
-        DEFAULT_TREESITTER_OUTPUT_DIR,
-    )
-
     confirmation_model = _reachability_setting(
         engine, args, "reachability_confirmation_model", "confirmation_model", "gpt-5.5"
     )
@@ -647,44 +483,40 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         print_console("[yellow]No C/C++ files found in codebase.[/yellow]", q)
         return
 
-    print_console(
-        f"\n[bold cyan]Metis Reachability[/bold cyan]\n"
-        f"  Files: {len(files)}\n"
-        f"  Analysis model: {escape(str(confirmation_model))}"
-        f"{' | reasoning=' + escape(str(reasoning_effort)) if reasoning_effort else ''}\n"
-        f"  Output: {escape(str(output_dir or DEFAULT_TREESITTER_OUTPUT_DIR))}",
-        q,
-    )
+    phase_progress = None
+    phase_task = None
+    if args.verbose and not q:
+        phase_progress = build_standard_progress(transient=True)
+        phase_progress.start()
+        phase_task = phase_progress.add_task("", total=5)
+
+    def _set_phase(description, completed):
+        if phase_progress is None or phase_task is None:
+            return
+        phase_progress.update(
+            phase_task,
+            completed=completed,
+            description=f"[cyan]{escape(description)}[/cyan]",
+        )
+
+    def _stop_phase_progress(completed=None):
+        nonlocal phase_progress, phase_task
+        if phase_progress is None:
+            return
+        if completed is not None and phase_task is not None:
+            phase_progress.update(phase_task, completed=completed)
+        phase_progress.stop()
+        phase_progress = None
+        phase_task = None
 
     def _graph_cb(event):
-        ev = event.get("event", "")
+        logger.debug("reachability progress event: %r", event)
+        ev = str(event.get("event", ""))
         if ev == "treesitter_graph_start":
-            print_console(
-                f"\n[cyan]Phase 1/5 - Building deterministic graph from {event['total']} files[/cyan]",
-                q,
+            _set_phase(
+                f"Phase 1/5 - Building deterministic graph from {event.get('total', 0)} files",
+                0,
             )
-        elif ev == "treesitter_graph_progress" and args.verbose:
-            print_console(
-                f"  [{event['completed']}/{event['total']}] "
-                f"{escape(str(event.get('file', '')))} "
-                f"functions={event.get('functions', 0)} globals={event.get('globals', 0)}",
-                q,
-            )
-            for error in event.get("error_messages", []) or []:
-                print_console(f"    [yellow]{escape(str(error))}[/yellow]", q)
-        elif ev == "treesitter_graph_done":
-            print_console(
-                f"[green]  Graph: {event['nodes']} functions, {event['edges']} edges, "
-                f"{event['sources']} sources, {event['sinks']} sinks[/green]",
-                q,
-            )
-            if event.get("errors"):
-                errors = event.get("errors") or []
-                print_console(f"[yellow]  Parse issues: {len(errors)}[/yellow]", q)
-                for error in errors[:8]:
-                    print_console(f"    [yellow]{escape(str(error))}[/yellow]", q)
-                if len(errors) > 8:
-                    print_console(f"    [yellow]... {len(errors) - 8} more[/yellow]", q)
 
     with usage_operation("reachability"):
         graph = engine.reachability.build_graph(
@@ -693,15 +525,15 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         )
 
     if graph.node_count() == 0:
+        _stop_phase_progress(completed=1)
         print_console(
             "[yellow]Tree-sitter graph empty - no functions extracted.[/yellow]", q
         )
         return
 
     graph.save_jsonl(graph_path, include_globals=True)
-    print_console(f"  Graph saved: {escape(str(graph_path))}", q)
 
-    print_console("\n[cyan]Phase 2/5 - Tracing source-rooted paths[/cyan]", q)
+    _set_phase("Phase 2/5 - Tracing source-rooted paths", 1)
     paths = engine.reachability.trace_paths(graph)
     paths_to_analyze = engine.reachability.select_confirmation_paths(
         paths,
@@ -709,42 +541,11 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         max_paths=max_paths_limit,
     )
     _write_paths_jsonl(paths, graph, paths_path)
-    selection_note = (
-        "explicit limit" if max_paths_limit and max_paths_limit > 0 else "auto cap"
-    )
-    print_console(
-        f"  Paths: [bold]{len(paths)}[/bold] | Selected: [bold]{len(paths_to_analyze)}[/bold] "
-        f"({selection_note})\n"
-        f"  Paths saved: {escape(str(paths_path))}",
-        q,
-    )
 
     def _supp_cb(event):
-        ev = str(event.get("event", ""))
-        if ev.endswith("_start"):
-            count = (
-                event.get("functions")
-                or event.get("files")
-                or event.get("globals")
-                or 0
-            )
-            print_console(
-                f"  [cyan]{escape(ev.replace('_', ' '))}: {count} candidate(s)[/cyan]",
-                q,
-            )
-        elif ev.endswith("_done") and ev != "supplementary_done":
-            print_console(
-                f"  [green]{escape(ev.replace('_', ' '))}: "
-                f"{event.get('findings', 0)} finding(s)[/green]",
-                q,
-            )
-        elif ev == "supplementary_done":
-            print_console(
-                f"[green]  Supplementary findings: {event.get('total', 0)}[/green]",
-                q,
-            )
+        logger.debug("reachability progress event: %r", event)
 
-    print_console("\n[cyan]Phase 3/5 - Supplementary semantic audit[/cyan]", q)
+    _set_phase("Phase 3/5 - Supplementary semantic audit", 2)
     with usage_operation("reachability"):
         supplementary_findings = engine.reachability.run_supplementary_analysis(
             graph,
@@ -759,6 +560,7 @@ def run_reachability(engine, args, runtime: CommandRuntime):
     _write_jsonl(str(supplementary_findings_path), supplementary_findings)
 
     if not paths_to_analyze:
+        _set_phase("Phase 4/5 - Skipping AI path review", 3)
         print_console(
             "[yellow]No source-rooted paths selected for AI path review.[/yellow]", q
         )
@@ -767,28 +569,12 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         findings = None
 
     def _confirm_cb(event):
-        ev = event.get("event", "")
+        logger.debug("reachability progress event: %r", event)
+        ev = str(event.get("event", ""))
         if ev == "confirmation_start":
-            print_console(
-                f"\n[cyan]Phase 4/5 - Confirming paths across {event['total']} endpoints[/cyan]",
-                q,
-            )
-        elif ev == "confirmation_progress" and args.verbose:
-            endpoint = event.get("endpoint", event.get("sink", ""))
-            print_console(
-                f"  [{event['completed']}/{event['total']}] {escape(str(endpoint))}",
-                q,
-            )
-        elif ev == "confirmation_error":
-            endpoint = event.get("endpoint", event.get("sink", ""))
-            print_console(
-                f"  [red]LLM error for {escape(str(endpoint))}: "
-                f"{escape(str(event.get('error', 'unknown error')))}[/red]",
-                q,
-            )
-        elif ev == "confirmation_done":
-            print_console(
-                f"[green]  Confirmed findings: {event['confirmed']}[/green]", q
+            _set_phase(
+                f"Phase 4/5 - Confirming paths across {event.get('total', 0)} endpoints",
+                3,
             )
 
     if findings is None:
@@ -807,8 +593,9 @@ def run_reachability(engine, args, runtime: CommandRuntime):
         list(supplementary_findings) + list(findings),
         graph,
     )
-    print_console("\n[cyan]Phase 5/5 - Deduplicating findings[/cyan]", q)
+    _set_phase("Phase 5/5 - Deduplicating findings", 4)
     if not all_findings:
+        _stop_phase_progress(completed=5)
         print_console(
             f"[yellow]No vulnerabilities confirmed.[/yellow]\n"
             f"  Raw findings: {escape(str(raw_findings_path))}\n"
@@ -825,6 +612,7 @@ def run_reachability(engine, args, runtime: CommandRuntime):
             max_paths_per_sink=max_paths_per_sink,
         )
 
+    _stop_phase_progress(completed=5)
     print_console(
         f"[green]  Findings: {total_before} raw, {len(deduped)} after dedupe "
         f"({removed} removed)[/green]\n"

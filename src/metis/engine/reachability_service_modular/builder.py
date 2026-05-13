@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import os
-
 from ..reachability_common import ReachabilityGraph
 from .c_family import CFamilyTreeSitterExtractor
 
@@ -65,10 +63,3 @@ class TreeSitterReachabilityGraphBuilder:
                 }
             )
         return graph
-
-
-def c_cpp_files(files) -> list[str]:
-    allowed = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
-    return [
-        str(path) for path in files if os.path.splitext(str(path))[1].lower() in allowed
-    ]
