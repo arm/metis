@@ -98,7 +98,7 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
         mode: str = "partial",
-        context_budget: int | None = None,
+        max_context_functions: int | None = None,
         progress_callback=None,
     ):
         return self._review_file_impl(
@@ -106,7 +106,7 @@ class ReviewService:
             options,
             use_retrieval_context=use_retrieval_context,
             mode=mode,
-            context_budget=context_budget,
+            max_context_functions=max_context_functions,
             progress_callback=progress_callback,
             partial_file_service=self._partial_reachability_file_service,
             prefer_treesitter_reachability=True,
@@ -119,7 +119,7 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
         mode: str = "partial",
-        context_budget: int | None = None,
+        max_context_functions: int | None = None,
         progress_callback=None,
         partial_file_service=None,
         prefer_treesitter_reachability: bool = False,
@@ -186,7 +186,7 @@ class ReviewService:
                         max_workers=int(
                             self._reachability_settings.get("max_workers", 8)
                         ),
-                        context_budget=context_budget or 250,
+                        max_context_functions=max_context_functions or 250,
                         max_paths_per_sink=int(
                             self._reachability_settings.get("max_paths_per_sink", 3)
                         ),

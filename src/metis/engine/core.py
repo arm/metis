@@ -41,6 +41,15 @@ def _int_setting(value, default):
     return int(value)
 
 
+def _choice_setting(value, choices, default):
+    if value is None or value == "":
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in choices:
+        return normalized
+    return default
+
+
 class MetisEngine:
     _SUPPORTED_LANGUAGES = None
 
@@ -106,6 +115,14 @@ class MetisEngine:
                 kwargs.get("reachability_max_path_length"), 25
             ),
             "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
+            "review_file_mode": _choice_setting(
+                kwargs.get("reachability_review_file_mode"),
+                {"partial", "full"},
+                "partial",
+            ),
+            "review_file_max_context_functions": _int_setting(
+                kwargs.get("reachability_review_file_max_context_functions"), 250
+            ),
         }
 
         self.plugin_config = load_plugin_config()

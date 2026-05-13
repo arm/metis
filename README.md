@@ -125,7 +125,7 @@ If the index is unavailable and you still want to run an analysis, use:
 ```
 review_code --ignore-index
 ```
-This is supported only for `review_code`, `review_file`, `review_patch`, `reachability`, and `triage`. In that mode Metis skips retrieval and warns that relevant-context lookup was disabled.
+This is supported only for `review_code`, `review_file`, `review_patch`, and `triage`. In that mode Metis skips retrieval and warns that relevant-context lookup was disabled.
 
 ### 3.1 Docker
 
@@ -154,6 +154,7 @@ Metis configuration can be over-ridden using a YAML configuration file (`metis.y
 - **Engine behavior:** max workers, max token length, similarity top-k
 - **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
 - **Vector indexing:** HNSW parameters for `pgvector`
+- **Reachability:** tree-sitter reachability tuning, including review-file mode and path-confirmation limits
 
 This file is **required** to run Metis and should be customized per deployment.
 
@@ -199,8 +200,7 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
 - `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--ignore-index` – allow `review_code`, `review_file`, `review_patch`, `reachability`, and `triage` to run without index-backed context. Metis warns and skips retrieval in this mode. It does not apply to `ask` or `update`.
-- `--reachability-confirmation-model`, `--reachability-reasoning-effort`, `--reachability-workers`, `--reachability-max-paths`, and `--reachability-max-paths-per-sink` – tune C/C++ reachability-backed review.
+- `--ignore-index` – allow `review_code`, `review_file`, `review_patch`, and `triage` to run without index-backed context. Metis warns and skips retrieval in this mode. It does not apply to `ask` or `update`.
 - `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
 
 ### `index`
@@ -210,11 +210,8 @@ Indexes your codebase into a vector database. Must be run before any analysis.
 Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.
 Use `--ignore-index` to run without retrieval when no index is available.
 
-### `reachability`
-Runs the standalone C/C++ reachability workflow. It builds the tree-sitter graph, writes `graph_*.jsonl` and `paths_*.jsonl`, runs supplementary semantic audits, confirms selected source-rooted paths, and writes final findings as JSONL.
-
 ### `review_file <path>`
-Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default (`--mode partial`), while non-C/C++ files use the language plugin review path.
+Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
 Use `--ignore-index` to run without retrieval when no index is available.
 
 ### `review_patch <patch.diff>`

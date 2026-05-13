@@ -106,10 +106,7 @@ def build_engine(args, runtime):
     engine_runtime = dict(runtime)
     engine_runtime.pop("_reachability_config", None)
 
-    def _reachability_value(arg_name, config_name, default=None):
-        value = getattr(args, arg_name, None)
-        if value is not None:
-            return value
+    def _reachability_value(config_name, default=None):
         return reachability_config.get(config_name, default)
 
     usage_runtime = UsageRuntime(args.codebase_path)
@@ -136,33 +133,27 @@ def build_engine(args, runtime):
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
         use_reachability_for_review=_reachability_value(
-            "use_reachability_for_review",
-            "use_reachability_for_review",
-            False,
+            "use_reachability_for_review", False
         ),
         reachability_confirmation_model=_reachability_value(
-            "reachability_confirmation_model",
-            "reachability_confirmation_model",
+            "reachability_confirmation_model"
         ),
-        reachability_workers=_reachability_value(
-            "reachability_workers",
-            "reachability_workers",
-        ),
-        reachability_max_paths=_reachability_value(
-            "reachability_max_paths",
-            "reachability_max_paths",
-        ),
+        reachability_workers=_reachability_value("reachability_workers"),
+        reachability_max_paths=_reachability_value("reachability_max_paths"),
         reachability_max_paths_per_sink=_reachability_value(
-            "reachability_max_paths_per_sink",
-            "reachability_max_paths_per_sink",
+            "reachability_max_paths_per_sink"
         ),
         reachability_max_path_length=_reachability_value(
-            "reachability_max_path_length",
-            "reachability_max_path_length",
+            "reachability_max_path_length"
         ),
         reachability_reasoning_effort=_reachability_value(
-            "reachability_reasoning_effort",
-            "reachability_reasoning_effort",
+            "reachability_reasoning_effort"
+        ),
+        reachability_review_file_mode=_reachability_value(
+            "reachability_review_file_mode"
+        ),
+        reachability_review_file_max_context_functions=_reachability_value(
+            "reachability_review_file_max_context_functions"
         ),
         **engine_runtime,
     )
@@ -514,54 +505,6 @@ def main():
         "--ignore-index",
         action="store_true",
         help="Allow selected analysis commands to run without an index-backed context.",
-    )
-
-    parser.add_argument(
-        "--reachability-confirmation-model",
-        type=str,
-        default=None,
-        help="LLM model for reachability vulnerability analysis (default: gpt-5.5)",
-    )
-    parser.add_argument(
-        "--reachability-reasoning-effort",
-        type=str,
-        default=None,
-        choices=["none", "minimal", "low", "medium", "high"],
-        help="Reasoning effort for reachability vulnerability analysis when supported (default: high)",
-    )
-    parser.add_argument(
-        "--reachability-max-paths-per-sink",
-        type=int,
-        default=None,
-        help="Maximum diverse paths per root-cause sink in reachability output (default: 3)",
-    )
-    parser.add_argument(
-        "--reachability-workers",
-        type=int,
-        default=None,
-        help="Parallel workers for reachability extraction and confirmation (default: 8)",
-    )
-    parser.add_argument(
-        "--reachability-max-paths",
-        type=int,
-        default=None,
-        help=(
-            "Max source-rooted paths to confirm. At 0, reachability uses an "
-            "automatic representative cap and review_code skips path confirmation. "
-            "Default: 0"
-        ),
-    )
-    parser.add_argument(
-        "--reachability-max-path-length",
-        type=int,
-        default=None,
-        help="Maximum source-rooted path length for reachability tracing (default: 25)",
-    )
-    parser.add_argument(
-        "--use-reachability-for-review",
-        action="store_true",
-        default=None,
-        help="Use reachability-backed review_code/review_file when available.",
     )
 
     args = parser.parse_args()

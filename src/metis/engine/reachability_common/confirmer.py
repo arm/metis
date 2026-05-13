@@ -178,7 +178,7 @@ class VulnerabilityConfirmer:
         self._t = max_tokens
         self._reasoning_effort = reasoning_effort
 
-    # --- Bulk confirmation (used by standalone reachability command) ---
+    # --- Bulk confirmation for full-codebase reachability review ---
 
     def confirm_parallel(
         self, paths, graph, *, max_workers=8, output_path=None, progress_callback=None

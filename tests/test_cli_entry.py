@@ -21,12 +21,12 @@ def test_determine_output_file_regenerates_auto_output_per_command(
     entry.determine_output_file("review_code", args, cmd_args)
     first = list(args.output_file)
 
-    entry.determine_output_file("reachability", args, cmd_args)
+    entry.determine_output_file("review_file", args, cmd_args)
     second = list(args.output_file)
 
     assert first != second
     assert first[0].startswith("results/review_code_")
-    assert second[0].startswith("results/reachability_")
+    assert second[0].startswith("results/review_file_")
 
 
 def test_determine_output_file_preserves_user_output(tmp_path, monkeypatch):
@@ -35,7 +35,7 @@ def test_determine_output_file_preserves_user_output(tmp_path, monkeypatch):
     cmd_args = []
 
     entry.determine_output_file("review_code", args, cmd_args)
-    entry.determine_output_file("reachability", args, cmd_args)
+    entry.determine_output_file("review_file", args, cmd_args)
 
     assert args.output_file == ["custom.json"]
 
@@ -46,7 +46,6 @@ def test_determine_output_file_preserves_user_output(tmp_path, monkeypatch):
         "review_file",
         "review_code",
         "review_patch",
-        "reachability",
         "triage",
     ],
 )

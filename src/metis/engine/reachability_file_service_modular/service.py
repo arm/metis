@@ -3,7 +3,7 @@
 
 # ruff: noqa: F403,F405
 
-"""Partial reachability service used by ``review_file --mode partial``."""
+"""Partial reachability service used by targeted C/C++ file review."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class PartialReachabilityFileService:
         *,
         review_model=None,
         max_workers=8,
-        context_budget=250,
+        max_context_functions=250,
         max_paths_per_sink=3,
         reasoning_effort=None,
         progress_callback=None,
@@ -55,7 +55,7 @@ class PartialReachabilityFileService:
         )
 
         caps = PartialContextCaps(
-            max_total_context_functions=max(25, int(context_budget or 250))
+            max_total_context_functions=max(25, int(max_context_functions or 250))
         )
         if progress_callback:
             progress_callback({"event": "partial_context_start", "file": rel_target})

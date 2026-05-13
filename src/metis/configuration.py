@@ -270,6 +270,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "reachability_max_paths_per_sink",
         "reachability_max_path_length",
         "reachability_reasoning_effort",
+        "reachability_review_file_mode",
+        "reachability_review_file_max_context_functions",
     )
     reachability_cfg = {}
     for key in reachability_keys:

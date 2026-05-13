@@ -18,6 +18,15 @@ metis_engine:
     hnsw_ef_construction: 64
     hnsw_ef_search: 40
     hnsw_dist_method: "vector_cosine_ops"
+  use_reachability_for_review: false
+  reachability_confirmation_model: "gpt-5.5"
+  reachability_reasoning_effort: "high"
+  reachability_workers: 8
+  reachability_max_paths: 0
+  reachability_max_paths_per_sink: 3
+  reachability_max_path_length: 25
+  reachability_review_file_mode: "partial"  # partial or full
+  reachability_review_file_max_context_functions: 250
 
 llm_provider:
   name: "openai"

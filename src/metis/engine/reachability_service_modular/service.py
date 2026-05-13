@@ -59,6 +59,7 @@ class TreeSitterReachabilityService:
         self._builder = None
         self._graph_cache = None
         self._paths_cache = None
+        self._paths_cache_max_path_length = None
         self._supplementary_cache: dict[
             tuple[str, str, str, int], list[VulnerabilityFinding]
         ] = {}
@@ -207,6 +208,7 @@ class TreeSitterReachabilityService:
         max_path_length=25,
         progress_callback=None,
         reasoning_effort=None,
+        **_kwargs,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
         graph = self._ensure_graph(progress_callback=progress_callback)
@@ -329,7 +331,7 @@ class TreeSitterReachabilityService:
         analysis_profile="full",
         **_kwargs,
     ):
-        graph, paths = self._ensure_graph_and_paths(
+        graph, paths = self.get_codebase_graph_and_paths(
             max_path_length=max_path_length,
             progress_callback=progress_callback,
         )
@@ -445,12 +447,21 @@ class TreeSitterReachabilityService:
             / DEFAULT_TREESITTER_OUTPUT_DIR
         )
 
-    def _ensure_graph_and_paths(self, *, max_path_length=25, progress_callback=None):
-        if self._graph_cache is not None and self._paths_cache is not None:
+    def get_codebase_graph_and_paths(
+        self, *, max_path_length=25, progress_callback=None
+    ):
+        """Return the cached codebase graph and traced paths for shared analysis."""
+        max_path_length = int(max_path_length or 25)
+        if (
+            self._graph_cache is not None
+            and self._paths_cache is not None
+            and self._paths_cache_max_path_length == max_path_length
+        ):
             return self._graph_cache, list(self._paths_cache)
         graph = self._ensure_graph(progress_callback=progress_callback)
         paths = self.trace_paths(graph, max_path_length=max_path_length)
         self._paths_cache = list(paths)
+        self._paths_cache_max_path_length = max_path_length
         return graph, list(paths)
 
     def _dedupe_path_objects(self, paths):
