@@ -3846,7 +3846,7 @@ Return ONLY valid JSON:
 {{"findings": [{{"is_vulnerable": true, "vulnerability_type": "buffer_overflow",
 "severity": "high", "confidence": "high", "function_name": "target_fn",
 "related_function": "helper_fn", "line": 123, "description": "...",
-"root_cause": "...", "evidence": "...", "primary_file": "src/target.c",
+"root_cause": "...", "evidence": "...", "mitigation": "...", "primary_file": "src/target.c",
 "primary_function": "target_fn", "primary_line": 123,
 "canonical_key": "src/target.c:target_fn:memory_bounds:size_check"}}]}}
 Return {{"findings": []}} if none found.

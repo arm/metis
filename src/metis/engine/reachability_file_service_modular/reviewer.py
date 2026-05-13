@@ -1167,6 +1167,7 @@ class TargetedFileReviewer:
                     description=str(entry.get("description") or ""),
                     root_cause=str(entry.get("root_cause") or ""),
                     evidence=str(entry.get("evidence") or ""),
+                    mitigation=str(entry.get("mitigation") or ""),
                     analysis_type=analysis_type,
                     primary_file=primary_file,
                     primary_function=primary_function,

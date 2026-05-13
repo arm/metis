@@ -34,6 +34,7 @@ from ..reachability_common import (
     _VULN_TO_CWE,
     _confidence_score,
     _dedupe_paths,
+    _mitigation_text,
     _normalise_vuln_type,
     _post_filter_findings,
     _read_function_body,

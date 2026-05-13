@@ -22,6 +22,7 @@ from ..reachability_common import (
     VulnerabilityConfirmer,
     _VULN_TO_CWE,
     _confidence_score,
+    _mitigation_text,
     _normalise_vuln_type,
     _post_filter_findings,
     _read_line_context,
@@ -730,7 +731,7 @@ class TreeSitterReachabilityService:
             "severity": _severity_title(finding.severity, "Medium"),
             "confidence": _confidence_score(finding.confidence),
             "reasoning": "\n".join(reasoning_parts),
-            "mitigation": str(finding.root_cause or "").strip(),
+            "mitigation": _mitigation_text(finding, vtype),
         }
 
     def _connected_functions_for_finding(self, finding, graph, target_file):
@@ -793,6 +794,7 @@ class TreeSitterReachabilityService:
         root_cause,
         evidence,
         token,
+        mitigation="",
     ):
         fn = self._function_for_line(graph, target_file, line)
         fn_name = fn.unique_name if fn else f"{target_file}::unknown"
@@ -812,6 +814,7 @@ class TreeSitterReachabilityService:
             description=description,
             root_cause=root_cause,
             evidence=evidence,
+            mitigation=mitigation,
             analysis_type="deterministic_treesitter",
             primary_file=target_file,
             primary_function=fn_name,
@@ -851,6 +854,7 @@ class TreeSitterReachabilityService:
                     description="A masked protocol-controlled index can exceed the fixed array bounds.",
                     root_cause="The mask permits values 0-15, but the target array is smaller than that range.",
                     evidence="Array indexing uses an expression like flags & 0x0F against a fixed-size array.",
+                    mitigation="Validate the masked index against the actual array length before indexing.",
                     token="masked_index_exceeds_array",
                 )
             )
@@ -871,6 +875,7 @@ class TreeSitterReachabilityService:
                     description="A value returned from the generic store is cast to a concrete struct type without checking the stored type tag.",
                     root_cause="The code trusts a void* store lookup result as a specific object type without validating metadata such as type_tag.",
                     evidence="store_get(...) is directly cast to a typed pointer and dereferenced without a visible type check.",
+                    mitigation="Validate the stored type metadata before casting or dereferencing the returned pointer.",
                     token="store_get_cast_without_type_tag",
                 )
             )
@@ -890,6 +895,7 @@ class TreeSitterReachabilityService:
                     description="The payload is sanitized before data_len is published, but the stored length remains the original pre-sanitization length.",
                     root_cause="Sanitization can shrink or rewrite the payload while callers continue to trust stale length metadata.",
                     evidence="util_sanitize(..., payload_len) is followed by msg->data_len = payload_len.",
+                    mitigation="Store the sanitized length returned by validation and use that value for later copies.",
                     token="sanitize_keeps_original_length",
                 )
             )
@@ -909,6 +915,7 @@ class TreeSitterReachabilityService:
                     description="The response copies an entire C struct, which can expose padding or uninitialized internal fields.",
                     root_cause="Whole-struct serialization is used instead of field-by-field serialization of initialized, intended output fields.",
                     evidence="memcpy copies sizeof(struct_type) bytes into a response buffer.",
+                    mitigation="Serialize only initialized public fields instead of copying the whole struct.",
                     token="whole_struct_response_copy",
                 )
             )
@@ -930,6 +937,7 @@ class TreeSitterReachabilityService:
                     description="The stored title length includes an extra terminator byte and is later used as a serialization copy length.",
                     root_cause="A string length field is maintained as copied + 1, so later byte-oriented serialization can read one byte past the copied string data.",
                     evidence="task title length is assigned copied + 1 and later used in memcpy(..., t->title_len).",
+                    mitigation="Track initialized payload bytes separately from the terminator and copy only that length.",
                     token="title_len_copied_plus_one",
                 )
             )

@@ -501,6 +501,21 @@ def _normalise_vuln_type(raw):
     return _VULN_TYPE_ALIASES.get(t, t)
 
 
+def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
+    explicit = str(getattr(finding, "mitigation", "") or "").strip()
+    if explicit:
+        return explicit
+
+    vtype = _normalise_vuln_type(
+        vulnerability_type or getattr(finding, "vulnerability_type", "")
+    )
+    label = _VTYPE_FAMILY.get(vtype, vtype).replace("_", " ")
+    return (
+        f"Address the {label} issue by adding the missing validation, ordering, "
+        "ownership, or cleanup guard before the reachable operation executes."
+    )
+
+
 _PRINTF_FORMAT_ARG_INDEX = {
     "printf": 0,
     "fprintf": 1,

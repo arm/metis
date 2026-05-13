@@ -40,6 +40,7 @@ Choose primary_file/primary_function/primary_line as the location of the actual 
 not merely the source, caller, helper, or path endpoint.
 If the same root cause appears through multiple paths, use the same canonical_key.
 canonical_key should be stable and concise: file:function:vulnerability_family:root_cause_token.
+Include a concise mitigation field that recommends a fix, not a restatement of root_cause or evidence.
 Be conservative. Report each distinct root cause once.
 Do not report a caller/path duplicate if the same primary defect is already represented.
 Do not assign a bug to a helper/header unless the actual defective code is in that helper/header."""
@@ -56,7 +57,8 @@ For EACH path determine if it contains a real exploitable vulnerability:
 3. Is the dangerous operation or missing check truly reachable as called?
 Return ONLY valid JSON:
 {{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "...",
+"mitigation": "..."}}]}}
 vulnerability_type: buffer_overflow, use_after_free, double_free, double_close, null_deref, command_injection, \
 format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, \
 out_of_bounds, refcount_imbalance, state_order, lock_order, stale_after_unlock, accounting_drift, \
@@ -87,7 +89,8 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 4. Is the root cause in the target file rather than merely elsewhere on the path?
 Return ONLY valid JSON:
 {{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "...",
+"mitigation": "..."}}]}}
 vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
 integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, \
 state_order, lock_order, stale_after_unlock, accounting_drift, missing_auth, permission_mismatch, \
@@ -276,6 +279,7 @@ class VulnerabilityConfirmer:
                     description=str(e.get("description") or ""),
                     root_cause=str(e.get("root_cause") or ""),
                     evidence=str(e.get("evidence") or ""),
+                    mitigation=str(e.get("mitigation") or ""),
                     analysis_type="reachability",
                     primary_file=primary_file,
                     primary_function=primary_function,

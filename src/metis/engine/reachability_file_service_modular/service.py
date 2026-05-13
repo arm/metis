@@ -460,7 +460,7 @@ class PartialReachabilityFileService:
             "severity": _severity_title(finding.severity, "Medium"),
             "confidence": _confidence_score(finding.confidence),
             "reasoning": "\n".join(reasoning_parts),
-            "mitigation": str(finding.root_cause or "").strip(),
+            "mitigation": _mitigation_text(finding, vtype),
         }
 
 

@@ -62,6 +62,7 @@ class VulnerabilityFinding:
     description: str = ""
     root_cause: str = ""
     evidence: str = ""
+    mitigation: str = ""
     analysis_type: str = "reachability"
     primary_file: str = ""
     primary_function: str = ""
