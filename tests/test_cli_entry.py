@@ -11,43 +11,8 @@ from metis.cli import entry
 from metis.cli import command_registry
 
 
-def test_determine_output_file_regenerates_auto_output_per_command(
-    tmp_path, monkeypatch
-):
-    monkeypatch.chdir(tmp_path)
-    args = SimpleNamespace(output_file=None)
-    cmd_args = []
-
-    entry.determine_output_file("review_code", args, cmd_args)
-    first = list(args.output_file)
-
-    entry.determine_output_file("review_file", args, cmd_args)
-    second = list(args.output_file)
-
-    assert first != second
-    assert first[0].startswith("results/review_code_")
-    assert second[0].startswith("results/review_file_")
-
-
-def test_determine_output_file_preserves_user_output(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    args = SimpleNamespace(output_file=["custom.json"])
-    cmd_args = []
-
-    entry.determine_output_file("review_code", args, cmd_args)
-    entry.determine_output_file("review_file", args, cmd_args)
-
-    assert args.output_file == ["custom.json"]
-
-
 @pytest.mark.parametrize(
-    "cmd",
-    [
-        "review_file",
-        "review_code",
-        "review_patch",
-        "triage",
-    ],
+    "cmd", ["review_file", "review_code", "review_patch", "triage"]
 )
 def test_prepare_command_runtime_allows_opt_in_no_index_for_supported_command(cmd):
     args = SimpleNamespace(ignore_index=False, quiet=True, codebase_path="src/metis")

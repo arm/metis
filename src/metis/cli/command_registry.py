@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
+from prompt_toolkit.completion import WordCompleter
 from rich.markup import escape
 
 from .command_runtime import CommandRuntime
@@ -164,13 +165,4 @@ COMMANDS = {
     "exit": CommandSpec(None),
 }
 
-_completer = None
-
-
-def get_completer():
-    global _completer
-    if _completer is None:
-        from prompt_toolkit.completion import WordCompleter
-
-        _completer = WordCompleter(list(COMMANDS), ignore_case=True)
-    return _completer
+completer = WordCompleter(list(COMMANDS), ignore_case=True)

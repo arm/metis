@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-# cli/entry.py
-
 import argparse
 from datetime import datetime
 import logging
@@ -11,6 +9,8 @@ import shlex
 from typing import cast
 
 from rich.markup import escape
+from prompt_toolkit import prompt
+from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
@@ -24,7 +24,8 @@ try:
 except ImportError:
     pass
 
-from .command_registry import COMMANDS, get_completer
+
+from .command_registry import COMMANDS, completer
 from .command_runtime import CommandRuntime
 from .utils import (
     configure_logger,
@@ -32,7 +33,6 @@ from .utils import (
     build_pg_backend,
     build_chroma_backend,
     print_console,
-    save_output,
     print_usage_summary,
     print_final_usage_summary,
 )
@@ -41,17 +41,11 @@ logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
 EXIT_REQUESTED = object()
-prompt = None
-InMemoryHistory = None
 
 
 def determine_output_file(cmd, args, cmd_args):
     """Set args.output_file list if not provided, or extract from cmd_args."""
     existing_outputs = list(args.output_file or [])
-    auto_outputs = list(getattr(args, "_metis_auto_output_file", []) or [])
-    if auto_outputs and existing_outputs == auto_outputs:
-        existing_outputs = []
-        args.output_file = None
     overrides: list[str] = []
 
     while "--output-file" in cmd_args:
@@ -62,7 +56,6 @@ def determine_output_file(cmd, args, cmd_args):
 
     if overrides:
         args.output_file = overrides
-        args._metis_auto_output_file = []
         return
 
     if cmd == "triage":
@@ -71,13 +64,11 @@ def determine_output_file(cmd, args, cmd_args):
 
     if existing_outputs:
         args.output_file = existing_outputs
-        args._metis_auto_output_file = []
         return
 
     Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     args.output_file = [f"results/{cmd}_{timestamp}.json"]
-    args._metis_auto_output_file = list(args.output_file)
 
 
 def resolve_custom_prompt(args):
@@ -247,27 +238,21 @@ def _interactive_command_ignores_index(cmd, cmd_args, args):
 
 
 def execute_command(engine, cmd, cmd_args, args):
-    setattr(args, "_metis_command_status", "starting")
     if cmd not in COMMANDS:
-        setattr(args, "_metis_command_status", "unknown_command")
         print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
         return
 
     spec = COMMANDS[cmd]
     if cmd == "exit":
-        setattr(args, "_metis_command_status", "exit_requested")
         return EXIT_REQUESTED
     runtime = _prepare_command_runtime(cmd, list(cmd_args), args)
     if runtime is None:
-        setattr(args, "_metis_command_status", "runtime_unavailable")
         return
 
     if spec.prepares_output_file:
         determine_output_file(cmd, args, runtime.command_args)
-        setattr(args, "_metis_command_status", "output_prepared")
 
     if not spec.validate(cmd, runtime.command_args, args):
-        setattr(args, "_metis_command_status", "validation_failed")
         return
 
     usage_command = None
@@ -279,77 +264,19 @@ def execute_command(engine, cmd, cmd_args, args):
         )
 
     if usage_command is None:
-        setattr(args, "_metis_command_status", "handler_invoking")
         spec.invoke(engine, runtime.command_args, args, runtime)
-        setattr(args, "_metis_command_status", "handler_invoked")
         return
 
-    setattr(args, "_metis_command_status", "handler_invoking")
     with usage_command as command:
         spec.invoke(engine, runtime.command_args, args, runtime)
-    setattr(args, "_metis_command_status", "handler_invoked")
 
     record = engine.finalize_usage_command(command)
-    setattr(args, "_metis_command_status", "usage_finalized")
     print_usage_summary(
         record["display_name"],
         record["summary"],
         record["cumulative"],
         quiet=args.quiet,
     )
-
-
-def _empty_output_payload(cmd, cmd_args, args=None):
-    status = str(getattr(args, "_metis_command_status", "unknown"))
-    error = f"Command completed without writing output. status={status}"
-    if cmd == "review_file":
-        target = cmd_args[0] if cmd_args else ""
-        return {
-            "reviews": [
-                {
-                    "file": target,
-                    "file_path": target,
-                    "reviews": [],
-                    "errors": [error],
-                }
-            ],
-            "diagnostics": {
-                "command": cmd,
-                "command_args": list(cmd_args),
-                "status": status,
-                "output_file": list(getattr(args, "output_file", None) or []),
-                "ignore_index": bool(getattr(args, "ignore_index", False)),
-                "non_interactive": bool(getattr(args, "non_interactive", False)),
-            },
-        }
-    return {"reviews": [], "errors": [error]}
-
-
-def _ensure_non_interactive_output(cmd, cmd_args, args):
-    spec = COMMANDS.get(cmd)
-    if spec is None or not spec.prepares_output_file:
-        return False
-    output_files = list(getattr(args, "output_file", None) or [])
-    if not output_files:
-        fallback_cmd_args = list(cmd_args)
-        determine_output_file(cmd, args, fallback_cmd_args)
-        output_files = list(getattr(args, "output_file", None) or [])
-    if not output_files:
-        return False
-    missing = [
-        str(output_file)
-        for output_file in output_files
-        if str(output_file).lower().endswith(".json")
-        and not Path(str(output_file)).is_file()
-    ]
-    if not missing:
-        return False
-    save_output(
-        missing,
-        _empty_output_payload(cmd, cmd_args, args),
-        quiet=getattr(args, "quiet", False),
-    )
-    return True
 
 
 def run_non_interactive(engine, args):
@@ -360,57 +287,22 @@ def run_non_interactive(engine, args):
             args.quiet,
         )
         return 1, None
-    try:
-        parts = shlex.split(args.command.strip())
-    except ValueError as e:
-        print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
-        return 1, None
+    parts = args.command.strip().split()
     cmd, cmd_args = parts[0], parts[1:]
-    result = None
-    exit_code = 0
     try:
         result = execute_command(engine, cmd, cmd_args, args)
     except Exception as e:
         print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
-        exit_code = 1
-    finally:
-        try:
-            wrote_fallback = _ensure_non_interactive_output(cmd, cmd_args, args)
-        except Exception as e:
-            print_console(
-                f"[bold red]Error writing output fallback:[/bold red] {escape(str(e))}",
-                args.quiet,
-            )
-            exit_code = 1
-        else:
-            if wrote_fallback and cmd in {
-                "review_file",
-                "review_code",
-                "review_patch",
-            }:
-                exit_code = 1
-    if exit_code:
-        return exit_code, None
+        return 1, None
     farewell = "[magenta]Goodbye![/magenta]" if result is EXIT_REQUESTED else None
     return 0, farewell
 
 
 def run_interactive_loop(engine, args, vector_backend):
-    global prompt, InMemoryHistory
-    if prompt is None or InMemoryHistory is None:
-        from prompt_toolkit import prompt as _prompt
-        from prompt_toolkit.history import InMemoryHistory as _InMemoryHistory
-
-        if prompt is None:
-            prompt = _prompt
-        if InMemoryHistory is None:
-            InMemoryHistory = _InMemoryHistory
-
     print_console(
         "[bold cyan]Metis CLI. Type 'help' for usage, 'exit' to quit.[/bold cyan]",
         args.quiet,
     )
-    completer = get_completer()
     history = InMemoryHistory()
 
     while True:
@@ -476,7 +368,7 @@ def main():
     parser.add_argument(
         "--output-file",
         action="append",
-        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif/.jsonl)",
+        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif)",
     )
     parser.add_argument(
         "--output-files",
@@ -550,7 +442,3 @@ def main():
         finalize_cli_session_and_close(engine, args, farewell)
     if exit_code:
         raise SystemExit(exit_code)
-
-
-if __name__ == "__main__":
-    main()

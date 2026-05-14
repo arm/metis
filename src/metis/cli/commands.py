@@ -103,14 +103,7 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
     _finalize_review_output(engine, results, args, runtime)
 
 
-def _run_file_review_with(
-    engine,
-    file_path,
-    args,
-    runtime: CommandRuntime,
-    review_file_func,
-):
-    original_file_path = file_path
+def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not Path(str(file_path)).is_file():
         codebase_path = getattr(engine, "codebase_path", None)
         if codebase_path:
@@ -118,19 +111,6 @@ def _run_file_review_with(
             if candidate.is_file():
                 file_path = str(candidate)
     if not check_file_exists(file_path):
-        if original_file_path != file_path:
-            check_file_exists(original_file_path)
-        missing_result = {
-            "reviews": [
-                {
-                    "file": str(original_file_path),
-                    "file_path": str(original_file_path),
-                    "reviews": [],
-                    "errors": [f"File not found: {original_file_path}"],
-                }
-            ]
-        }
-        _finalize_review_output(engine, missing_result, args, runtime)
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
@@ -145,101 +125,40 @@ def _run_file_review_with(
     def _progress(event):
         logger.debug("reachability progress event: %r", event)
 
-    try:
-        raw_result = with_spinner(
-            f"Reviewing file {file_path}...",
-            review_file_func,
-            file_path=file_path,
-            options=options,
-            mode=mode,
-            max_context_functions=max_context_functions,
-            progress_callback=_progress,
-            quiet=args.quiet,
-        )
-
-        if raw_result and isinstance(raw_result.get("reviews"), list):
-            results = {"reviews": [raw_result]}
-        else:
-            results = {"reviews": []}
-
-        _finalize_review_output(engine, results, args, runtime)
-    except Exception as exc:
-        error_result = {
-            "reviews": [
-                {
-                    "file": str(original_file_path),
-                    "file_path": str(file_path),
-                    "reviews": [],
-                    "errors": [f"{type(exc).__name__}: {exc}"],
-                }
-            ]
-        }
-        save_output(args.output_file, error_result, args.quiet)
-
-
-def run_file_review(engine, file_path, args, runtime: CommandRuntime):
-    return _run_file_review_with(
-        engine,
-        file_path,
-        args,
-        runtime,
+    raw_result = with_spinner(
+        f"Reviewing file {file_path}...",
         engine.review.review_file,
+        file_path=file_path,
+        options=options,
+        mode=mode,
+        max_context_functions=max_context_functions,
+        progress_callback=_progress,
+        quiet=args.quiet,
     )
+
+    if raw_result and isinstance(raw_result.get("reviews"), list):
+        results = {"reviews": [raw_result]}
+    else:
+        results = {"reviews": []}
+
+    _finalize_review_output(engine, results, args, runtime)
 
 
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-    use_reachability = False
-    uses_reachability_fn = getattr(
-        engine.review, "uses_reachability_for_code_review", None
-    )
-    if callable(uses_reachability_fn):
-        use_reachability = bool(uses_reachability_fn())
 
     def _progress(event):
         logger.debug("reachability progress event: %r", event)
 
-    if args.verbose:
-        if use_reachability:
-            print_console(
-                "[cyan]Reviewing C/C++ codebase with tree-sitter reachability...[/cyan]",
-                args.quiet,
-            )
-            file_reviews = [
-                r
-                for r in engine.review.review_code(
-                    options=options, progress_callback=_progress
-                )
-                if r
-            ]
-        else:
-            print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-            total = len(engine.review.get_code_files(options=options))
-            file_reviews = iterate_with_progress(
-                total,
-                engine.review.review_code(options=options),
-            )
-        results = {"reviews": file_reviews}
-    else:
-        if use_reachability:
-            results = {
-                "reviews": [
-                    r
-                    for r in engine.review.review_code(
-                        options=options, progress_callback=_progress
-                    )
-                    if r
-                ]
-            }
-        else:
-            results = with_spinner(
-                "Reviewing codebase...",
-                collect_reviews,
-                engine,
-                options=options,
-                quiet=args.quiet,
-            )
+    results = with_spinner(
+        "Reviewing codebase...",
+        collect_reviews,
+        engine,
+        options=options,
+        progress_callback=_progress,
+        quiet=args.quiet,
+    )
     _finalize_review_output(engine, results, args, runtime)
 
 
