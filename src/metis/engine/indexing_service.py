@@ -32,6 +32,21 @@ class IndexingService:
         self._state = state
         self._repository = repository
 
+    def _get_broken_symlink_excludes(self, supported_exts: list[str]) -> list[str]:
+        base_path = os.path.abspath(self._config.codebase_path)
+        supported = {ext.lower() for ext in supported_exts}
+        excludes = []
+
+        for root, _, files in os.walk(base_path):
+            for file_name in files:
+                full_path = os.path.join(root, file_name)
+                if os.path.splitext(file_name)[1].lower() not in supported:
+                    continue
+                if os.path.islink(full_path) and not os.path.exists(full_path):
+                    excludes.append(os.path.relpath(full_path, base_path))
+
+        return excludes
+
     def index_codebase(self):
         self.index_prepare_nodes()
         self.index_finalize_embeddings()
@@ -63,10 +78,12 @@ class IndexingService:
         code_supported_exts = self._repository.get_all_supported_code_extensions()
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
+        supported_exts = code_supported_exts + docs_supported_exts
         reader = SimpleDirectoryReader(
             input_dir=self._config.codebase_path,
             recursive=True,
-            required_exts=code_supported_exts + docs_supported_exts,
+            required_exts=supported_exts,
+            exclude=self._get_broken_symlink_excludes(supported_exts),
             filename_as_id=True,
         )
         documents = reader.load_data()
