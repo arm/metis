@@ -123,6 +123,7 @@ class MetisEngine:
             "review_file_max_context_functions": _int_setting(
                 kwargs.get("reachability_review_file_max_context_functions"), 250
             ),
+            "security_functions": kwargs.get("reachability_security_functions") or [],
         }
 
         self.plugin_config = load_plugin_config()

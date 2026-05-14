@@ -675,16 +675,7 @@ class TargetedFileReviewer:
                     default=len(text),
                 ),
             )
-        return self._dedupe_nodes(nodes)[:cap]
-
-    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
-        seen, out = set(), []
-        for node in nodes:
-            if node.unique_name in seen:
-                continue
-            seen.add(node.unique_name)
-            out.append(node)
-        return out
+        return _dedupe_nodes(nodes)[:cap]
 
     def _run_pass(self, context, graph, pass_item, detector_result):
         pass_name, target_nodes, context_nodes = pass_item

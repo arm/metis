@@ -162,6 +162,9 @@ class ReviewService:
                         reasoning_effort=self._reachability_settings.get(
                             "reasoning_effort"
                         ),
+                        security_functions=self._reachability_settings.get(
+                            "security_functions"
+                        ),
                         progress_callback=progress_callback,
                     )
                 except Exception as e:

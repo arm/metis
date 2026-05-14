@@ -382,7 +382,7 @@ class PartialReachabilityFileService:
                 context.globals, detector_result.globals
             )
         if detector_result.nodes:
-            context.lifecycle_pair_nodes = self._dedupe_nodes(
+            context.lifecycle_pair_nodes = _dedupe_nodes(
                 list(context.lifecycle_pair_nodes or []) + list(detector_result.nodes)
             )
         paths = list(context.candidate_paths or [])
@@ -401,15 +401,6 @@ class PartialReachabilityFileService:
                     )
                 )
         context.candidate_paths = _dedupe_paths(paths)
-
-    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
-        seen, out = set(), []
-        for node in nodes:
-            if node.unique_name in seen:
-                continue
-            seen.add(node.unique_name)
-            out.append(node)
-        return out
 
     def _all_context_nodes(self, context):
         seen = {}

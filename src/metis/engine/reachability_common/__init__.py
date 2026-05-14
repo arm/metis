@@ -48,6 +48,7 @@ from .utils import (
     _safe_int,
     _same_file_ref,
     _severity_title,
+    _split_c_args,
 )
 
 __all__ = [
@@ -89,4 +90,5 @@ __all__ = [
     "_safe_int",
     "_same_file_ref",
     "_severity_title",
+    "_split_c_args",
 ]

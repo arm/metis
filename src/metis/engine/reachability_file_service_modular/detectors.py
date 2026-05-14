@@ -86,7 +86,7 @@ class PartialCandidateDetector:
         self._detect_imported_mapping_policy(index, result, target_syms, context)
         self._detect_sentinel_misuse(index, result, target_syms)
         self._detect_target_calls_wrappers(index, result, target_syms, wrappers)
-        result.nodes = self._dedupe_nodes(result.nodes)
+        result.nodes = _dedupe_nodes(result.nodes)
         result.globals = list({g.unique_name: g for g in result.globals}.values())
         return result
 
@@ -104,15 +104,6 @@ class PartialCandidateDetector:
     ):
         if sym:
             result.nodes.append(self._node(index, sym))
-
-    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
-        seen, out = set(), []
-        for node in nodes:
-            if node.unique_name in seen:
-                continue
-            seen.add(node.unique_name)
-            out.append(node)
-        return out
 
     def _symbol_for_function(
         self, index: SymbolIndex, file_path: str, name: str

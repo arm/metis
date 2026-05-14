@@ -14,6 +14,7 @@ from metis.engine.analysis.c_family_analyzer_common import (
     _node_line,
     _node_text,
 )
+from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 from metis.plugins.cpp_plugin import CppPlugin
 
@@ -35,7 +36,7 @@ class ParsedFileGraph:
     errors: list[str] = field(default_factory=list)
 
 
-class CFamilyTreeSitterExtractor:
+class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     """Convert one C-family source file into graph nodes plus global callbacks."""
 
     def __init__(self):
@@ -175,17 +176,6 @@ class CFamilyTreeSitterExtractor:
                         )
                     entrypoint_refs.update(refs)
         return globals_, entrypoint_refs
-
-    def _iter_nodes(self, root):
-        if root is None:
-            return
-        stack = [root]
-        while stack:
-            node = stack.pop()
-            yield node
-            children = getattr(node, "children", []) or []
-            for child in reversed(children):
-                stack.append(child)
 
     def _entrypoint_references(self, text: str) -> list[str]:
         refs: list[str] = []

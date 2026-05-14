@@ -42,11 +42,23 @@ from ..reachability_common import (
     _safe_int,
     _same_file_ref,
     _severity_title,
+    _split_c_args,
 )
 from ..repository import EngineRepository
 from ..runtime import EngineConfig
 
 logger = logging.getLogger("metis")
+
+
+def _dedupe_nodes(nodes: list[FunctionNode]) -> list[FunctionNode]:
+    seen, out = set(), []
+    for node in nodes:
+        if node.unique_name in seen:
+            continue
+        seen.add(node.unique_name)
+        out.append(node)
+    return out
+
 
 _CONTROL_CALLS = frozenset(
     {
@@ -1450,42 +1462,9 @@ def _normalise_partial_vuln_type(raw) -> str:
     return _PARTIAL_VULN_ALIASES.get(text, _normalise_vuln_type(text))
 
 
-def _split_args(args_text: str) -> list[str]:
-    args, current = [], []
-    depth = 0
-    quote = None
-    escape = False
-    for ch in str(args_text or ""):
-        if quote:
-            current.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == quote:
-                quote = None
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            current.append(ch)
-            continue
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}" and depth > 0:
-            depth -= 1
-        if ch == "," and depth == 0:
-            args.append("".join(current).strip())
-            current = []
-        else:
-            current.append(ch)
-    if current or args_text:
-        args.append("".join(current).strip())
-    return args
-
-
 def _first_call_args(line: str, fn_name: str) -> list[str]:
     match = re.search(r"\b" + re.escape(fn_name) + r"\s*\((.*)\)", line)
-    return _split_args(match.group(1)) if match else []
+    return _split_c_args(match.group(1)) if match else []
 
 
 def _is_string_literal(expr: str) -> bool:

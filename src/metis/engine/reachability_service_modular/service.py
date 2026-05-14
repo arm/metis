@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import uuid
@@ -13,7 +12,6 @@ from collections import defaultdict
 
 from metis.utils import read_file_content
 
-from ..reachability_common.project_sinks import ProjectSinkClassifier
 from ..reachability_common import (
     Deduplicator,
     FunctionNode,
@@ -37,7 +35,55 @@ _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
 _C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
-logger = logging.getLogger("metis")
+
+
+def _normalise_security_function_specs(raw):
+    specs = {}
+
+    def add(name, *, sink_type="other", reason="configured in metis.yaml"):
+        key = str(name or "").strip()
+        if not key:
+            return
+        specs[key.lower()] = {
+            "sink_type": _normalise_vuln_type(sink_type or "other"),
+            "reason": str(reason or "configured in metis.yaml").strip(),
+        }
+
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, (list, tuple, set)):
+        items = ((None, item) for item in raw)
+    else:
+        return specs
+
+    for key, value in items:
+        if isinstance(value, str):
+            if key is None:
+                add(value, sink_type="other")
+            else:
+                add(key, sink_type=value)
+            continue
+        if not isinstance(value, dict):
+            add(key or value, sink_type="other")
+            continue
+        names = (
+            value.get("names")
+            or value.get("functions")
+            or value.get("function_names")
+            or value.get("name")
+            or value.get("function")
+            or value.get("function_name")
+            or key
+        )
+        if isinstance(names, str):
+            names = [names]
+        for name in names or []:
+            add(
+                name,
+                sink_type=value.get("sink_type") or value.get("type") or "other",
+                reason=value.get("reason") or "configured in metis.yaml",
+            )
+    return specs
 
 
 class TreeSitterReachabilityService:
@@ -158,12 +204,13 @@ class TreeSitterReachabilityService:
         max_path_length=25,
         progress_callback=None,
         reasoning_effort=None,
+        security_functions=None,
         **_kwargs,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
         graph = self._ensure_graph(
             progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
+            security_functions=security_functions,
         )
         if graph.node_count() == 0:
             return None
@@ -280,6 +327,7 @@ class TreeSitterReachabilityService:
         max_path_length=25,
         progress_callback=None,
         reasoning_effort=None,
+        security_functions=None,
         confirm_paths=True,
         analysis_profile="full",
         **_kwargs,
@@ -287,7 +335,7 @@ class TreeSitterReachabilityService:
         graph, paths = self.get_codebase_graph_and_paths(
             max_path_length=max_path_length,
             progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
+            security_functions=security_functions,
         )
         if graph.node_count() == 0:
             return []
@@ -387,10 +435,19 @@ class TreeSitterReachabilityService:
         return annotated
 
     def get_codebase_graph_and_paths(
-        self, *, max_path_length=25, progress_callback=None, reasoning_effort=None
+        self, *, max_path_length=25, progress_callback=None, security_functions=None
     ):
         """Return the cached codebase graph and traced paths for shared analysis."""
         max_path_length = int(max_path_length or 25)
+        if self._graph_cache is not None:
+            updated = self._annotate_configured_security_functions(
+                self._graph_cache,
+                security_functions,
+                progress_callback=progress_callback,
+            )
+            if updated:
+                self._paths_cache = None
+                self._paths_cache_max_path_length = None
         if (
             self._graph_cache is not None
             and self._paths_cache is not None
@@ -399,7 +456,7 @@ class TreeSitterReachabilityService:
             return self._graph_cache, list(self._paths_cache)
         graph = self._ensure_graph(
             progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
+            security_functions=security_functions,
         )
         paths = self.trace_paths(graph, max_path_length=max_path_length)
         self._paths_cache = list(paths)
@@ -504,40 +561,54 @@ class TreeSitterReachabilityService:
                 )
         return reviews
 
-    def _ensure_graph(self, *, progress_callback=None, reasoning_effort=None):
+    def _ensure_graph(self, *, progress_callback=None, security_functions=None):
         if self._graph_cache is not None:
+            updated = self._annotate_configured_security_functions(
+                self._graph_cache,
+                security_functions,
+                progress_callback=progress_callback,
+            )
+            if updated:
+                self._paths_cache = None
+                self._paths_cache_max_path_length = None
             return self._graph_cache
         graph = self.build_graph(progress_callback=progress_callback)
-        self._annotate_project_sinks(
+        self._annotate_configured_security_functions(
             graph,
+            security_functions,
             progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
         )
         self._graph_cache = graph
         return self._graph_cache
 
-    def _annotate_project_sinks(
-        self, graph, *, progress_callback=None, reasoning_effort=None
+    def _annotate_configured_security_functions(
+        self, graph, security_functions, *, progress_callback=None
     ):
-        model = getattr(self._config, "llama_query_model", None)
-        if not model or self._llm_provider is None:
+        specs = _normalise_security_function_specs(security_functions)
+        if not specs:
             return 0
-        max_workers = max(1, min(int(getattr(self._config, "max_workers", 4) or 4), 4))
-        try:
-            return ProjectSinkClassifier(
-                self._llm_provider,
-                model,
-                self._usage_runtime,
-                self._config.codebase_path,
-                reasoning_effort=reasoning_effort,
-            ).annotate(
-                graph,
-                max_workers=max_workers,
-                progress_callback=progress_callback,
+        updated = 0
+        for node in graph.nodes.values():
+            if node.is_sink:
+                continue
+            matched_calls = [
+                str(call)
+                for call in node.calls or []
+                if str(call or "").lower() in specs
+            ]
+            if not matched_calls:
+                continue
+            spec = specs[str(matched_calls[0]).lower()]
+            node.is_sink = True
+            node.sink_type = spec["sink_type"]
+            node.sink_reason = f"calls configured security function {matched_calls[0]}: {spec['reason']}"
+            updated += 1
+
+        if updated and progress_callback:
+            progress_callback(
+                {"event": "configured_security_functions_done", "sinks": updated}
             )
-        except Exception as exc:
-            logger.debug("Project sink discovery skipped: %s", exc)
-            return 0
+        return updated
 
     def _ensure_supplementary(
         self,

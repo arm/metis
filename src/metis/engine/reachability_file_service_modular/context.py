@@ -144,7 +144,7 @@ class PartialContextBuilder:
         companions = [
             sym for sym in companions if _symbol_unique_name(sym) not in existing
         ]
-        context.companion_nodes = self._dedupe_nodes(
+        context.companion_nodes = _dedupe_nodes(
             list(context.companion_nodes or [])
             + self._materialize_symbols(index, companions)
         )
@@ -425,15 +425,6 @@ class PartialContextBuilder:
                         )
                     )
         return paths
-
-    def _dedupe_nodes(self, nodes: list[FunctionNode]) -> list[FunctionNode]:
-        seen, out = set(), []
-        for node in nodes:
-            if node.unique_name in seen:
-                continue
-            seen.add(node.unique_name)
-            out.append(node)
-        return out
 
     def _target_calls(self, target_nodes, index, target_symbols):
         calls = []
