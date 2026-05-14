@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import nullcontext
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -226,3 +227,15 @@ def test_run_non_interactive_keeps_quiet_without_verbose():
     assert exit_code == 1
     assert farewell is None
     assert args.quiet is True
+
+
+def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
+    def fail_load_runtime_config(*_args, **_kwargs):
+        raise AssertionError("runtime config should not be loaded for --version")
+
+    monkeypatch.setattr(sys, "argv", ["metis", "--version"])
+    monkeypatch.setattr(entry, "load_runtime_config", fail_load_runtime_config)
+
+    entry.main()
+
+    assert "Metis" in capsys.readouterr().out
