@@ -453,8 +453,6 @@ def _dedupe_family(f):
 
 def _normalise_dedupe_token(token):
     token = _DEDUP_TOKEN_ALIASES.get(token, token)
-    if token in _DEDUP_TOKEN_ALIASES:
-        return _DEDUP_TOKEN_ALIASES[token]
     if len(token) > 5:
         for suffix in ("ingly", "edly", "ation", "ing", "ed"):
             if token.endswith(suffix) and len(token) - len(suffix) >= 4:

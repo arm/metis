@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -12,6 +13,7 @@ from collections import defaultdict
 
 from metis.utils import read_file_content
 
+from ..reachability_common.project_sinks import ProjectSinkClassifier
 from ..reachability_common import (
     Deduplicator,
     FunctionNode,
@@ -35,6 +37,7 @@ _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
 _C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
+logger = logging.getLogger("metis")
 
 
 class TreeSitterReachabilityService:
@@ -158,7 +161,10 @@ class TreeSitterReachabilityService:
         **_kwargs,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
-        graph = self._ensure_graph(progress_callback=progress_callback)
+        graph = self._ensure_graph(
+            progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
+        )
         if graph.node_count() == 0:
             return None
 
@@ -281,6 +287,7 @@ class TreeSitterReachabilityService:
         graph, paths = self.get_codebase_graph_and_paths(
             max_path_length=max_path_length,
             progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
         )
         if graph.node_count() == 0:
             return []
@@ -380,7 +387,7 @@ class TreeSitterReachabilityService:
         return annotated
 
     def get_codebase_graph_and_paths(
-        self, *, max_path_length=25, progress_callback=None
+        self, *, max_path_length=25, progress_callback=None, reasoning_effort=None
     ):
         """Return the cached codebase graph and traced paths for shared analysis."""
         max_path_length = int(max_path_length or 25)
@@ -390,7 +397,10 @@ class TreeSitterReachabilityService:
             and self._paths_cache_max_path_length == max_path_length
         ):
             return self._graph_cache, list(self._paths_cache)
-        graph = self._ensure_graph(progress_callback=progress_callback)
+        graph = self._ensure_graph(
+            progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
+        )
         paths = self.trace_paths(graph, max_path_length=max_path_length)
         self._paths_cache = list(paths)
         self._paths_cache_max_path_length = max_path_length
@@ -494,11 +504,40 @@ class TreeSitterReachabilityService:
                 )
         return reviews
 
-    def _ensure_graph(self, *, progress_callback=None):
+    def _ensure_graph(self, *, progress_callback=None, reasoning_effort=None):
         if self._graph_cache is not None:
             return self._graph_cache
-        self._graph_cache = self.build_graph(progress_callback=progress_callback)
+        graph = self.build_graph(progress_callback=progress_callback)
+        self._annotate_project_sinks(
+            graph,
+            progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
+        )
+        self._graph_cache = graph
         return self._graph_cache
+
+    def _annotate_project_sinks(
+        self, graph, *, progress_callback=None, reasoning_effort=None
+    ):
+        model = getattr(self._config, "llama_query_model", None)
+        if not model or self._llm_provider is None:
+            return 0
+        max_workers = max(1, min(int(getattr(self._config, "max_workers", 4) or 4), 4))
+        try:
+            return ProjectSinkClassifier(
+                self._llm_provider,
+                model,
+                self._usage_runtime,
+                self._config.codebase_path,
+                reasoning_effort=reasoning_effort,
+            ).annotate(
+                graph,
+                max_workers=max_workers,
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            logger.debug("Project sink discovery skipped: %s", exc)
+            return 0
 
     def _ensure_supplementary(
         self,

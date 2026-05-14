@@ -18,7 +18,7 @@ from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 from metis.plugins.cpp_plugin import CppPlugin
 
 from ..reachability_common import FunctionNode, GlobalConstruct
-from .heuristics import (
+from .c_family_rules import (
     CONTROL_CALLS,
     ENTRYPOINT_FIELDS,
     is_sink_function,

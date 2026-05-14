@@ -143,8 +143,7 @@ _CLASSIC_C_SINK_RE = re.compile(
     r"\b(?:sprintf|vsprintf|strcpy|strcat|gets|scanf|sscanf|memcpy|memmove|strncpy|"
     r"snprintf|system|popen|exec(?:l|le|lp|lpe|v|ve|vp|vpe)?|fopen|open|stat|"
     r"lstat|access|printf|fprintf|vprintf|vfprintf|malloc|calloc|realloc|free|"
-    r"strlen|strnlen|close|auth_get_level|store_unref|store_compact|task_serialize|"
-    r"util_log|session_sweep|session_close|notify_fire)\s*\(",
+    r"strlen|strnlen|close)\s*\(",
     re.IGNORECASE,
 )
 _ERROR_UNWIND_RE = re.compile(
@@ -346,7 +345,7 @@ Below are functions from the codebase. Analyze their INTERACTIONS:
    realloc/grow/compact the backing store. The cached pointer is now stale.
 Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "use_after_free", "severity": "high", "confidence": "high", \
-"free_function": "session_close", "use_function": "store_lookup", \
+"free_function": "connection_close", "use_function": "resource_lookup", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
 Return {{"findings": []}} if none found."""
     + _CANONICAL_FINDING_INSTRUCTIONS
@@ -372,7 +371,7 @@ Examine ALL functions below for:
    timer, irq), free object without unregistering/canceling.
 Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "double_free", "severity": "high", "confidence": "high", \
-"function_a": "proto_parse", "function_b": "dispatch", \
+"function_a": "parse_message", "function_b": "dispatch_request", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
 Return {{"findings": []}} if none found."""
     + _CANONICAL_FINDING_INSTRUCTIONS
@@ -405,7 +404,7 @@ Examine ALL functions below for:
     lacks any capability or permission check.
 Return ONLY valid JSON:
 {{"findings": [{{"vulnerability_type": "boolean_coercion", "severity": "high", "confidence": "high", \
-"function_name": "dispatch", "related_function": "auth_get_level", \
+"function_name": "dispatch_request", "related_function": "get_permission_level", \
 "description": "...", "root_cause": "...", "evidence": "..."}}]}}
 Return {{"findings": []}} if none found. Be EXTREMELY thorough."""
     + _CANONICAL_FINDING_INSTRUCTIONS
