@@ -36,6 +36,7 @@ from .finding_normalization import (
     _lookup_fn,
     _normalise_vuln_type,
 )
+from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _chunked
 from .source_context import (
     _build_file_grouped_chunks,
@@ -122,12 +123,7 @@ _HW_STATE_KW = frozenset(
         "abort",
         "fence",
         "sync",
-        "doorbell",
         "register",
-        "mmio",
-        "firmware",
-        "fw",
-        "irq",
         "interrupt",
         "handler",
         "callback",
@@ -174,32 +170,33 @@ _CLASSIC_C_SINK_RE = re.compile(
 )
 _ERROR_UNWIND_RE = re.compile(
     r"\b(?:malloc|calloc|realloc|goto|rb_link_node|rb_erase|list_add|list_del|"
-    r"hash_add|insert|register)\b|return\s+(?:NULL|-1)|ctx->regions|"
-    r"\b(?:region_count|queue_count|ctx_count)\b|(?:^|_)(?:insert|register|create)(?:_|$)",
+    r"hash_add|insert|register)\b|return\s+(?:NULL|-1)|"
+    r"\b(?:object_count|resource_count|queue_count|ref_count)\b|"
+    r"(?:^|_)(?:insert|register|create)(?:_|$)",
     re.IGNORECASE,
 )
 _COUNTER_RE = re.compile(
-    r"\b(?:count|refcount|refs|gpu_mappings|alias_count|region_count|queue_count|"
-    r"ctx_count|nr_pages|total|get|put|create|destroy|map|unmap|alias|shrink|grow)\b|"
-    r"(?:^|_)(?:get|put|ref|unref|create|destroy|map|unmap|alias|shrink|grow)(?:_|$)|"
+    r"\b(?:count|refcount|refs|object_count|resource_count|queue_count|"
+    r"nr_pages|total|get|put|create|destroy|map|unmap|shrink|grow)\b|"
+    r"(?:^|_)(?:get|put|ref|unref|create|destroy|map|unmap|shrink|grow)(?:_|$)|"
     r"\+\+|--|\+=|-=",
     re.IGNORECASE,
 )
 _ORDERING_GAP_RE = re.compile(
     r"\b(?:flush|sync|drain|fence|reset|power|pm|suspend|resume|disable|enable|"
-    r"shutdown|term|mmu|dma)\b|"
+    r"shutdown|term|transition|runtime)\b|"
     r"(?:^|_)(?:flush|sync|drain|fence|reset|power|pm|suspend|resume|disable|"
-    r"enable|shutdown|term|mmu|dma)(?:_|$)",
+    r"enable|shutdown|term|transition|runtime)(?:_|$)",
     re.IGNORECASE,
 )
 _PATH_ACCESS_RE = re.compile(
     r"\b(?:fopen|open|stat|lstat|access|realpath|canonicalize|snprintf)\s*\(|"
-    r"\b(?:path|full_path|file|filename|fw_name|name)\b",
+    r"\b(?:path|full_path|file|filename|name)\b",
     re.IGNORECASE,
 )
 _GLOBAL_LIFECYCLE_NAME_RE = re.compile(
     r"(?:init|term|shutdown|release|destroy|poll|flush|submit|callback|worker|"
-    r"timer|watchdog|open|ioctl|unregister|cancel)",
+    r"timer|open|control|unregister|cancel)",
     re.IGNORECASE,
 )
 _LOCK_EVENT_RE = re.compile(
@@ -226,13 +223,11 @@ _RELATED_FILE_FUNCTION_KEYWORDS = frozenset(
         "unmap",
         "grow",
         "shrink",
-        "alias",
         "load",
         "unload",
         "verify",
         "open",
         "poll",
-        "ioctl",
         "enable",
         "disable",
         "reset",
@@ -241,7 +236,6 @@ _RELATED_FILE_FUNCTION_KEYWORDS = frozenset(
         "worker",
         "work",
         "timer",
-        "watchdog",
     }
 )
 
@@ -361,7 +355,7 @@ analysis_type lifecycle:
   the pointed-to object is freed.
 - Lifetime mismatch: object A stores a pointer to object B, but B can be destroyed
   while A still exists.
-- Deferred callback UAF: timer/work/watchdog/callback context points at an object
+- Deferred callback UAF: timer/work/callback context points at an object
   that teardown frees without canceling/flushing/unregistering the callback.
 - Stale pointer after realloc/grow/compact: code caches a pointer, then a later
   operation may move or invalidate the backing store.""",
@@ -387,35 +381,35 @@ analysis_type semantic:
 - Width mismatch/truncation: 32-bit checks guard size_t/uint64_t values.
 - Array index vs size mismatch, integer overflow in allocation/copy sizes.
 - Uninitialized data exposure, wrong flag semantics, accounting drift, info leaks.
-- Missing auth/permission checks before privileged reset, firmware, debug, MMIO, DMA,
-  register, sysfs, or ioctl operations.""",
+- Missing auth/permission checks before privileged reset, diagnostics, raw resource
+  access, filesystem, or control operations.""",
     "state_concurrency": """\
 analysis_type state_concurrency:
 - Premature state transition: ready/enabled/initialized flag set before validation,
-  allocation, registration, firmware load, hardware init, or permission checks.
+  allocation, registration, dependency initialization, or permission checks.
 - Ordering gap: flush/sync/drain/fence must complete before power-off, teardown, or
   reset, but the ordering is not enforced.
 - Stale-after-unlock: value read under lock is used after unlock while mutable.
 - Lock order inversion across functions.
 - Teardown race: destroys mutex/workqueue/resource while pending work/timers/callbacks
   can still reference it.
-- Missing lock on shared structure, stale software state after hardware disable.""",
+- Missing lock on shared structure, stale software state after runtime disable.""",
     "targeted_state_order": """\
 analysis_type targeted_state_order:
 - Only report ready/state flag ordering bugs.
-- Look for gpu_ready, loaded, active, initialized, enabled, runtime_active,
-  gpu_powered, ready, or online being set before prerequisites complete.
+- Look for ready, loaded, active, initialized, enabled, runtime_active, powered,
+  or online being set before prerequisites complete.
 - Confirm an error path after the transition does not roll state back, or another
-  function trusts that state to access hardware, firmware, DMA, queues, MMIO, or
-  privileged operations.""",
+  function trusts that state to access resources, queues, shared state, or privileged
+  operations.""",
     "targeted_callback_lifecycle": """\
 analysis_type targeted_callback_lifecycle:
 - Only report callback teardown symmetry bugs.
-- timer/work/watchdog/callback fn/data/ctx is initialized with an object pointer.
+- timer/work/callback fn/data/context is initialized with an object pointer.
 - Teardown/release/remove/shutdown/error cleanup/free does not cancel, deactivate,
   flush, unregister, or clear the callback before freeing the object or destroying
   its mutex/workqueue.
-- file_operations or ops tables show lifecycle asymmetry, such as release without
+- operation tables show lifecycle asymmetry, such as release without
   a needed flush/cancel path.""",
     "targeted_refcount": """\
 analysis_type targeted_refcount:
@@ -426,14 +420,15 @@ analysis_type targeted_refcount:
     "targeted_permission": """\
 analysis_type targeted_permission:
 - Only report permission-domain mismatches or missing privileged checks.
-- CPU operation checks GPU_WR or GPU-only permission when CPU_WR or CPU domain is
-  required.
-- Channel/message/firmware/reset/debug/sysfs/ioctl/destructive operation checks the
+- Operation-specific access checks use the wrong resource, role, or permission
+  constant for the requested operation.
+- Channel/message/reset/diagnostic/destructive operation checks the
   wrong resource constant.
 - Numeric permission/role is treated as boolean, allowing low-privilege nonzero
   values through high-privilege checks.
 - Generic boolean permission check used where a domain-specific capability is needed.
-- reset, firmware load, debug, MMIO, DMA, or register access lacks permission checks.""",
+- reset, diagnostic, raw resource access, or privileged operation lacks
+  permission checks.""",
     "targeted_toctou": """\
 analysis_type targeted_toctou:
 - Only report filesystem time-of-check/time-of-use bugs.
@@ -445,39 +440,66 @@ analysis_type targeted_toctou:
 _COMBINED_GRAPH_LENS_EXAMPLES = {
     "lifecycle": (
         '{"analysis_type":"lifecycle","vulnerability_type":"use_after_free",'
-        '"function_name":"resource_lookup","related_function":"connection_close"}'
+        '"function_name":"resource_lookup","related_function":"connection_close",'
+        '"primary_file":"src/resource.c","primary_function":"src/resource.c::resource_lookup",'
+        '"primary_line":42,"root_cause_id":"lookup_after_connection_close",'
+        '"canonical_key":"src/resource.c:src/resource.c::resource_lookup:lifetime:lookup_after_connection_close"}'
     ),
     "ownership": (
         '{"analysis_type":"ownership","vulnerability_type":"double_free",'
-        '"function_name":"dispatch_request","related_function":"parse_message"}'
+        '"function_name":"dispatch_request","related_function":"parse_message",'
+        '"primary_file":"src/dispatch.c","primary_function":"src/dispatch.c::dispatch_request",'
+        '"primary_line":73,"root_cause_id":"request_error_double_free",'
+        '"canonical_key":"src/dispatch.c:src/dispatch.c::dispatch_request:double_release:request_error_double_free"}'
     ),
     "semantic": (
         '{"analysis_type":"semantic","vulnerability_type":"boolean_coercion",'
-        '"function_name":"dispatch_request","related_function":"get_permission_level"}'
+        '"function_name":"dispatch_request","related_function":"get_permission_level",'
+        '"primary_file":"src/dispatch.c","primary_function":"src/dispatch.c::dispatch_request",'
+        '"primary_line":88,"root_cause_id":"permission_level_used_as_boolean",'
+        '"canonical_key":"src/dispatch.c:src/dispatch.c::dispatch_request:authorization:permission_level_used_as_boolean"}'
     ),
     "state_concurrency": (
         '{"analysis_type":"state_concurrency","vulnerability_type":"state_order",'
-        '"function_name":"device_init","related_function":"device_ready_check"}'
+        '"function_name":"component_init","related_function":"component_ready_check",'
+        '"primary_file":"src/component.c","primary_function":"src/component.c::component_init",'
+        '"primary_line":55,"root_cause_id":"ready_set_before_init_complete",'
+        '"canonical_key":"src/component.c:src/component.c::component_init:state_order:ready_set_before_init_complete"}'
     ),
     "targeted_state_order": (
         '{"analysis_type":"targeted_state_order","vulnerability_type":"state_order",'
-        '"function_name":"gpu_init","related_function":"gpu_submit"}'
+        '"function_name":"component_init","related_function":"submit_work",'
+        '"primary_file":"src/component.c","primary_function":"src/component.c::component_init",'
+        '"primary_line":101,"root_cause_id":"ready_before_initialization_complete",'
+        '"canonical_key":"src/component.c:src/component.c::component_init:state_order:ready_before_initialization_complete"}'
     ),
     "targeted_callback_lifecycle": (
         '{"analysis_type":"targeted_callback_lifecycle","vulnerability_type":"teardown_race",'
-        '"function_name":"gpu_remove","related_function":"gpu_watchdog_fn"}'
+        '"function_name":"component_remove","related_function":"component_timer_callback",'
+        '"primary_file":"src/component.c","primary_function":"src/component.c::component_remove",'
+        '"primary_line":140,"root_cause_id":"callback_not_cancelled_before_free",'
+        '"canonical_key":"src/component.c:src/component.c::component_remove:teardown_lifecycle:callback_not_cancelled_before_free"}'
     ),
     "targeted_refcount": (
         '{"analysis_type":"targeted_refcount","vulnerability_type":"refcount_imbalance",'
-        '"function_name":"gpu_ctx_get","related_function":"gpu_ctx_put"}'
+        '"function_name":"object_get","related_function":"object_put",'
+        '"primary_file":"src/object.c","primary_function":"src/object.c::object_get",'
+        '"primary_line":33,"root_cause_id":"get_no_refcount_increment",'
+        '"canonical_key":"src/object.c:src/object.c::object_get:refcount:get_no_refcount_increment"}'
     ),
     "targeted_permission": (
         '{"analysis_type":"targeted_permission","vulnerability_type":"permission_mismatch",'
-        '"function_name":"gpu_ioctl_reset","related_function":"gpu_check_perm"}'
+        '"function_name":"handle_reset_request","related_function":"check_permission",'
+        '"primary_file":"src/control.c","primary_function":"src/control.c::handle_reset_request",'
+        '"primary_line":118,"root_cause_id":"reset_uses_wrong_permission",'
+        '"canonical_key":"src/control.c:src/control.c::handle_reset_request:authorization:reset_uses_wrong_permission"}'
     ),
     "targeted_toctou": (
         '{"analysis_type":"targeted_toctou","vulnerability_type":"toctou",'
-        '"function_name":"load_firmware_path","related_function":""}'
+        '"function_name":"load_config_path","related_function":"",'
+        '"primary_file":"src/config.c","primary_function":"src/config.c::load_config_path",'
+        '"primary_line":64,"root_cause_id":"config_path_check_then_open",'
+        '"canonical_key":"src/config.c:src/config.c::load_config_path:filesystem_race:config_path_check_then_open"}'
     ),
 }
 _COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES = {
@@ -502,12 +524,18 @@ def _node_match_text(codebase_path, node, max_chars=12000):
     return f"{node.name}\n{' '.join(node.calls)}\n{body}"
 
 
-def _select_nodes_by_regex(graph, codebase_path, pattern, *, max_body_chars=12000):
+def _select_nodes_by_regex(
+    graph, codebase_path, pattern, *, max_body_chars=12000, extra_keywords=()
+):
     nodes = []
+    keywords = tuple(str(k).lower() for k in extra_keywords if str(k).strip())
     for node in sorted(
         graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)
     ):
-        if pattern.search(_node_match_text(codebase_path, node, max_body_chars)):
+        text = _node_match_text(codebase_path, node, max_body_chars)
+        if pattern.search(text) or (
+            keywords and any(keyword in text.lower() for keyword in keywords)
+        ):
             nodes.append(node)
     return nodes
 
@@ -593,6 +621,8 @@ class SupplementaryAnalyzer:
         audit_max_tokens=8192,
         strong_max_tokens=16384,
         reasoning_effort=None,
+        domain_hints=None,
+        domain_profiles=None,
     ):
         self._p = llm_provider
         self._am = audit_model
@@ -602,6 +632,14 @@ class SupplementaryAnalyzer:
         self._at = audit_max_tokens
         self._st = strong_max_tokens
         self._reasoning_effort = reasoning_effort
+        self._domain_hints = normalize_domain_hints(domain_hints, domain_profiles)
+        self._domain_keywords = self._domain_hints["keywords"]
+        self._domain_prompt_hints = format_domain_hints_for_prompt(self._domain_hints)
+
+    def _with_domain_hints(self, prompt):
+        if not self._domain_prompt_hints:
+            return prompt
+        return f"{prompt}\n\n{self._domain_prompt_hints}"
 
     def analyze(
         self, graph, *, max_workers=8, progress_callback=None, analysis_profile="full"
@@ -703,6 +741,8 @@ class SupplementaryAnalyzer:
             _COMBINED_GRAPH_LENS_NOTES.get(analysis_type, analysis_type)
             for analysis_type in analysis_types
         )
+        if self._domain_prompt_hints:
+            lens_instructions = f"{lens_instructions}\n\n{self._domain_prompt_hints}"
         lens_examples = "\n".join(
             f"- {_COMBINED_GRAPH_LENS_EXAMPLES[analysis_type]}"
             for analysis_type in analysis_types
@@ -813,6 +853,7 @@ class SupplementaryAnalyzer:
 
     def _select_intra_targets(self, graph):
         all_kw = _RESOURCE_KW | _AUTH_KW | _HW_STATE_KW | _LIFECYCLE_KW
+        all_kw = all_kw | set(self._domain_keywords)
         seen, targets = set(), []
         for n in graph.nodes.values():
             nl = n.name.lower()
@@ -843,7 +884,7 @@ class SupplementaryAnalyzer:
             self._u,
             model=self._am,
             max_tokens=self._at,
-            system_prompt=_INTRA_SYS,
+            system_prompt=self._with_domain_hints(_INTRA_SYS),
             user_prompt=_INTRA_USR,
             variables={"file_path": file_path, "functions_code": "\n\n".join(bodies)},
             reasoning_effort=getattr(self, "_reasoning_effort", None),
@@ -863,17 +904,19 @@ class SupplementaryAnalyzer:
         default_vulnerability_type="other",
         default_severity="medium",
     ):
+        vulnerability_type = _normalise_vuln_type(
+            entry.get("vulnerability_type") or default_vulnerability_type
+        )
         primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
             entry,
             default_file=sink_fn.file_path,
             default_function=sink_fn.unique_name,
             default_line=sink_line,
+            vulnerability_type=vulnerability_type,
         )
         return VulnerabilityFinding(
             id=uuid.uuid4().hex[:16],
-            vulnerability_type=_normalise_vuln_type(
-                entry.get("vulnerability_type") or default_vulnerability_type
-            ),
+            vulnerability_type=vulnerability_type,
             severity=str(entry.get("severity") or default_severity),
             confidence=str(entry.get("confidence") or "medium"),
             source_function=source_fn.unique_name,
@@ -931,7 +974,9 @@ class SupplementaryAnalyzer:
     def _run_candidate_intra_lens(
         self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix
     ):
-        candidates = _select_nodes_by_regex(graph, self._cb, pattern)
+        candidates = _select_nodes_by_regex(
+            graph, self._cb, pattern, extra_keywords=self._domain_keywords
+        )
         if not candidates:
             return []
         if cb:
@@ -949,7 +994,7 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=sys_prompt,
+                system_prompt=self._with_domain_hints(sys_prompt),
                 user_prompt=_INTRA_USR,
                 variables={
                     "file_path": "candidate functions",
@@ -986,10 +1031,15 @@ class SupplementaryAnalyzer:
         event_prefix,
         relation_keywords=None,
     ):
-        candidates = _select_nodes_by_regex(graph, self._cb, pattern)
+        candidates = _select_nodes_by_regex(
+            graph, self._cb, pattern, extra_keywords=self._domain_keywords
+        )
         if not candidates:
             return []
         if relation_keywords:
+            relation_keywords = frozenset(relation_keywords) | set(
+                self._domain_keywords
+            )
             candidates = _expand_candidates_with_related_file_functions(
                 graph, candidates, relation_keywords
             )
@@ -1008,7 +1058,7 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=sys_prompt,
+                system_prompt=self._with_domain_hints(sys_prompt),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code_chunk},
                 reasoning_effort=getattr(self, "_reasoning_effort", None),
@@ -1076,7 +1126,7 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=_GLOBAL_LIFECYCLE_SYS,
+                system_prompt=self._with_domain_hints(_GLOBAL_LIFECYCLE_SYS),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code},
                 reasoning_effort=getattr(self, "_reasoning_effort", None),
@@ -1112,14 +1162,10 @@ class SupplementaryAnalyzer:
             return "hwaccess_lock"
         if "scheduler_lock" in expr:
             return "scheduler_lock"
-        if ".ctx.lock" in expr or expr.endswith("ctx.lock"):
-            return "ctx.lock"
         if ".queue.lock" in expr or expr.endswith("queue.lock"):
             return "queue.lock"
         if ".pm.lock" in expr or expr.endswith("pm.lock"):
             return "pm.lock"
-        if ".mmu.lock" in expr or expr.endswith("mmu.lock"):
-            return "mmu.lock"
         if expr.endswith(".lock"):
             return ".".join(expr.split(".")[-2:])
         return expr
@@ -1203,7 +1249,7 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=_LOCK_ORDER_SYS,
+                system_prompt=self._with_domain_hints(_LOCK_ORDER_SYS),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code},
                 reasoning_effort=getattr(self, "_reasoning_effort", None),

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 
 import os
+import re
 
 
 def _lookup_fn(name, fn_by_name, fn_by_unique, all_fns):
@@ -85,7 +86,12 @@ def _same_file_ref(a, b, base_path=None):
     return ak == bk
 
 
-def _canonical_fields(entry, *, default_file, default_function, default_line):
+_CANONICAL_LINE_BUCKET_SIZE = 5
+
+
+def _canonical_fields(
+    entry, *, default_file, default_function, default_line, vulnerability_type="other"
+):
     primary_file = str(entry.get("primary_file") or "").strip() or default_file or ""
     primary_function = (
         str(entry.get("primary_function") or "").strip() or default_function or ""
@@ -93,8 +99,70 @@ def _canonical_fields(entry, *, default_file, default_function, default_line):
     primary_line = _safe_int(entry.get("primary_line"), default_line or 0)
     if primary_line <= 0:
         primary_line = default_line or 0
-    canonical_key = str(entry.get("canonical_key") or "").strip()
+    canonical_key = _canonical_key_from_parts(
+        primary_file,
+        primary_function,
+        primary_line,
+        vulnerability_type,
+        _entry_root_cause_token(entry),
+    )
     return primary_file, primary_function, primary_line, canonical_key
+
+
+def _canonical_finding_key(finding):
+    return _canonical_key_from_parts(
+        _finding_file(finding),
+        _finding_function(finding),
+        _finding_line(finding),
+        getattr(finding, "vulnerability_type", ""),
+        _canonical_root_token(getattr(finding, "canonical_key", "")),
+    )
+
+
+def _entry_root_cause_token(entry):
+    for key in ("root_cause_id", "root_cause_token", "root_cause_key"):
+        token = _canonical_root_token(entry.get(key))
+        if token:
+            return token
+    return _canonical_root_token(entry.get("canonical_key"))
+
+
+def _canonical_key_from_parts(
+    primary_file, primary_function, primary_line, vulnerability_type, root_cause_token
+):
+    file_key = _canonical_path(primary_file)
+    function_key = _canonical_function(primary_function)
+    if not file_key or not function_key:
+        return ""
+    vtype = _normalise_vuln_type(vulnerability_type)
+    family = _VTYPE_FAMILY.get(vtype, vtype)
+    root_token = root_cause_token or f"line_{_line_bucket(primary_line)}"
+    return f"{file_key}:{function_key}:{family}:{root_token}"
+
+
+def _canonical_path(path):
+    return _path_key(path).lower()
+
+
+def _canonical_function(function_name):
+    return re.sub(r"\s+", "", str(function_name or "").strip()).replace("\\", "/")
+
+
+def _canonical_root_token(value):
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if ":" in text:
+        text = text.rsplit(":", 1)[-1]
+    tokens = re.findall(r"[a-z0-9]+", text)
+    return "_".join(tokens[:8])
+
+
+def _line_bucket(line):
+    line = max(0, _safe_int(line, 0))
+    if line <= 0:
+        return 0
+    return (line - 1) // _CANONICAL_LINE_BUCKET_SIZE
 
 
 _VULN_TO_CWE = {
@@ -118,7 +186,7 @@ _VULN_TO_CWE = {
     "callback_uaf": "CWE-416",
     "stale_pointer": "CWE-825",
     "refcount_imbalance": "CWE-911",
-    # firmware / driver / hw specific
+    # lifecycle, state, and concurrency findings
     "state_order": "CWE-696",
     "lock_order": "CWE-667",
     "missing_lock": "CWE-820",

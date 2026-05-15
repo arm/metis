@@ -31,14 +31,16 @@ _CANONICAL_FINDING_INSTRUCTIONS = """\
 For every finding include canonical ownership fields. These fields are mandatory:
 {{"primary_file": "src/example.c", "primary_function": "example_function",
 "primary_line": 123,
+"root_cause_id": "short_snake_case_root",
 "canonical_key": "src/example.c:example_function:vulnerability_family:root_cause_token"}}
 Choose primary_file/primary_function/primary_line as the location of the actual defective code,
 not merely the source, caller, helper, or path endpoint.
 Use the exact shown function identifier for primary_function when available.
-canonical_key must be stable and concise:
-primary_file:primary_function:vulnerability_type:root_cause_token.
-Use the same canonical_key for the same root cause across different paths, chunks, or lenses.
-Do not include caller/path/source names in canonical_key unless the caller itself contains the defect.
+root_cause_id must be a stable short snake_case token for the specific root cause.
+Use the same root_cause_id and canonical_key for the same root cause across different
+paths, chunks, or lenses.
+Do not include caller/path/source names in root_cause_id or canonical_key unless the
+caller itself contains the defect.
 Include a concise mitigation field that recommends a fix, not a restatement of root_cause or evidence.
 Be conservative. Report each distinct root cause once.
 Do not report a caller/path duplicate if the same primary defect is already represented.
@@ -56,8 +58,11 @@ For EACH path determine if it contains a real exploitable vulnerability:
 3. Is the dangerous operation or missing check truly reachable as called?
 Return ONLY valid JSON:
 {{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "...",
-"mitigation": "..."}}]}}
+"severity": "high", "confidence": "high", "primary_file": "src/example.c",
+"primary_function": "src/example.c::copy_input", "primary_line": 42,
+"root_cause_id": "unchecked_copy_size",
+"canonical_key": "src/example.c:src/example.c::copy_input:buffer_overflow:unchecked_copy_size",
+"description": "...", "root_cause": "...", "evidence": "...", "mitigation": "..."}}]}}
 vulnerability_type: buffer_overflow, use_after_free, double_free, double_close, null_deref, command_injection, \
 format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, \
 out_of_bounds, refcount_imbalance, state_order, lock_order, stale_after_unlock, accounting_drift, \
@@ -88,8 +93,11 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 4. Is the root cause in the target file rather than merely elsewhere on the path?
 Return ONLY valid JSON:
 {{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "description": "...", "root_cause": "...", "evidence": "...",
-"mitigation": "..."}}]}}
+"severity": "high", "confidence": "high", "primary_file": "src/example.c",
+"primary_function": "src/example.c::copy_input", "primary_line": 42,
+"root_cause_id": "unchecked_copy_size",
+"canonical_key": "src/example.c:src/example.c::copy_input:buffer_overflow:unchecked_copy_size",
+"description": "...", "root_cause": "...", "evidence": "...", "mitigation": "..."}}]}}
 vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
 integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, \
 state_order, lock_order, stale_after_unlock, accounting_drift, missing_auth, permission_mismatch, \
@@ -251,20 +259,22 @@ class VulnerabilityConfirmer:
                 and not _same_file_ref(explicit_primary_file, target_file, self._cb)
             ):
                 continue
+            vulnerability_type = _normalise_vuln_type(
+                e.get("vulnerability_type") or rp.sink_type or "other"
+            )
             primary_file, primary_function, primary_line, canonical_key = (
                 _canonical_fields(
                     e,
                     default_file=sink_file or source_file,
                     default_function=rp.sink or rp.source,
                     default_line=sink_line or source_line,
+                    vulnerability_type=vulnerability_type,
                 )
             )
             results.append(
                 VulnerabilityFinding(
                     id=uuid.uuid4().hex[:16],
-                    vulnerability_type=_normalise_vuln_type(
-                        e.get("vulnerability_type") or rp.sink_type or "other"
-                    ),
+                    vulnerability_type=vulnerability_type,
                     severity=str(e.get("severity") or "medium"),
                     confidence=str(e.get("confidence") or "medium"),
                     source_function=rp.source,

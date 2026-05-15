@@ -138,6 +138,10 @@ class ReviewService:
                         security_functions=self._reachability_settings.get(
                             "security_functions"
                         ),
+                        domain_hints=self._reachability_settings.get("domain_hints"),
+                        domain_profiles=self._reachability_settings.get(
+                            "domain_profiles"
+                        ),
                         progress_callback=progress_callback,
                     )
                 except Exception as e:

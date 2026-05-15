@@ -118,6 +118,8 @@ class MetisEngine:
                 "partial",
             ),
             "security_functions": kwargs.get("reachability_security_functions") or [],
+            "domain_profiles": kwargs.get("reachability_domain_profiles") or [],
+            "domain_hints": kwargs.get("reachability_domain_hints") or [],
         }
 
         self.plugin_config = load_plugin_config()

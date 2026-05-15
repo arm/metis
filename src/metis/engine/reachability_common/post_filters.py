@@ -147,45 +147,6 @@ def _finding_code_context(codebase_path, finding, *, context=8, max_chars=6000):
     return body or line_context
 
 
-def _is_borrowed_alias_cleanup_false_positive(finding):
-    fn = _finding_function(finding).lower()
-    if "destroy_alias" not in fn:
-        return False
-    text = _finding_text(finding).lower()
-    compact = re.sub(r"\s+", "", text)
-    mentions_alias_pages = (
-        "alias->pages" in compact or "alias pages" in text or "alias page" in text
-    )
-    mentions_leak_cleanup = any(
-        token in text
-        for token in (
-            "leak",
-            "without freeing",
-            "missing free",
-            "not freed",
-            "should free",
-            "must free",
-            "fails to free",
-        )
-    )
-    keep_tokens = (
-        "alias_count",
-        "lifetime",
-        "source",
-        "use-after-free",
-        "use_after_free",
-        "refcount",
-        "borrowed",
-        "pin",
-        "pinned",
-    )
-    return (
-        mentions_alias_pages
-        and mentions_leak_cleanup
-        and not any(token in text for token in keep_tokens)
-    )
-
-
 def _is_leak_misclassified_as_double_free(finding):
     if (
         _normalise_vuln_type(getattr(finding, "vulnerability_type", ""))
@@ -226,9 +187,6 @@ def _post_filter_findings(findings, codebase_path):
         if _is_leak_misclassified_as_double_free(finding):
             finding.vulnerability_type = "partial_cleanup"
             vtype = "partial_cleanup"
-
-        if _is_borrowed_alias_cleanup_false_positive(finding):
-            continue
 
         if vtype == "format_string":
             context = _finding_code_context(codebase_path, finding)

@@ -9,7 +9,10 @@ from metis.engine.reachability_common import (
     ReachabilityGraph,
     SourceRootedPathTracer,
 )
-from metis.engine.reachability_common.finding_normalization import _confidence_score
+from metis.engine.reachability_common.finding_normalization import (
+    _canonical_fields,
+    _confidence_score,
+)
 from metis.engine.reachability_service_modular.builder import (
     TreeSitterReachabilityGraphBuilder,
 )
@@ -476,7 +479,63 @@ def test_deduplicator_merges_same_canonical_key_across_paths():
     assert total == 2
     assert removed == 1
     assert len(deduped) == 1
-    assert deduped[0].canonical_key == key
+    assert (
+        deduped[0].canonical_key
+        == "src/task.c:src/task.c::task_import:memory_bounds:unterminated_title"
+    )
+
+
+def test_canonical_fields_build_deterministic_key_from_root_cause_id():
+    primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
+        {
+            "primary_file": "src/task.c",
+            "primary_function": "src/task.c::task_import",
+            "primary_line": 64,
+            "root_cause_id": "unterminated_title",
+            "canonical_key": "ignored/free-form/prefix:other_token",
+        },
+        default_file="src/fallback.c",
+        default_function="src/fallback.c::fallback",
+        default_line=1,
+        vulnerability_type="missing_bounds_check",
+    )
+
+    assert primary_file == "src/task.c"
+    assert primary_function == "src/task.c::task_import"
+    assert primary_line == 64
+    assert (
+        canonical_key
+        == "src/task.c:src/task.c::task_import:memory_bounds:unterminated_title"
+    )
+
+
+def test_deduplicator_normalizes_raw_canonical_key_to_structured_identity():
+    findings = [
+        _finding(
+            "missing_bounds_check",
+            "src/task.c",
+            "src/task.c::task_import",
+            63,
+            "Import passes a length-delimited title to task_create.",
+            "title import buffer not terminated before task_create strlen",
+            canonical_key="src/task.c:src/task.c::task_import:out_of_bounds:unterminated_title",
+        ),
+        _finding(
+            "out_of_bounds",
+            "src/task.c",
+            "src/task.c::task_import",
+            64,
+            "The same title slice can be read past its end.",
+            "unterminated title reaches strlen",
+            canonical_key="task_import:memory_bounds:unterminated_title",
+        ),
+    ]
+
+    deduped, total, removed = Deduplicator.deduplicate(findings)
+
+    assert total == 2
+    assert removed == 1
+    assert len(deduped) == 1
 
 
 def test_deduplicator_keeps_different_canonical_keys_in_same_location():

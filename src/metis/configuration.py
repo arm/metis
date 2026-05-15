@@ -272,6 +272,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "reachability_reasoning_effort",
         "reachability_review_file_mode",
         "reachability_security_functions",
+        "reachability_domain_profiles",
+        "reachability_domain_hints",
     )
     reachability_cfg = {}
     for key in reachability_keys:

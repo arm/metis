@@ -166,6 +166,8 @@ class TreeSitterReachabilityService:
         progress_callback=None,
         reasoning_effort=None,
         analysis_profile="full",
+        domain_hints=None,
+        domain_profiles=None,
     ):
         # Supplementary lenses inspect the whole graph and usually provide the
         # final findings when path confirmation is skipped for large graphs.
@@ -178,6 +180,8 @@ class TreeSitterReachabilityService:
             self._usage_runtime,
             self._config.codebase_path,
             reasoning_effort=reasoning_effort,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
         ).analyze(
             graph,
             max_workers=max_workers,
@@ -197,6 +201,8 @@ class TreeSitterReachabilityService:
         progress_callback=None,
         reasoning_effort=None,
         security_functions=None,
+        domain_hints=None,
+        domain_profiles=None,
         **_kwargs,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
@@ -237,6 +243,8 @@ class TreeSitterReachabilityService:
             max_workers=max_workers,
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
         )
 
         confirmer = VulnerabilityConfirmer(
@@ -302,6 +310,8 @@ class TreeSitterReachabilityService:
         progress_callback=None,
         reasoning_effort=None,
         security_functions=None,
+        domain_hints=None,
+        domain_profiles=None,
         confirm_paths=True,
         analysis_profile="full",
         **_kwargs,
@@ -337,6 +347,8 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
             analysis_profile=analysis_profile,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
         )
         path_findings = []
         if selected_paths:
@@ -574,12 +586,16 @@ class TreeSitterReachabilityService:
         progress_callback=None,
         reasoning_effort=None,
         analysis_profile="full",
+        domain_hints=None,
+        domain_profiles=None,
     ):
         key = (
             str(scope_id or "full"),
             str(model or ""),
             str(reasoning_effort or ""),
             str(analysis_profile or "full"),
+            repr(domain_hints or ()),
+            repr(domain_profiles or ()),
             str(graph.node_count()),
             int(max_workers),
         )
@@ -594,6 +610,8 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
             analysis_profile=analysis_profile,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
         )
         self._supplementary_cache[key] = list(findings)
         return list(findings)
@@ -720,8 +738,7 @@ class TreeSitterReachabilityService:
 
             if vtype == "null_deref" and severity != "high":
                 if finding.analysis_type != "classic_c_sink" or not any(
-                    marker in text
-                    for marker in ("before", "after", "lookup", "task_find")
+                    marker in text for marker in ("before", "after", "lookup")
                 ):
                     if any(marker in text for marker in low_signal_null_markers):
                         continue

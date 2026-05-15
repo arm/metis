@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 
 from .finding_normalization import (
     _VTYPE_FAMILY,
+    _canonical_finding_key,
     _finding_file,
     _finding_function,
-    _finding_line,
     _normalise_vuln_type,
 )
 
@@ -40,19 +39,18 @@ _VULN_PRIORITY = {
     "state_order": 2,
     "null_deref": 3,
 }
-_LINE_BUCKET_SIZE = 5
 
 
 class Deduplicator:
     @staticmethod
     def deduplicate(findings, *, max_per_sink=3):
         """
-        Collapse duplicate reachability findings using stable model-owned fields.
+        Collapse duplicate reachability findings using stable canonical fields.
 
-        The LLM prompt requires a canonical key for each distinct root cause. When
-        that key is absent, fall back to the deterministic primary location and
-        normalized vulnerability family. This intentionally avoids prose/token
-        matching so different bugs in the same area are not merged by wording.
+        Parsers normalize model output into a deterministic canonical key built from
+        primary file/function, vulnerability family, and a short root-cause token.
+        This intentionally avoids prose/token matching so different bugs in the same
+        area are not merged by wording alone.
         """
         if not findings:
             return [], 0, 0
@@ -67,43 +65,22 @@ def _normalize_finding(finding):
     finding.vulnerability_type = _normalise_vuln_type(
         getattr(finding, "vulnerability_type", "")
     )
+    canonical_key = _canonical_finding_key(finding)
+    if canonical_key:
+        finding.canonical_key = canonical_key
     return finding
 
 
 def _collapse_by_canonical_identity(findings):
-    keyed_groups = defaultdict(list)
-    fallback_groups = defaultdict(list)
-
+    groups = defaultdict(list)
     for finding in findings:
-        canonical_key = _canonical_key(finding)
-        if canonical_key:
-            keyed_groups[canonical_key].append(finding)
-            continue
-        fallback_groups[_fallback_identity_key(finding)].append(finding)
+        key = _canonical_finding_key(finding) or f"unkeyed:{id(finding)}"
+        groups[key].append(finding)
 
     collapsed = []
-    for group in keyed_groups.values():
-        collapsed.append(_pick_best(group))
-    for group in fallback_groups.values():
+    for group in groups.values():
         collapsed.append(_pick_best(group))
     return collapsed
-
-
-def _canonical_key(finding):
-    raw = str(getattr(finding, "canonical_key", "") or "").strip().lower()
-    if not raw:
-        return ""
-    return re.sub(r"\s+", "", raw).replace("\\", "/")
-
-
-def _fallback_identity_key(finding):
-    line = _finding_line(finding)
-    return (
-        _normalize_path(_finding_file(finding)),
-        _normalize_function(_finding_function(finding)),
-        _dedupe_family(finding),
-        _line_bucket(line),
-    )
 
 
 def _normalize_path(path):
@@ -117,13 +94,6 @@ def _normalize_function(function):
 def _dedupe_family(finding):
     vtype = _normalise_vuln_type(getattr(finding, "vulnerability_type", ""))
     return _VTYPE_FAMILY.get(vtype, vtype)
-
-
-def _line_bucket(line):
-    line = max(0, int(line or 0))
-    if line <= 0:
-        return 0
-    return (line - 1) // _LINE_BUCKET_SIZE
 
 
 def _cap_per_function_family(findings, limit):

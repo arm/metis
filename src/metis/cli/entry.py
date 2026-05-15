@@ -146,6 +146,10 @@ def build_engine(args, runtime):
         reachability_security_functions=_reachability_value(
             "reachability_security_functions", []
         ),
+        reachability_domain_profiles=_reachability_value(
+            "reachability_domain_profiles", []
+        ),
+        reachability_domain_hints=_reachability_value("reachability_domain_hints", []),
         **engine_runtime,
     )
     return engine, vector_backend
