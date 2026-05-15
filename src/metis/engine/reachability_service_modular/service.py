@@ -6,11 +6,6 @@
 from __future__ import annotations
 
 import os
-import re
-import uuid
-from collections import defaultdict
-
-from metis.utils import read_file_content
 
 from ..reachability_common import (
     Deduplicator,
@@ -20,16 +15,13 @@ from ..reachability_common import (
     SupplementaryAnalyzer,
     VulnerabilityFinding,
     VulnerabilityConfirmer,
-    _VULN_TO_CWE,
-    _confidence_score,
-    _mitigation_text,
-    _normalise_vuln_type,
-    _post_filter_findings,
-    _read_line_context,
-    _severity_title,
 )
+from ..reachability_common.finding_normalization import _normalise_vuln_type
+from ..reachability_common.graph_utils import _dedupe_paths
+from ..reachability_common.post_filters import _post_filter_findings
 from .file_focus import FileFocusBuilder
 from .finding_paths import FindingPathAnnotator
+from .review_output import group_findings_as_reviews, reviews_for_findings
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
@@ -136,7 +128,7 @@ class TreeSitterReachabilityService:
         The graph is still saved in full, but confirmation is capped by default because
         the supplementary audits already inspect the whole graph.
         """
-        paths = self._dedupe_path_objects(paths)
+        paths = _dedupe_paths(paths)
         if max_paths and int(max_paths) > 0:
             return paths[: int(max_paths)]
         if len(paths) <= _AUTO_CONFIRMATION_MAX_PATHS:
@@ -267,11 +259,6 @@ class TreeSitterReachabilityService:
                 )
             )
 
-        deterministic_findings = self._deterministic_file_findings(
-            relative_target,
-            graph,
-            source_to_file_paths,
-        )
         if progress_callback:
             progress_callback(
                 {
@@ -279,41 +266,28 @@ class TreeSitterReachabilityService:
                     "file": relative_target,
                     "supplementary_findings": len(supplementary),
                     "path_findings": len(path_findings),
-                    "deterministic_findings": len(deterministic_findings),
                 }
             )
 
-        all_findings = (
-            self._findings_for_file(supplementary, relative_target, graph)
-            + self._findings_for_file(path_findings, relative_target, graph)
-            + deterministic_findings
-        )
-        all_findings = FindingPathAnnotator(
+        all_findings = self._findings_for_file(
+            supplementary, relative_target, graph
+        ) + self._findings_for_file(path_findings, relative_target, graph)
+        deduped, _total, _removed = self._finalize_findings(
+            all_findings,
             graph,
-            relative_target,
+            max_paths_per_sink=max_paths_per_sink,
             max_path_length=max_path_length,
-        ).annotate(all_findings)
-        all_findings = self._strict_file_findings(all_findings)
-        all_findings = _post_filter_findings(all_findings, self._config.codebase_path)
-        if not all_findings:
+            target_file=relative_target,
+            strict_file=True,
+        )
+        if not deduped:
             return {"file": relative_target, "file_path": abs_target, "reviews": []}
 
-        deduped, _total, _removed = Deduplicator.deduplicate(
-            all_findings,
-            max_per_sink=max_paths_per_sink,
-        )
-        reviews = [
-            self._finding_to_review(finding, graph=graph, target_file=relative_target)
-            for finding in deduped
-        ]
-        reviews.sort(
-            key=lambda item: (
-                {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(
-                    item.get("severity"), 4
-                ),
-                int(item.get("line_number") or 0),
-                str(item.get("issue") or ""),
-            )
+        reviews = reviews_for_findings(
+            deduped,
+            graph,
+            codebase_path=self._config.codebase_path,
+            target_file=relative_target,
         )
         return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
@@ -380,20 +354,18 @@ class TreeSitterReachabilityService:
                 progress_callback=progress_callback,
             )
 
-        # Convert direct function-level findings back into source-rooted paths
-        # before filtering and legacy review JSON serialization.
-        all_findings = self.annotate_findings_with_source_paths(
+        deduped_findings, total_before, removed = self._finalize_findings(
             list(supplementary) + list(path_findings),
             graph,
             max_path_length=max_path_length,
-        )
-        all_findings = _post_filter_findings(all_findings, self._config.codebase_path)
-        deduped, total_before, removed = Deduplicator.deduplicate(
-            all_findings,
-            max_per_sink=max_paths_per_sink,
+            max_paths_per_sink=max_paths_per_sink,
         )
 
-        reviews = self._group_findings_as_reviews(deduped, graph)
+        reviews = group_findings_as_reviews(
+            deduped_findings,
+            graph,
+            codebase_path=self._config.codebase_path,
+        )
         if progress_callback:
             progress_callback(
                 {
@@ -401,15 +373,12 @@ class TreeSitterReachabilityService:
                     "supplementary_findings": len(supplementary),
                     "path_findings": len(path_findings),
                     "raw_findings": total_before,
-                    "deduped_findings": len(deduped),
+                    "deduped_findings": len(deduped_findings),
                     "removed_findings": removed,
                     "files": len(reviews),
                 }
             )
         return reviews
-
-    def review_single_file_from_codebase(self, file_path, **kwargs):
-        return self.review_file(file_path, **kwargs)
 
     def annotate_findings_with_source_paths(
         self, findings, graph, *, max_path_length=25
@@ -463,17 +432,6 @@ class TreeSitterReachabilityService:
         self._paths_cache_max_path_length = max_path_length
         return graph, list(paths)
 
-    def _dedupe_path_objects(self, paths):
-        seen = set()
-        selected = []
-        for path in paths or []:
-            key = (path.source, path.sink, tuple(path.path or []))
-            if key in seen:
-                continue
-            seen.add(key)
-            selected.append(path)
-        return selected
-
     def _confirmation_path_rank(self, path, graph):
         node_names = list(path.path or [])
         nodes = [graph.get_node(name) for name in node_names]
@@ -525,41 +483,37 @@ class TreeSitterReachabilityService:
             tuple(node_names),
         )
 
-    def _group_findings_as_reviews(self, findings, graph):
-        by_file = defaultdict(list)
-        for finding in findings:
-            primary_file = (
-                finding.primary_file or finding.sink_file or finding.source_file
+    def _finalize_findings(
+        self,
+        findings,
+        graph,
+        *,
+        max_paths_per_sink,
+        max_path_length=25,
+        target_file="",
+        strict_file=False,
+    ):
+        if target_file:
+            findings = FindingPathAnnotator(
+                graph,
+                target_file,
+                max_path_length=max_path_length,
+            ).annotate(findings)
+            if strict_file:
+                findings = self._strict_file_findings(findings)
+        else:
+            # Convert direct function-level findings back into source-rooted paths
+            # before filtering and legacy review JSON serialization.
+            findings = self.annotate_findings_with_source_paths(
+                findings,
+                graph,
+                max_path_length=max_path_length,
             )
-            if primary_file:
-                by_file[primary_file].append(finding)
 
-        reviews = []
-        for target_file in sorted(by_file):
-            items = [
-                self._finding_to_review(finding, graph=graph, target_file=target_file)
-                for finding in by_file[target_file]
-            ]
-            items.sort(
-                key=lambda item: (
-                    {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(
-                        item.get("severity"), 4
-                    ),
-                    int(item.get("line_number") or 0),
-                    str(item.get("issue") or ""),
-                )
-            )
-            if items:
-                reviews.append(
-                    {
-                        "file": target_file,
-                        "file_path": os.path.join(
-                            self._config.codebase_path, target_file
-                        ),
-                        "reviews": items,
-                    }
-                )
-        return reviews
+        findings = _post_filter_findings(findings, self._config.codebase_path)
+        if not findings:
+            return [], 0, 0
+        return Deduplicator.deduplicate(findings, max_per_sink=max_paths_per_sink)
 
     def _ensure_graph(self, *, progress_callback=None, security_functions=None):
         if self._graph_cache is not None:
@@ -683,12 +637,6 @@ class TreeSitterReachabilityService:
         rel_target = os.path.relpath(abs_target, base_path).replace("\\", "/")
         return abs_target, rel_target
 
-    def _path_node_names(self, paths):
-        names = set()
-        for path in paths:
-            names.update(path.path or [])
-        return names
-
     def _finding_participates_in_file(self, finding, target_file, graph):
         if any(
             self._same_file(file_name, target_file)
@@ -749,7 +697,6 @@ class TreeSitterReachabilityService:
             "targeted_permission",
             "classic_c_sink",
             "counter_symmetry",
-            "deterministic_treesitter",
         }
         low_signal_null_markers = (
             "caller-supplied",
@@ -771,9 +718,6 @@ class TreeSitterReachabilityService:
                 ]
             ).lower()
 
-            if finding.analysis_type == "deterministic_treesitter":
-                keep.append(finding)
-                continue
             if vtype == "null_deref" and severity != "high":
                 if finding.analysis_type != "classic_c_sink" or not any(
                     marker in text
@@ -789,270 +733,6 @@ class TreeSitterReachabilityService:
             ):
                 keep.append(finding)
         return keep
-
-    def _finding_to_review(self, finding, *, graph=None, target_file=""):
-        line_number = int(
-            finding.primary_line or finding.sink_line or finding.source_line or 1
-        )
-        vtype = _normalise_vuln_type(finding.vulnerability_type)
-        primary_fn = finding.primary_function or finding.sink_function
-        issue = (
-            str(finding.description).strip()
-            or f"{vtype.replace('_', ' ')} in {primary_fn}"
-        )
-        primary_file = finding.primary_file or finding.sink_file or finding.source_file
-        reasoning_parts = []
-        if primary_file:
-            reasoning_parts.append(
-                f"Primary location: {primary_file}:{line_number}"
-                + (f" ({primary_fn})" if primary_fn else "")
-            )
-        if target_file and not self._same_file(primary_file, target_file):
-            reasoning_parts.append(f"Reviewed file participates via: {target_file}")
-        connected = self._connected_functions_for_finding(finding, graph, target_file)
-        if connected:
-            reasoning_parts.append(f"Connected functions: {', '.join(connected[:8])}")
-        if str(finding.evidence or "").strip():
-            reasoning_parts.append(str(finding.evidence).strip())
-        if finding.path:
-            reasoning_parts.append(f"Reachability path: {' -> '.join(finding.path)}")
-        if str(finding.root_cause or "").strip():
-            reasoning_parts.append(f"Root cause: {str(finding.root_cause).strip()}")
-        if finding.analysis_type:
-            reasoning_parts.append(f"Analysis type: {finding.analysis_type}")
-        if finding.canonical_key:
-            reasoning_parts.append(f"Canonical key: {finding.canonical_key}")
-        target_file = primary_file
-        return {
-            "issue": issue,
-            "line_number": line_number,
-            "primary_file": primary_file,
-            "primary_function": primary_fn,
-            "analysis_type": finding.analysis_type,
-            "path": list(finding.path or []),
-            "code_snippet": (
-                _read_line_context(
-                    self._config.codebase_path, target_file, line_number, context=2
-                )
-                if target_file
-                else ""
-            ),
-            "cwe": _VULN_TO_CWE.get(vtype),
-            "severity": _severity_title(finding.severity, "Medium"),
-            "confidence": _confidence_score(finding.confidence),
-            "reasoning": "\n".join(reasoning_parts),
-            "mitigation": _mitigation_text(finding, vtype),
-        }
-
-    def _connected_functions_for_finding(self, finding, graph, target_file):
-        if graph is None:
-            return []
-        connected = []
-        seen = set()
-        candidates = list(finding.path or [])
-        candidates.extend(
-            [
-                finding.primary_function,
-                finding.source_function,
-                finding.sink_function,
-            ]
-        )
-        for node_name in candidates:
-            node = graph.get_node(node_name)
-            if not node:
-                continue
-            for resolved_name in node.resolved_calls or []:
-                resolved = graph.get_node(resolved_name)
-                if not resolved:
-                    continue
-                if target_file and self._same_file(resolved.file_path, target_file):
-                    continue
-                if resolved.unique_name in seen:
-                    continue
-                seen.add(resolved.unique_name)
-                connected.append(resolved.unique_name)
-        return connected
-
-    def _line_of(self, text, pattern, default=1):
-        match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
-        if not match:
-            return default
-        return text[: match.start()].count("\n") + 1
-
-    def _function_for_line(self, graph, target_file, line):
-        nodes = sorted(
-            graph.get_file_nodes(target_file), key=lambda item: item.line_number
-        )
-        chosen = None
-        for node in nodes:
-            if node.line_number <= line:
-                chosen = node
-            else:
-                break
-        return chosen
-
-    def _deterministic_finding(
-        self,
-        *,
-        target_file,
-        graph,
-        line,
-        vulnerability_type,
-        severity,
-        confidence,
-        description,
-        root_cause,
-        evidence,
-        token,
-        mitigation="",
-    ):
-        fn = self._function_for_line(graph, target_file, line)
-        fn_name = fn.unique_name if fn else f"{target_file}::unknown"
-        fn_short = fn.name if fn else "unknown"
-        return VulnerabilityFinding(
-            id=uuid.uuid4().hex[:16],
-            vulnerability_type=vulnerability_type,
-            severity=severity,
-            confidence=confidence,
-            source_function=fn_name,
-            source_file=target_file,
-            source_line=line,
-            sink_function=fn_name,
-            sink_file=target_file,
-            sink_line=line,
-            path=[fn_name],
-            description=description,
-            root_cause=root_cause,
-            evidence=evidence,
-            mitigation=mitigation,
-            analysis_type="deterministic_treesitter",
-            primary_file=target_file,
-            primary_function=fn_name,
-            primary_line=line,
-            canonical_key=f"{target_file}:{fn_short}:{vulnerability_type}:{token}",
-        )
-
-    def _deterministic_file_findings(self, target_file, graph, target_paths):
-        content = read_file_content(
-            os.path.join(self._config.codebase_path, target_file)
-        )
-        if not content:
-            return []
-        path_names = self._path_node_names(target_paths)
-        findings = []
-
-        def add_if_path_relevant(finding):
-            if (
-                not path_names
-                or finding.primary_function in path_names
-                or finding.source_function in path_names
-            ):
-                findings.append(finding)
-
-        if re.search(
-            r"\b\w+\s*\[\s*(?:MAX_[A-Z0-9_]+|\d+)\s*\]\s*;", content
-        ) and re.search(r"\[[^\]]*&\s*0x0?f\s*\]", content, re.IGNORECASE):
-            line = self._line_of(content, r"\[[^\]]*&\s*0x0?f\s*\]", 1)
-            add_if_path_relevant(
-                self._deterministic_finding(
-                    target_file=target_file,
-                    graph=graph,
-                    line=line,
-                    vulnerability_type="out_of_bounds",
-                    severity="high",
-                    confidence="high",
-                    description="A masked protocol-controlled index can exceed the fixed array bounds.",
-                    root_cause="The mask permits values 0-15, but the target array is smaller than that range.",
-                    evidence="Array indexing uses an expression like flags & 0x0F against a fixed-size array.",
-                    mitigation="Validate the masked index against the actual array length before indexing.",
-                    token="masked_index_exceeds_array",
-                )
-            )
-
-        if (
-            re.search(r"\(\s*\w+_t\s*\*\s*\)\s*store_get\s*\(", content)
-            and "type_tag" not in content
-        ):
-            line = self._line_of(content, r"\(\s*\w+_t\s*\*\s*\)\s*store_get\s*\(", 1)
-            add_if_path_relevant(
-                self._deterministic_finding(
-                    target_file=target_file,
-                    graph=graph,
-                    line=line,
-                    vulnerability_type="type_confusion",
-                    severity="high",
-                    confidence="high",
-                    description="A value returned from the generic store is cast to a concrete struct type without checking the stored type tag.",
-                    root_cause="The code trusts a void* store lookup result as a specific object type without validating metadata such as type_tag.",
-                    evidence="store_get(...) is directly cast to a typed pointer and dereferenced without a visible type check.",
-                    mitigation="Validate the stored type metadata before casting or dereferencing the returned pointer.",
-                    token="store_get_cast_without_type_tag",
-                )
-            )
-
-        if re.search(
-            r"util_sanitize\s*\([^;]+payload_len[^;]*\)\s*;", content, re.DOTALL
-        ) and re.search(r"data_len\s*=\s*payload_len\s*;", content):
-            line = self._line_of(content, r"data_len\s*=\s*payload_len\s*;", 1)
-            add_if_path_relevant(
-                self._deterministic_finding(
-                    target_file=target_file,
-                    graph=graph,
-                    line=line,
-                    vulnerability_type="stale_length",
-                    severity="high",
-                    confidence="high",
-                    description="The payload is sanitized before data_len is published, but the stored length remains the original pre-sanitization length.",
-                    root_cause="Sanitization can shrink or rewrite the payload while callers continue to trust stale length metadata.",
-                    evidence="util_sanitize(..., payload_len) is followed by msg->data_len = payload_len.",
-                    mitigation="Store the sanitized length returned by validation and use that value for later copies.",
-                    token="sanitize_keeps_original_length",
-                )
-            )
-
-        if re.search(r"memcpy\s*\([^;]+sizeof\s*\(\s*\w+_t\s*\)", content, re.DOTALL):
-            line = self._line_of(
-                content, r"memcpy\s*\([^;]+sizeof\s*\(\s*\w+_t\s*\)", 1
-            )
-            add_if_path_relevant(
-                self._deterministic_finding(
-                    target_file=target_file,
-                    graph=graph,
-                    line=line,
-                    vulnerability_type="info_leak",
-                    severity="high",
-                    confidence="high",
-                    description="The response copies an entire C struct, which can expose padding or uninitialized internal fields.",
-                    root_cause="Whole-struct serialization is used instead of field-by-field serialization of initialized, intended output fields.",
-                    evidence="memcpy copies sizeof(struct_type) bytes into a response buffer.",
-                    mitigation="Serialize only initialized public fields instead of copying the whole struct.",
-                    token="whole_struct_response_copy",
-                )
-            )
-
-        if re.search(
-            r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", content
-        ) and re.search(r"memcpy\s*\([^;]+title[^;]+title_len", content, re.DOTALL):
-            line = self._line_of(
-                content, r"title_len\s*=\s*\([^;]*\)\s*copied\s*\+\s*1\s*;", 1
-            )
-            add_if_path_relevant(
-                self._deterministic_finding(
-                    target_file=target_file,
-                    graph=graph,
-                    line=line,
-                    vulnerability_type="stale_length",
-                    severity="high",
-                    confidence="high",
-                    description="The stored title length includes an extra terminator byte and is later used as a serialization copy length.",
-                    root_cause="A string length field is maintained as copied + 1, so later byte-oriented serialization can read one byte past the copied string data.",
-                    evidence="task title length is assigned copied + 1 and later used in memcpy(..., t->title_len).",
-                    mitigation="Track initialized payload bytes separately from the terminator and copy only that length.",
-                    token="title_len_copied_plus_one",
-                )
-            )
-
-        return findings
 
     def _get_builder(self):
         if self._builder is None:

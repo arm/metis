@@ -11,23 +11,19 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-
 from metis.usage import submit_with_current_context
 from metis.utils import parse_json_output
 
-from .models import VulnerabilityFinding
-from .utils import (
+from .finding_normalization import (
     _canonical_fields,
-    _chat_model_kwargs,
-    _chunked,
-    _dedupe_paths,
     _normalise_vuln_type,
-    _read_function_body,
     _safe_int,
     _same_file_ref,
 )
+from .graph_utils import _chunked, _dedupe_paths
+from .llm_runner import invoke_reachability_prompt
+from .models import VulnerabilityFinding
+from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
 _CANONICAL_FINDING_INSTRUCTIONS = """\
@@ -209,19 +205,18 @@ class VulnerabilityConfirmer:
             b = _read_function_body(self._cb, n)
             if b:
                 cs.append(f"\n--- {u} (line {n.line_number}) ---\n{b}")
-        kw = _chat_model_kwargs(
-            self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
-        )
-        chat = self._p.get_chat_model(
-            model=self._m, max_tokens=self._t, temperature=0.1, **kw
-        )
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", _CONFIRM_SYS), ("user", _CONFIRM_USR)]
-        )
-        raw = (
-            (prompt | chat | StrOutputParser())
-            .invoke({"paths_section": "\n".join(ps), "code_section": "\n".join(cs)})
-            .strip()
+        raw = invoke_reachability_prompt(
+            self._p,
+            self._u,
+            model=self._m,
+            max_tokens=self._t,
+            system_prompt=_CONFIRM_SYS,
+            user_prompt=_CONFIRM_USR,
+            variables={
+                "paths_section": "\n".join(ps),
+                "code_section": "\n".join(cs),
+            },
+            reasoning_effort=getattr(self, "_reasoning_effort", None),
         )
         return self._parse_confirm(raw, batch, graph)
 
@@ -348,25 +343,19 @@ class VulnerabilityConfirmer:
             body = _read_function_body(self._cb, n, 2500)
             if body:
                 rc.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
-        kw = _chat_model_kwargs(
-            self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
-        )
-        chat = self._p.get_chat_model(
-            model=self._m, max_tokens=self._t, temperature=0.1, **kw
-        )
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", _FILE_CONFIRM_SYS), ("user", _FILE_CONFIRM_USR)]
-        )
-        raw = (
-            (prompt | chat | StrOutputParser())
-            .invoke(
-                {
-                    "target_file": target_file,
-                    "paths_section": "\n".join(ps),
-                    "target_file_code": "\n".join(tc),
-                    "related_code_section": "\n".join(rc),
-                }
-            )
-            .strip()
+        raw = invoke_reachability_prompt(
+            self._p,
+            self._u,
+            model=self._m,
+            max_tokens=self._t,
+            system_prompt=_FILE_CONFIRM_SYS,
+            user_prompt=_FILE_CONFIRM_USR,
+            variables={
+                "target_file": target_file,
+                "paths_section": "\n".join(ps),
+                "target_file_code": "\n".join(tc),
+                "related_code_section": "\n".join(rc),
+            },
+            reasoning_effort=getattr(self, "_reasoning_effort", None),
         )
         return self._parse_confirm(raw, batch, graph, target_file=target_file)

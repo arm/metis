@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from ..reachability_common import ReachabilityPath
-from ..reachability_common.utils import _build_reverse_edges
+from ..reachability_common.graph_utils import _build_reverse_edges
 
 
 DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64

@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .models import ReachabilityPath
-from .utils import _dedupe_paths
+from .graph_utils import _dedupe_paths
 
 
 class SourceRootedPathTracer:

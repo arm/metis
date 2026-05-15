@@ -8,8 +8,8 @@ from metis.engine.reachability_common import (
     FunctionNode,
     ReachabilityGraph,
     SourceRootedPathTracer,
-    _confidence_score,
 )
+from metis.engine.reachability_common.finding_normalization import _confidence_score
 from metis.engine.reachability_service_modular.builder import (
     TreeSitterReachabilityGraphBuilder,
 )

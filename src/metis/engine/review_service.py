@@ -85,7 +85,7 @@ class ReviewService:
         )
 
     def _find_reachability_review_for_file(self, file_path):
-        return self._reachability_service.review_single_file_from_codebase(
+        return self._reachability_service.review_file(
             file_path,
             **self._reachability_settings,
         )

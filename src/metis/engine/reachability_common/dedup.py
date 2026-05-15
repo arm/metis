@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from .utils import (
+from .finding_normalization import (
     _VTYPE_FAMILY,
     _finding_file,
     _finding_function,
@@ -17,6 +17,30 @@ from .utils import (
     _safe_int,
 )
 
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+_CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
+_VULN_PRIORITY = {
+    "use_after_free": 0,
+    "double_free": 0,
+    "double_close": 0,
+    "teardown_race": 0,
+    "stale_pointer_after_realloc": 0,
+    "format_string": 0,
+    "out_of_bounds": 0,
+    "buffer_overflow": 0,
+    "integer_overflow": 0,
+    "integer_overflow_in_allocation": 0,
+    "missing_auth": 0,
+    "permission_mismatch": 0,
+    "auth_comparison_logic_error": 0,
+    "refcount_imbalance": 1,
+    "missing_bounds_check": 1,
+    "boolean_coercion": 1,
+    "info_leak": 1,
+    "type_confusion": 1,
+    "state_order": 2,
+    "null_deref": 3,
+}
 
 _DEDUP_NOISY_CANONICAL_TOKENS = frozenset(
     {
@@ -867,42 +891,21 @@ class Deduplicator:
 
 def _pick_best(findings):
     """Pick the single best representative from a group of duplicates."""
-    sev = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
-    conf = {"high": 0, "medium": 1, "low": 2}
-    vprio = {
-        "use_after_free": 0,
-        "double_free": 0,
-        "double_close": 0,
-        "teardown_race": 0,
-        "stale_pointer_after_realloc": 0,
-        "format_string": 0,
-        "out_of_bounds": 0,
-        "buffer_overflow": 0,
-        "integer_overflow": 0,
-        "integer_overflow_in_allocation": 0,
-        "missing_auth": 0,
-        "permission_mismatch": 0,
-        "auth_comparison_logic_error": 0,
-        "refcount_imbalance": 1,
-        "missing_bounds_check": 1,
-        "boolean_coercion": 1,
-        "info_leak": 1,
-        "type_confusion": 1,
-        "state_order": 2,
-        "null_deref": 3,
-    }
-    best = min(
-        findings,
-        key=lambda f: (
-            sev.get(f.severity, 5),
-            vprio.get(_normalise_vuln_type(getattr(f, "vulnerability_type", "")), 2),
-            conf.get(f.confidence, 3),
-            len(f.path),
-            -len(f.description),  # prefer longer descriptions
-        ),
-    )
+    best = min(findings, key=_best_finding_sort_key)
     best.vulnerability_type = _normalise_vuln_type(best.vulnerability_type)
     return best
+
+
+def _best_finding_sort_key(finding):
+    return (
+        _SEVERITY_RANK.get(finding.severity, 5),
+        _VULN_PRIORITY.get(
+            _normalise_vuln_type(getattr(finding, "vulnerability_type", "")), 2
+        ),
+        _CONFIDENCE_RANK.get(finding.confidence, 3),
+        len(finding.path),
+        -len(finding.description),  # prefer longer descriptions
+    )
 
 
 def _collapse_by_description(findings):
@@ -944,8 +947,9 @@ def _collapse_by_description(findings):
 def _select_diverse(findings, limit):
     if len(findings) <= limit:
         return list(findings)
-    sev = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
-    fs = sorted(findings, key=lambda f: (sev.get(f.severity, 5), len(f.path)))
+    fs = sorted(
+        findings, key=lambda f: (_SEVERITY_RANK.get(f.severity, 5), len(f.path))
+    )
     sel, cov = [], set()
     for f in fs:
         if len(sel) >= limit:

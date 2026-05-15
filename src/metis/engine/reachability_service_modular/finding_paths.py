@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import replace
 
-from ..reachability_common.utils import _build_reverse_edges
+from ..reachability_common.graph_utils import _build_reverse_edges
 
 
 class FindingPathAnnotator:
