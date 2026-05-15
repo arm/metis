@@ -40,10 +40,14 @@ _SEM_USR = "{all_functions_code}"
 _COMBINED_GRAPH_SYS = (
     """\
 You are analyzing a C/C++ codebase with several requested security lenses in one review.
-Run only the requested lenses below and report each distinct root cause once.
+Evaluate each requested lens independently, then merge duplicate root causes before
+returning JSON. Run only the requested lenses below.
 
 Requested lenses:
 {lens_instructions}
+
+Output examples:
+{lens_examples}
 
 Return ONLY valid JSON:
 {{"findings": [{{"analysis_type": "semantic", "vulnerability_type": "missing_auth",
@@ -51,14 +55,16 @@ Return ONLY valid JSON:
 "related_function": "gpu_check_perm", "description": "...", "root_cause": "...",
 "evidence": "...", "mitigation": "..."}}]}}
 
-analysis_type must be one of: {allowed_analysis_types}
+analysis_type is mandatory and must exactly be one of: {allowed_analysis_types}
 For lifecycle findings, set function_name to the use/deref function and related_function
 to the free, teardown, or lifetime-ending function when known.
 For ownership findings, set function_name to the defective cleanup/caller function and
 related_function to the paired function when known.
 For all other findings, set function_name to the primary defective function and
 related_function only when another shown function is needed to explain the bug.
-Return {{"findings": []}} if none found. Be conservative."""
+Do not report style issues, hypothetical risks without a shown path/mechanism, or
+duplicates already represented by the same root cause.
+Return {{"findings": []}} if none found. Be conservative but thorough."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
 

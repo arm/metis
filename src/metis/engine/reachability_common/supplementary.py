@@ -354,44 +354,146 @@ _REVIEW_LENS_NAMES = {
 
 _COMBINED_GRAPH_LENS_KINDS = frozenset({"cross", "semantic", "targeted"})
 _COMBINED_GRAPH_LENS_NOTES = {
+    "lifecycle": """\
+analysis_type lifecycle:
+- Use-after-free: one function frees a resource and another later dereferences it.
+- Dangling pointers: global/shared structures keep pointers that are not cleared when
+  the pointed-to object is freed.
+- Lifetime mismatch: object A stores a pointer to object B, but B can be destroyed
+  while A still exists.
+- Deferred callback UAF: timer/work/watchdog/callback context points at an object
+  that teardown frees without canceling/flushing/unregistering the callback.
+- Stale pointer after realloc/grow/compact: code caches a pointer, then a later
+  operation may move or invalidate the backing store.""",
+    "ownership": """\
+analysis_type ownership:
+- Double-free/double-close across functions: callee frees on error and caller also
+  frees, or caller frees unconditionally after ownership was transferred.
+- Refcount imbalance: get/ref and put/unref are not matched, or helpers named get,
+  put, ref, unref, acquire, release, retain, or drop are no-ops.
+- Cleanup symmetry: setup/register allocates N resources but teardown releases fewer.
+- Partial cleanup on error: init allocates A, B, C, then if C fails it forgets A/B.
+- Rollback gap: list/rbtree/hash/register publishes an object and a later failure
+  does not remove/unregister it.
+- Callback registration lifecycle: callback context is an object that can be freed
+  without unregistering or canceling the callback first.""",
+    "semantic": """\
+analysis_type semantic:
+- Boolean coercion of rich returns: callers treat level/enum/count as boolean.
+- Wrong enum/constant/domain: permission or resource checks use the wrong constant.
+- Type confusion or void* miscast without a type tag/check.
+- Wrong field or stale metadata: raw_len used as data_len, nr_pages vs size, old
+  length/count retained after data mutation.
+- Width mismatch/truncation: 32-bit checks guard size_t/uint64_t values.
+- Array index vs size mismatch, integer overflow in allocation/copy sizes.
+- Uninitialized data exposure, wrong flag semantics, accounting drift, info leaks.
+- Missing auth/permission checks before privileged reset, firmware, debug, MMIO, DMA,
+  register, sysfs, or ioctl operations.""",
+    "state_concurrency": """\
+analysis_type state_concurrency:
+- Premature state transition: ready/enabled/initialized flag set before validation,
+  allocation, registration, firmware load, hardware init, or permission checks.
+- Ordering gap: flush/sync/drain/fence must complete before power-off, teardown, or
+  reset, but the ordering is not enforced.
+- Stale-after-unlock: value read under lock is used after unlock while mutable.
+- Lock order inversion across functions.
+- Teardown race: destroys mutex/workqueue/resource while pending work/timers/callbacks
+  can still reference it.
+- Missing lock on shared structure, stale software state after hardware disable.""",
+    "targeted_state_order": """\
+analysis_type targeted_state_order:
+- Only report ready/state flag ordering bugs.
+- Look for gpu_ready, loaded, active, initialized, enabled, runtime_active,
+  gpu_powered, ready, or online being set before prerequisites complete.
+- Confirm an error path after the transition does not roll state back, or another
+  function trusts that state to access hardware, firmware, DMA, queues, MMIO, or
+  privileged operations.""",
+    "targeted_callback_lifecycle": """\
+analysis_type targeted_callback_lifecycle:
+- Only report callback teardown symmetry bugs.
+- timer/work/watchdog/callback fn/data/ctx is initialized with an object pointer.
+- Teardown/release/remove/shutdown/error cleanup/free does not cancel, deactivate,
+  flush, unregister, or clear the callback before freeing the object or destroying
+  its mutex/workqueue.
+- file_operations or ops tables show lifecycle asymmetry, such as release without
+  a needed flush/cancel path.""",
+    "targeted_refcount": """\
+analysis_type targeted_refcount:
+- Only report no-op reference counting helpers that callers rely on.
+- Functions named like *_get, *_put, *_ref, *_unref, acquire, release, retain, or drop
+  have empty/no-op bodies, only return a pointer, only cast, or only log.
+- They do not update refcount/atomic/kref/state and do not free on final put.""",
+    "targeted_permission": """\
+analysis_type targeted_permission:
+- Only report permission-domain mismatches or missing privileged checks.
+- CPU operation checks GPU_WR or GPU-only permission when CPU_WR or CPU domain is
+  required.
+- Channel/message/firmware/reset/debug/sysfs/ioctl/destructive operation checks the
+  wrong resource constant.
+- Numeric permission/role is treated as boolean, allowing low-privilege nonzero
+  values through high-privilege checks.
+- Generic boolean permission check used where a domain-specific capability is needed.
+- reset, firmware load, debug, MMIO, DMA, or register access lacks permission checks.""",
+    "targeted_toctou": """\
+analysis_type targeted_toctou:
+- Only report filesystem time-of-check/time-of-use bugs.
+- stat, lstat, access, faccessat, or related path checks are followed by fopen, open,
+  unlink, rename, chmod, chown, truncate, or mutation/open on the same path.
+- There is no safe open-by-handle, O_NOFOLLOW/openat discipline, directory fd pinning,
+  or post-open validation that closes the race.""",
+}
+_COMBINED_GRAPH_LENS_EXAMPLES = {
     "lifecycle": (
-        "lifecycle: use-after-free, dangling pointers, lifetime mismatch, "
-        "deferred callback UAF, stale pointer after realloc."
+        '{"analysis_type":"lifecycle","vulnerability_type":"use_after_free",'
+        '"function_name":"resource_lookup","related_function":"connection_close"}'
     ),
     "ownership": (
-        "ownership: double-free/double-close across functions, refcount imbalance, "
-        "cleanup symmetry, partial cleanup, rollback gaps, callback lifecycle."
+        '{"analysis_type":"ownership","vulnerability_type":"double_free",'
+        '"function_name":"dispatch_request","related_function":"parse_message"}'
     ),
     "semantic": (
-        "semantic: boolean coercion of rich returns, wrong enum/constant, type "
-        "confusion, wrong field, stale length/count, width mismatch, array size "
-        "mismatch, integer overflow, info leak, missing auth."
+        '{"analysis_type":"semantic","vulnerability_type":"boolean_coercion",'
+        '"function_name":"dispatch_request","related_function":"get_permission_level"}'
     ),
     "state_concurrency": (
-        "state_concurrency: premature state transitions, ordering gaps, stale "
-        "after unlock, lock-order inversion, teardown races, missing locks, stale "
-        "state after disable."
+        '{"analysis_type":"state_concurrency","vulnerability_type":"state_order",'
+        '"function_name":"device_init","related_function":"device_ready_check"}'
     ),
     "targeted_state_order": (
-        "targeted_state_order: ready/enabled/initialized state set before validation, "
-        "allocation, registration, firmware load, hardware init, or permission checks."
+        '{"analysis_type":"targeted_state_order","vulnerability_type":"state_order",'
+        '"function_name":"gpu_init","related_function":"gpu_submit"}'
     ),
     "targeted_callback_lifecycle": (
-        "targeted_callback_lifecycle: timer/work/watchdog/callback teardown "
-        "symmetry bugs and missing cancel/flush/unregister before free."
+        '{"analysis_type":"targeted_callback_lifecycle","vulnerability_type":"teardown_race",'
+        '"function_name":"gpu_remove","related_function":"gpu_watchdog_fn"}'
     ),
     "targeted_refcount": (
-        "targeted_refcount: no-op get/put/ref/unref/acquire/release helpers that "
-        "callers rely on for lifetime safety."
+        '{"analysis_type":"targeted_refcount","vulnerability_type":"refcount_imbalance",'
+        '"function_name":"gpu_ctx_get","related_function":"gpu_ctx_put"}'
     ),
     "targeted_permission": (
-        "targeted_permission: wrong permission domain/resource checks, boolean use "
-        "of permission levels, and privileged operations with missing checks."
+        '{"analysis_type":"targeted_permission","vulnerability_type":"permission_mismatch",'
+        '"function_name":"gpu_ioctl_reset","related_function":"gpu_check_perm"}'
     ),
     "targeted_toctou": (
-        "targeted_toctou: path checks followed by open/mutation of the same path "
-        "without safe open-by-handle/openat/O_NOFOLLOW discipline."
+        '{"analysis_type":"targeted_toctou","vulnerability_type":"toctou",'
+        '"function_name":"load_firmware_path","related_function":""}'
     ),
+}
+_COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES = {
+    "lifecycle_audit": "lifecycle",
+    "life": "lifecycle",
+    "ownership_audit": "ownership",
+    "resource_ownership": "ownership",
+    "semantic_audit": "semantic",
+    "state": "state_concurrency",
+    "state_audit": "state_concurrency",
+    "concurrency": "state_concurrency",
+    "callback_lifecycle": "targeted_callback_lifecycle",
+    "refcount": "targeted_refcount",
+    "permission": "targeted_permission",
+    "permission_mismatch": "targeted_permission",
+    "toctou": "targeted_toctou",
 }
 
 
@@ -598,8 +700,13 @@ class SupplementaryAnalyzer:
 
         allowed = ", ".join(analysis_types)
         lens_instructions = "\n".join(
-            f"- {_COMBINED_GRAPH_LENS_NOTES.get(analysis_type, analysis_type)}"
+            _COMBINED_GRAPH_LENS_NOTES.get(analysis_type, analysis_type)
             for analysis_type in analysis_types
+        )
+        lens_examples = "\n".join(
+            f"- {_COMBINED_GRAPH_LENS_EXAMPLES[analysis_type]}"
+            for analysis_type in analysis_types
+            if analysis_type in _COMBINED_GRAPH_LENS_EXAMPLES
         )
         results = []
 
@@ -615,6 +722,7 @@ class SupplementaryAnalyzer:
                     "all_functions_code": code_chunk,
                     "allowed_analysis_types": allowed,
                     "lens_instructions": lens_instructions,
+                    "lens_examples": lens_examples,
                 },
                 reasoning_effort=getattr(self, "_reasoning_effort", None),
             )
@@ -1107,6 +1215,15 @@ class SupplementaryAnalyzer:
             cb({"event": "lock_order_extraction_done", "findings": len(results)})
         return results
 
+    def _normalise_combined_analysis_type(self, value, allowed_analysis_types):
+        raw = str(value or "").strip().lower().replace("-", "_")
+        if raw in allowed_analysis_types:
+            return raw
+        alias = _COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES.get(raw)
+        if alias in allowed_analysis_types:
+            return alias
+        return ""
+
     def _parse_combined(self, raw, all_fns, allowed_analysis_types):
         parsed = parse_json_output(raw)
         if not isinstance(parsed, dict):
@@ -1120,19 +1237,44 @@ class SupplementaryAnalyzer:
         for e in fl:
             if not isinstance(e, dict):
                 continue
-            analysis_type = str(e.get("analysis_type") or "").strip()
-            if analysis_type not in allowed_analysis_types:
+            analysis_type = self._normalise_combined_analysis_type(
+                e.get("analysis_type"), allowed_analysis_types
+            )
+            if not analysis_type:
                 continue
 
             if analysis_type == "lifecycle":
-                source_name = e.get("free_function") or e.get("related_function")
-                sink_name = e.get("use_function") or e.get("function_name")
+                source_name = (
+                    e.get("free_function")
+                    or e.get("teardown_function")
+                    or e.get("source_function")
+                    or e.get("related_function")
+                )
+                sink_name = (
+                    e.get("use_function")
+                    or e.get("sink_function")
+                    or e.get("primary_function")
+                    or e.get("function_name")
+                )
             elif analysis_type == "ownership":
-                source_name = e.get("function_a") or e.get("related_function")
-                sink_name = e.get("function_b") or e.get("function_name")
+                source_name = (
+                    e.get("function_a")
+                    or e.get("source_function")
+                    or e.get("related_function")
+                )
+                sink_name = (
+                    e.get("function_b")
+                    or e.get("sink_function")
+                    or e.get("primary_function")
+                    or e.get("function_name")
+                )
             else:
-                source_name = e.get("related_function")
-                sink_name = e.get("function_name")
+                source_name = e.get("related_function") or e.get("source_function")
+                sink_name = (
+                    e.get("function_name")
+                    or e.get("sink_function")
+                    or e.get("primary_function")
+                )
 
             sink_fn = _lookup_fn(str(sink_name or ""), bn, bu, all_fns)
             source_fn = _lookup_fn(str(source_name or ""), bn, bu, all_fns)
