@@ -28,14 +28,17 @@ from .source_context import _read_function_body
 logger = logging.getLogger("metis")
 _CANONICAL_FINDING_INSTRUCTIONS = """\
 
-For every finding include canonical ownership fields:
+For every finding include canonical ownership fields. These fields are mandatory:
 {{"primary_file": "src/example.c", "primary_function": "example_function",
 "primary_line": 123,
 "canonical_key": "src/example.c:example_function:vulnerability_family:root_cause_token"}}
 Choose primary_file/primary_function/primary_line as the location of the actual defective code,
 not merely the source, caller, helper, or path endpoint.
-If the same root cause appears through multiple paths, use the same canonical_key.
-canonical_key should be stable and concise: file:function:vulnerability_family:root_cause_token.
+Use the exact shown function identifier for primary_function when available.
+canonical_key must be stable and concise:
+primary_file:primary_function:vulnerability_type:root_cause_token.
+Use the same canonical_key for the same root cause across different paths, chunks, or lenses.
+Do not include caller/path/source names in canonical_key unless the caller itself contains the defect.
 Include a concise mitigation field that recommends a fix, not a restatement of root_cause or evidence.
 Be conservative. Report each distinct root cause once.
 Do not report a caller/path duplicate if the same primary defect is already represented.

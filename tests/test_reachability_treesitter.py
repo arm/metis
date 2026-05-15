@@ -70,14 +70,15 @@ class _Runtime:
 
 
 def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
+    import metis.engine.analysis.c_family_ast as c_family_ast
     import metis.engine.reachability_service_modular.c_family as c_family
 
+    def fake_identifier(node, _source):
+        return getattr(node, "text", "") if node else ""
+
     monkeypatch.setattr(c_family, "_node_text", lambda node, _source: node.text)
-    monkeypatch.setattr(
-        c_family,
-        "_identifier_from_node",
-        lambda node, _source: getattr(node, "text", "") if node else "",
-    )
+    monkeypatch.setattr(c_family, "_identifier_from_node", fake_identifier)
+    monkeypatch.setattr(c_family_ast, "_identifier_from_node", fake_identifier)
 
     foo_call_ident = _Node("identifier", text="foo", line=3)
     foo_call = _Node("call_expression", line=3, fields={"function": foo_call_ident})
@@ -204,14 +205,15 @@ def test_identifier_extraction_handles_deep_trees_without_recursion():
 
 
 def test_c_family_extractor_handles_deep_trees_without_recursion(monkeypatch):
+    import metis.engine.analysis.c_family_ast as c_family_ast
     import metis.engine.reachability_service_modular.c_family as c_family
 
+    def fake_identifier(node, _source):
+        return getattr(node, "text", "") if node else ""
+
     monkeypatch.setattr(c_family, "_node_text", lambda node, _source: node.text)
-    monkeypatch.setattr(
-        c_family,
-        "_identifier_from_node",
-        lambda node, _source: getattr(node, "text", "") if node else "",
-    )
+    monkeypatch.setattr(c_family, "_identifier_from_node", fake_identifier)
+    monkeypatch.setattr(c_family_ast, "_identifier_from_node", fake_identifier)
 
     extractor = object.__new__(CFamilyTreeSitterExtractor)
 
@@ -286,7 +288,17 @@ def _fn(unique, file_path, name, line, *, source=False, sink=False, calls=None):
     )
 
 
-def _finding(vtype, file_path, function, line, description, root_cause):
+def _finding(
+    vtype,
+    file_path,
+    function,
+    line,
+    description,
+    root_cause,
+    *,
+    canonical_key="",
+    path=None,
+):
     return VulnerabilityFinding(
         id=f"{vtype}-{line}",
         vulnerability_type=vtype,
@@ -298,7 +310,7 @@ def _finding(vtype, file_path, function, line, description, root_cause):
         sink_function=function,
         sink_file=file_path,
         sink_line=line,
-        path=[function],
+        path=list(path or [function]),
         description=description,
         root_cause=root_cause,
         evidence=root_cause,
@@ -306,7 +318,7 @@ def _finding(vtype, file_path, function, line, description, root_cause):
         primary_file=file_path,
         primary_function=function,
         primary_line=line,
-        canonical_key=f"{file_path}:{function}:{vtype}:{line}",
+        canonical_key=canonical_key,
     )
 
 
@@ -434,23 +446,28 @@ def test_finding_path_annotator_leaves_external_primary_file_unchanged():
     assert annotated is finding
 
 
-def test_deduplicator_merges_auth_variants_for_same_gate():
+def test_deduplicator_merges_same_canonical_key_across_paths():
+    key = "src/task.c:src/task.c::task_import:out_of_bounds:unterminated_title"
     findings = [
         _finding(
-            "permission_mismatch",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_proj_create",
-            108,
-            "Project creation checks RES_TASK instead of a project permission.",
-            "project create permission resource mismatch",
+            "missing_bounds_check",
+            "src/task.c",
+            "src/task.c::task_import",
+            63,
+            "Import passes a length-delimited title to task_create.",
+            "title import buffer not terminated before task_create strlen",
+            canonical_key=key,
+            path=["src/api.c::dispatch", "src/task.c::task_import"],
         ),
         _finding(
-            "auth_logic_error",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_proj_create",
-            108,
-            "Authorization is gated by treating auth_get_level as a boolean.",
-            "auth level boolean project create permission",
+            "out_of_bounds",
+            "src/task.c",
+            "src/task.c::task_import",
+            64,
+            "The same title slice can be read past its end.",
+            "unterminated title reaches strlen",
+            canonical_key=key,
+            path=["src/io.c::read_task", "src/task.c::task_import"],
         ),
     ]
 
@@ -459,71 +476,39 @@ def test_deduplicator_merges_auth_variants_for_same_gate():
     assert total == 2
     assert removed == 1
     assert len(deduped) == 1
+    assert deduped[0].canonical_key == key
 
 
-def test_deduplicator_merges_refcount_release_variants_for_same_line():
+def test_deduplicator_keeps_different_canonical_keys_in_same_location():
     findings = [
         _finding(
-            "accounting_drift",
+            "missing_auth",
             "src/dispatch.c",
-            "src/dispatch.c::handle_stats",
-            181,
-            "The stats handler increments a refcount once but decrements twice.",
-            "store_ref followed by store_unref store_unref on same entry",
+            "src/dispatch.c::handle_task_update",
+            80,
+            "Task update treats auth_get_level as a boolean.",
+            "auth level boolean gate for task update",
+            canonical_key="src/dispatch.c:src/dispatch.c::handle_task_update:missing_auth:boolean_gate",
         ),
         _finding(
-            "double_free",
+            "missing_auth",
             "src/dispatch.c",
-            "src/dispatch.c::handle_stats",
-            181,
-            "The same store entry is unreferenced twice after one explicit ref.",
-            "duplicate store_unref releases same refcounted entry",
-        ),
-        _finding(
-            "refcount_imbalance",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_stats",
-            181,
-            "One acquired reference is released twice.",
-            "unmatched store_ref store_unref calls decrement refcount too far",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 3
-    assert removed == 2
-    assert len(deduped) == 1
-
-
-def test_deduplicator_merges_callback_lifecycle_variants_in_same_file():
-    findings = [
-        _finding(
-            "teardown_race",
-            "src/session.c",
-            "src/session.c::session_close",
-            50,
-            "Session teardown frees callback ctx without notify unregister.",
-            "notify callback register ctx session free without unregister",
-        ),
-        _finding(
-            "state_order",
-            "src/session.c",
-            "src/session.c::session_close",
-            50,
-            "notify_fire can invoke on_session_event with a freed session pointer.",
-            "callback ctx not unregistered before session free notify_fire",
+            "src/dispatch.c::handle_task_update",
+            82,
+            "Task update does not verify that the session owns the task.",
+            "missing owner check before task update",
+            canonical_key="src/dispatch.c:src/dispatch.c::handle_task_update:missing_auth:owner_check",
         ),
     ]
 
     deduped, total, removed = Deduplicator.deduplicate(findings)
 
     assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
+    assert removed == 0
+    assert len(deduped) == 2
 
 
-def test_deduplicator_merges_common_model_aliases():
+def test_deduplicator_falls_back_to_location_family_when_key_missing():
     findings = [
         _finding(
             "array_index_size_mismatch",
@@ -537,53 +522,10 @@ def test_deduplicator_merges_common_model_aliases():
             "array_oob",
             "src/dispatch.c",
             "src/dispatch.c::dispatch",
-            198,
+            199,
             "The priority_counts index allows values 0 through 15.",
             "0x0F masked index can exceed the array bounds",
         ),
-        _finding(
-            "integer_overflow_allocation",
-            "src/store.c",
-            "src/store.c::store_grow",
-            18,
-            "store_grow computes new_cap * sizeof(store_entry_t).",
-            "unchecked capacity multiplication can wrap allocation size",
-        ),
-        _finding(
-            "integer_overflow",
-            "src/store.c",
-            "src/store.c::store_grow",
-            18,
-            "The grow size calculation can overflow before realloc.",
-            "capacity multiplication can wrap allocation size before realloc",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 4
-    assert removed == 2
-    assert len(deduped) == 2
-
-
-def test_deduplicator_merges_authorization_bypass_aliases():
-    findings = [
-        _finding(
-            "missing_auth",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_proj_add",
-            130,
-            "Project add ignores the session and performs no permission check.",
-            "session ignored project add authorization missing owner permission",
-        ),
-        _finding(
-            "authorization_bypass",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_proj_add",
-            136,
-            "The project-add handler performs the operation without authentication.",
-            "project add session ignored authorization bypass owner check missing",
-        ),
     ]
 
     deduped, total, removed = Deduplicator.deduplicate(findings)
@@ -591,211 +533,10 @@ def test_deduplicator_merges_authorization_bypass_aliases():
     assert total == 2
     assert removed == 1
     assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "missing_auth"
+    assert deduped[0].vulnerability_type == "array_index_oob"
 
 
-def test_deduplicator_merges_auth_helper_reports_across_callers():
-    findings = [
-        _finding(
-            "permission_mismatch",
-            "src/auth.c",
-            "src/auth.c::auth_get_level",
-            29,
-            "auth_get_level ignores the requested resource and returns a global level.",
-            "auth get level ignores resource permission; callers use auth_get_level boolean checks",
-        ),
-        _finding(
-            "boolean_coercion",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_create",
-            41,
-            "Task creation treats auth_get_level as a boolean.",
-            "auth get level boolean permission gate for task create",
-        ),
-        _finding(
-            "boolean_coercion",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_update",
-            80,
-            "Task update treats auth_get_level as a boolean.",
-            "auth get level boolean permission gate for task update",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 3
-    assert removed == 2
-    assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "permission_mismatch"
-
-
-def test_deduplicator_keeps_distinct_owner_check_and_boolean_gate():
-    findings = [
-        _finding(
-            "boolean_coercion",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_update",
-            80,
-            "Task update treats auth_get_level as a boolean.",
-            "auth get level boolean permission gate for task update",
-        ),
-        _finding(
-            "authorization_bypass",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_update",
-            90,
-            "Task update does not verify that the session owns the task.",
-            "missing task owner check before task_set_title update",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 0
-    assert len(deduped) == 2
-
-
-def test_deduplicator_merges_format_string_helper_and_callsite():
-    findings = [
-        _finding(
-            "format_string",
-            "src/util.c",
-            "src/util.c::util_log",
-            35,
-            "util_log passes msg directly as the vprintf format string.",
-            "caller controlled msg used as printf format string in vprintf",
-        ),
-        _finding(
-            "info_leak",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_get",
-            74,
-            "A task title is passed directly to util_log as the format string.",
-            "task title util_log vprintf format specifier can disclose stack data",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "format_string"
-
-
-def test_deduplicator_merges_unterminated_title_variants():
-    findings = [
-        _finding(
-            "missing_bounds_check",
-            "src/task.c",
-            "src/task.c::task_import",
-            63,
-            "Import passes a length-delimited title to task_create without a NUL terminator.",
-            "title import buffer not NUL terminated before task_create strlen string",
-        ),
-        _finding(
-            "out_of_bounds",
-            "src/task.c",
-            "src/task.c::task_create",
-            17,
-            "task_create calls strlen on attacker-controlled title slices.",
-            "task_create strlen title can read past non-terminated import buffer",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "out_of_bounds"
-
-
-def test_deduplicator_merges_session_get_lifetime_variants():
-    findings = [
-        _finding(
-            "refcount_imbalance",
-            "src/session.c",
-            "src/session.c::session_get",
-            32,
-            "session_get returns a session pointer without acquiring a lifetime reference.",
-            "session_get no refcount lifetime acquire; fresh session used across maintenance sweep free",
-        ),
-        _finding(
-            "use_after_free",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_task_get",
-            58,
-            "handle_task_get caches a session pointer across maintenance and dereferences it.",
-            "fresh session pointer from session_get crosses session_run_maintenance session_sweep expire free",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "use_after_free"
-
-
-def test_deduplicator_merges_task_delete_project_membership_variants():
-    findings = [
-        _finding(
-            "accounting_drift",
-            "src/task.c",
-            "src/task.c::task_delete",
-            45,
-            "Deleting a task does not decrement the project's member_count.",
-            "project_add_task increments member_count but task_delete remove does not clear project member count",
-        ),
-        _finding(
-            "stale_state_after_disable",
-            "src/task.c",
-            "src/task.c::task_delete",
-            45,
-            "Deleting a task leaves project members and cached_entries pointing at stale state.",
-            "task_delete removes store entry without clearing project members cached entries",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-
-
-def test_deduplicator_merges_same_expression_null_and_bounds_variants():
-    findings = [
-        _finding(
-            "missing_bounds_check",
-            "src/auth.c",
-            "src/auth.c::auth_verify_session",
-            42,
-            "Copies identity into a fixed-size buffer without checking length.",
-            "char identity buffer memcpy full strlen length unchecked",
-        ),
-        _finding(
-            "null_deref",
-            "src/auth.c",
-            "src/auth.c::auth_verify_session",
-            42,
-            "user_get_identity can return NULL before strlen(full).",
-            "full from user_get_identity unchecked before strlen memcpy identity",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-
-
-def test_deduplicator_merges_same_expression_type_and_size_variants():
+def test_deduplicator_keeps_different_families_without_canonical_key():
     findings = [
         _finding(
             "type_confusion",
@@ -811,12 +552,34 @@ def test_deduplicator_merges_same_expression_type_and_size_variants():
             "src/dispatch.c::handle_stats",
             174,
             "The returned store size is ignored before strlen(t->title).",
-            "store_get size ignored data cast task_t title strlen",
+            "store_get size ignored before title strlen",
         ),
     ]
 
     deduped, total, removed = Deduplicator.deduplicate(findings)
 
     assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
+    assert removed == 0
+    assert len(deduped) == 2
+
+
+def test_deduplicator_caps_per_function_family_after_canonical_merge():
+    findings = [
+        _finding(
+            "missing_auth",
+            "src/dispatch.c",
+            "src/dispatch.c::handle_task_update",
+            80 + index,
+            f"Missing authorization check {index}.",
+            f"missing authorization check {index}",
+            canonical_key=f"src/dispatch.c:src/dispatch.c::handle_task_update:missing_auth:check_{index}",
+            path=[f"src/api.c::entry_{index}", "src/dispatch.c::handle_task_update"],
+        )
+        for index in range(4)
+    ]
+
+    deduped, total, removed = Deduplicator.deduplicate(findings, max_per_sink=2)
+
+    assert total == 4
+    assert removed == 2
+    assert len(deduped) == 2

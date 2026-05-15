@@ -82,63 +82,48 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         nodes: list[FunctionNode] = []
         seen: set[str] = set()
 
-        for node in self._iter_nodes(root):
-            node_type = str(getattr(node, "type", "") or "")
-            if node_type in {"function_definition", "method_definition"}:
-                name = self._function_name(node, source)
-                if name:
-                    unique = f"{rel_path}::{name}"
-                    if unique not in seen:
-                        seen.add(unique)
-                        calls = self._collect_calls(node, source)
-                        text = _node_text(node, source)
-                        is_source, source_reason = is_source_function(
-                            name, calls, entrypoint_refs
+        for node in self._iter_function_definitions(root, include_methods=True):
+            name = self._function_name_from_definition(node, source)
+            if name:
+                unique = f"{rel_path}::{name}"
+                if unique not in seen:
+                    seen.add(unique)
+                    calls = self._collect_call_symbols(node, source)
+                    text = _node_text(node, source)
+                    is_source, source_reason = is_source_function(
+                        name, calls, entrypoint_refs
+                    )
+                    is_sink, sink_type, sink_reason = is_sink_function(
+                        name, calls, text
+                    )
+                    nodes.append(
+                        FunctionNode(
+                            unique_name=unique,
+                            file_path=rel_path,
+                            name=name,
+                            line_number=_node_line(node),
+                            is_source=is_source,
+                            is_sink=is_sink,
+                            calls=calls,
+                            source_reason=source_reason,
+                            sink_type=sink_type,
+                            sink_reason=sink_reason,
                         )
-                        is_sink, sink_type, sink_reason = is_sink_function(
-                            name, calls, text
-                        )
-                        nodes.append(
-                            FunctionNode(
-                                unique_name=unique,
-                                file_path=rel_path,
-                                name=name,
-                                line_number=_node_line(node),
-                                is_source=is_source,
-                                is_sink=is_sink,
-                                calls=calls,
-                                source_reason=source_reason,
-                                sink_type=sink_type,
-                                sink_reason=sink_reason,
-                            )
-                        )
+                    )
         return sorted(
             nodes, key=lambda item: (item.file_path, item.line_number, item.name)
         )
 
-    def _function_name(self, node, source: bytes) -> str:
-        declarator = self._field(node, "declarator")
-        return _identifier_from_node(declarator or node, source)
-
-    def _collect_calls(self, scope_node, source: bytes) -> list[str]:
+    def _collect_call_symbols(self, scope_node, source: bytes) -> list[str]:
         calls: list[str] = []
         seen: set[str] = set()
-
-        def add(symbol: str):
-            if not symbol:
-                return
-            if symbol in CONTROL_CALLS:
-                return
-            if symbol in seen:
-                return
-            seen.add(symbol)
-            calls.append(symbol)
-
-        for node in self._iter_nodes(scope_node):
-            node_type = str(getattr(node, "type", "") or "")
-            if node_type == "call_expression":
-                function_node = self._field(node, "function")
-                add(_identifier_from_node(function_node or node, source))
+        for call in self._collect_calls_in_scope(
+            scope_node, source, exclude_symbols=CONTROL_CALLS, sort=False
+        ):
+            if call.symbol in seen:
+                continue
+            seen.add(call.symbol)
+            calls.append(call.symbol)
         return calls
 
     def _collect_globals(
