@@ -19,27 +19,17 @@ from .llm_runner import invoke_reachability_prompt
 from .models import VulnerabilityFinding
 from .supplementary_prompts import (
     _CLASSIC_C_SINK_SYS,
+    _COMBINED_GRAPH_SYS,
+    _COMBINED_GRAPH_USR,
     _COUNTER_SYMMETRY_SYS,
     _ERROR_UNWIND_SYS,
     _GLOBAL_LIFECYCLE_SYS,
     _INTRA_SYS,
     _INTRA_USR,
-    _LIFE_SYS,
-    _LIFE_USR,
     _LOCK_ORDER_SYS,
-    _OWN_SYS,
-    _OWN_USR,
-    _SEM_SYS,
     _SEM_USR,
-    _STATE_SYS,
-    _STATE_USR,
-    _TARGET_CALLBACK_SYS,
     _TARGET_ORDERING_GAP_SYS,
     _TARGET_PATH_ACCESS_SYS,
-    _TARGET_PERMISSION_SYS,
-    _TARGET_REFCOUNT_SYS,
-    _TARGET_STATE_SYS,
-    _TARGET_TOCTOU_SYS,
 )
 from .finding_normalization import (
     _canonical_fields,
@@ -58,20 +48,14 @@ logger = logging.getLogger("metis")
 
 
 @dataclass(frozen=True)
-class _SupplementaryPassSpec:
+class _SupplementaryLensSpec:
     name: str
     kind: str
     method_name: str = ""
     sys_prompt: str = ""
-    user_prompt: str = _SEM_USR
-    user_key: str = "all_functions_code"
     analysis_type: str = ""
-    key_a: str = ""
-    key_b: str = ""
     pattern: object = None
-    include_globals: bool = False
     relation_keywords: object = None
-    warning_label: str = ""
 
 
 _RESOURCE_KW = frozenset(
@@ -261,82 +245,61 @@ _RELATED_FILE_FUNCTION_KEYWORDS = frozenset(
     }
 )
 
-_FULL_PASS_SPECS = (
-    _SupplementaryPassSpec("intra_audit", "method", method_name="_pass_intra"),
-    _SupplementaryPassSpec(
+_FULL_LENS_SPECS = (
+    _SupplementaryLensSpec("intra_audit", "method", method_name="_lens_intra"),
+    _SupplementaryLensSpec(
         "lifecycle_audit",
         "cross",
-        sys_prompt=_LIFE_SYS,
-        user_prompt=_LIFE_USR,
         analysis_type="lifecycle",
-        key_a="free_function",
-        key_b="use_function",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "ownership_audit",
         "cross",
-        sys_prompt=_OWN_SYS,
-        user_prompt=_OWN_USR,
         analysis_type="ownership",
-        key_a="function_a",
-        key_b="function_b",
-        include_globals=True,
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "semantic_audit",
         "semantic",
-        sys_prompt=_SEM_SYS,
-        include_globals=True,
-        warning_label="Semantic",
+        analysis_type="semantic",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "state_audit",
         "semantic",
-        sys_prompt=_STATE_SYS,
-        user_prompt=_STATE_USR,
         analysis_type="state_concurrency",
-        include_globals=True,
-        warning_label="State/concurrency",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_state_order",
         "targeted",
-        sys_prompt=_TARGET_STATE_SYS,
         analysis_type="targeted_state_order",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_callback_lifecycle",
         "targeted",
-        sys_prompt=_TARGET_CALLBACK_SYS,
         analysis_type="targeted_callback_lifecycle",
-        relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_refcount",
         "targeted",
-        sys_prompt=_TARGET_REFCOUNT_SYS,
         analysis_type="targeted_refcount",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_permission",
         "targeted",
-        sys_prompt=_TARGET_PERMISSION_SYS,
         analysis_type="targeted_permission",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_toctou",
         "targeted",
-        sys_prompt=_TARGET_TOCTOU_SYS,
         analysis_type="targeted_toctou",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "classic_c_sink",
         "candidate_intra",
         sys_prompt=_CLASSIC_C_SINK_SYS,
         pattern=_CLASSIC_C_SINK_RE,
         analysis_type="classic_c_sink",
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "error_unwind",
         "candidate_semantic",
         sys_prompt=_ERROR_UNWIND_SYS,
@@ -344,7 +307,7 @@ _FULL_PASS_SPECS = (
         analysis_type="error_unwind",
         relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "counter_symmetry",
         "candidate_semantic",
         sys_prompt=_COUNTER_SYMMETRY_SYS,
@@ -352,13 +315,13 @@ _FULL_PASS_SPECS = (
         analysis_type="counter_symmetry",
         relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
-    _SupplementaryPassSpec(
-        "global_lifecycle", "method", method_name="_pass_global_lifecycle"
+    _SupplementaryLensSpec(
+        "global_lifecycle", "method", method_name="_lens_global_lifecycle"
     ),
-    _SupplementaryPassSpec(
-        "lock_order_extraction", "method", method_name="_pass_lock_order"
+    _SupplementaryLensSpec(
+        "lock_order_extraction", "method", method_name="_lens_lock_order"
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_ordering_gap",
         "candidate_semantic",
         sys_prompt=_TARGET_ORDERING_GAP_SYS,
@@ -366,7 +329,7 @@ _FULL_PASS_SPECS = (
         analysis_type="targeted_ordering_gap",
         relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
-    _SupplementaryPassSpec(
+    _SupplementaryLensSpec(
         "targeted_path_access",
         "candidate_semantic",
         sys_prompt=_TARGET_PATH_ACCESS_SYS,
@@ -375,7 +338,7 @@ _FULL_PASS_SPECS = (
     ),
 )
 
-_REVIEW_PASS_NAMES = {
+_REVIEW_LENS_NAMES = {
     "intra_audit",
     "lifecycle_audit",
     "ownership_audit",
@@ -387,6 +350,48 @@ _REVIEW_PASS_NAMES = {
     "error_unwind",
     "counter_symmetry",
     "targeted_path_access",
+}
+
+_COMBINED_GRAPH_LENS_KINDS = frozenset({"cross", "semantic", "targeted"})
+_COMBINED_GRAPH_LENS_NOTES = {
+    "lifecycle": (
+        "lifecycle: use-after-free, dangling pointers, lifetime mismatch, "
+        "deferred callback UAF, stale pointer after realloc."
+    ),
+    "ownership": (
+        "ownership: double-free/double-close across functions, refcount imbalance, "
+        "cleanup symmetry, partial cleanup, rollback gaps, callback lifecycle."
+    ),
+    "semantic": (
+        "semantic: boolean coercion of rich returns, wrong enum/constant, type "
+        "confusion, wrong field, stale length/count, width mismatch, array size "
+        "mismatch, integer overflow, info leak, missing auth."
+    ),
+    "state_concurrency": (
+        "state_concurrency: premature state transitions, ordering gaps, stale "
+        "after unlock, lock-order inversion, teardown races, missing locks, stale "
+        "state after disable."
+    ),
+    "targeted_state_order": (
+        "targeted_state_order: ready/enabled/initialized state set before validation, "
+        "allocation, registration, firmware load, hardware init, or permission checks."
+    ),
+    "targeted_callback_lifecycle": (
+        "targeted_callback_lifecycle: timer/work/watchdog/callback teardown "
+        "symmetry bugs and missing cancel/flush/unregister before free."
+    ),
+    "targeted_refcount": (
+        "targeted_refcount: no-op get/put/ref/unref/acquire/release helpers that "
+        "callers rely on for lifetime safety."
+    ),
+    "targeted_permission": (
+        "targeted_permission: wrong permission domain/resource checks, boolean use "
+        "of permission levels, and privileged operations with missing checks."
+    ),
+    "targeted_toctou": (
+        "targeted_toctou: path checks followed by open/mutation of the same path "
+        "without safe open-by-handle/openat/O_NOFOLLOW discipline."
+    ),
 }
 
 
@@ -474,7 +479,7 @@ def _expand_candidates_with_related_file_functions(
 
 
 class SupplementaryAnalyzer:
-    """Run targeted semantic passes over graph-selected function groups."""
+    """Run targeted semantic lenses over graph-selected function groups."""
 
     def __init__(
         self,
@@ -500,42 +505,60 @@ class SupplementaryAnalyzer:
         self, graph, *, max_workers=8, progress_callback=None, analysis_profile="full"
     ):
         profile = str(analysis_profile or "full").lower()
-        pass_specs = (
-            [spec for spec in _FULL_PASS_SPECS if spec.name in _REVIEW_PASS_NAMES]
+        lens_specs = (
+            [spec for spec in _FULL_LENS_SPECS if spec.name in _REVIEW_LENS_NAMES]
             if profile == "review"
-            else list(_FULL_PASS_SPECS)
+            else list(_FULL_LENS_SPECS)
         )
         findings = []
-        if not pass_specs:
+        if not lens_specs:
             return findings
+        combined_specs = [
+            spec for spec in lens_specs if spec.kind in _COMBINED_GRAPH_LENS_KINDS
+        ]
+        lens_jobs = [
+            spec for spec in lens_specs if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
+        ]
+        if combined_specs:
+            lens_jobs.insert(0, tuple(combined_specs))
         worker_budget = max(1, int(max_workers or 1))
-        pass_parallelism = max(1, min(len(pass_specs), worker_budget, 8))
-        pass_workers = max(1, worker_budget // pass_parallelism)
+        lens_parallelism = max(1, min(len(lens_jobs), worker_budget, 8))
+        lens_workers = max(1, worker_budget // lens_parallelism)
 
-        def _run_pass(spec):
+        def _job_name(job):
+            return "combined_graph_lenses" if isinstance(job, tuple) else job.name
+
+        def _run_lens(job):
             try:
-                return self._run_pass_spec(spec, graph, pass_workers, progress_callback)
+                if isinstance(job, tuple):
+                    return self._run_combined_graph_lenses(
+                        job, graph, lens_workers, progress_callback
+                    )
+                return self._run_lens_spec(job, graph, lens_workers, progress_callback)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
-                logger.warning("%s pass fail: %s", spec.name, exc)
+                name = _job_name(job)
+                logger.warning("%s lens fail: %s", name, exc)
                 if progress_callback:
                     progress_callback(
                         {
-                            "event": f"{spec.name}_error",
+                            "event": f"{name}_error",
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                     )
                 return []
 
-        if pass_parallelism == 1:
-            for spec in pass_specs:
-                findings.extend(_run_pass(spec))
+        if lens_parallelism == 1:
+            for job in lens_jobs:
+                findings.extend(_run_lens(job))
         else:
-            with ThreadPoolExecutor(max_workers=pass_parallelism) as executor:
+            with ThreadPoolExecutor(max_workers=lens_parallelism) as executor:
                 futures = {
-                    submit_with_current_context(executor, _run_pass, spec): spec.name
-                    for spec in pass_specs
+                    submit_with_current_context(executor, _run_lens, job): _job_name(
+                        job
+                    )
+                    for job in lens_jobs
                 }
                 for future in as_completed(futures):
                     findings.extend(future.result())
@@ -548,54 +571,77 @@ class SupplementaryAnalyzer:
             )
         return findings
 
-    def _run_pass_spec(self, spec, graph, max_workers, cb):
+    def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
+        analysis_types = [spec.analysis_type for spec in specs]
+        fns = list(graph.nodes.values())
+        if not fns:
+            return []
+        if cb:
+            cb(
+                {
+                    "event": "combined_graph_lenses_start",
+                    "functions": len(fns),
+                    "lenses": [spec.name for spec in specs],
+                }
+            )
+        chunks = _build_file_grouped_chunks(
+            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        )
+        if not chunks:
+            return []
+        globals_code = _build_globals_code(graph)
+        if globals_code:
+            chunks = [
+                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
+                for chunk in chunks
+            ]
+
+        allowed = ", ".join(analysis_types)
+        lens_instructions = "\n".join(
+            f"- {_COMBINED_GRAPH_LENS_NOTES.get(analysis_type, analysis_type)}"
+            for analysis_type in analysis_types
+        )
+        results = []
+
+        def _run_chunk(code_chunk):
+            raw = invoke_reachability_prompt(
+                self._p,
+                self._u,
+                model=self._sm,
+                max_tokens=self._st,
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables={
+                    "all_functions_code": code_chunk,
+                    "allowed_analysis_types": allowed,
+                    "lens_instructions": lens_instructions,
+                },
+                reasoning_effort=getattr(self, "_reasoning_effort", None),
+            )
+            return self._parse_combined(raw, fns, frozenset(analysis_types))
+
+        if len(chunks) == 1:
+            results = _run_chunk(chunks[0])
+        else:
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
+                for fut in as_completed(futs):
+                    try:
+                        results.extend(fut.result())
+                    except Exception as e:
+                        logger.warning("Combined graph lens chunk fail: %s", e)
+        if cb:
+            cb({"event": "combined_graph_lenses_done", "findings": len(results)})
+        return results
+
+    def _run_lens_spec(self, spec, graph, max_workers, cb):
         if spec.kind == "method":
             return getattr(self, spec.method_name)(graph, max_workers, cb)
-        if spec.kind == "cross":
-            return self._run_chunked_cross_pass(
-                graph,
-                spec.sys_prompt,
-                spec.user_prompt,
-                spec.user_key,
-                spec.analysis_type,
-                spec.key_a,
-                spec.key_b,
-                self._sm,
-                self._st,
-                max_workers,
-                cb,
-                spec.name,
-                include_globals=spec.include_globals,
-            )
-        if spec.kind == "semantic":
-            return self._run_chunked_llm_pass(
-                graph,
-                spec.sys_prompt,
-                spec.user_prompt,
-                spec.user_key,
-                self._sm,
-                self._st,
-                max_workers,
-                cb,
-                spec.name,
-                lambda raw, fns: self._parse_semantic(
-                    raw, fns, analysis_type=spec.analysis_type or "semantic"
-                ),
-                include_globals=spec.include_globals,
-                warning_label=spec.warning_label or None,
-            )
-        if spec.kind == "targeted":
-            return self._run_targeted_pass(
-                graph,
-                spec.sys_prompt,
-                spec.analysis_type,
-                max_workers,
-                cb,
-                spec.name,
-                relation_keywords=spec.relation_keywords,
-            )
         if spec.kind == "candidate_intra":
-            return self._run_candidate_intra_pass(
+            return self._run_candidate_intra_lens(
                 graph,
                 spec.pattern,
                 spec.sys_prompt,
@@ -605,7 +651,7 @@ class SupplementaryAnalyzer:
                 spec.name,
             )
         if spec.kind == "candidate_semantic":
-            return self._run_candidate_semantic_pass(
+            return self._run_candidate_semantic_lens(
                 graph,
                 spec.pattern,
                 spec.sys_prompt,
@@ -615,9 +661,9 @@ class SupplementaryAnalyzer:
                 spec.name,
                 relation_keywords=spec.relation_keywords,
             )
-        raise ValueError(f"unknown supplementary pass kind: {spec.kind}")
+        raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
-    def _pass_intra(self, graph, max_workers, cb):
+    def _lens_intra(self, graph, max_workers, cb):
         targets = self._select_intra_targets(graph)
         if not targets:
             return []
@@ -774,140 +820,7 @@ class SupplementaryAnalyzer:
             )
         return results
 
-    # All use chunking to avoid blowing context windows.
-
-    def _run_chunked_llm_pass(
-        self,
-        graph,
-        sys_prompt,
-        usr_template,
-        usr_key,
-        model,
-        max_tokens,
-        max_workers,
-        cb,
-        event_prefix,
-        parse_raw,
-        include_globals=False,
-        warning_label=None,
-        functions=None,
-    ):
-        fns = list(functions) if functions is not None else list(graph.nodes.values())
-        if not fns:
-            return []
-        if cb:
-            cb({"event": f"{event_prefix}_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(
-            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
-        )
-        if not chunks:
-            return []
-        globals_code = _build_globals_code(graph) if include_globals else ""
-        if globals_code:
-            chunks = [
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
-                for chunk in chunks
-            ]
-        results = []
-
-        def _run_chunk(code_chunk):
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=model,
-                max_tokens=max_tokens,
-                system_prompt=sys_prompt,
-                user_prompt=usr_template,
-                variables={usr_key: code_chunk},
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
-            )
-            return raw
-
-        if len(chunks) == 1:
-            raw = _run_chunk(chunks[0])
-            results = parse_raw(raw, fns)
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {
-                    submit_with_current_context(ex, _run_chunk, chunk): i
-                    for i, chunk in enumerate(chunks)
-                }
-                for fut in as_completed(futs):
-                    try:
-                        raw = fut.result()
-                        results.extend(parse_raw(raw, fns))
-                    except Exception as e:
-                        logger.warning(
-                            "%s chunk fail: %s", warning_label or event_prefix, e
-                        )
-
-        if cb:
-            cb({"event": f"{event_prefix}_done", "findings": len(results)})
-        return results
-
-    def _run_chunked_cross_pass(
-        self,
-        graph,
-        sys_prompt,
-        usr_template,
-        usr_key,
-        analysis_type,
-        key_a,
-        key_b,
-        model,
-        max_tokens,
-        max_workers,
-        cb,
-        event_prefix,
-        include_globals=False,
-    ):
-        return self._run_chunked_llm_pass(
-            graph,
-            sys_prompt,
-            usr_template,
-            usr_key,
-            model,
-            max_tokens,
-            max_workers,
-            cb,
-            event_prefix,
-            lambda raw, fns: self._parse_cross(raw, fns, analysis_type, key_a, key_b),
-            include_globals=include_globals,
-        )
-
-    def _run_targeted_pass(
-        self,
-        graph,
-        sys_prompt,
-        analysis_type,
-        max_workers,
-        cb,
-        event_prefix,
-        relation_keywords=None,
-    ):
-        fns = list(graph.nodes.values())
-        if relation_keywords:
-            fns = _expand_candidates_with_related_file_functions(
-                graph, fns, relation_keywords
-            )
-        return self._run_chunked_llm_pass(
-            graph,
-            sys_prompt,
-            _SEM_USR,
-            "all_functions_code",
-            self._sm,
-            self._st,
-            max_workers,
-            cb,
-            event_prefix,
-            lambda raw, fns: self._parse_semantic(
-                raw, fns, analysis_type=analysis_type
-            ),
-            include_globals=True,
-            functions=fns,
-        )
-
-    def _run_candidate_intra_pass(
+    def _run_candidate_intra_lens(
         self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix
     ):
         candidates = _select_nodes_by_regex(graph, self._cb, pattern)
@@ -954,7 +867,7 @@ class SupplementaryAnalyzer:
             cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
-    def _run_candidate_semantic_pass(
+    def _run_candidate_semantic_lens(
         self,
         graph,
         pattern,
@@ -1010,7 +923,7 @@ class SupplementaryAnalyzer:
             cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
-    def _pass_global_lifecycle(self, graph, max_workers, cb):
+    def _lens_global_lifecycle(self, graph, max_workers, cb):
         globals_ = graph.get_globals()
         if not globals_:
             return []
@@ -1149,7 +1062,7 @@ class SupplementaryAnalyzer:
                         return conflicts
         return conflicts
 
-    def _pass_lock_order(self, graph, max_workers, cb):
+    def _lens_lock_order(self, graph, max_workers, cb):
         conflicts = self._extract_lock_conflicts(graph)
         if not conflicts:
             return []
@@ -1194,7 +1107,7 @@ class SupplementaryAnalyzer:
             cb({"event": "lock_order_extraction_done", "findings": len(results)})
         return results
 
-    def _parse_cross(self, raw, all_fns, analysis_type, key_a, key_b):
+    def _parse_combined(self, raw, all_fns, allowed_analysis_types):
         parsed = parse_json_output(raw)
         if not isinstance(parsed, dict):
             return []
@@ -1207,21 +1120,44 @@ class SupplementaryAnalyzer:
         for e in fl:
             if not isinstance(e, dict):
                 continue
-            fa = _lookup_fn(str(e.get(key_a) or ""), bn, bu, all_fns)
-            fb = _lookup_fn(str(e.get(key_b) or ""), bn, bu, all_fns)
-            if not fa or not fb:
+            analysis_type = str(e.get("analysis_type") or "").strip()
+            if analysis_type not in allowed_analysis_types:
                 continue
+
+            if analysis_type == "lifecycle":
+                source_name = e.get("free_function") or e.get("related_function")
+                sink_name = e.get("use_function") or e.get("function_name")
+            elif analysis_type == "ownership":
+                source_name = e.get("function_a") or e.get("related_function")
+                sink_name = e.get("function_b") or e.get("function_name")
+            else:
+                source_name = e.get("related_function")
+                sink_name = e.get("function_name")
+
+            sink_fn = _lookup_fn(str(sink_name or ""), bn, bu, all_fns)
+            source_fn = _lookup_fn(str(source_name or ""), bn, bu, all_fns)
+            if not sink_fn:
+                continue
+            if not source_fn:
+                source_fn = sink_fn
+            high_risk_cross = analysis_type in {"lifecycle", "ownership"}
             results.append(
                 self._finding_from_entry(
                     e,
-                    source_fn=fa,
-                    source_line=fa.line_number,
-                    sink_fn=fb,
-                    sink_line=fb.line_number,
-                    path=[fa.unique_name, fb.unique_name],
+                    source_fn=source_fn,
+                    source_line=source_fn.line_number,
+                    sink_fn=sink_fn,
+                    sink_line=sink_fn.line_number,
+                    path=(
+                        [source_fn.unique_name, sink_fn.unique_name]
+                        if source_fn.unique_name != sink_fn.unique_name
+                        else [sink_fn.unique_name]
+                    ),
                     analysis_type=analysis_type,
-                    default_vulnerability_type="use_after_free",
-                    default_severity="high",
+                    default_vulnerability_type=(
+                        "use_after_free" if high_risk_cross else "other"
+                    ),
+                    default_severity="high" if high_risk_cross else "medium",
                 )
             )
         return results

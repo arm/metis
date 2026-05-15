@@ -79,7 +79,7 @@ def _normalise_security_function_specs(raw):
 
 
 class TreeSitterReachabilityService:
-    """Coordinate graph building, path tracing, supplementary passes, and output."""
+    """Coordinate graph building, path tracing, supplementary lenses, and output."""
 
     def __init__(self, config, repository, llm_provider, usage_runtime):
         self._config = config
@@ -167,7 +167,7 @@ class TreeSitterReachabilityService:
         reasoning_effort=None,
         analysis_profile="full",
     ):
-        # Supplementary passes inspect the whole graph and usually provide the
+        # Supplementary lenses inspect the whole graph and usually provide the
         # final findings when path confirmation is skipped for large graphs.
         model = strong_model or self._config.llama_query_model
         audit = audit_model or model

@@ -35,212 +35,34 @@ Return {{"findings": []}} if none found. Be thorough but report each distinct bu
 
 _INTRA_USR = "File: {file_path}\n\n{functions_code}"
 
-_LIFE_SYS = (
-    """\
-You are analyzing a C/C++ codebase for USE-AFTER-FREE, DANGLING POINTER, and LIFETIME bugs spanning MULTIPLE functions.
-Below are functions from the codebase. Analyze their INTERACTIONS:
-1. USE-AFTER-FREE: Function A frees a resource, Function B later dereferences it.
-2. DANGLING POINTERS: Pointers in global/shared structures not NULLed when target freed.
-3. LIFETIME MISMATCH: Object A stores pointer to B, but B can be destroyed while A exists.
-4. DEFERRED CALLBACK UAF: A timer/work/watchdog is registered with an object as context. \
-   The object is freed or torn down without canceling/flushing the pending callback. \
-   When the callback fires, it dereferences freed memory.
-5. STALE POINTER AFTER REALLOC: Code caches a pointer, then calls a function that may \
-   realloc/grow/compact the backing store. The cached pointer is now stale.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "use_after_free", "severity": "high", "confidence": "high", \
-"free_function": "connection_close", "use_function": "resource_lookup", \
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
-_LIFE_USR = "{all_functions_code}"
-
-_OWN_SYS = (
-    """\
-You are analyzing a C/C++ codebase for RESOURCE OWNERSHIP, CLEANUP COORDINATION, and TEARDOWN bugs.
-Examine ALL functions below for:
-1. DOUBLE-FREE / DOUBLE-CLOSE ACROSS FUNCTIONS: Function A frees on error, caller also frees unconditionally. \
-   A callee frees a resource and returns error, but the caller frees the same resource on error.
-2. REFCOUNT IMBALANCE: get/ref and put/unref are not called in matched pairs. \
-   Also check: are get/put functions actually no-ops (empty body or just return)?
-3. CLEANUP SYMMETRY: init/setup allocates or registers N resources, but teardown/cleanup \
-   only releases N-1 (missing cancel_work, del_timer, unregister, iounmap, etc.).
-4. PARTIAL CLEANUP ON ERROR: An init function allocates A, B, C in sequence. If C fails, \
-   it cleans up C but forgets to clean up A or B.
-5. ROLLBACK GAP: A function adds an entry to a data structure (rbtree, list, hash) then \
-   fails a later step but does not remove the entry - leaving a dangling/corrupt entry.
-6. CALLBACK / REGISTRATION LIFECYCLE: Register callback with object as context (work_queue, \
-   timer, irq), free object without unregistering/canceling.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "double_free", "severity": "high", "confidence": "high", \
-"function_a": "parse_message", "function_b": "dispatch_request", \
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
-_OWN_USR = "{all_functions_code}"
-
-_SEM_SYS = (
-    """\
-You are analyzing a C/C++ codebase for SEMANTIC, TYPE, and DATA-FLOW correctness bugs.
-Examine ALL functions below for:
-1. BOOLEAN COERCION OF RICH RETURNS: Function returns level/enum/count, caller checks with if (!func()). \
-   This collapses a multi-valued result into a binary test.
-2. WRONG ENUM / CONSTANT: Permission check uses wrong resource type constant. \
-   Example: checking GPU_WR permission when CPU_WR is needed.
-3. TYPE CONFUSION / VOID* MISCAST: void* from generic store cast without checking type tag.
-4. WRONG STRUCT FIELD: raw_len used where data_len needed, or nr_pages vs size confusion.
-5. FIELD STALENESS AFTER MUTATION: Data sanitized/transformed but old length/count stored - callers use stale value.
-6. WIDTH MISMATCH: A 32-bit variable used to check a 64-bit value, causing truncation. \
-   Or: uint32_t comparison against a size_t/uint64_t parameter.
-7. ARRAY INDEX vs SIZE MISMATCH: arr[flags & 0x0F] where array has fewer than 16 entries.
-8. INTEGER OVERFLOW IN ALLOCATION: new_cap * sizeof(large_struct) wraps size_t.
-9. UNINITIALIZED DATA EXPOSURE: malloc + partial init + memcpy entire struct to network/user.
-10. WRONG FLAG SEMANTIC: Using DONT_NEED where NO_USER_FREE is intended, or similar flag confusion.
-11. ACCOUNTING DRIFT: A counter (gpu_mappings, alias_count, nr_pages) is incremented on add \
-    but not decremented on remove, or vice versa. Or: counter tracks one quantity but is \
-    compared against a different quantity.
-12. INFO LEAK: Logging/printing physical addresses, keys, tokens, or other sensitive data.
-13. MISSING AUTH / PERMISSION CHECK: A privileged operation (reset, firmware load, debug access) \
-    lacks any capability or permission check.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "boolean_coercion", "severity": "high", "confidence": "high", \
-"function_name": "dispatch_request", "related_function": "get_permission_level", \
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be EXTREMELY thorough."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
 _SEM_USR = "{all_functions_code}"
 
-_STATE_SYS = (
+_COMBINED_GRAPH_SYS = (
     """\
-You are analyzing a C/C++ codebase for STATE ORDERING, CONCURRENCY, and SYNCHRONIZATION bugs.
-Examine ALL functions below for:
-1. PREMATURE STATE TRANSITION: A "ready", "enabled", or "initialized" flag/field is set \
-   BEFORE the object is actually ready. Other code that checks the flag may observe \
-   partially initialized state.
-2. ORDERING GAP: An operation (flush, sync, drain, fence) must complete before another \
-   (power off, teardown, reset), but the code does not enforce the ordering (missing \
-   wait/flush/barrier before the dependent operation).
-3. STALE-AFTER-UNLOCK: Code reads a value while holding a lock, releases the lock, \
-   then uses the value. Another thread may have changed the underlying data.
-4. LOCK ORDER INVERSION: Two or more locks are acquired in inconsistent orders across \
-   different functions, creating deadlock potential. E.g. function A takes lock1->lock2 \
-   but function B takes lock2->lock1.
-5. TEARDOWN RACE: A teardown/cleanup function destroys a mutex, frees a workqueue, \
-   or releases a resource while pending work/timers/callbacks may still reference it. \
-   Must cancel/flush work before destroying the synchronization primitive.
-6. MISSING LOCK: A shared data structure is accessed without holding the protecting lock \
-   in some code paths, while other paths properly lock.
-7. STALE STATE AFTER DISABLE: A hardware resource (doorbell, ring buffer, DMA channel) \
-   is disabled but associated software state (cached pointers, pending flags) is not \
-   cleared/reset, causing stale state if re-enabled or inspected.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "state_order", "severity": "high", "confidence": "high", \
-"function_name": "device_init", "related_function": "device_ready_check", \
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be thorough."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
+You are analyzing a C/C++ codebase with several requested security lenses in one review.
+Run only the requested lenses below and report each distinct root cause once.
 
-_STATE_USR = "{all_functions_code}"
+Requested lenses:
+{lens_instructions}
 
-_TARGET_STATE_SYS = (
-    """\
-You are analyzing C/C++ GPU, firmware, and driver-style code for ready/state flag ordering bugs.
-Target only this bug class:
-- State flags or fields named like gpu_ready, loaded, active, initialized, enabled,
-  runtime_active, gpu_powered, ready, or online are set before validation, allocation,
-  registration, firmware load, hardware init, or capability checks complete.
-- An error path after the state transition does not roll the state back.
-- Other functions later trust that state flag to access hardware, firmware, DMA, queues,
-  MMIO, or privileged operations.
 Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "state_order", "severity": "high",
-"confidence": "high", "function_name": "gpu_init", "related_function": "gpu_submit",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+{{"findings": [{{"analysis_type": "semantic", "vulnerability_type": "missing_auth",
+"severity": "high", "confidence": "high", "function_name": "gpu_ioctl_reset",
+"related_function": "gpu_check_perm", "description": "...", "root_cause": "...",
+"evidence": "...", "mitigation": "..."}}]}}
+
+analysis_type must be one of: {allowed_analysis_types}
+For lifecycle findings, set function_name to the use/deref function and related_function
+to the free, teardown, or lifetime-ending function when known.
+For ownership findings, set function_name to the defective cleanup/caller function and
+related_function to the paired function when known.
+For all other findings, set function_name to the primary defective function and
+related_function only when another shown function is needed to explain the bug.
 Return {{"findings": []}} if none found. Be conservative."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
 
-_TARGET_CALLBACK_SYS = (
-    """\
-You are analyzing C/C++ GPU, firmware, and driver-style code for callback teardown symmetry bugs.
-Target only this bug class:
-- timer/work/watchdog/callback fn/data/ctx is initialized with an object pointer.
-- A pending, armed, active, scheduled, or enabled state is set later.
-- Teardown, release, remove, shutdown, error cleanup, or destroy/free code does not
-  cancel, deactivate, flush, unregister, or clear the callback before freeing the
-  object or destroying its mutex/workqueue.
-- file_operations or ops tables show lifecycle asymmetry, such as .release without
-  a needed .flush/cancel path.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "teardown_race", "severity": "high",
-"confidence": "high", "function_name": "gpu_remove", "related_function": "gpu_watchdog_fn",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
-_TARGET_REFCOUNT_SYS = (
-    """\
-You are analyzing C/C++ code for no-op reference counting helpers.
-Target only this bug class:
-- Functions named like *_get, *_put, *_ref, *_unref, acquire, release, retain, or drop
-  have empty/no-op bodies, only return a pointer, only cast, or only log.
-- They do not update a refcount/atomic/kref/state value and do not free on final put.
-- Callers rely on those helpers for lifetime safety.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "refcount_imbalance", "severity": "high",
-"confidence": "high", "function_name": "gpu_ctx_get", "related_function": "gpu_ctx_put",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
-_TARGET_PERMISSION_SYS = (
-    """\
-You are analyzing C/C++ GPU, firmware, and driver-style code for permission-domain mismatches.
-Target only these bug classes:
-- A privileged CPU operation checks GPU_WR or a GPU-only permission when CPU_WR is needed.
-- A channel, message, firmware, reset, debug, sysfs, ioctl, or destructive operation
-  checks a wrong resource constant such as RES_MSG before channel deletion.
-- A function returns a numeric permission level or role and callers treat it as a boolean,
-  allowing low-privilege nonzero values to pass high-privilege checks.
-- A caller checks the wrong resource/domain constant for the operation being performed,
-  such as checking task permission before creating/deleting a project.
-- A privileged operation uses a generic boolean permission check where a domain-specific
-  capability/permission check is required.
-- reset, firmware load, debug, MMIO, DMA, or register access lacks capability or
-  permission checks entirely.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "permission_mismatch", "severity": "high",
-"confidence": "high", "function_name": "gpu_ioctl_reset", "related_function": "gpu_check_perm",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
-
-_TARGET_TOCTOU_SYS = (
-    """\
-You are analyzing C/C++ code for filesystem time-of-check/time-of-use bugs.
-Target only this bug class:
-- stat, lstat, access, faccessat, or similar path checks are followed by fopen, open,
-  unlink, rename, chmod, chown, truncate, or another mutating/opening operation on
-  the same or clearly related path variable.
-- There is no safe open-by-handle, O_NOFOLLOW/openat discipline, directory fd pinning,
-  or post-open validation that closes the race.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "toctou", "severity": "medium",
-"confidence": "high", "function_name": "load_firmware_path", "related_function": "",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
-)
+_COMBINED_GRAPH_USR = "{all_functions_code}"
 
 _CLASSIC_C_SINK_SYS = (
     """\

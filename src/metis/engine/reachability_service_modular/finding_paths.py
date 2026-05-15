@@ -14,7 +14,7 @@ from ..reachability_common.graph_utils import _build_reverse_edges
 class FindingPathAnnotator:
     """Attach deterministic source-to-defect paths to file-review findings.
 
-    Supplementary audit passes often identify the defective function directly and
+    Supplementary audit lenses often identify the defective function directly and
     emit a single-node path. This helper keeps that finding but enriches it with
     the best source-to-primary-function path from the full tree-sitter graph.
     """

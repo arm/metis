@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared LLM invocation helper for reachability analysis passes."""
+"""Shared LLM invocation helper for reachability analysis lenses."""
 
 from __future__ import annotations
 
