@@ -36,7 +36,6 @@ class ReviewService:
         review_graph_factory: Callable[[], Any],
         reachability_service=None,
         treesitter_reachability_service=None,
-        partial_reachability_file_service=None,
         use_reachability_for_review: bool = False,
         reachability_settings: dict[str, Any] | None = None,
     ):
@@ -46,7 +45,6 @@ class ReviewService:
         self._review_graph_factory = review_graph_factory
         self._reachability_service = reachability_service
         self._treesitter_reachability_service = treesitter_reachability_service
-        self._partial_reachability_file_service = partial_reachability_file_service
         self._use_reachability_for_review = use_reachability_for_review
         self._reachability_settings = dict(reachability_settings or {})
         self._reachability_cache = None
@@ -99,31 +97,7 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
         mode: str = "partial",
-        max_context_functions: int | None = None,
         progress_callback=None,
-    ):
-        return self._review_file_impl(
-            file_path,
-            options,
-            use_retrieval_context=use_retrieval_context,
-            mode=mode,
-            max_context_functions=max_context_functions,
-            progress_callback=progress_callback,
-            partial_file_service=self._partial_reachability_file_service,
-            prefer_treesitter_reachability=True,
-        )
-
-    def _review_file_impl(
-        self,
-        file_path,
-        options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
-        mode: str = "partial",
-        max_context_functions: int | None = None,
-        progress_callback=None,
-        partial_file_service=None,
-        prefer_treesitter_reachability: bool = False,
     ):
         options = coerce_review_options(
             options,
@@ -138,8 +112,7 @@ class ReviewService:
                 return self._find_reachability_review_for_file(file_path)
         elif mode == "partial":
             if (
-                prefer_treesitter_reachability
-                and self._treesitter_reachability_service is not None
+                self._treesitter_reachability_service is not None
                 and self._is_file_in_codebase(file_path)
                 and self._is_c_cpp_file(file_path)
             ):
@@ -174,38 +147,6 @@ class ReviewService:
                             {
                                 "event": "treesitter_file_review_error",
                                 "file": file_path,
-                                "error": f"{type(e).__name__}: {e}",
-                            }
-                        )
-                else:
-                    if result is not None:
-                        return result
-            if partial_file_service is not None:
-                try:
-                    result = partial_file_service.review_file(
-                        file_path,
-                        review_model=self._reachability_settings.get(
-                            "confirmation_model"
-                        ),
-                        max_workers=int(
-                            self._reachability_settings.get("max_workers", 8)
-                        ),
-                        max_context_functions=max_context_functions or 250,
-                        max_paths_per_sink=int(
-                            self._reachability_settings.get("max_paths_per_sink", 3)
-                        ),
-                        reasoning_effort=self._reachability_settings.get(
-                            "reasoning_effort"
-                        ),
-                        progress_callback=progress_callback,
-                    )
-                except Exception as e:
-                    logger.exception("Partial file review failed for %s", file_path)
-                    if progress_callback is not None:
-                        progress_callback(
-                            {
-                                "event": "partial_review_error",
-                                "pass": "partial_file_service",
                                 "error": f"{type(e).__name__}: {e}",
                             }
                         )

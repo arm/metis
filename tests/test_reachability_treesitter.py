@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.reachability_service import PathTracer, SourceRootedPathTracer
 from metis.engine.analysis.c_family_analyzer_common import _identifier_from_node
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.reachability_common import (
     Deduplicator,
     FunctionNode,
     ReachabilityGraph,
+    SourceRootedPathTracer,
     _confidence_score,
 )
 from metis.engine.reachability_service_modular.builder import (
@@ -111,10 +111,6 @@ def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
     assert graph.get_node("main.c::foo").is_sink is True
     assert graph.get_node("main.c::foo").sink_type == "buffer_overflow"
     assert graph.get_node("main.c::main").resolved_calls == ["main.c::foo"]
-
-    paths = PathTracer(graph).find_all_paths()
-    assert paths
-    assert paths[0].path == ["main.c::main", "main.c::foo"]
 
 
 def test_source_rooted_tracer_keeps_maximal_non_sink_paths():

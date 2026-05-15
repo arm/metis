@@ -14,9 +14,6 @@ from metis.vector_store.base import BaseVectorStore
 from .graphs import AskGraph, ReviewGraph
 from .indexing_service import IndexingService
 from .options import TriageOptions, coerce_triage_options
-from .reachability_file_service_modular import (
-    PartialReachabilityFileService as ModularPartialReachabilityFileService,
-)
 from .reachability_service_modular import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
@@ -120,9 +117,6 @@ class MetisEngine:
                 {"partial", "full"},
                 "partial",
             ),
-            "review_file_max_context_functions": _int_setting(
-                kwargs.get("reachability_review_file_max_context_functions"), 250
-            ),
             "security_functions": kwargs.get("reachability_security_functions") or [],
         }
 
@@ -183,12 +177,6 @@ class MetisEngine:
             llm_provider=self.llm_provider,
             usage_runtime=self.usage_runtime,
         )
-        self.partial_reachability_file_modular = ModularPartialReachabilityFileService(
-            config=self._config,
-            repository=self.repository,
-            llm_provider=self.llm_provider,
-            usage_runtime=self.usage_runtime,
-        )
         self.review = ReviewService(
             self._config,
             self.repository,
@@ -196,7 +184,6 @@ class MetisEngine:
             review_graph_factory=lambda: self._get_review_graph(),
             reachability_service=self.reachability,
             treesitter_reachability_service=self.reachability,
-            partial_reachability_file_service=self.partial_reachability_file_modular,
             use_reachability_for_review=self.use_reachability_for_review,
             reachability_settings=self.reachability_settings,
         )

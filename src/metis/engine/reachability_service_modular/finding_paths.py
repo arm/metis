@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import replace
+
+from ..reachability_common.utils import _build_reverse_edges
 
 
 class FindingPathAnnotator:
@@ -21,7 +23,9 @@ class FindingPathAnnotator:
         self._graph = graph
         self._target_file = self._norm_file(target_file)
         self._max_path_length = max(1, int(max_path_length or 1))
-        self._reverse_edges = self._build_reverse_edges()
+        self._reverse_edges = _build_reverse_edges(
+            self._graph, self._node_name_sort_key
+        )
 
     def annotate(self, findings):
         return [self.annotate_one(finding) for finding in findings]
@@ -113,15 +117,6 @@ class FindingPathAnnotator:
                     return list(reversed(next_reverse_path))
                 queue.append(next_reverse_path)
         return []
-
-    def _build_reverse_edges(self):
-        reverse = defaultdict(list)
-        for node in self._graph.nodes.values():
-            for callee in node.resolved_calls or []:
-                reverse[callee].append(node.unique_name)
-        for callers in reverse.values():
-            callers.sort(key=self._node_name_sort_key)
-        return dict(reverse)
 
     def _node_name_sort_key(self, node_name: str):
         node = self._graph.get_node(node_name)

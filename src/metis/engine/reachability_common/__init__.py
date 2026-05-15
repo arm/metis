@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared compatibility surface for full and partial reachability review."""
+"""Shared reachability graph, finding, and analysis helpers."""
 
 from __future__ import annotations
 
@@ -16,10 +16,7 @@ from .models import (
 )
 from .supplementary import SupplementaryAnalyzer
 from .tracing import (
-    PathTracer,
     SourceRootedPathTracer,
-    _EXTRACTION_SYSTEM_PROMPT,
-    _EXTRACTION_USER_TEMPLATE,
 )
 from .utils import (
     _VTYPE_FAMILY,
@@ -55,15 +52,12 @@ __all__ = [
     "Deduplicator",
     "FunctionNode",
     "GlobalConstruct",
-    "PathTracer",
     "ReachabilityGraph",
     "ReachabilityPath",
     "SourceRootedPathTracer",
     "SupplementaryAnalyzer",
     "VulnerabilityConfirmer",
     "VulnerabilityFinding",
-    "_EXTRACTION_SYSTEM_PROMPT",
-    "_EXTRACTION_USER_TEMPLATE",
     "_VTYPE_FAMILY",
     "_VULN_TO_CWE",
     "_VULN_TYPE_ALIASES",

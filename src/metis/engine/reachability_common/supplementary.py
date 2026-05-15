@@ -867,6 +867,50 @@ class SupplementaryAnalyzer:
         )
         return self._parse_intra(raw, functions)
 
+    def _finding_from_entry(
+        self,
+        entry,
+        *,
+        source_fn,
+        source_line,
+        sink_fn,
+        sink_line,
+        path,
+        analysis_type,
+        default_vulnerability_type="other",
+        default_severity="medium",
+    ):
+        primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
+            entry,
+            default_file=sink_fn.file_path,
+            default_function=sink_fn.unique_name,
+            default_line=sink_line,
+        )
+        return VulnerabilityFinding(
+            id=uuid.uuid4().hex[:16],
+            vulnerability_type=_normalise_vuln_type(
+                entry.get("vulnerability_type") or default_vulnerability_type
+            ),
+            severity=str(entry.get("severity") or default_severity),
+            confidence=str(entry.get("confidence") or "medium"),
+            source_function=source_fn.unique_name,
+            source_file=source_fn.file_path,
+            source_line=source_line,
+            sink_function=sink_fn.unique_name,
+            sink_file=sink_fn.file_path,
+            sink_line=sink_line,
+            path=list(path),
+            description=str(entry.get("description") or ""),
+            root_cause=str(entry.get("root_cause") or ""),
+            evidence=str(entry.get("evidence") or ""),
+            mitigation=str(entry.get("mitigation") or ""),
+            analysis_type=analysis_type,
+            primary_file=primary_file,
+            primary_function=primary_function,
+            primary_line=primary_line,
+            canonical_key=canonical_key,
+        )
+
     def _parse_intra(self, raw, functions, analysis_type="intra_function"):
         parsed = parse_json_output(raw)
         if not isinstance(parsed, dict):
@@ -888,61 +932,38 @@ class SupplementaryAnalyzer:
                 line = max(1, int(e.get("line", line)))
             except (TypeError, ValueError):
                 pass
-            primary_file, primary_function, primary_line, canonical_key = (
-                _canonical_fields(
-                    e,
-                    default_file=fn.file_path,
-                    default_function=fn.unique_name,
-                    default_line=line,
-                )
-            )
             results.append(
-                VulnerabilityFinding(
-                    id=uuid.uuid4().hex[:16],
-                    vulnerability_type=_normalise_vuln_type(
-                        e.get("vulnerability_type") or "other"
-                    ),
-                    severity=str(e.get("severity") or "medium"),
-                    confidence=str(e.get("confidence") or "medium"),
-                    source_function=fn.unique_name,
-                    source_file=fn.file_path,
+                self._finding_from_entry(
+                    e,
+                    source_fn=fn,
                     source_line=line,
-                    sink_function=fn.unique_name,
-                    sink_file=fn.file_path,
+                    sink_fn=fn,
                     sink_line=line,
                     path=[fn.unique_name],
-                    description=str(e.get("description") or ""),
-                    root_cause=str(e.get("root_cause") or ""),
-                    evidence=str(e.get("evidence") or ""),
-                    mitigation=str(e.get("mitigation") or ""),
                     analysis_type=analysis_type,
-                    primary_file=primary_file,
-                    primary_function=primary_function,
-                    primary_line=primary_line,
-                    canonical_key=canonical_key,
                 )
             )
         return results
 
     # All use chunking to avoid blowing context windows.
 
-    def _run_chunked_cross_pass(
+    def _run_chunked_llm_pass(
         self,
         graph,
         sys_prompt,
         usr_template,
         usr_key,
-        analysis_type,
-        key_a,
-        key_b,
         model,
         max_tokens,
         max_workers,
         cb,
         event_prefix,
+        parse_raw,
         include_globals=False,
+        warning_label=None,
+        functions=None,
     ):
-        fns = list(graph.nodes.values())
+        fns = list(functions) if functions is not None else list(graph.nodes.values())
         if not fns:
             return []
         if cb:
@@ -979,7 +1000,7 @@ class SupplementaryAnalyzer:
 
         if len(chunks) == 1:
             raw = _run_chunk(chunks[0])
-            results = self._parse_cross(raw, fns, analysis_type, key_a, key_b)
+            results = parse_raw(raw, fns)
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
                 futs = {
@@ -989,70 +1010,61 @@ class SupplementaryAnalyzer:
                 for fut in as_completed(futs):
                     try:
                         raw = fut.result()
-                        results.extend(
-                            self._parse_cross(raw, fns, analysis_type, key_a, key_b)
-                        )
+                        results.extend(parse_raw(raw, fns))
                     except Exception as e:
-                        logger.warning("%s chunk fail: %s", event_prefix, e)
+                        logger.warning(
+                            "%s chunk fail: %s", warning_label or event_prefix, e
+                        )
 
         if cb:
             cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
 
-    def _run_chunked_semantic_pass(self, graph, max_workers, cb):
-        fns = list(graph.nodes.values())
-        if not fns:
-            return []
-        if cb:
-            cb({"event": "semantic_audit_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(
-            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+    def _run_chunked_cross_pass(
+        self,
+        graph,
+        sys_prompt,
+        usr_template,
+        usr_key,
+        analysis_type,
+        key_a,
+        key_b,
+        model,
+        max_tokens,
+        max_workers,
+        cb,
+        event_prefix,
+        include_globals=False,
+    ):
+        return self._run_chunked_llm_pass(
+            graph,
+            sys_prompt,
+            usr_template,
+            usr_key,
+            model,
+            max_tokens,
+            max_workers,
+            cb,
+            event_prefix,
+            lambda raw, fns: self._parse_cross(raw, fns, analysis_type, key_a, key_b),
+            include_globals=include_globals,
         )
-        if not chunks:
-            return []
-        globals_code = _build_globals_code(graph)
-        if globals_code:
-            chunks = [
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
-                for chunk in chunks
-            ]
-        results = []
 
-        def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(
-                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
-            )
-            chat = self._p.get_chat_model(
-                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
-            )
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", _SEM_SYS), ("user", _SEM_USR)]
-            )
-            return (
-                (prompt | chat | StrOutputParser())
-                .invoke({"all_functions_code": code_chunk})
-                .strip()
-            )
-
-        if len(chunks) == 1:
-            raw = _run_chunk(chunks[0])
-            results = self._parse_semantic(raw, fns)
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {
-                    submit_with_current_context(ex, _run_chunk, chunk): i
-                    for i, chunk in enumerate(chunks)
-                }
-                for fut in as_completed(futs):
-                    try:
-                        raw = fut.result()
-                        results.extend(self._parse_semantic(raw, fns))
-                    except Exception as e:
-                        logger.warning("Semantic chunk fail: %s", e)
-
-        if cb:
-            cb({"event": "semantic_audit_done", "findings": len(results)})
-        return results
+    def _run_chunked_semantic_pass(self, graph, max_workers, cb):
+        return self._run_chunked_llm_pass(
+            graph,
+            _SEM_SYS,
+            _SEM_USR,
+            "all_functions_code",
+            self._sm,
+            self._st,
+            max_workers,
+            cb,
+            "semantic_audit",
+            lambda raw, fns: self._parse_semantic(raw, fns),
+            include_globals=True,
+            warning_label="Semantic",
+        )
 
     def _pass_lifecycle(self, graph, max_workers, cb):
         return self._run_chunked_cross_pass(
@@ -1092,63 +1104,22 @@ class SupplementaryAnalyzer:
 
     def _pass_state_concurrency(self, graph, max_workers, cb):
         """New pass: state ordering, lock discipline, teardown races."""
-        fns = list(graph.nodes.values())
-        if not fns:
-            return []
-        if cb:
-            cb({"event": "state_audit_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(
-            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        return self._run_chunked_llm_pass(
+            graph,
+            _STATE_SYS,
+            _STATE_USR,
+            "all_functions_code",
+            self._sm,
+            self._st,
+            max_workers,
+            cb,
+            "state_audit",
+            lambda raw, fns: self._parse_semantic(
+                raw, fns, analysis_type="state_concurrency"
+            ),
+            include_globals=True,
+            warning_label="State/concurrency",
         )
-        if not chunks:
-            return []
-        globals_code = _build_globals_code(graph)
-        if globals_code:
-            chunks = [
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
-                for chunk in chunks
-            ]
-        results = []
-
-        def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(
-                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
-            )
-            chat = self._p.get_chat_model(
-                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
-            )
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", _STATE_SYS), ("user", _STATE_USR)]
-            )
-            return (
-                (prompt | chat | StrOutputParser())
-                .invoke({"all_functions_code": code_chunk})
-                .strip()
-            )
-
-        if len(chunks) == 1:
-            raw = _run_chunk(chunks[0])
-            results = self._parse_semantic(raw, fns, analysis_type="state_concurrency")
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {
-                    submit_with_current_context(ex, _run_chunk, chunk): i
-                    for i, chunk in enumerate(chunks)
-                }
-                for fut in as_completed(futs):
-                    try:
-                        raw = fut.result()
-                        results.extend(
-                            self._parse_semantic(
-                                raw, fns, analysis_type="state_concurrency"
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning("State/concurrency chunk fail: %s", e)
-
-        if cb:
-            cb({"event": "state_audit_done", "findings": len(results)})
-        return results
 
     def _run_targeted_pass(
         self,
@@ -1165,61 +1136,22 @@ class SupplementaryAnalyzer:
             fns = _expand_candidates_with_related_file_functions(
                 graph, fns, relation_keywords
             )
-        if not fns:
-            return []
-        if cb:
-            cb({"event": f"{event_prefix}_start", "functions": len(fns)})
-        chunks = _build_file_grouped_chunks(
-            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+        return self._run_chunked_llm_pass(
+            graph,
+            sys_prompt,
+            _SEM_USR,
+            "all_functions_code",
+            self._sm,
+            self._st,
+            max_workers,
+            cb,
+            event_prefix,
+            lambda raw, fns: self._parse_semantic(
+                raw, fns, analysis_type=analysis_type
+            ),
+            include_globals=True,
+            functions=fns,
         )
-        if not chunks:
-            return []
-        globals_code = _build_globals_code(graph)
-        if globals_code:
-            chunks = [
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
-                for chunk in chunks
-            ]
-        results = []
-
-        def _run_chunk(code_chunk):
-            kw = _chat_model_kwargs(
-                self._u, reasoning_effort=getattr(self, "_reasoning_effort", None)
-            )
-            chat = self._p.get_chat_model(
-                model=self._sm, max_tokens=self._st, temperature=0.1, **kw
-            )
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", sys_prompt), ("user", _SEM_USR)]
-            )
-            return (
-                (prompt | chat | StrOutputParser())
-                .invoke({"all_functions_code": code_chunk})
-                .strip()
-            )
-
-        if len(chunks) == 1:
-            results = self._parse_semantic(
-                _run_chunk(chunks[0]), fns, analysis_type=analysis_type
-            )
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {
-                    submit_with_current_context(ex, _run_chunk, chunk): i
-                    for i, chunk in enumerate(chunks)
-                }
-                for fut in as_completed(futs):
-                    try:
-                        results.extend(
-                            self._parse_semantic(
-                                fut.result(), fns, analysis_type=analysis_type
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb:
-            cb({"event": f"{event_prefix}_done", "findings": len(results)})
-        return results
 
     def _run_candidate_intra_pass(
         self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix
@@ -1652,38 +1584,17 @@ class SupplementaryAnalyzer:
             fb = _lookup_fn(str(e.get(key_b) or ""), bn, bu, all_fns)
             if not fa or not fb:
                 continue
-            primary_file, primary_function, primary_line, canonical_key = (
-                _canonical_fields(
-                    e,
-                    default_file=fb.file_path,
-                    default_function=fb.unique_name,
-                    default_line=fb.line_number,
-                )
-            )
             results.append(
-                VulnerabilityFinding(
-                    id=uuid.uuid4().hex[:16],
-                    vulnerability_type=_normalise_vuln_type(
-                        e.get("vulnerability_type") or "use_after_free"
-                    ),
-                    severity=str(e.get("severity") or "high"),
-                    confidence=str(e.get("confidence") or "medium"),
-                    source_function=fa.unique_name,
-                    source_file=fa.file_path,
+                self._finding_from_entry(
+                    e,
+                    source_fn=fa,
                     source_line=fa.line_number,
-                    sink_function=fb.unique_name,
-                    sink_file=fb.file_path,
+                    sink_fn=fb,
                     sink_line=fb.line_number,
                     path=[fa.unique_name, fb.unique_name],
-                    description=str(e.get("description") or ""),
-                    root_cause=str(e.get("root_cause") or ""),
-                    evidence=str(e.get("evidence") or ""),
-                    mitigation=str(e.get("mitigation") or ""),
                     analysis_type=analysis_type,
-                    primary_file=primary_file,
-                    primary_function=primary_function,
-                    primary_line=primary_line,
-                    canonical_key=canonical_key,
+                    default_vulnerability_type="use_after_free",
+                    default_severity="high",
                 )
             )
         return results
@@ -1706,40 +1617,17 @@ class SupplementaryAnalyzer:
             if not fn:
                 continue
             src_fn = rf or fn
-            primary_file, primary_function, primary_line, canonical_key = (
-                _canonical_fields(
-                    e,
-                    default_file=fn.file_path,
-                    default_function=fn.unique_name,
-                    default_line=fn.line_number,
-                )
-            )
             results.append(
-                VulnerabilityFinding(
-                    id=uuid.uuid4().hex[:16],
-                    vulnerability_type=_normalise_vuln_type(
-                        e.get("vulnerability_type") or "other"
-                    ),
-                    severity=str(e.get("severity") or "medium"),
-                    confidence=str(e.get("confidence") or "medium"),
-                    source_function=src_fn.unique_name,
-                    source_file=src_fn.file_path,
+                self._finding_from_entry(
+                    e,
+                    source_fn=src_fn,
                     source_line=src_fn.line_number,
-                    sink_function=fn.unique_name,
-                    sink_file=fn.file_path,
+                    sink_fn=fn,
                     sink_line=fn.line_number,
                     path=(
                         [src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name]
                     ),
-                    description=str(e.get("description") or ""),
-                    root_cause=str(e.get("root_cause") or ""),
-                    evidence=str(e.get("evidence") or ""),
-                    mitigation=str(e.get("mitigation") or ""),
                     analysis_type=analysis_type,
-                    primary_file=primary_file,
-                    primary_function=primary_function,
-                    primary_line=primary_line,
-                    canonical_key=canonical_key,
                 )
             )
         return results

@@ -118,9 +118,6 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     mode = str(reachability_settings.get("review_file_mode") or "partial").lower()
     if mode not in {"partial", "full"}:
         mode = "partial"
-    max_context_functions = reachability_settings.get(
-        "review_file_max_context_functions"
-    )
 
     def _progress(event):
         logger.debug("reachability progress event: %r", event)
@@ -131,7 +128,6 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
         file_path=file_path,
         options=options,
         mode=mode,
-        max_context_functions=max_context_functions,
         progress_callback=_progress,
         quiet=args.quiet,
     )

@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from ..reachability_common import ReachabilityPath
+from ..reachability_common.utils import _build_reverse_edges
 
 
 DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64
@@ -60,7 +61,7 @@ class FileFocusBuilder:
         self._max_outgoing_paths_per_target = max(
             1, int(max_outgoing_paths_per_target or 1)
         )
-        self._reverse_edges = self._build_reverse_edges()
+        self._reverse_edges = _build_reverse_edges(self._graph, self._node_sort_key)
 
     def build(self, target_file: str) -> FileFocus:
         target_nodes = sorted(
@@ -80,15 +81,6 @@ class FileFocusBuilder:
         focus.outgoing_context_paths = outgoing
         focus.node_names = self._focus_node_names(target_nodes, incoming, outgoing)
         return focus
-
-    def _build_reverse_edges(self) -> dict[str, list[str]]:
-        reverse = defaultdict(list)
-        for node in self._graph.nodes.values():
-            for callee in node.resolved_calls or []:
-                reverse[callee].append(node.unique_name)
-        for callees in reverse.values():
-            callees.sort(key=self._node_sort_key)
-        return dict(reverse)
 
     def _source_to_target_paths(self, target_nodes) -> list[ReachabilityPath]:
         selected: list[ReachabilityPath] = []

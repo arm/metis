@@ -26,7 +26,6 @@ metis_engine:
   reachability_max_paths_per_sink: 3
   reachability_max_path_length: 25
   reachability_review_file_mode: "partial"  # partial or full
-  reachability_review_file_max_context_functions: 250
   reachability_security_functions: []
 
 llm_provider:

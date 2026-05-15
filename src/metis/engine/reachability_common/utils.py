@@ -47,65 +47,6 @@ def _read_function_body(codebase_path, node, max_chars=3000):
     return snippet[:max_chars] + "\n" if len(snippet) > max_chars else snippet
 
 
-def _build_file_grouped_chunks(
-    codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
-):
-    """Build deterministic chunks, keeping functions from the same file together."""
-    by_file = defaultdict(list)
-    for fn in sorted(
-        nodes, key=lambda n: (str(n.file_path), int(n.line_number or 0), str(n.name))
-    ):
-        by_file[fn.file_path].append(fn)
-
-    chunks = []
-    current_chunk = []
-    current_size = 0
-
-    def flush_current():
-        nonlocal current_chunk, current_size
-        if current_chunk:
-            chunks.append("\n\n".join(current_chunk))
-            current_chunk = []
-            current_size = 0
-
-    for file_path in sorted(by_file):
-        header = f"===== FILE: {file_path} ====="
-        entries = []
-        for fn in by_file[file_path]:
-            body = _read_function_body(codebase_path, fn, per_fn_chars)
-            if body:
-                entries.append(
-                    f"Function {fn.unique_name} (line {fn.line_number} in {fn.file_path}):\n{body}"
-                )
-        if not entries:
-            continue
-
-        file_text = header + "\n\n" + "\n\n".join(entries)
-        if len(file_text) <= max_total_chars:
-            if current_size + len(file_text) > max_total_chars and current_chunk:
-                flush_current()
-            current_chunk.append(file_text)
-            current_size += len(file_text)
-            continue
-
-        flush_current()
-        file_chunk = [header]
-        file_size = len(header)
-        for entry in entries:
-            entry_size = len(entry) + 2
-            if file_size + entry_size > max_total_chars and len(file_chunk) > 1:
-                chunks.append("\n\n".join(file_chunk))
-                file_chunk = [header]
-                file_size = len(header)
-            file_chunk.append(entry)
-            file_size += entry_size
-        if len(file_chunk) > 1:
-            chunks.append("\n\n".join(file_chunk))
-
-    flush_current()
-    return chunks
-
-
 def _build_file_grouped_node_chunks(
     codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
 ):
@@ -173,6 +114,21 @@ def _build_file_grouped_node_chunks(
 
     flush_current()
     return chunks
+
+
+def _build_file_grouped_chunks(
+    codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
+):
+    """Build deterministic chunks, keeping functions from the same file together."""
+    return [
+        text
+        for _nodes, text in _build_file_grouped_node_chunks(
+            codebase_path,
+            nodes,
+            max_total_chars=max_total_chars,
+            per_fn_chars=per_fn_chars,
+        )
+    ]
 
 
 def _build_globals_code(graph, max_chars=20000):
@@ -261,6 +217,16 @@ def _dedupe_paths(paths):
             seen.add(key)
             results.append(p)
     return results
+
+
+def _build_reverse_edges(graph, sort_key):
+    reverse = defaultdict(list)
+    for node in graph.nodes.values():
+        for callee in node.resolved_calls or []:
+            reverse[callee].append(node.unique_name)
+    for callers in reverse.values():
+        callers.sort(key=sort_key)
+    return dict(reverse)
 
 
 def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):

@@ -143,9 +143,6 @@ def build_engine(args, runtime):
         reachability_review_file_mode=_reachability_value(
             "reachability_review_file_mode"
         ),
-        reachability_review_file_max_context_functions=_reachability_value(
-            "reachability_review_file_max_context_functions"
-        ),
         reachability_security_functions=_reachability_value(
             "reachability_security_functions", []
         ),
