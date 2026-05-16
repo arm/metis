@@ -8,12 +8,12 @@ from __future__ import annotations
 import os
 
 from ..reachability_common.finding_normalization import (
-    _VULN_TO_CWE,
     _confidence_score,
     _mitigation_text,
     _normalise_vuln_type,
     _severity_title,
 )
+from ..reachability_common.finding_taxonomy import _VULN_TO_CWE
 from ..reachability_common.graph_utils import _same_file
 from ..reachability_common.source_context import _read_line_context
 

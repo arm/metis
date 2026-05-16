@@ -91,15 +91,12 @@ class TreeSitterReachabilityService:
         self._paths_cache = None
         self._paths_cache_max_path_length = None
         self._supplementary_cache: dict[
-            tuple[str, str, str, int], list[VulnerabilityFinding]
+            tuple[str | int, ...], list[VulnerabilityFinding]
         ] = {}
-
-    def get_c_cpp_files(self):
-        return self._c_cpp_files(self._repository.get_code_files())
 
     def build_graph(self, files=None, *, progress_callback=None):
         selected = self._c_cpp_files(
-            files if files is not None else self.get_c_cpp_files()
+            files if files is not None else self._repository.get_code_files()
         )
         return self._get_builder().build(
             selected,
@@ -115,11 +112,6 @@ class TreeSitterReachabilityService:
                 str(path), C_FAMILY_PLUGIN_NAMES
             )
         ]
-
-    def trace_paths(self, graph, *, max_path_length=25):
-        return SourceRootedPathTracer(
-            graph, max_path_length=max_path_length
-        ).find_all_paths()
 
     def select_confirmation_paths(self, paths, graph, *, max_paths=0):
         """Pick a bounded, representative set of source-rooted paths for AI confirmation.
@@ -155,39 +147,6 @@ class TreeSitterReachabilityService:
 
         selected.sort(key=lambda item: item[0])
         return [path for _idx, path in selected]
-
-    def run_supplementary_analysis(
-        self,
-        graph,
-        *,
-        audit_model=None,
-        strong_model=None,
-        max_workers=8,
-        progress_callback=None,
-        reasoning_effort=None,
-        analysis_profile="full",
-        domain_hints=None,
-        domain_profiles=None,
-    ):
-        # Supplementary lenses inspect the whole graph and usually provide the
-        # final findings when path confirmation is skipped for large graphs.
-        model = strong_model or self._config.llama_query_model
-        audit = audit_model or model
-        return SupplementaryAnalyzer(
-            self._llm_provider,
-            audit,
-            model,
-            self._usage_runtime,
-            self._config.codebase_path,
-            reasoning_effort=reasoning_effort,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
-        ).analyze(
-            graph,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            analysis_profile=analysis_profile,
-        )
 
     def review_file(
         self,
@@ -277,9 +236,11 @@ class TreeSitterReachabilityService:
                 }
             )
 
-        all_findings = self._findings_for_file(
-            supplementary, relative_target, graph
-        ) + self._findings_for_file(path_findings, relative_target, graph)
+        all_findings = [
+            finding
+            for finding in list(supplementary) + list(path_findings)
+            if self._finding_participates_in_file(finding, relative_target, graph)
+        ]
         deduped, _total, _removed = self._finalize_findings(
             all_findings,
             graph,
@@ -439,7 +400,9 @@ class TreeSitterReachabilityService:
             progress_callback=progress_callback,
             security_functions=security_functions,
         )
-        paths = self.trace_paths(graph, max_path_length=max_path_length)
+        paths = SourceRootedPathTracer(
+            graph, max_path_length=max_path_length
+        ).find_all_paths()
         self._paths_cache = list(paths)
         self._paths_cache_max_path_length = max_path_length
         return graph, list(paths)
@@ -602,16 +565,20 @@ class TreeSitterReachabilityService:
         cached = self._supplementary_cache.get(key)
         if cached is not None:
             return list(cached)
-        findings = self.run_supplementary_analysis(
-            graph,
-            audit_model=model,
-            strong_model=model,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
+        findings = SupplementaryAnalyzer(
+            self._llm_provider,
+            model,
+            model,
+            self._usage_runtime,
+            self._config.codebase_path,
             reasoning_effort=reasoning_effort,
-            analysis_profile=analysis_profile,
             domain_hints=domain_hints,
             domain_profiles=domain_profiles,
+        ).analyze(
+            graph,
+            max_workers=max_workers,
+            progress_callback=progress_callback,
+            analysis_profile=analysis_profile,
         )
         self._supplementary_cache[key] = list(findings)
         return list(findings)
@@ -648,13 +615,6 @@ class TreeSitterReachabilityService:
             if str(node_name or "").startswith(f"{target_file}::"):
                 return True
         return False
-
-    def _findings_for_file(self, findings, target_file, graph):
-        selected = []
-        for finding in findings:
-            if self._finding_participates_in_file(finding, target_file, graph):
-                selected.append(finding)
-        return selected
 
     def _strict_file_findings(self, findings):
         keep = []

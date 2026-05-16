@@ -5,14 +5,12 @@ from __future__ import annotations
 
 import re
 
-from metis.engine.analysis.c_family_macro import (
-    is_c_family_file_path,
-    is_c_macro_like_symbol,
-)
 from metis.engine.analysis.c_family_helpers import (
     extract_c_family_seed_symbols,
+    is_c_family_file_path,
     is_low_value_c_family_probe_term,
 )
+from metis.engine.analysis.c_family_macro import is_c_macro_like_symbol
 
 from . import constants as C
 from ..types import TriageState

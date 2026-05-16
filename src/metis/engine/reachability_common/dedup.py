@@ -8,13 +8,13 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .finding_normalization import (
-    _VTYPE_FAMILY,
     _canonical_finding_key,
     _finding_file,
     _finding_function,
     _finding_line,
     _normalise_vuln_type,
 )
+from .finding_taxonomy import _VTYPE_FAMILY
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
 _CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}

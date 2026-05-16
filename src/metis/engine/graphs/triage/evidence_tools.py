@@ -14,10 +14,10 @@ from metis.engine.analysis.c_family_analyzer_common import (
     _node_line,
     _node_text,
 )
+from metis.engine.analysis.c_family_helpers import is_c_family_file_path
 from metis.engine.analysis.c_family_macro import (
     collect_c_macro_definition_sections,
     collect_c_macro_like_calls_from_scope,
-    is_c_family_file_path,
 )
 
 from . import constants as C

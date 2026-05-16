@@ -209,7 +209,7 @@ class SupplementaryAnalyzer:
                     "lens_instructions": lens_instructions,
                     "lens_examples": lens_examples,
                 },
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
+                reasoning_effort=self._reasoning_effort,
             )
             return _parse_combined(raw, fns, frozenset(analysis_types))
 
@@ -332,7 +332,7 @@ class SupplementaryAnalyzer:
             system_prompt=self._with_domain_hints(_INTRA_SYS),
             user_prompt=_INTRA_USR,
             variables={"file_path": file_path, "functions_code": "\n\n".join(bodies)},
-            reasoning_effort=getattr(self, "_reasoning_effort", None),
+            reasoning_effort=self._reasoning_effort,
         )
         return _parse_intra(raw, functions)
 
@@ -365,7 +365,7 @@ class SupplementaryAnalyzer:
                     "file_path": "candidate functions",
                     "functions_code": code_chunk,
                 },
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
+                reasoning_effort=self._reasoning_effort,
             )
             return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
@@ -426,7 +426,7 @@ class SupplementaryAnalyzer:
                 system_prompt=self._with_domain_hints(sys_prompt),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code_chunk},
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
+                reasoning_effort=self._reasoning_effort,
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
 
@@ -494,7 +494,7 @@ class SupplementaryAnalyzer:
                 system_prompt=self._with_domain_hints(_GLOBAL_LIFECYCLE_SYS),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code},
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
+                reasoning_effort=self._reasoning_effort,
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
 
@@ -615,7 +615,7 @@ class SupplementaryAnalyzer:
                 system_prompt=self._with_domain_hints(_LOCK_ORDER_SYS),
                 user_prompt=_SEM_USR,
                 variables={"all_functions_code": code},
-                reasoning_effort=getattr(self, "_reasoning_effort", None),
+                reasoning_effort=self._reasoning_effort,
             )
             results.extend(
                 _parse_semantic(raw, nodes, analysis_type="lock_order_extraction")

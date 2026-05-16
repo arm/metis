@@ -71,23 +71,6 @@ class ReviewService:
                 )
         return list(self._reachability_cache)
 
-    def uses_reachability_for_code_review(
-        self, review_file_func=None, get_code_files_func=None
-    ):
-        files = (get_code_files_func or self.get_code_files)()
-        c_cpp_files = [path for path in files if self._is_c_cpp_file(path)]
-        return (
-            self._reachability_service is not None
-            and review_file_func is None
-            and bool(c_cpp_files)
-        )
-
-    def _find_reachability_review_for_file(self, file_path):
-        return self._reachability_service.review_file(
-            file_path,
-            **self._reachability_settings,
-        )
-
     def review_file(
         self,
         file_path,
@@ -107,7 +90,10 @@ class ReviewService:
                 self._use_reachability_for_review
                 and self._reachability_service is not None
             ):
-                return self._find_reachability_review_for_file(file_path)
+                return self._reachability_service.review_file(
+                    file_path,
+                    **self._reachability_settings,
+                )
         elif mode == "partial":
             if (
                 self._reachability_service is not None
@@ -156,7 +142,10 @@ class ReviewService:
                     if result is not None:
                         return result
         if self._use_reachability_for_review and self._reachability_service is not None:
-            return self._find_reachability_review_for_file(file_path)
+            return self._reachability_service.review_file(
+                file_path,
+                **self._reachability_settings,
+            )
         qe_code = qe_docs = None
         if options.use_retrieval_context:
             qe_code, qe_docs = self._get_query_engines()
@@ -279,9 +268,10 @@ class ReviewService:
             }
             return
 
-        use_reachability = self.uses_reachability_for_code_review(
-            review_file_func=review_file_func,
-            get_code_files_func=lambda: files,
+        use_reachability = (
+            self._reachability_service is not None
+            and review_file_func is None
+            and any(self._is_c_cpp_file(path) for path in files)
         )
         if use_reachability:
             results = self._get_reachability_reviews(

@@ -232,7 +232,7 @@ class VulnerabilityConfirmer:
                 "paths_section": "\n".join(ps),
                 "code_section": "\n".join(cs),
             },
-            reasoning_effort=getattr(self, "_reasoning_effort", None),
+            reasoning_effort=self._reasoning_effort,
         )
         return self._parse_confirm(raw, batch, graph)
 
@@ -355,6 +355,6 @@ class VulnerabilityConfirmer:
                 "target_file_code": "\n".join(tc),
                 "related_code_section": "\n".join(rc),
             },
-            reasoning_effort=getattr(self, "_reasoning_effort", None),
+            reasoning_effort=self._reasoning_effort,
         )
         return self._parse_confirm(raw, batch, graph, target_file=target_file)

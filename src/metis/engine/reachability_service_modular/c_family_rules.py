@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import re
 
-C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
+from ..reachability_common.heuristic_data import _words
 
-CONTROL_CALLS = frozenset(
-    "if for while switch return sizeof alignof _Generic case do else typedef defined".split()
+C_FAMILY_PLUGIN_NAMES = _words("c cpp")
+
+CONTROL_CALLS = _words(
+    "if for while switch return sizeof alignof _Generic case do else typedef defined"
 )
 
-SOURCE_CALLS = frozenset(
+SOURCE_CALLS = _words(
     "read recv recvfrom fread scanf sscanf fscanf gets getenv copy_from_user "
-    "copyin ioctl poll select accept".split()
+    "copyin ioctl poll select accept"
 )
 
 SOURCE_NAME_RE = re.compile(
@@ -24,25 +26,23 @@ SOURCE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-ENTRYPOINT_FIELDS = frozenset(
+ENTRYPOINT_FIELDS = _words(
     "open release ioctl unlocked_ioctl compat_ioctl read write poll probe remove "
-    "shutdown suspend resume callback fn handler worker".split()
+    "shutdown suspend resume callback fn handler worker"
 )
 
-_BUFFER_COPY_CALLS = frozenset("memcpy memmove strcpy strncpy strcat gets".split())
-_BOUNDS_CALLS = frozenset({"strlen", "strnlen"})
-_FORMAT_CALLS = frozenset(
-    "sprintf vsprintf snprintf vsnprintf printf fprintf vprintf vfprintf".split()
+_BUFFER_COPY_CALLS = _words("memcpy memmove strcpy strncpy strcat gets")
+_BOUNDS_CALLS = _words("strlen strnlen")
+_FORMAT_CALLS = _words(
+    "sprintf vsprintf snprintf vsnprintf printf fprintf vprintf vfprintf"
 )
-_COMMAND_CALLS = frozenset(
-    "system popen execl execle execlp execv execve execvp".split()
-)
-_PATH_CALLS = frozenset("fopen open stat lstat access unlink rename".split())
-_FREE_CALLS = frozenset({"free", "kfree", "vfree"})
-_CLOSE_CALLS = frozenset({"close"})
-_ALLOC_CALLS = frozenset("malloc calloc realloc kmalloc kcalloc krealloc".split())
-_IOCTL_CALLS = frozenset({"ioctl"})
-_UNCATEGORIZED_SINK_CALLS = frozenset({"scanf", "sscanf", "fscanf"})
+_COMMAND_CALLS = _words("system popen execl execle execlp execv execve execvp")
+_PATH_CALLS = _words("fopen open stat lstat access unlink rename")
+_FREE_CALLS = _words("free kfree vfree")
+_CLOSE_CALLS = _words("close")
+_ALLOC_CALLS = _words("malloc calloc realloc kmalloc kcalloc krealloc")
+_IOCTL_CALLS = _words("ioctl")
+_UNCATEGORIZED_SINK_CALLS = _words("scanf sscanf fscanf")
 _LIFETIME_TEXT_RE = re.compile(r"\b(?:release|destroy|cleanup)\b")
 
 _SINK_TYPE_CALL_RULES = (

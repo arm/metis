@@ -7,14 +7,8 @@ import os
 from pathlib import Path
 import re
 
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
-
 from .c_family_analyzer_common import _CrossFileHit
-
-_XREF_EXTENSIONS = frozenset(
-    CPlugin.DEFAULT_EXTENSIONS + CppPlugin.DEFAULT_EXTENSIONS + [".S", ".s"]
-)
+from .c_family_helpers import is_c_family_xref_file_path
 
 
 class CFamilyXrefMixin:
@@ -190,8 +184,7 @@ class CFamilyXrefMixin:
         rest: list[str] = []
         for dirpath, _, filenames in os.walk(root):
             for name in filenames:
-                ext = os.path.splitext(name)[1]
-                if ext not in _XREF_EXTENSIONS:
+                if not is_c_family_xref_file_path(name):
                     continue
                 full = Path(dirpath) / name
                 try:

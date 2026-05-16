@@ -3,10 +3,9 @@
 
 from __future__ import annotations
 
-import os
 import re
 
-from .base import AnalyzerEvidence, AnalyzerRequest
+from .base import AnalyzerEvidence, AnalyzerRequest, supports_file_extension
 from .treesitter_runtime import TreeSitterRuntime
 
 
@@ -24,8 +23,7 @@ class GenericTreeSitterAnalyzer:
         self.supported_extensions = {str(ext).lower() for ext in supported_extensions}
 
     def supports_file(self, rel_path: str) -> bool:
-        ext = os.path.splitext(rel_path or "")[1].lower()
-        return ext in self.supported_extensions
+        return supports_file_extension(rel_path, self.supported_extensions)
 
     def collect_evidence(self, request: AnalyzerRequest) -> AnalyzerEvidence:
         if not self.supports_file(request.file_path):

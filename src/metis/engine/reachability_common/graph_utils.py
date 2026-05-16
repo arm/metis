@@ -4,7 +4,6 @@
 """Small graph and sequence helpers for reachability analysis."""
 from __future__ import annotations
 
-
 from collections import defaultdict
 
 from .models import FunctionNode, ReachabilityGraph

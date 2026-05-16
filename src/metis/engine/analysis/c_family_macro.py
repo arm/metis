@@ -6,16 +6,16 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
-
 from .c_family_analyzer_common import (
     _CrossFileHit,
     _node_child_by_field_name,
     _node_children,
     _node_kind,
 )
-from .c_family_helpers import parse_includes_from_text, resolve_include_path
+from .c_family_helpers import (
+    parse_includes_from_text,
+    resolve_include_path,
+)
 
 
 class CFamilyMacroMixin:
@@ -193,16 +193,6 @@ class CFamilyMacroMixin:
         if "do" in expanded and "while" in expanded:
             return "macro_block"
         return "unknown"
-
-
-_C_FAMILY_EXTENSIONS = frozenset(
-    CPlugin.DEFAULT_EXTENSIONS + CppPlugin.DEFAULT_EXTENSIONS
-)
-
-
-def is_c_family_file_path(file_path: str) -> bool:
-    ext = Path(file_path or "").suffix.lower()
-    return ext in _C_FAMILY_EXTENSIONS
 
 
 def is_c_macro_like_symbol(text: str) -> bool:

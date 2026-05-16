@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .heuristic_data import _words
 from .supplementary_prompts import (
     _CLASSIC_C_SINK_SYS,
     _COUNTER_SYMMETRY_SYS,
@@ -28,23 +29,23 @@ class _SupplementaryLensSpec:
     relation_keywords: object = None
 
 
-_RESOURCE_KW = frozenset(
+_RESOURCE_KW = _words(
     "free malloc calloc realloc close destroy release delete munmap unref grow "
-    "compact resize kfree vfree devm_kfree put get ref unref".split()
+    "compact resize kfree vfree devm_kfree put get ref unref"
 )
-_AUTH_KW = frozenset(
+_AUTH_KW = _words(
     "auth login check verify compare validate token password permit deny match "
-    "level permission capable access_ok".split()
+    "level permission capable access_ok"
 )
-_HW_STATE_KW = frozenset(
+_HW_STATE_KW = _words(
     "ready init enable disable reset power suspend resume probe remove shutdown "
     "flush drain start stop halt abort fence sync register interrupt handler "
     "callback work timer schedule cancel queue dequeue lock unlock mutex spinlock "
-    "spin_lock spin_unlock".split()
+    "spin_lock spin_unlock"
 )
-_LIFECYCLE_KW = frozenset(
+_LIFECYCLE_KW = _words(
     "create alloc open setup teardown cleanup fini exit deinit unregister detach "
-    "load unload bind unbind".split()
+    "load unload bind unbind"
 )
 
 _CLASSIC_C_SINK_RE = re.compile(
@@ -91,10 +92,10 @@ _LOCK_EVENT_RE = re.compile(
     r"\(\s*(?P<arg>[^,\)]+)",
     re.IGNORECASE,
 )
-_RELATED_FILE_FUNCTION_KEYWORDS = frozenset(
+_RELATED_FILE_FUNCTION_KEYWORDS = _words(
     "init term shutdown destroy release cancel flush create get put ref unref "
     "map unmap grow shrink load unload verify open poll enable disable reset "
-    "schedule callback worker work timer".split()
+    "schedule callback worker work timer"
 )
 
 _FULL_LENS_SPECS = (
@@ -170,7 +171,7 @@ _REVIEW_LENS_NAMES = set(
     "classic_c_sink error_unwind counter_symmetry targeted_path_access".split()
 )
 
-_COMBINED_GRAPH_LENS_KINDS = frozenset({"cross", "semantic", "targeted"})
+_COMBINED_GRAPH_LENS_KINDS = _words("cross semantic targeted")
 _COMBINED_GRAPH_LENS_NOTES = {
     "lifecycle": """\
 analysis_type lifecycle:
