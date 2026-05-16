@@ -118,7 +118,11 @@ class MetisEngine:
                 "partial",
             ),
             "security_functions": kwargs.get("reachability_security_functions") or [],
-            "domain_profiles": kwargs.get("reachability_domain_profiles") or [],
+            "domain_profiles": (
+                ["gpu"]
+                if kwargs.get("reachability_domain_profiles") is None
+                else kwargs.get("reachability_domain_profiles")
+            ),
             "domain_hints": kwargs.get("reachability_domain_hints") or [],
         }
 
