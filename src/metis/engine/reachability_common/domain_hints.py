@@ -6,56 +6,21 @@
 from __future__ import annotations
 
 
+_GPU_KEYWORDS = tuple(
+    """
+    gpu gpu_ready gpu_powered gpu_init gpu_submit gpu_remove gpu_watchdog_fn
+    gpu_ctx_get gpu_ctx_put gpu_ioctl_reset gpu_check_perm gpu_debug_dump_context
+    gpu_region_create gpu_region_create_alias gpu_region_destroy_alias
+    gpu_file_release gpu_file_poll gpu_sched_submit gpu_ctx_destroy
+    gpu_mmu_insert_pages gpu_power_off gpu_fw_load_custom gpu_mappings gpu_wr
+    cpu_wr ctx ctx_count ctx->regions ctx.lock region regions region_count
+    region->pages alias alias_count mmu mmu.lock mmio dma firmware fw_name ioctl
+    sysfs debugfs doorbell irq watchdog
+    """.split()
+)
+
 _GPU_PROFILE = {
-    "keywords": (
-        "gpu",
-        "gpu_ready",
-        "gpu_powered",
-        "gpu_init",
-        "gpu_submit",
-        "gpu_remove",
-        "gpu_watchdog_fn",
-        "gpu_ctx_get",
-        "gpu_ctx_put",
-        "gpu_ioctl_reset",
-        "gpu_check_perm",
-        "gpu_debug_dump_context",
-        "gpu_region_create",
-        "gpu_region_create_alias",
-        "gpu_region_destroy_alias",
-        "gpu_file_release",
-        "gpu_file_poll",
-        "gpu_sched_submit",
-        "gpu_ctx_destroy",
-        "gpu_mmu_insert_pages",
-        "gpu_power_off",
-        "gpu_fw_load_custom",
-        "gpu_mappings",
-        "gpu_wr",
-        "cpu_wr",
-        "ctx",
-        "ctx_count",
-        "ctx->regions",
-        "ctx.lock",
-        "region",
-        "regions",
-        "region_count",
-        "region->pages",
-        "alias",
-        "alias_count",
-        "mmu",
-        "mmu.lock",
-        "mmio",
-        "dma",
-        "firmware",
-        "fw_name",
-        "ioctl",
-        "sysfs",
-        "debugfs",
-        "doorbell",
-        "irq",
-        "watchdog",
-    ),
+    "keywords": _GPU_KEYWORDS,
     "notes": (
         "GPU/domain hints are user-selected and should not be assumed for generic code.",
         "State/order: gpu_ready, gpu_powered, firmware, MMIO/DMA, queues, "

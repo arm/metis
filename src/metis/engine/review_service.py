@@ -21,10 +21,10 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
+from .reachability_service_modular.c_family_rules import C_FAMILY_PLUGIN_NAMES
 from .runtime import EngineConfig
 
 logger = logging.getLogger("metis")
-_C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
 
 
 class ReviewService:
@@ -35,7 +35,6 @@ class ReviewService:
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
         reachability_service=None,
-        treesitter_reachability_service=None,
         use_reachability_for_review: bool = False,
         reachability_settings: dict[str, Any] | None = None,
     ):
@@ -44,7 +43,6 @@ class ReviewService:
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
         self._reachability_service = reachability_service
-        self._treesitter_reachability_service = treesitter_reachability_service
         self._use_reachability_for_review = use_reachability_for_review
         self._reachability_settings = dict(reachability_settings or {})
         self._reachability_cache = None
@@ -112,12 +110,12 @@ class ReviewService:
                 return self._find_reachability_review_for_file(file_path)
         elif mode == "partial":
             if (
-                self._treesitter_reachability_service is not None
+                self._reachability_service is not None
                 and self._is_file_in_codebase(file_path)
                 and self._is_c_cpp_file(file_path)
             ):
                 try:
-                    result = self._treesitter_reachability_service.review_file(
+                    result = self._reachability_service.review_file(
                         file_path,
                         confirmation_model=self._reachability_settings.get(
                             "confirmation_model"
@@ -212,7 +210,7 @@ class ReviewService:
 
     def _is_c_cpp_file(self, file_path):
         return self._repository.is_path_supported_by_plugins(
-            str(file_path), _C_FAMILY_PLUGIN_NAMES
+            str(file_path), C_FAMILY_PLUGIN_NAMES
         )
 
     def _invoke_review_file(

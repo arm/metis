@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 from collections import defaultdict
+from functools import partial
 
 from .models import ReachabilityPath
-from .graph_utils import _dedupe_paths
+from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort_key
 
 
 class SourceRootedPathTracer:
@@ -17,6 +18,8 @@ class SourceRootedPathTracer:
         self._g = graph
         self._ml = max(1, int(max_path_length or 1))
         self._mp = max(1, int(max_paths_per_source or 1))
+        self._node_sort_key = partial(_node_sort_key, self._g)
+        self._path_sort_key = partial(_source_rooted_path_sort_key, self._g)
 
     def find_all_paths(self):
         sources = sorted(self._g.get_sources(), key=self._node_sort_key)
@@ -77,25 +80,3 @@ class SourceRootedPathTracer:
                     continue
                 selected.append(path)
         return sorted(selected, key=self._path_sort_key)
-
-    def _node_sort_key(self, node_or_name):
-        node = node_or_name
-        if isinstance(node_or_name, str):
-            node = self._g.get_node(node_or_name)
-        if not node:
-            return ("", 0, str(node_or_name))
-        return (node.file_path, int(node.line_number or 0), node.name, node.unique_name)
-
-    def _path_sort_key(self, path):
-        endpoint = self._g.get_node(path.sink)
-        source = self._g.get_node(path.source)
-        return (
-            source.file_path if source else "",
-            int(source.line_number or 0) if source else 0,
-            source.name if source else path.source,
-            len(path.path or []),
-            endpoint.file_path if endpoint else "",
-            int(endpoint.line_number or 0) if endpoint else 0,
-            endpoint.name if endpoint else path.sink,
-            tuple(path.path or []),
-        )

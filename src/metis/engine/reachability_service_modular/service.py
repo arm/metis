@@ -7,26 +7,26 @@ from __future__ import annotations
 
 import os
 
-from ..reachability_common import (
-    Deduplicator,
-    FunctionNode,
-    ReachabilityGraph,
-    SourceRootedPathTracer,
-    SupplementaryAnalyzer,
-    VulnerabilityFinding,
-    VulnerabilityConfirmer,
-)
+from ..reachability_common.confirmer import VulnerabilityConfirmer
+from ..reachability_common.dedup import Deduplicator
 from ..reachability_common.finding_normalization import _normalise_vuln_type
-from ..reachability_common.graph_utils import _dedupe_paths
+from ..reachability_common.graph_utils import (
+    _copy_graph_nodes,
+    _dedupe_paths,
+    _same_file,
+)
+from ..reachability_common.models import VulnerabilityFinding
 from ..reachability_common.post_filters import _post_filter_findings
+from ..reachability_common.supplementary import SupplementaryAnalyzer
+from ..reachability_common.tracing import SourceRootedPathTracer
 from .file_focus import FileFocusBuilder
 from .finding_paths import FindingPathAnnotator
 from .review_output import group_findings_as_reviews, reviews_for_findings
+from .c_family_rules import C_FAMILY_PLUGIN_NAMES
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
-_C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
 
 
 def _normalise_security_function_specs(raw):
@@ -112,7 +112,7 @@ class TreeSitterReachabilityService:
             str(path)
             for path in files
             if self._repository.is_path_supported_by_plugins(
-                str(path), _C_FAMILY_PLUGIN_NAMES
+                str(path), C_FAMILY_PLUGIN_NAMES
             )
         ]
 
@@ -233,7 +233,7 @@ class TreeSitterReachabilityService:
             )
 
         model = confirmation_model or self._config.llama_query_model
-        focus_graph = self._build_graph_from_node_names(graph, focus.node_names)
+        focus_graph = _copy_graph_nodes(graph, focus.node_names)
         if focus_graph.node_count() == 0:
             return None
         supplementary = self._ensure_supplementary(
@@ -616,34 +616,6 @@ class TreeSitterReachabilityService:
         self._supplementary_cache[key] = list(findings)
         return list(findings)
 
-    def _build_graph_from_node_names(self, graph, needed):
-        focus = ReachabilityGraph()
-        for unique_name in sorted(needed):
-            node = graph.get_node(unique_name)
-            if not node:
-                continue
-            focus.add_node(
-                FunctionNode(
-                    unique_name=node.unique_name,
-                    file_path=node.file_path,
-                    name=node.name,
-                    line_number=node.line_number,
-                    is_source=node.is_source,
-                    is_sink=node.is_sink,
-                    calls=list(node.calls or []),
-                    resolved_calls=[],
-                    source_reason=node.source_reason,
-                    sink_type=node.sink_type,
-                    sink_reason=node.sink_reason,
-                )
-            )
-        needed_files = {node.file_path for node in focus.nodes.values()}
-        for global_construct in graph.get_globals():
-            if global_construct.file_path in needed_files:
-                focus.add_global(global_construct)
-        focus.resolve_all_calls()
-        return focus
-
     def _normalize_target_file(self, file_path):
         base_path = os.path.abspath(self._config.codebase_path)
         full = (
@@ -657,7 +629,7 @@ class TreeSitterReachabilityService:
 
     def _finding_participates_in_file(self, finding, target_file, graph):
         if any(
-            self._same_file(file_name, target_file)
+            _same_file(file_name, target_file)
             for file_name in (
                 finding.primary_file,
                 finding.source_file,
@@ -671,7 +643,7 @@ class TreeSitterReachabilityService:
             finding.sink_function,
         ]:
             node = graph.get_node(node_name) if graph is not None else None
-            if node and self._same_file(node.file_path, target_file):
+            if node and _same_file(node.file_path, target_file):
                 return True
             if str(node_name or "").startswith(f"{target_file}::"):
                 return True
@@ -683,9 +655,6 @@ class TreeSitterReachabilityService:
             if self._finding_participates_in_file(finding, target_file, graph):
                 selected.append(finding)
         return selected
-
-    def _same_file(self, a, b):
-        return str(a or "").replace("\\", "/") == str(b or "").replace("\\", "/")
 
     def _strict_file_findings(self, findings):
         keep = []

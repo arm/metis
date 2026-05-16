@@ -104,7 +104,7 @@ def _is_c_string_literal_arg(value):
     return bool(_C_STRING_LITERAL_RE.match(str(value or "").strip()))
 
 
-def _is_fixed_literal_format_call_false_positive(body_or_context, finding) -> bool:
+def _is_fixed_literal_format_call_false_positive(body_or_context) -> bool:
     """
     Return true only when visible printf-family calls all use fixed string literal
     format arguments. If any visible call uses a variable format, keep the finding.
@@ -190,7 +190,7 @@ def _post_filter_findings(findings, codebase_path):
 
         if vtype == "format_string":
             context = _finding_code_context(codebase_path, finding)
-            if _is_fixed_literal_format_call_false_positive(context, finding):
+            if _is_fixed_literal_format_call_false_positive(context):
                 continue
 
         filtered.append(finding)

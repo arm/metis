@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
+
+from .models import VulnerabilityFinding
 
 
 def _lookup_fn(name, fn_by_name, fn_by_unique, all_fns):
@@ -107,6 +110,59 @@ def _canonical_fields(
         _entry_root_cause_token(entry),
     )
     return primary_file, primary_function, primary_line, canonical_key
+
+
+def _finding_from_llm_entry(
+    entry,
+    *,
+    source_function,
+    source_file,
+    source_line,
+    sink_function,
+    sink_file,
+    sink_line,
+    path,
+    analysis_type,
+    default_file=None,
+    default_function=None,
+    default_line=None,
+    default_vulnerability_type="other",
+    default_severity="medium",
+):
+    vulnerability_type = _normalise_vuln_type(
+        entry.get("vulnerability_type") or default_vulnerability_type
+    )
+    primary_file, primary_function, primary_line, canonical_key = _canonical_fields(
+        entry,
+        default_file=sink_file if default_file is None else default_file,
+        default_function=(
+            sink_function if default_function is None else default_function
+        ),
+        default_line=sink_line if default_line is None else default_line,
+        vulnerability_type=vulnerability_type,
+    )
+    return VulnerabilityFinding(
+        id=uuid.uuid4().hex[:16],
+        vulnerability_type=vulnerability_type,
+        severity=str(entry.get("severity") or default_severity),
+        confidence=str(entry.get("confidence") or "medium"),
+        source_function=source_function,
+        source_file=source_file,
+        source_line=source_line,
+        sink_function=sink_function,
+        sink_file=sink_file,
+        sink_line=sink_line,
+        path=list(path),
+        description=str(entry.get("description") or ""),
+        root_cause=str(entry.get("root_cause") or ""),
+        evidence=str(entry.get("evidence") or ""),
+        mitigation=str(entry.get("mitigation") or ""),
+        analysis_type=analysis_type,
+        primary_file=primary_file,
+        primary_function=primary_function,
+        primary_line=primary_line,
+        canonical_key=canonical_key,
+    )
 
 
 def _canonical_finding_key(finding):

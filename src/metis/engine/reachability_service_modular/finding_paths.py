@@ -7,8 +7,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
+from functools import partial
 
-from ..reachability_common.graph_utils import _build_reverse_edges
+from ..reachability_common.graph_utils import (
+    _build_reverse_edges,
+    _node_sort_key,
+    _normalize_file_ref,
+)
 
 
 class FindingPathAnnotator:
@@ -21,11 +26,10 @@ class FindingPathAnnotator:
 
     def __init__(self, graph, target_file: str, *, max_path_length: int = 25):
         self._graph = graph
-        self._target_file = self._norm_file(target_file)
+        self._target_file = _normalize_file_ref(target_file)
         self._max_path_length = max(1, int(max_path_length or 1))
-        self._reverse_edges = _build_reverse_edges(
-            self._graph, self._node_name_sort_key
-        )
+        self._node_sort_key = partial(_node_sort_key, self._graph)
+        self._reverse_edges = _build_reverse_edges(self._graph, self._node_sort_key)
 
     def annotate(self, findings):
         return [self.annotate_one(finding) for finding in findings]
@@ -59,14 +63,14 @@ class FindingPathAnnotator:
         ]
         candidates.extend(reversed(list(getattr(finding, "path", []) or [])))
 
-        primary_file = self._norm_file(getattr(finding, "primary_file", ""))
+        primary_file = _normalize_file_ref(getattr(finding, "primary_file", ""))
         wanted_file = primary_file or self._target_file
         if wanted_file and wanted_file != self._target_file:
             return None
 
         for candidate in candidates:
             node = self._lookup_node(candidate, wanted_file)
-            if node and self._norm_file(node.file_path) == self._target_file:
+            if node and _normalize_file_ref(node.file_path) == self._target_file:
                 return node
         return None
 
@@ -87,7 +91,7 @@ class FindingPathAnnotator:
             same_file = [
                 node
                 for node in matches
-                if self._norm_file(node.file_path) == wanted_file
+                if _normalize_file_ref(node.file_path) == wanted_file
             ]
             if same_file:
                 return sorted(same_file, key=self._node_sort_key)[0]
@@ -117,18 +121,3 @@ class FindingPathAnnotator:
                     return list(reversed(next_reverse_path))
                 queue.append(next_reverse_path)
         return []
-
-    def _node_name_sort_key(self, node_name: str):
-        node = self._graph.get_node(node_name)
-        return self._node_sort_key(node) if node else ("", 0, "", node_name)
-
-    def _node_sort_key(self, node):
-        return (
-            self._norm_file(node.file_path),
-            int(node.line_number or 0),
-            node.name,
-            node.unique_name,
-        )
-
-    def _norm_file(self, value: str) -> str:
-        return str(value or "").replace("\\", "/")

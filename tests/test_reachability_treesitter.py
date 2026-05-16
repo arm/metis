@@ -538,6 +538,42 @@ def test_deduplicator_normalizes_raw_canonical_key_to_structured_identity():
     assert len(deduped) == 1
 
 
+def test_deduplicator_prefers_specific_primary_location_for_same_root():
+    key = "src/dispatch.c:src/dispatch.c::handle_reset:missing_auth:reset_missing_permission"
+    vague = _finding(
+        "missing_auth",
+        "src/dispatch.c",
+        "src/dispatch.c::handle_reset",
+        0,
+        "Reset is missing an authorization check.",
+        "",
+        canonical_key=key,
+        path=["src/dispatch.c::handle_reset"],
+    )
+    vague.primary_line = 0
+    vague.evidence = ""
+    vague.mitigation = ""
+    specific = _finding(
+        "missing_auth",
+        "src/dispatch.c",
+        "src/dispatch.c::handle_reset",
+        88,
+        "handle_reset dispatches the privileged reset operation before checking reset permission.",
+        "reset operation reaches device_reset without reset-specific permission",
+        canonical_key=key,
+        path=["src/api.c::dispatch", "src/dispatch.c::handle_reset"],
+    )
+    specific.mitigation = (
+        "Require reset-specific permission before calling device_reset."
+    )
+
+    deduped, total, removed = Deduplicator.deduplicate([vague, specific])
+
+    assert total == 2
+    assert removed == 1
+    assert deduped == [specific]
+
+
 def test_deduplicator_keeps_different_canonical_keys_in_same_location():
     findings = [
         _finding(

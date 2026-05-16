@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from .dedup import Deduplicator
-from .confirmer import VulnerabilityConfirmer
 from .models import (
     FunctionNode,
     GlobalConstruct,
@@ -14,10 +13,7 @@ from .models import (
     ReachabilityPath,
     VulnerabilityFinding,
 )
-from .supplementary import SupplementaryAnalyzer
-from .tracing import (
-    SourceRootedPathTracer,
-)
+from .tracing import SourceRootedPathTracer
 
 __all__ = [
     "Deduplicator",
@@ -26,7 +22,5 @@ __all__ = [
     "ReachabilityGraph",
     "ReachabilityPath",
     "SourceRootedPathTracer",
-    "SupplementaryAnalyzer",
-    "VulnerabilityConfirmer",
     "VulnerabilityFinding",
 ]

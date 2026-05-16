@@ -189,7 +189,6 @@ class MetisEngine:
             get_query_engines=lambda: self._init_and_get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
             reachability_service=self.reachability,
-            treesitter_reachability_service=self.reachability,
             use_reachability_for_review=self.use_reachability_for_review,
             reachability_settings=self.reachability_settings,
         )

@@ -14,6 +14,7 @@ from ..reachability_common.finding_normalization import (
     _normalise_vuln_type,
     _severity_title,
 )
+from ..reachability_common.graph_utils import _same_file
 from ..reachability_common.source_context import _read_line_context
 
 
@@ -145,7 +146,3 @@ def connected_functions_for_finding(finding, graph, target_file):
             seen.add(resolved.unique_name)
             connected.append(resolved.unique_name)
     return connected
-
-
-def _same_file(a, b):
-    return str(a or "").replace("\\", "/") == str(b or "").replace("\\", "/")

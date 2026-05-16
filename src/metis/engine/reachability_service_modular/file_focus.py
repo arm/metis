@@ -7,9 +7,14 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from functools import partial
 
-from ..reachability_common import ReachabilityPath
-from ..reachability_common.graph_utils import _build_reverse_edges
+from ..reachability_common.models import ReachabilityPath
+from ..reachability_common.graph_utils import (
+    _build_reverse_edges,
+    _file_focus_path_sort_key,
+    _node_sort_key,
+)
 
 
 DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64
@@ -61,6 +66,8 @@ class FileFocusBuilder:
         self._max_outgoing_paths_per_target = max(
             1, int(max_outgoing_paths_per_target or 1)
         )
+        self._node_sort_key = partial(_node_sort_key, self._graph)
+        self._path_sort_key = partial(_file_focus_path_sort_key, self._graph)
         self._reverse_edges = _build_reverse_edges(self._graph, self._node_sort_key)
 
     def build(self, target_file: str) -> FileFocus:
@@ -237,23 +244,3 @@ class FileFocusBuilder:
         if max_total > 0:
             selected = selected[:max_total]
         return selected
-
-    def _path_sort_key(self, path: ReachabilityPath):
-        target = self._graph.get_node(path.sink)
-        source = self._graph.get_node(path.source)
-        return (
-            len(path.path or []),
-            target.file_path if target else "",
-            int(target.line_number or 0) if target else 0,
-            target.name if target else path.sink,
-            source.file_path if source else "",
-            int(source.line_number or 0) if source else 0,
-            source.name if source else path.source,
-            tuple(path.path or []),
-        )
-
-    def _node_sort_key(self, node_name: str):
-        node = self._graph.get_node(node_name)
-        if not node:
-            return ("", 0, node_name)
-        return (node.file_path, int(node.line_number or 0), node.name, node.unique_name)

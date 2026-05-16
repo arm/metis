@@ -70,6 +70,9 @@ For ownership findings, set function_name to the defective cleanup/caller functi
 related_function to the paired function when known.
 For all other findings, set function_name to the primary defective function and
 related_function only when another shown function is needed to explain the bug.
+Prefer the narrowest primary defective statement over a broad caller, wrapper, or
+endpoint. If two candidate findings describe the same root cause, keep the one with
+the more specific primary_file, primary_function, primary_line, evidence, and mitigation.
 Do not report style issues, hypothetical risks without shown code evidence/mechanism, or
 duplicates already represented by the same root cause.
 Return {{"findings": []}} if none found. Be conservative but thorough."""

@@ -6,8 +6,6 @@
 from __future__ import annotations
 import logging
 import os
-import threading
-import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -15,14 +13,12 @@ from metis.usage import submit_with_current_context
 from metis.utils import parse_json_output
 
 from .finding_normalization import (
-    _canonical_fields,
-    _normalise_vuln_type,
+    _finding_from_llm_entry,
     _safe_int,
     _same_file_ref,
 )
 from .graph_utils import _chunked, _dedupe_paths
 from .llm_runner import invoke_reachability_prompt
-from .models import VulnerabilityFinding
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
@@ -36,6 +32,19 @@ For every finding include canonical ownership fields. These fields are mandatory
 Choose primary_file/primary_function/primary_line as the location of the actual defective code,
 not merely the source, caller, helper, or path endpoint.
 Use the exact shown function identifier for primary_function when available.
+Primary location rules:
+- Memory, path, format-string, and command bugs: primary_line is the unsafe call,
+  size calculation, open/check pair, or unchecked data use.
+- Missing auth/permission bugs: primary_line is the privileged operation or dispatch
+  that lacks the correct check, not the permission helper.
+- State/order bugs: primary_line is the premature state publication, such as the
+  ready/enabled/powered assignment, not a later consumer.
+- Cleanup/rollback bugs: primary_line is the failure branch, return, goto, publish,
+  or cleanup point where the required rollback/release is missing.
+- Lifecycle/use-after-free bugs: primary_line is the use/deref/callback that can
+  observe ended lifetime; put the lifetime-ending function in related_function.
+- Refcount/accounting bugs: primary_line is the get/put/ref/unref/count update, or
+  the paired create/destroy/map/unmap path where the update is missing.
 root_cause_id must be a stable short snake_case token for the specific root cause.
 Use the same root_cause_id and canonical_key for the same root cause across different
 paths, chunks, or lenses.
@@ -144,8 +153,7 @@ class VulnerabilityConfirmer:
             groups[p.sink].append(p)
         total = len(groups)
         all_f = []
-        lock = threading.Lock()
-        done = [0]
+        done = 0
         if progress_callback:
             progress_callback({"event": "confirmation_start", "total": total})
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -156,9 +164,7 @@ class VulnerabilityConfirmer:
             for fut in as_completed(futs):
                 sn = futs[fut]
                 try:
-                    findings = fut.result()
-                    with lock:
-                        all_f.extend(findings)
+                    all_f.extend(fut.result())
                 except Exception as e:
                     logger.warning("Confirm fail %s: %s", sn, e)
                     if progress_callback:
@@ -170,13 +176,12 @@ class VulnerabilityConfirmer:
                                 "error": f"{type(e).__name__}: {e}",
                             }
                         )
-                with lock:
-                    done[0] += 1
+                done += 1
                 if progress_callback:
                     progress_callback(
                         {
                             "event": "confirmation_progress",
-                            "completed": done[0],
+                            "completed": done,
                             "total": total,
                             "sink": sn,
                             "endpoint": sn,
@@ -259,40 +264,21 @@ class VulnerabilityConfirmer:
                 and not _same_file_ref(explicit_primary_file, target_file, self._cb)
             ):
                 continue
-            vulnerability_type = _normalise_vuln_type(
-                e.get("vulnerability_type") or rp.sink_type or "other"
-            )
-            primary_file, primary_function, primary_line, canonical_key = (
-                _canonical_fields(
-                    e,
-                    default_file=sink_file or source_file,
-                    default_function=rp.sink or rp.source,
-                    default_line=sink_line or source_line,
-                    vulnerability_type=vulnerability_type,
-                )
-            )
             results.append(
-                VulnerabilityFinding(
-                    id=uuid.uuid4().hex[:16],
-                    vulnerability_type=vulnerability_type,
-                    severity=str(e.get("severity") or "medium"),
-                    confidence=str(e.get("confidence") or "medium"),
+                _finding_from_llm_entry(
+                    e,
                     source_function=rp.source,
                     source_file=source_file,
                     source_line=source_line,
                     sink_function=rp.sink,
                     sink_file=sink_file,
                     sink_line=sink_line,
-                    path=list(rp.path),
-                    description=str(e.get("description") or ""),
-                    root_cause=str(e.get("root_cause") or ""),
-                    evidence=str(e.get("evidence") or ""),
-                    mitigation=str(e.get("mitigation") or ""),
+                    path=rp.path,
                     analysis_type="reachability",
-                    primary_file=primary_file,
-                    primary_function=primary_function,
-                    primary_line=primary_line,
-                    canonical_key=canonical_key,
+                    default_file=sink_file or source_file,
+                    default_function=rp.sink or rp.source,
+                    default_line=sink_line or source_line,
+                    default_vulnerability_type=rp.sink_type or "other",
                 )
             )
         return results

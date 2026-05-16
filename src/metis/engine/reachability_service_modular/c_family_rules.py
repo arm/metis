@@ -7,42 +7,15 @@ from __future__ import annotations
 
 import re
 
+C_FAMILY_PLUGIN_NAMES = frozenset({"c", "cpp"})
+
 CONTROL_CALLS = frozenset(
-    {
-        "if",
-        "for",
-        "while",
-        "switch",
-        "return",
-        "sizeof",
-        "alignof",
-        "_Generic",
-        "case",
-        "do",
-        "else",
-        "typedef",
-        "defined",
-    }
+    "if for while switch return sizeof alignof _Generic case do else typedef defined".split()
 )
 
 SOURCE_CALLS = frozenset(
-    {
-        "read",
-        "recv",
-        "recvfrom",
-        "fread",
-        "scanf",
-        "sscanf",
-        "fscanf",
-        "gets",
-        "getenv",
-        "copy_from_user",
-        "copyin",
-        "ioctl",
-        "poll",
-        "select",
-        "accept",
-    }
+    "read recv recvfrom fread scanf sscanf fscanf gets getenv copy_from_user "
+    "copyin ioctl poll select accept".split()
 )
 
 SOURCE_NAME_RE = re.compile(
@@ -52,54 +25,22 @@ SOURCE_NAME_RE = re.compile(
 )
 
 ENTRYPOINT_FIELDS = frozenset(
-    {
-        "open",
-        "release",
-        "ioctl",
-        "unlocked_ioctl",
-        "compat_ioctl",
-        "read",
-        "write",
-        "poll",
-        "probe",
-        "remove",
-        "shutdown",
-        "suspend",
-        "resume",
-        "callback",
-        "fn",
-        "handler",
-        "worker",
-    }
+    "open release ioctl unlocked_ioctl compat_ioctl read write poll probe remove "
+    "shutdown suspend resume callback fn handler worker".split()
 )
 
-_BUFFER_COPY_CALLS = frozenset(
-    {"memcpy", "memmove", "strcpy", "strncpy", "strcat", "gets"}
-)
+_BUFFER_COPY_CALLS = frozenset("memcpy memmove strcpy strncpy strcat gets".split())
 _BOUNDS_CALLS = frozenset({"strlen", "strnlen"})
 _FORMAT_CALLS = frozenset(
-    {
-        "sprintf",
-        "vsprintf",
-        "snprintf",
-        "vsnprintf",
-        "printf",
-        "fprintf",
-        "vprintf",
-        "vfprintf",
-    }
+    "sprintf vsprintf snprintf vsnprintf printf fprintf vprintf vfprintf".split()
 )
 _COMMAND_CALLS = frozenset(
-    {"system", "popen", "execl", "execle", "execlp", "execv", "execve", "execvp"}
+    "system popen execl execle execlp execv execve execvp".split()
 )
-_PATH_CALLS = frozenset(
-    {"fopen", "open", "stat", "lstat", "access", "unlink", "rename"}
-)
+_PATH_CALLS = frozenset("fopen open stat lstat access unlink rename".split())
 _FREE_CALLS = frozenset({"free", "kfree", "vfree"})
 _CLOSE_CALLS = frozenset({"close"})
-_ALLOC_CALLS = frozenset(
-    {"malloc", "calloc", "realloc", "kmalloc", "kcalloc", "krealloc"}
-)
+_ALLOC_CALLS = frozenset("malloc calloc realloc kmalloc kcalloc krealloc".split())
 _IOCTL_CALLS = frozenset({"ioctl"})
 _UNCATEGORIZED_SINK_CALLS = frozenset({"scanf", "sscanf", "fscanf"})
 _LIFETIME_TEXT_RE = re.compile(r"\b(?:release|destroy|cleanup)\b")

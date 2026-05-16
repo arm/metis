@@ -12,6 +12,7 @@ from .finding_normalization import (
     _canonical_finding_key,
     _finding_file,
     _finding_function,
+    _finding_line,
     _normalise_vuln_type,
 )
 
@@ -127,9 +128,37 @@ def _best_finding_sort_key(finding):
             _normalise_vuln_type(getattr(finding, "vulnerability_type", "")), 2
         ),
         _CONFIDENCE_RANK.get(str(getattr(finding, "confidence", "")).lower(), 3),
+        -_primary_location_quality_score(finding),
         len(getattr(finding, "path", []) or []),
         -len(str(getattr(finding, "description", "") or "")),
     )
+
+
+def _primary_location_quality_score(finding):
+    score = 0
+    if _finding_file(finding):
+        score += 4
+    if _finding_function(finding):
+        score += 4
+    if _finding_line(finding) > 0:
+        score += 4
+
+    for field in ("description", "root_cause", "evidence", "mitigation"):
+        text = str(getattr(finding, field, "") or "").strip()
+        if len(text) >= 20:
+            score += 2
+
+    canonical_key = str(getattr(finding, "canonical_key", "") or "")
+    if canonical_key:
+        score += 2
+        if ":line_" not in canonical_key:
+            score += 2
+
+    primary_function = str(getattr(finding, "primary_function", "") or "")
+    if primary_function and primary_function in set(getattr(finding, "path", []) or []):
+        score += 2
+
+    return score
 
 
 def _select_diverse(findings, limit):
