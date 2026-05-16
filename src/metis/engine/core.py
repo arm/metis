@@ -24,27 +24,10 @@ from .triage_service import TriageService
 logger = logging.getLogger("metis")
 
 
-def _bool_setting(value, default=False):
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
 def _int_setting(value, default):
     if value is None or value == "":
         return default
     return int(value)
-
-
-def _choice_setting(value, choices, default):
-    if value is None or value == "":
-        return default
-    normalized = str(value).strip().lower()
-    if normalized in choices:
-        return normalized
-    return default
 
 
 class MetisEngine:
@@ -96,9 +79,6 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
-        self.use_reachability_for_review = _bool_setting(
-            kwargs.get("use_reachability_for_review"), False
-        )
         self.reachability_settings = {
             "confirmation_model": kwargs.get("reachability_confirmation_model"),
             "max_workers": _int_setting(
@@ -112,11 +92,6 @@ class MetisEngine:
                 kwargs.get("reachability_max_path_length"), 25
             ),
             "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
-            "review_file_mode": _choice_setting(
-                kwargs.get("reachability_review_file_mode"),
-                {"partial", "full"},
-                "partial",
-            ),
             "security_functions": kwargs.get("reachability_security_functions") or [],
             "domain_profiles": (
                 ["gpu"]
@@ -189,7 +164,6 @@ class MetisEngine:
             get_query_engines=lambda: self._init_and_get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
             reachability_service=self.reachability,
-            use_reachability_for_review=self.use_reachability_for_review,
             reachability_settings=self.reachability_settings,
         )
         self._triage_service = self._build_triage_service()

@@ -35,7 +35,6 @@ class ReviewService:
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
         reachability_service=None,
-        use_reachability_for_review: bool = False,
         reachability_settings: dict[str, Any] | None = None,
     ):
         self._config = config
@@ -43,7 +42,6 @@ class ReviewService:
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
         self._reachability_service = reachability_service
-        self._use_reachability_for_review = use_reachability_for_review
         self._reachability_settings = dict(reachability_settings or {})
         self._reachability_cache = None
         self._reachability_lock = threading.Lock()
@@ -77,75 +75,54 @@ class ReviewService:
         options: ReviewOptions | None = None,
         *,
         use_retrieval_context: bool | None = None,
-        mode: str = "partial",
         progress_callback=None,
     ):
         options = coerce_review_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
-        mode = str(mode or "partial").lower()
-        if mode == "full":
-            if (
-                self._use_reachability_for_review
-                and self._reachability_service is not None
-            ):
-                return self._reachability_service.review_file(
+        if (
+            self._reachability_service is not None
+            and self._is_file_in_codebase(file_path)
+            and self._is_c_cpp_file(file_path)
+        ):
+            try:
+                result = self._reachability_service.review_file(
                     file_path,
-                    **self._reachability_settings,
+                    confirmation_model=self._reachability_settings.get(
+                        "confirmation_model"
+                    ),
+                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
+                    max_paths=int(self._reachability_settings.get("max_paths", 0)),
+                    max_paths_per_sink=int(
+                        self._reachability_settings.get("max_paths_per_sink", 3)
+                    ),
+                    max_path_length=int(
+                        self._reachability_settings.get("max_path_length", 25)
+                    ),
+                    reasoning_effort=self._reachability_settings.get(
+                        "reasoning_effort"
+                    ),
+                    security_functions=self._reachability_settings.get(
+                        "security_functions"
+                    ),
+                    domain_hints=self._reachability_settings.get("domain_hints"),
+                    domain_profiles=self._reachability_settings.get("domain_profiles"),
+                    progress_callback=progress_callback,
                 )
-        elif mode == "partial":
-            if (
-                self._reachability_service is not None
-                and self._is_file_in_codebase(file_path)
-                and self._is_c_cpp_file(file_path)
-            ):
-                try:
-                    result = self._reachability_service.review_file(
-                        file_path,
-                        confirmation_model=self._reachability_settings.get(
-                            "confirmation_model"
-                        ),
-                        max_workers=int(
-                            self._reachability_settings.get("max_workers", 8)
-                        ),
-                        max_paths=int(self._reachability_settings.get("max_paths", 0)),
-                        max_paths_per_sink=int(
-                            self._reachability_settings.get("max_paths_per_sink", 3)
-                        ),
-                        max_path_length=int(
-                            self._reachability_settings.get("max_path_length", 25)
-                        ),
-                        reasoning_effort=self._reachability_settings.get(
-                            "reasoning_effort"
-                        ),
-                        security_functions=self._reachability_settings.get(
-                            "security_functions"
-                        ),
-                        domain_hints=self._reachability_settings.get("domain_hints"),
-                        domain_profiles=self._reachability_settings.get(
-                            "domain_profiles"
-                        ),
-                        progress_callback=progress_callback,
+            except Exception as e:
+                logger.exception("Tree-sitter file review failed for %s", file_path)
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "event": "treesitter_file_review_error",
+                            "file": file_path,
+                            "error": f"{type(e).__name__}: {e}",
+                        }
                     )
-                except Exception as e:
-                    logger.exception("Tree-sitter file review failed for %s", file_path)
-                    if progress_callback is not None:
-                        progress_callback(
-                            {
-                                "event": "treesitter_file_review_error",
-                                "file": file_path,
-                                "error": f"{type(e).__name__}: {e}",
-                            }
-                        )
-                else:
-                    if result is not None:
-                        return result
-        if self._use_reachability_for_review and self._reachability_service is not None:
-            return self._reachability_service.review_file(
-                file_path,
-                **self._reachability_settings,
-            )
+            else:
+                if result is not None:
+                    return result
         qe_code = qe_docs = None
         if options.use_retrieval_context:
             qe_code, qe_docs = self._get_query_engines()
@@ -207,8 +184,6 @@ class ReviewService:
         review_fn,
         path: str,
         options: ReviewOptions,
-        *,
-        force_classic: bool = False,
     ):
         try:
             signature = inspect.signature(review_fn)
@@ -225,8 +200,6 @@ class ReviewService:
                 kwargs["options"] = options
             if "use_retrieval_context" in params:
                 kwargs["use_retrieval_context"] = options.use_retrieval_context
-            if force_classic and ("mode" in params or accepts_kwargs):
-                kwargs["mode"] = "classic"
             if kwargs:
                 return review_fn(path, **kwargs)
 
@@ -268,12 +241,12 @@ class ReviewService:
             }
             return
 
-        use_reachability = (
+        run_codebase_reachability = (
             self._reachability_service is not None
             and review_file_func is None
             and any(self._is_c_cpp_file(path) for path in files)
         )
-        if use_reachability:
+        if run_codebase_reachability:
             results = self._get_reachability_reviews(
                 progress_callback=progress_callback
             )
@@ -292,7 +265,6 @@ class ReviewService:
                     review_fn,
                     path,
                     options,
-                    force_classic=review_file_func is None,
                 ): path
                 for path in files
             }

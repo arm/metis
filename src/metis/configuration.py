@@ -263,14 +263,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "review_code_exclude_paths", []
     )
     reachability_keys = (
-        "use_reachability_for_review",
         "reachability_confirmation_model",
         "reachability_workers",
         "reachability_max_paths",
         "reachability_max_paths_per_sink",
         "reachability_max_path_length",
         "reachability_reasoning_effort",
-        "reachability_review_file_mode",
         "reachability_security_functions",
         "reachability_domain_profiles",
         "reachability_domain_hints",

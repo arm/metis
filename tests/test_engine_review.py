@@ -41,12 +41,11 @@ def test_review_code_uses_reachability_for_c_cpp(engine):
     engine.review.review_file.assert_not_called()
 
 
-def test_review_code_uses_legacy_for_non_c_cpp_even_when_reachability_enabled(engine):
+def test_review_code_uses_legacy_for_non_c_cpp(engine):
     reachability = Mock()
     reachability.review_codebase.return_value = [
         {"file": "ignored.c", "reviews": [{"issue": "Issue"}]}
     ]
-    engine.review._use_reachability_for_review = True
     engine.review._reachability_service = reachability
     engine.review._reachability_cache = None
     engine.review.review_file = Mock(

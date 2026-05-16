@@ -123,9 +123,6 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        use_reachability_for_review=_reachability_value(
-            "use_reachability_for_review", False
-        ),
         reachability_confirmation_model=_reachability_value(
             "reachability_confirmation_model"
         ),
@@ -139,9 +136,6 @@ def build_engine(args, runtime):
         ),
         reachability_reasoning_effort=_reachability_value(
             "reachability_reasoning_effort"
-        ),
-        reachability_review_file_mode=_reachability_value(
-            "reachability_review_file_mode"
         ),
         reachability_security_functions=_reachability_value(
             "reachability_security_functions", []

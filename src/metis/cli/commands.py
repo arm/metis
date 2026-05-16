@@ -114,10 +114,6 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-    reachability_settings = getattr(engine, "reachability_settings", {}) or {}
-    mode = str(reachability_settings.get("review_file_mode") or "partial").lower()
-    if mode not in {"partial", "full"}:
-        mode = "partial"
 
     def _progress(event):
         logger.debug("reachability progress event: %r", event)
@@ -127,7 +123,6 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
         engine.review.review_file,
         file_path=file_path,
         options=options,
-        mode=mode,
         progress_callback=_progress,
         quiet=args.quiet,
     )
