@@ -18,28 +18,6 @@ from .finding_taxonomy import _VTYPE_FAMILY
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
 _CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
-_VULN_PRIORITY = {
-    "use_after_free": 0,
-    "double_free": 0,
-    "double_close": 0,
-    "teardown_race": 0,
-    "stale_pointer_after_realloc": 0,
-    "format_string": 0,
-    "out_of_bounds": 0,
-    "buffer_overflow": 0,
-    "integer_overflow": 0,
-    "integer_overflow_in_allocation": 0,
-    "missing_auth": 0,
-    "permission_mismatch": 0,
-    "auth_comparison_logic_error": 0,
-    "refcount_imbalance": 1,
-    "missing_bounds_check": 1,
-    "boolean_coercion": 1,
-    "info_leak": 1,
-    "type_confusion": 1,
-    "state_order": 2,
-    "null_deref": 3,
-}
 
 
 class Deduplicator:
@@ -122,43 +100,18 @@ def _pick_best(findings):
 
 
 def _best_finding_sort_key(finding):
+    canonical_key = str(getattr(finding, "canonical_key", "") or "")
     return (
         _SEVERITY_RANK.get(str(getattr(finding, "severity", "")).lower(), 5),
-        _VULN_PRIORITY.get(
-            _normalise_vuln_type(getattr(finding, "vulnerability_type", "")), 2
-        ),
         _CONFIDENCE_RANK.get(str(getattr(finding, "confidence", "")).lower(), 3),
-        -_primary_location_quality_score(finding),
+        not bool(_finding_file(finding)),
+        not bool(_finding_function(finding)),
+        _finding_line(finding) <= 0,
+        not bool(canonical_key),
+        ":line_" in canonical_key,
         len(getattr(finding, "path", []) or []),
         -len(str(getattr(finding, "description", "") or "")),
     )
-
-
-def _primary_location_quality_score(finding):
-    score = 0
-    if _finding_file(finding):
-        score += 4
-    if _finding_function(finding):
-        score += 4
-    if _finding_line(finding) > 0:
-        score += 4
-
-    for field in ("description", "root_cause", "evidence", "mitigation"):
-        text = str(getattr(finding, field, "") or "").strip()
-        if len(text) >= 20:
-            score += 2
-
-    canonical_key = str(getattr(finding, "canonical_key", "") or "")
-    if canonical_key:
-        score += 2
-        if ":line_" not in canonical_key:
-            score += 2
-
-    primary_function = str(getattr(finding, "primary_function", "") or "")
-    if primary_function and primary_function in set(getattr(finding, "path", []) or []):
-        score += 2
-
-    return score
 
 
 def _select_diverse(findings, limit):

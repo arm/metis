@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
+from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS, _GENERIC_FINDING_JSON_SCHEMA
 
 _INTRA_SYS = (
     """\
@@ -26,13 +26,9 @@ Look for:
 11. MISSING BOUNDS CHECK: memcpy/sprintf/strncpy with size from parameter without validation.
 12. STATE ORDERING: Setting ready/enabled flag BEFORE prerequisite validation/initialization completes.
 13. STALE METADATA: Modifying buffer content without updating associated length/size field.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "double_free", "severity": "high", "confidence": "high", \
-"function_name": "handle_set", "line": 55, "primary_file": "src/example.c",
-"primary_function": "src/example.c::handle_set", "primary_line": 55,
-"root_cause_id": "cleanup_double_free",
-"canonical_key": "src/example.c:src/example.c::handle_set:double_free:cleanup_double_free",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -51,15 +47,9 @@ Run only the requested lenses below.
 Requested lenses:
 {lens_instructions}
 
-Return ONLY valid JSON:
-{{"findings": [{{"analysis_type": "semantic", "vulnerability_type": "missing_auth",
-"severity": "high", "confidence": "high", "function_name": "handle_reset_request",
-"related_function": "check_permission", "description": "...", "root_cause": "...",
-"evidence": "...", "mitigation": "...", "primary_file": "src/control.c",
-"primary_function": "src/control.c::handle_reset_request", "primary_line": 123,
-"root_cause_id": "reset_missing_permission",
-"canonical_key": "src/control.c:src/control.c::handle_reset_request:authorization:reset_missing_permission"}}]}}
-
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 analysis_type is mandatory and must exactly be one of: {allowed_analysis_types}
 For lifecycle findings, set function_name to the use/deref function and related_function
 to the free, teardown, or lifetime-ending function when known.
@@ -93,13 +83,9 @@ Only report concrete bugs in the shown functions:
    without canonicalization and base-directory restriction.
 7. TOCTOU when stat/access/lstat is followed by open/fopen/unlink/etc. on the same path.
 8. NULL dereference after failed allocation/lookup and out-of-bounds indexing.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "buffer_overflow", "severity": "high",
-"confidence": "high", "function_name": "copy_record", "line": 123,
-"primary_file": "src/records.c", "primary_function": "src/records.c::copy_record",
-"primary_line": 123, "root_cause_id": "unchecked_record_copy",
-"canonical_key": "src/records.c:src/records.c::copy_record:memory_bounds:unchecked_record_copy",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative and report each root cause once."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -117,13 +103,9 @@ Focus only on:
 - Object publication before full initialization succeeds.
 - Do not report borrowed pointer fields being set to NULL as leaks unless this function
   actually owns the pointed-to memory.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "rollback_gap", "severity": "high",
-"confidence": "high", "function_name": "object_create", "related_function": "remove_from_index",
-"primary_file": "src/object.c", "primary_function": "src/object.c::object_create",
-"primary_line": 88, "root_cause_id": "missing_rb_erase_rollback",
-"canonical_key": "src/object.c:src/object.c::object_create:cleanup:missing_index_rollback",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative and do not report style-only cleanup issues."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -139,14 +121,9 @@ Report only concrete mismatches:
 - resource/page/queue/context counts incremented but not decremented.
 - Delta computed after overwriting the old value.
 - No-op get/put/ref/unref helpers that callers rely on for lifetime or accounting.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "accounting_drift", "severity": "medium",
-"confidence": "high", "function_name": "object_create_mapping",
-"related_function": "object_destroy_mapping",
-"primary_file": "src/object.c", "primary_function": "src/object.c::object_create_mapping",
-"primary_line": 71, "root_cause_id": "mapping_count_not_decremented",
-"canonical_key": "src/object.c:src/object.c::object_create_mapping:accounting:mapping_count_not_decremented",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -162,13 +139,9 @@ Focus on:
   callbacks or references alive beyond release.
 - callback fn/data initialized with object context, but teardown does not cancel/flush
   before free/destroy/mutex_destroy.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "teardown_race", "severity": "high",
-"confidence": "high", "function_name": "resource_release", "related_function": "resource_poll",
-"primary_file": "src/resource.c", "primary_function": "src/resource.c::resource_release",
-"primary_line": 44, "root_cause_id": "release_without_callback_flush",
-"canonical_key": "src/resource.c:src/resource.c::resource_release:teardown_lifecycle:release_without_callback_flush",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative and report only actionable lifecycle gaps."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -181,13 +154,9 @@ Confirm only real lock-order inversions:
 - The locks protect shared state and the functions can run concurrently.
 - Ignore sequences where one lock is released before the other is acquired or where the
   ordering is impossible due to clear call/lifecycle constraints.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "lock_order", "severity": "medium",
-"confidence": "high", "function_name": "scheduler_submit", "related_function": "context_destroy",
-"primary_file": "src/scheduler.c", "primary_function": "src/scheduler.c::scheduler_submit",
-"primary_line": 210, "root_cause_id": "context_scheduler_lock_inversion",
-"canonical_key": "src/scheduler.c:src/scheduler.c::scheduler_submit:lock_order:context_scheduler_lock_inversion",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -201,14 +170,9 @@ Focus only on:
 - State transitions published while dependent structures are still being mutated.
 - Missing wait/flush/barrier before dependent operation.
 - Missing state-management or address-translation lock coordination around transitions.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "ordering_gap", "severity": "high",
-"confidence": "high", "function_name": "mapping_insert_pages",
-"related_function": "runtime_disable",
-"primary_file": "src/mapping.c", "primary_function": "src/mapping.c::mapping_insert_pages",
-"primary_line": 305, "root_cause_id": "missing_state_transition_barrier",
-"canonical_key": "src/mapping.c:src/mapping.c::mapping_insert_pages:state_order:missing_state_transition_barrier",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
@@ -224,13 +188,9 @@ Target only:
 - stat/access/lstat followed by fopen/open on the same path.
 Prefer vulnerability_type path_traversal or toctou. Do not classify as missing_auth
 unless the real root cause is authorization rather than filesystem path validation.
-Return ONLY valid JSON:
-{{"findings": [{{"vulnerability_type": "path_traversal", "severity": "high",
-"confidence": "high", "function_name": "load_custom_file", "related_function": "",
-"primary_file": "src/file_loader.c", "primary_function": "src/file_loader.c::load_custom_file",
-"primary_line": 60, "root_cause_id": "uncanonicalized_base_path",
-"canonical_key": "src/file_loader.c:src/file_loader.c::load_custom_file:filesystem_path:uncanonicalized_base_path",
-"description": "...", "root_cause": "...", "evidence": "..."}}]}}
+"""
+    + _GENERIC_FINDING_JSON_SCHEMA
+    + """\
 Return {{"findings": []}} if none found. Be conservative."""
     + _CANONICAL_FINDING_INSTRUCTIONS
 )

@@ -558,14 +558,6 @@ class SupplementaryAnalyzer:
         expr = expr.replace("->", ".").strip("&()")
         if not expr:
             return ""
-        if "hwaccess_lock" in expr:
-            return "hwaccess_lock"
-        if "scheduler_lock" in expr:
-            return "scheduler_lock"
-        if ".queue.lock" in expr or expr.endswith("queue.lock"):
-            return "queue.lock"
-        if ".pm.lock" in expr or expr.endswith("pm.lock"):
-            return "pm.lock"
         if expr.endswith(".lock"):
             return ".".join(expr.split(".")[-2:])
         return expr

@@ -22,13 +22,37 @@ from .llm_runner import invoke_reachability_prompt
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
+
+
+def _finding_json_schema(*, path_fields=False, analysis_type="requested_analysis_type"):
+    first_fields = '"path_index": 0, "is_vulnerable": true, ' if path_fields else ""
+    return (
+        "Return ONLY valid JSON using this generic shape. Use real values from the "
+        "shown code and requested analysis; do not copy placeholder values into "
+        "findings:\n"
+        '{{"findings": [{{' + first_fields + f'"analysis_type": "{analysis_type}",\n'
+        '"vulnerability_type": "valid_vulnerability_type", "severity": "high",\n'
+        '"confidence": "high", "function_name": "function_name",\n'
+        '"related_function": "related_function_or_empty", "line": 123,\n'
+        '"primary_file": "src/file.c", '
+        '"primary_function": "src/file.c::function_name",\n'
+        '"primary_line": 123, "root_cause_id": "short_snake_case_root_cause",\n'
+        '"canonical_key": '
+        '"src/file.c:src/file.c::function_name:vulnerability_family:short_snake_case_root_cause",\n'
+        '"description": "...", "root_cause": "...", "evidence": "...", '
+        '"mitigation": "..."}}]}}\n'
+    )
+
+
+_GENERIC_FINDING_JSON_SCHEMA = _finding_json_schema()
+_CONFIRM_FINDING_JSON_SCHEMA = _finding_json_schema(
+    path_fields=True, analysis_type="reachability"
+)
+
 _CANONICAL_FINDING_INSTRUCTIONS = """\
 
-For every finding include canonical ownership fields. These fields are mandatory:
-{{"primary_file": "src/example.c", "primary_function": "example_function",
-"primary_line": 123,
-"root_cause_id": "short_snake_case_root",
-"canonical_key": "src/example.c:example_function:vulnerability_family:root_cause_token"}}
+For every finding include canonical ownership fields: primary_file, primary_function,
+primary_line, root_cause_id, and canonical_key.
 Choose primary_file/primary_function/primary_line as the location of the actual defective code,
 not merely the source, caller, helper, or path endpoint.
 Use the exact shown function identifier for primary_function when available.
@@ -65,13 +89,9 @@ For EACH path determine if it contains a real exploitable vulnerability:
 1. Does attacker-controlled execution, input, state, or object lifetime reach the vulnerable operation through the path?
 2. Are there sanitization, bounds, permission, or lifecycle checks that prevent exploitation?
 3. Is the dangerous operation or missing check truly reachable as called?
-Return ONLY valid JSON:
-{{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "primary_file": "src/example.c",
-"primary_function": "src/example.c::copy_input", "primary_line": 42,
-"root_cause_id": "unchecked_copy_size",
-"canonical_key": "src/example.c:src/example.c::copy_input:buffer_overflow:unchecked_copy_size",
-"description": "...", "root_cause": "...", "evidence": "...", "mitigation": "..."}}]}}
+"""
+    + _CONFIRM_FINDING_JSON_SCHEMA
+    + """\
 vulnerability_type: buffer_overflow, use_after_free, double_free, double_close, null_deref, command_injection, \
 format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, \
 out_of_bounds, refcount_imbalance, state_order, lock_order, stale_after_unlock, accounting_drift, \
@@ -100,13 +120,9 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 2. Does the target file contain the missing validation, unsafe state transition, or dangerous sink usage?
 3. Are there checks or lifecycle constraints that make the path non-exploitable?
 4. Is the root cause in the target file rather than merely elsewhere on the path?
-Return ONLY valid JSON:
-{{"findings": [{{"path_index": 0, "is_vulnerable": true, "vulnerability_type": "buffer_overflow",
-"severity": "high", "confidence": "high", "primary_file": "src/example.c",
-"primary_function": "src/example.c::copy_input", "primary_line": 42,
-"root_cause_id": "unchecked_copy_size",
-"canonical_key": "src/example.c:src/example.c::copy_input:buffer_overflow:unchecked_copy_size",
-"description": "...", "root_cause": "...", "evidence": "...", "mitigation": "..."}}]}}
+"""
+    + _CONFIRM_FINDING_JSON_SCHEMA
+    + """\
 vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
 integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, \
 state_order, lock_order, stale_after_unlock, accounting_drift, missing_auth, permission_mismatch, \
