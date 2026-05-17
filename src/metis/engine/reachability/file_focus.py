@@ -9,8 +9,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from functools import partial
 
-from ..reachability_common.models import ReachabilityPath
-from ..reachability_common.graph_utils import (
+from .models import ReachabilityPath
+from .graph_utils import (
     _build_reverse_edges,
     _file_focus_path_sort_key,
     _node_sort_key,

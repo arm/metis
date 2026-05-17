@@ -8,6 +8,31 @@ from collections import defaultdict
 
 from .models import FunctionNode, ReachabilityGraph
 
+_AUTO_CONFIRMATION_MAX_PATHS = 48
+_AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
+_AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
+
+_CONFIRMATION_RANK_TERMS = (
+    "auth",
+    "permission",
+    "login",
+    "dispatch",
+    "parse",
+    "import",
+    "export",
+    "free",
+    "close",
+    "unref",
+    "copy",
+    "memcpy",
+    "printf",
+    "sanitize",
+    "callback",
+    "notify",
+    "session",
+    "store",
+)
+
 
 def _chunked(items, size):
     if size <= 0:
@@ -115,3 +140,66 @@ def _copy_graph_nodes(graph, node_names):
             focus.add_global(global_construct)
     focus.resolve_all_calls()
     return focus
+
+
+def select_confirmation_paths(paths, graph, *, max_paths=0):
+    """Pick a bounded, representative set of source-rooted paths for LLM review."""
+    paths = _dedupe_paths(paths)
+    if max_paths and int(max_paths) > 0:
+        return paths[: int(max_paths)]
+    if len(paths) <= _AUTO_CONFIRMATION_MAX_PATHS:
+        return paths
+
+    indexed = list(enumerate(paths))
+    indexed.sort(key=lambda item: _confirmation_path_rank(item[1], graph))
+    selected = []
+    endpoint_counts = {}
+    for original_index, path in indexed:
+        endpoint = path.sink
+        endpoint_count = endpoint_counts.get(endpoint, 0)
+        if endpoint_count >= _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT:
+            continue
+        if (
+            len(endpoint_counts) >= _AUTO_CONFIRMATION_MAX_ENDPOINTS
+            and endpoint not in endpoint_counts
+        ):
+            continue
+        endpoint_counts[endpoint] = endpoint_count + 1
+        selected.append((original_index, path))
+        if len(selected) >= _AUTO_CONFIRMATION_MAX_PATHS:
+            break
+
+    selected.sort(key=lambda item: item[0])
+    return [path for _original_index, path in selected]
+
+
+def _confirmation_path_rank(path, graph):
+    node_names = list(path.path or [])
+    nodes = [graph.get_node(name) for name in node_names]
+    nodes = [node for node in nodes if node is not None]
+    endpoint = graph.get_node(path.sink)
+    sink_count = sum(1 for node in nodes if node.is_sink)
+    term_score = 0
+    for node in nodes:
+        haystack = " ".join(
+            [
+                node.unique_name,
+                node.name,
+                node.sink_type,
+                node.sink_reason,
+                node.source_reason,
+            ]
+        ).lower()
+        if any(term in haystack for term in _CONFIRMATION_RANK_TERMS):
+            term_score += 1
+    source = graph.get_node(path.source)
+    return (
+        -sink_count,
+        -term_score,
+        len(node_names),
+        endpoint.file_path if endpoint else "",
+        int(endpoint.line_number or 0) if endpoint else 0,
+        source.file_path if source else "",
+        int(source.line_number or 0) if source else 0,
+        tuple(node_names),
+    )

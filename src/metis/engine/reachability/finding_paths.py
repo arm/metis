@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import replace
 from functools import partial
 
-from ..reachability_common.graph_utils import (
+from .graph_utils import (
     _build_reverse_edges,
     _node_sort_key,
     _normalize_file_ref,

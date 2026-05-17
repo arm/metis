@@ -195,3 +195,68 @@ def _post_filter_findings(findings, codebase_path):
 
         filtered.append(finding)
     return filtered
+
+
+def _strict_file_findings(findings):
+    keep = []
+    important_types = {
+        "buffer_overflow",
+        "out_of_bounds",
+        "use_after_free",
+        "double_free",
+        "double_close",
+        "format_string",
+        "integer_overflow",
+        "type_confusion",
+        "info_leak",
+        "stale_length",
+        "missing_auth",
+        "permission_mismatch",
+        "refcount_imbalance",
+        "accounting_drift",
+        "null_deref",
+    }
+    important_analysis = {
+        "reachability",
+        "lifecycle",
+        "ownership",
+        "targeted_callback_lifecycle",
+        "targeted_refcount",
+        "targeted_permission",
+        "classic_c_sink",
+        "counter_symmetry",
+    }
+    low_signal_null_markers = (
+        "caller-supplied",
+        "pointer parameter",
+        "parameters before",
+        "localtime",
+        "calloc",
+        "allocation result",
+    )
+    for finding in findings:
+        vtype = _normalise_vuln_type(finding.vulnerability_type)
+        severity = str(finding.severity or "").lower()
+        confidence = str(finding.confidence or "").lower()
+        text = " ".join(
+            [
+                str(finding.description or ""),
+                str(finding.root_cause or ""),
+                str(finding.evidence or ""),
+            ]
+        ).lower()
+
+        if vtype == "null_deref" and severity != "high":
+            if finding.analysis_type != "classic_c_sink" or not any(
+                marker in text for marker in ("before", "after", "lookup")
+            ):
+                if any(marker in text for marker in low_signal_null_markers):
+                    continue
+        if severity == "high":
+            keep.append(finding)
+            continue
+        if confidence == "high" and (
+            vtype in important_types or finding.analysis_type in important_analysis
+        ):
+            keep.append(finding)
+    return keep

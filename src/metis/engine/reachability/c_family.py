@@ -18,7 +18,7 @@ from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.analysis.c_family_helpers import CPP_EXTENSIONS
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
-from ..reachability_common.models import FunctionNode, GlobalConstruct
+from .models import FunctionNode, GlobalConstruct
 from .c_family_rules import (
     CONTROL_CALLS,
     ENTRYPOINT_FIELDS,

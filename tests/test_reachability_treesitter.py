@@ -3,28 +3,26 @@
 
 from metis.engine.analysis.c_family_analyzer_common import _identifier_from_node
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
-from metis.engine.reachability_common import (
+from metis.engine.reachability import (
     Deduplicator,
     FunctionNode,
     ReachabilityGraph,
     SourceRootedPathTracer,
 )
-from metis.engine.reachability_common.finding_normalization import (
+from metis.engine.reachability.finding_normalization import (
     _canonical_fields,
     _confidence_score,
 )
-from metis.engine.reachability_service_modular.builder import (
+from metis.engine.reachability.graph_utils import select_confirmation_paths
+from metis.engine.reachability.builder import (
     TreeSitterReachabilityGraphBuilder,
 )
-from metis.engine.reachability_service_modular.c_family import (
+from metis.engine.reachability.c_family import (
     CFamilyTreeSitterExtractor,
 )
-from metis.engine.reachability_service_modular.file_focus import FileFocusBuilder
-from metis.engine.reachability_service_modular.finding_paths import FindingPathAnnotator
-from metis.engine.reachability_service_modular.service import (
-    TreeSitterReachabilityService,
-)
-from metis.engine.reachability_common import VulnerabilityFinding
+from metis.engine.reachability.file_focus import FileFocusBuilder
+from metis.engine.reachability.finding_paths import FindingPathAnnotator
+from metis.engine.reachability import VulnerabilityFinding
 
 
 def test_confidence_score_matches_review_schema():
@@ -74,7 +72,7 @@ class _Runtime:
 
 def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
     import metis.engine.analysis.c_family_ast as c_family_ast
-    import metis.engine.reachability_service_modular.c_family as c_family
+    import metis.engine.reachability.c_family as c_family
 
     def fake_identifier(node, _source):
         return getattr(node, "text", "") if node else ""
@@ -180,9 +178,8 @@ def test_reachability_service_auto_caps_confirmation_paths():
         )
     graph.resolve_all_calls()
     paths = SourceRootedPathTracer(graph).find_all_paths()
-    service = object.__new__(TreeSitterReachabilityService)
 
-    selected = service.select_confirmation_paths(paths, graph)
+    selected = select_confirmation_paths(paths, graph)
     selected_endpoints = {path.sink for path in selected}
 
     assert len(paths) == 80
@@ -209,7 +206,7 @@ def test_identifier_extraction_handles_deep_trees_without_recursion():
 
 def test_c_family_extractor_handles_deep_trees_without_recursion(monkeypatch):
     import metis.engine.analysis.c_family_ast as c_family_ast
-    import metis.engine.reachability_service_modular.c_family as c_family
+    import metis.engine.reachability.c_family as c_family
 
     def fake_identifier(node, _source):
         return getattr(node, "text", "") if node else ""

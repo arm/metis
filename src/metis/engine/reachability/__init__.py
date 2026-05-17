@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared reachability graph, finding, and analysis helpers."""
+"""Tree-sitter reachability review package."""
 
 from __future__ import annotations
 

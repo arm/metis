@@ -21,7 +21,7 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
-from .reachability_service_modular.c_family_rules import C_FAMILY_PLUGIN_NAMES
+from .reachability.c_family_rules import C_FAMILY_PLUGIN_NAMES
 from .runtime import EngineConfig
 
 logger = logging.getLogger("metis")

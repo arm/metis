@@ -14,7 +14,7 @@ from metis.vector_store.base import BaseVectorStore
 from .graphs import AskGraph, ReviewGraph
 from .indexing_service import IndexingService
 from .options import TriageOptions, coerce_triage_options
-from .reachability_service_modular import TreeSitterReachabilityService
+from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState

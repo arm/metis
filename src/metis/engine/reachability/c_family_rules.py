@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import re
 
-from ..reachability_common.heuristic_data import _words
+from .finding_normalization import _normalise_vuln_type
+from .heuristic_data import _words
 
 C_FAMILY_PLUGIN_NAMES = _words("c cpp")
 
@@ -105,3 +106,52 @@ def is_sink_function(
             f"calls sink API(s): {', '.join(matched_calls[:6])}",
         )
     return False, "", ""
+
+
+def _normalise_security_function_specs(raw):
+    specs = {}
+
+    def add(name, *, sink_type="other", reason="configured in metis.yaml"):
+        key = str(name or "").strip()
+        if not key:
+            return
+        specs[key.lower()] = {
+            "sink_type": _normalise_vuln_type(sink_type or "other"),
+            "reason": str(reason or "configured in metis.yaml").strip(),
+        }
+
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, (list, tuple, set)):
+        items = ((None, item) for item in raw)
+    else:
+        return specs
+
+    for key, value in items:
+        if isinstance(value, str):
+            if key is None:
+                add(value, sink_type="other")
+            else:
+                add(key, sink_type=value)
+            continue
+        if not isinstance(value, dict):
+            add(key or value, sink_type="other")
+            continue
+        names = (
+            value.get("names")
+            or value.get("functions")
+            or value.get("function_names")
+            or value.get("name")
+            or value.get("function")
+            or value.get("function_name")
+            or key
+        )
+        if isinstance(names, str):
+            names = [names]
+        for name in names or []:
+            add(
+                name,
+                sink_type=value.get("sink_type") or value.get("type") or "other",
+                reason=value.get("reason") or "configured in metis.yaml",
+            )
+    return specs
