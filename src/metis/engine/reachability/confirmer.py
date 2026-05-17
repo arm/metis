@@ -17,6 +17,7 @@ from .finding_normalization import (
     _safe_int,
     _same_file_ref,
 )
+from .finding_taxonomy import _PROMPT_VULNERABILITY_TYPE_LIST
 from .graph_utils import _chunked, _dedupe_paths
 from .llm_runner import invoke_reachability_prompt
 from .source_context import _read_function_body
@@ -27,15 +28,16 @@ logger = logging.getLogger("metis")
 def _finding_json_schema(*, path_fields=False, analysis_type="requested_analysis_type"):
     first_fields = '"path_index": 0, "is_vulnerable": true, ' if path_fields else ""
     return (
-        "Return ONLY valid JSON using this generic shape. Use real values from the "
-        "shown code and requested analysis; do not copy placeholder values into "
-        "findings:\n"
+        "Return ONLY valid JSON using the exact field names in this shape. Use real "
+        "values from the shown code and requested analysis; never copy placeholder "
+        "tokens or ellipses into findings. If the evidence is insufficient, return "
+        '{{"findings": []}}.\n'
         '{{"findings": [{{' + first_fields + f'"analysis_type": "{analysis_type}",\n'
-        '"vulnerability_type": "valid_vulnerability_type", "severity": "high",\n'
-        '"confidence": "high", "function_name": "function_name",\n'
+        '"vulnerability_type": "one_allowed_vulnerability_type", "severity": "high",\n'
+        '"confidence": "high", "function_name": "actual_function_name",\n'
         '"related_function": "related_function_or_empty", "line": 123,\n'
         '"primary_file": "src/file.c", '
-        '"primary_function": "src/file.c::function_name",\n'
+        '"primary_function": "src/file.c::actual_function_name",\n'
         '"primary_line": 123, "root_cause_id": "short_snake_case_root_cause",\n'
         '"canonical_key": '
         '"src/file.c:src/file.c::function_name:vulnerability_family:short_snake_case_root_cause",\n'
@@ -48,6 +50,15 @@ _GENERIC_FINDING_JSON_SCHEMA = _finding_json_schema()
 _CONFIRM_FINDING_JSON_SCHEMA = _finding_json_schema(
     path_fields=True, analysis_type="reachability"
 )
+
+
+def _output_constraints(no_finding_guidance):
+    return f"""\
+vulnerability_type must be exactly one of: {_PROMPT_VULNERABILITY_TYPE_LIST}.
+severity must be exactly one of: critical, high, medium, low.
+confidence must be exactly one of: high, medium, low.
+Be conservative. {no_finding_guidance}"""
+
 
 _CANONICAL_FINDING_INSTRUCTIONS = """\
 
@@ -91,13 +102,9 @@ For EACH path determine if it contains a real exploitable vulnerability:
 3. Is the dangerous operation or missing check truly reachable as called?
 """
     + _CONFIRM_FINDING_JSON_SCHEMA
-    + """\
-vulnerability_type: buffer_overflow, use_after_free, double_free, double_close, null_deref, command_injection, \
-format_string, integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, \
-out_of_bounds, refcount_imbalance, state_order, lock_order, stale_after_unlock, accounting_drift, \
-missing_auth, permission_mismatch, info_leak, teardown_race, partial_cleanup, deferred_uaf, stale_state, \
-toctou, other.
-severity: critical, high, medium, low. confidence: high, medium, low. Be conservative."""
+    + _output_constraints(
+        'If the path does not prove a vulnerability, return {{"findings": []}}.'
+    )
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
 
@@ -122,12 +129,9 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 4. Is the root cause in the target file rather than merely elsewhere on the path?
 """
     + _CONFIRM_FINDING_JSON_SCHEMA
-    + """\
-vulnerability_type: buffer_overflow, use_after_free, double_free, null_deref, command_injection, format_string, \
-integer_overflow, path_traversal, race_condition, uninitialized_memory, type_confusion, out_of_bounds, \
-state_order, lock_order, stale_after_unlock, accounting_drift, missing_auth, permission_mismatch, \
-info_leak, teardown_race, partial_cleanup, deferred_uaf, stale_state, toctou, other.
-severity: critical, high, medium, low. confidence: high, medium, low. Be conservative."""
+    + _output_constraints(
+        'If the target file does not contain the primary bug, return {{"findings": []}}.'
+    )
     + _CANONICAL_FINDING_INSTRUCTIONS
 )
 

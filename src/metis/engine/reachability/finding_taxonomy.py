@@ -28,6 +28,8 @@ _VULN_TO_CWE = _mapping(
     """
 )
 
+_PROMPT_VULNERABILITY_TYPE_LIST = ", ".join((*_VULN_TO_CWE, "other"))
+
 _VTYPE_FAMILY = _mapping(
     """
     buffer_overflow memory_bounds out_of_bounds memory_bounds

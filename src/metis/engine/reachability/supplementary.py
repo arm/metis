@@ -6,7 +6,6 @@
 from __future__ import annotations
 import logging
 import os
-import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -15,6 +14,7 @@ from metis.usage import submit_with_current_context
 from .llm_runner import invoke_reachability_prompt
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _build_reverse_edges, _chunked, _node_sort_key
+from .lock_order import _extract_lock_conflicts
 from .supplementary_lenses import (
     _COMBINED_GRAPH_LENS_KINDS,
     _COMBINED_GRAPH_LENS_NOTES,
@@ -39,13 +39,6 @@ from .source_context import (
 )
 
 logger = logging.getLogger("metis")
-
-_LOCK_EVENT_RE = re.compile(
-    r"\b(?P<fn>pthread_mutex_lock|pthread_mutex_unlock|mutex_lock|mutex_unlock|"
-    r"spin_lock(?:_irqsave|_irq)?|spin_unlock(?:_irqrestore|_irq)?)\s*"
-    r"\(\s*(?P<arg>[^,\)]+)",
-    re.IGNORECASE,
-)
 
 
 class SupplementaryAnalyzer:
@@ -223,22 +216,29 @@ class SupplementaryAnalyzer:
         if spec.kind == "method":
             return getattr(self, spec.method_name)(graph, max_workers, cb)
         if spec.kind == "candidate_intra":
-            return self._run_candidate_intra_lens(
+            return self._run_candidate_lens(
                 graph,
                 spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
                 cb,
                 spec.name,
+                parse_mode="intra",
+                max_total_chars=50000,
+                per_fn_chars=5000,
+                sinks_only=spec.analysis_type == "classic_c_sink",
             )
         if spec.kind == "candidate_semantic":
-            return self._run_candidate_semantic_lens(
+            return self._run_candidate_lens(
                 graph,
                 spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
                 cb,
                 spec.name,
+                parse_mode="semantic",
+                max_total_chars=60000,
+                per_fn_chars=4000,
             )
         raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
@@ -375,56 +375,7 @@ class SupplementaryAnalyzer:
         )
         return _parse_intra(raw, functions)
 
-    def _run_candidate_intra_lens(
-        self, graph, sys_prompt, analysis_type, max_workers, cb, event_prefix
-    ):
-        candidates = self._structural_candidate_nodes(
-            graph, sinks_only=analysis_type == "classic_c_sink"
-        )
-        if not candidates:
-            return []
-        if cb:
-            cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
-        chunks = _build_file_grouped_node_chunks(
-            self._cb, candidates, max_total_chars=50000, per_fn_chars=5000
-        )
-        if not chunks:
-            return []
-        results = []
-
-        def _run_chunk(chunk_nodes, code_chunk):
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._sm,
-                max_tokens=self._st,
-                system_prompt=self._with_domain_hints(sys_prompt),
-                user_prompt=_INTRA_USR,
-                variables={
-                    "file_path": "candidate functions",
-                    "functions_code": code_chunk,
-                },
-                reasoning_effort=self._reasoning_effort,
-            )
-            return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
-
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(max_workers, len(chunks)))
-        ) as ex:
-            futs = {
-                submit_with_current_context(ex, _run_chunk, nodes, text): i
-                for i, (nodes, text) in enumerate(chunks)
-            }
-            for fut in as_completed(futs):
-                try:
-                    results.extend(fut.result())
-                except Exception as e:
-                    logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb:
-            cb({"event": f"{event_prefix}_done", "findings": len(results)})
-        return results
-
-    def _run_candidate_semantic_lens(
+    def _run_candidate_lens(
         self,
         graph,
         sys_prompt,
@@ -432,18 +383,27 @@ class SupplementaryAnalyzer:
         max_workers,
         cb,
         event_prefix,
+        *,
+        parse_mode,
+        max_total_chars,
+        per_fn_chars,
+        sinks_only=False,
     ):
-        candidates = self._structural_candidate_nodes(graph)
+        candidates = self._structural_candidate_nodes(graph, sinks_only=sinks_only)
         if not candidates:
             return []
         if cb:
             cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
         chunks = _build_file_grouped_node_chunks(
-            self._cb, candidates, max_total_chars=60000, per_fn_chars=4000
+            self._cb,
+            candidates,
+            max_total_chars=max_total_chars,
+            per_fn_chars=per_fn_chars,
         )
         if not chunks:
             return []
         results = []
+        is_intra = parse_mode == "intra"
 
         def _run_chunk(chunk_nodes, code_chunk):
             raw = invoke_reachability_prompt(
@@ -452,10 +412,16 @@ class SupplementaryAnalyzer:
                 model=self._sm,
                 max_tokens=self._st,
                 system_prompt=self._with_domain_hints(sys_prompt),
-                user_prompt=_SEM_USR,
-                variables={"all_functions_code": code_chunk},
+                user_prompt=_INTRA_USR if is_intra else _SEM_USR,
+                variables=(
+                    {"file_path": "candidate functions", "functions_code": code_chunk}
+                    if is_intra
+                    else {"all_functions_code": code_chunk}
+                ),
                 reasoning_effort=self._reasoning_effort,
             )
+            if is_intra:
+                return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
             return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
 
         with ThreadPoolExecutor(
@@ -551,65 +517,8 @@ class SupplementaryAnalyzer:
             cb({"event": "global_lifecycle_done", "findings": len(results)})
         return results
 
-    def _normalise_lock_expr(self, expr):
-        expr = re.sub(r"/\*.*?\*/", "", str(expr or ""))
-        expr = re.sub(r"\s+", "", expr).strip("&()")
-        expr = re.sub(r"^\([^)]*\)", "", expr)
-        expr = expr.replace("->", ".").strip("&()")
-        if not expr:
-            return ""
-        if expr.endswith(".lock"):
-            return ".".join(expr.split(".")[-2:])
-        return expr
-
-    def _extract_lock_conflicts(self, graph):
-        edges = defaultdict(list)
-        for node in sorted(
-            graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)
-        ):
-            body = _read_function_body(self._cb, node, 8000)
-            if not body:
-                continue
-            held = []
-            for match in _LOCK_EVENT_RE.finditer(body):
-                lock = self._normalise_lock_expr(match.group("arg"))
-                if not lock:
-                    continue
-                line = node.line_number + body[: match.start()].count("\n")
-                fn_name = match.group("fn").lower()
-                if "unlock" in fn_name:
-                    if lock in held:
-                        held.remove(lock)
-                    continue
-                for prior in held:
-                    if prior != lock:
-                        edges[(prior, lock)].append((node, line))
-                if lock not in held:
-                    held.append(lock)
-
-        conflicts, seen = [], set()
-        for (a, b), first_edges in edges.items():
-            reverse_edges = edges.get((b, a))
-            if not reverse_edges:
-                continue
-            for node_a, line_a in first_edges:
-                for node_b, line_b in reverse_edges:
-                    if node_a.unique_name == node_b.unique_name:
-                        continue
-                    key = tuple(
-                        sorted((node_a.unique_name, node_b.unique_name))
-                        + sorted((a, b))
-                    )
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    conflicts.append((a, b, node_a, line_a, node_b, line_b))
-                    if len(conflicts) >= 40:
-                        return conflicts
-        return conflicts
-
     def _lens_lock_order(self, graph, max_workers, cb):
-        conflicts = self._extract_lock_conflicts(graph)
+        conflicts = _extract_lock_conflicts(graph, self._cb)
         if not conflicts:
             return []
         if cb:

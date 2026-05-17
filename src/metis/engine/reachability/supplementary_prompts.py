@@ -7,7 +7,17 @@ from __future__ import annotations
 
 from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS, _GENERIC_FINDING_JSON_SCHEMA
 
-_INTRA_SYS = (
+
+def _finding_prompt(body, response_guidance):
+    return (
+        body
+        + _GENERIC_FINDING_JSON_SCHEMA
+        + response_guidance
+        + _CANONICAL_FINDING_INSTRUCTIONS
+    )
+
+
+_INTRA_SYS = _finding_prompt(
     """\
 You are a C/C++ vulnerability expert. Examine each function below for bugs WITHIN the function itself.
 Look for:
@@ -26,18 +36,16 @@ Look for:
 11. MISSING BOUNDS CHECK: memcpy/sprintf/strncpy with size from parameter without validation.
 12. STATE ORDERING: Setting ready/enabled flag BEFORE prerequisite validation/initialization completes.
 13. STALE METADATA: Modifying buffer content without updating associated length/size field.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE.""",
 )
 
 _INTRA_USR = "File: {file_path}\n\n{functions_code}"
 
 _SEM_USR = "{all_functions_code}"
 
-_COMBINED_GRAPH_SYS = (
+_COMBINED_GRAPH_SYS = _finding_prompt(
     """\
 You are analyzing a C/C++ codebase with several requested security lenses in one review.
 Evaluate each requested lens independently, then return one finding per distinct
@@ -47,9 +55,8 @@ Run only the requested lenses below.
 Requested lenses:
 {lens_instructions}
 
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
+""",
+    """\
 analysis_type is mandatory and must exactly be one of: {allowed_analysis_types}
 For lifecycle findings, set function_name to the use/deref function and related_function
 to the free, teardown, or lifetime-ending function when known.
@@ -62,13 +69,12 @@ endpoint. If two candidate findings describe the same root cause, keep the one w
 the more specific primary_file, primary_function, primary_line, evidence, and mitigation.
 Do not report style issues, hypothetical risks without shown code evidence/mechanism, or
 duplicates already represented by the same root cause.
-Return {{"findings": []}} if none found. Be conservative but thorough."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+Return {{"findings": []}} if none found. Be conservative but thorough.""",
 )
 
-_COMBINED_GRAPH_USR = "{all_functions_code}"
+_COMBINED_GRAPH_USR = _SEM_USR
 
-_CLASSIC_C_SINK_SYS = (
+_CLASSIC_C_SINK_SYS = _finding_prompt(
     """\
 You are analyzing selected C/C++ functions that contain classic dangerous APIs.
 Only report concrete bugs in the shown functions:
@@ -83,14 +89,12 @@ Only report concrete bugs in the shown functions:
    without canonicalization and base-directory restriction.
 7. TOCTOU when stat/access/lstat is followed by open/fopen/unlink/etc. on the same path.
 8. NULL dereference after failed allocation/lookup and out-of-bounds indexing.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative and report each root cause once."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative and report each root cause once.""",
 )
 
-_ERROR_UNWIND_SYS = (
+_ERROR_UNWIND_SYS = _finding_prompt(
     """\
 You are analyzing selected C/C++ functions for error-unwind, cleanup, and rollback bugs.
 Focus only on:
@@ -103,14 +107,12 @@ Focus only on:
 - Object publication before full initialization succeeds.
 - Do not report borrowed pointer fields being set to NULL as leaks unless this function
   actually owns the pointed-to memory.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative and do not report style-only cleanup issues."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative and do not report style-only cleanup issues.""",
 )
 
-_COUNTER_SYMMETRY_SYS = (
+_COUNTER_SYMMETRY_SYS = _finding_prompt(
     """\
 You are analyzing selected C/C++ functions for counter, refcount, and accounting symmetry bugs.
 Compare add/remove, create/destroy, map/unmap, get/put,
@@ -121,14 +123,12 @@ Report only concrete mismatches:
 - resource/page/queue/context counts incremented but not decremented.
 - Delta computed after overwriting the old value.
 - No-op get/put/ref/unref helpers that callers rely on for lifetime or accounting.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative.""",
 )
 
-_GLOBAL_LIFECYCLE_SYS = (
+_GLOBAL_LIFECYCLE_SYS = _finding_prompt(
     """\
 You are analyzing global C/C++ callback and file-operations tables plus referenced functions.
 Focus on:
@@ -139,14 +139,12 @@ Focus on:
   callbacks or references alive beyond release.
 - callback fn/data initialized with object context, but teardown does not cancel/flush
   before free/destroy/mutex_destroy.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative and report only actionable lifecycle gaps."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative and report only actionable lifecycle gaps.""",
 )
 
-_LOCK_ORDER_SYS = (
+_LOCK_ORDER_SYS = _finding_prompt(
     """\
 You are analyzing deterministic lock acquisition sequences extracted from C/C++ functions.
 Confirm only real lock-order inversions:
@@ -154,14 +152,12 @@ Confirm only real lock-order inversions:
 - The locks protect shared state and the functions can run concurrently.
 - Ignore sequences where one lock is released before the other is acquired or where the
   ordering is impossible due to clear call/lifecycle constraints.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative.""",
 )
 
-_TARGET_ORDERING_GAP_SYS = (
+_TARGET_ORDERING_GAP_SYS = _finding_prompt(
     """\
 You are analyzing stateful C/C++ code for operation ordering gaps.
 Focus only on:
@@ -170,14 +166,12 @@ Focus only on:
 - State transitions published while dependent structures are still being mutated.
 - Missing wait/flush/barrier before dependent operation.
 - Missing state-management or address-translation lock coordination around transitions.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative.""",
 )
 
-_TARGET_PATH_ACCESS_SYS = (
+_TARGET_PATH_ACCESS_SYS = _finding_prompt(
     """\
 You are analyzing selected C/C++ functions for path traversal and filesystem TOCTOU.
 Target only:
@@ -188,9 +182,7 @@ Target only:
 - stat/access/lstat followed by fopen/open on the same path.
 Prefer vulnerability_type path_traversal or toctou. Do not classify as missing_auth
 unless the real root cause is authorization rather than filesystem path validation.
-"""
-    + _GENERIC_FINDING_JSON_SCHEMA
-    + """\
-Return {{"findings": []}} if none found. Be conservative."""
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    """\
+Return {{"findings": []}} if none found. Be conservative.""",
 )

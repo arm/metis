@@ -182,18 +182,3 @@ analysis_type targeted_toctou:
 - There is no safe open-by-handle, O_NOFOLLOW/openat discipline, directory fd pinning,
   or post-open validation that closes the race.""",
 }
-_COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES = {
-    "lifecycle_audit": "lifecycle",
-    "life": "lifecycle",
-    "ownership_audit": "ownership",
-    "resource_ownership": "ownership",
-    "semantic_audit": "semantic",
-    "state": "state_concurrency",
-    "state_audit": "state_concurrency",
-    "concurrency": "state_concurrency",
-    "callback_lifecycle": "targeted_callback_lifecycle",
-    "refcount": "targeted_refcount",
-    "permission": "targeted_permission",
-    "permission_mismatch": "targeted_permission",
-    "toctou": "targeted_toctou",
-}

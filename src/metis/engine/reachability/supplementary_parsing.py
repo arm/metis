@@ -11,7 +11,6 @@ from .finding_normalization import (
     _finding_from_llm_entry,
     _lookup_fn,
 )
-from .supplementary_lenses import _COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES
 
 
 def _finding_entries(raw):
@@ -54,16 +53,6 @@ def _parse_intra(raw, functions, analysis_type="intra_function"):
     return results
 
 
-def _normalise_combined_analysis_type(value, allowed_analysis_types):
-    raw = str(value or "").strip().lower().replace("-", "_")
-    if raw in allowed_analysis_types:
-        return raw
-    alias = _COMBINED_GRAPH_ANALYSIS_TYPE_ALIASES.get(raw)
-    if alias in allowed_analysis_types:
-        return alias
-    return ""
-
-
 def _parse_combined(raw, all_fns, allowed_analysis_types):
     fl = _finding_entries(raw)
     bn = {fn.name: fn for fn in all_fns}
@@ -72,10 +61,10 @@ def _parse_combined(raw, all_fns, allowed_analysis_types):
     for entry in fl:
         if not isinstance(entry, dict):
             continue
-        analysis_type = _normalise_combined_analysis_type(
-            entry.get("analysis_type"), allowed_analysis_types
+        analysis_type = (
+            str(entry.get("analysis_type") or "").strip().lower().replace("-", "_")
         )
-        if not analysis_type:
+        if analysis_type not in allowed_analysis_types:
             continue
 
         if analysis_type == "lifecycle":
