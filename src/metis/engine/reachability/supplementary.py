@@ -17,7 +17,6 @@ from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _chunked
 from .supplementary_lenses import (
     _AUTH_KW,
-    _COMBINED_GRAPH_LENS_EXAMPLES,
     _COMBINED_GRAPH_LENS_KINDS,
     _COMBINED_GRAPH_LENS_NOTES,
     _FULL_LENS_SPECS,
@@ -188,11 +187,6 @@ class SupplementaryAnalyzer:
         )
         if self._domain_prompt_hints:
             lens_instructions = f"{lens_instructions}\n\n{self._domain_prompt_hints}"
-        lens_examples = "\n".join(
-            f"- {_COMBINED_GRAPH_LENS_EXAMPLES[analysis_type]}"
-            for analysis_type in analysis_types
-            if analysis_type in _COMBINED_GRAPH_LENS_EXAMPLES
-        )
         results = []
 
         def _run_chunk(code_chunk):
@@ -207,7 +201,6 @@ class SupplementaryAnalyzer:
                     "all_functions_code": code_chunk,
                     "allowed_analysis_types": allowed,
                     "lens_instructions": lens_instructions,
-                    "lens_examples": lens_examples,
                 },
                 reasoning_effort=self._reasoning_effort,
             )

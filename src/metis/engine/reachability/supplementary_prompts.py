@@ -51,9 +51,6 @@ Run only the requested lenses below.
 Requested lenses:
 {lens_instructions}
 
-Output examples:
-{lens_examples}
-
 Return ONLY valid JSON:
 {{"findings": [{{"analysis_type": "semantic", "vulnerability_type": "missing_auth",
 "severity": "high", "confidence": "high", "function_name": "handle_reset_request",
