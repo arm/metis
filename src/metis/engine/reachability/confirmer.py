@@ -151,15 +151,20 @@ class VulnerabilityConfirmer:
         groups = defaultdict(list)
         for p in paths:
             groups[p.sink].append(p)
-        total = len(groups)
+        batches = [
+            (sink_name, batch)
+            for sink_name, group_paths in groups.items()
+            for batch in _chunked(group_paths, 8)
+        ]
+        total = len(batches)
         all_f = []
         done = 0
         if progress_callback:
             progress_callback({"event": "confirmation_start", "total": total})
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {
-                submit_with_current_context(ex, self._group, sn, gp, graph): sn
-                for sn, gp in groups.items()
+                submit_with_current_context(ex, self._group, sn, batch, graph): sn
+                for sn, batch in batches
             }
             for fut in as_completed(futs):
                 sn = futs[fut]
@@ -192,7 +197,7 @@ class VulnerabilityConfirmer:
         return all_f
 
     def _group(self, sink_name, paths, graph):
-        batch = paths[:8]
+        batch = list(paths)
         needed = {}
         for p in batch:
             for u in p.path:

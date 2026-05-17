@@ -12,27 +12,6 @@ _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
 
-_CONFIRMATION_RANK_TERMS = (
-    "auth",
-    "permission",
-    "login",
-    "dispatch",
-    "parse",
-    "import",
-    "export",
-    "free",
-    "close",
-    "unref",
-    "copy",
-    "memcpy",
-    "printf",
-    "sanitize",
-    "callback",
-    "notify",
-    "session",
-    "store",
-)
-
 
 def _chunked(items, size):
     if size <= 0:
@@ -179,23 +158,11 @@ def _confirmation_path_rank(path, graph):
     nodes = [node for node in nodes if node is not None]
     endpoint = graph.get_node(path.sink)
     sink_count = sum(1 for node in nodes if node.is_sink)
-    term_score = 0
-    for node in nodes:
-        haystack = " ".join(
-            [
-                node.unique_name,
-                node.name,
-                node.sink_type,
-                node.sink_reason,
-                node.source_reason,
-            ]
-        ).lower()
-        if any(term in haystack for term in _CONFIRMATION_RANK_TERMS):
-            term_score += 1
     source = graph.get_node(path.source)
     return (
         -sink_count,
-        -term_score,
+        -int(bool(endpoint and endpoint.is_sink)),
+        -int(bool(endpoint and endpoint.sink_type and endpoint.sink_type != "other")),
         len(node_names),
         endpoint.file_path if endpoint else "",
         int(endpoint.line_number or 0) if endpoint else 0,

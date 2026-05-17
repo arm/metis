@@ -14,18 +14,11 @@ from metis.usage import submit_with_current_context
 
 from .llm_runner import invoke_reachability_prompt
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
-from .graph_utils import _chunked
+from .graph_utils import _build_reverse_edges, _chunked, _node_sort_key
 from .supplementary_lenses import (
-    _AUTH_KW,
     _COMBINED_GRAPH_LENS_KINDS,
     _COMBINED_GRAPH_LENS_NOTES,
     _FULL_LENS_SPECS,
-    _GLOBAL_LIFECYCLE_NAME_RE,
-    _HW_STATE_KW,
-    _LIFECYCLE_KW,
-    _LOCK_EVENT_RE,
-    _RELATED_FILE_FUNCTION_KEYWORDS,
-    _RESOURCE_KW,
     _REVIEW_LENS_NAMES,
 )
 from .supplementary_parsing import _parse_combined, _parse_intra, _parse_semantic
@@ -38,10 +31,6 @@ from .supplementary_prompts import (
     _LOCK_ORDER_SYS,
     _SEM_USR,
 )
-from .supplementary_selection import (
-    _expand_candidates_with_related_file_functions,
-    _select_nodes_by_regex,
-)
 from .source_context import (
     _build_file_grouped_chunks,
     _build_file_grouped_node_chunks,
@@ -50,6 +39,13 @@ from .source_context import (
 )
 
 logger = logging.getLogger("metis")
+
+_LOCK_EVENT_RE = re.compile(
+    r"\b(?P<fn>pthread_mutex_lock|pthread_mutex_unlock|mutex_lock|mutex_unlock|"
+    r"spin_lock(?:_irqsave|_irq)?|spin_unlock(?:_irqrestore|_irq)?)\s*"
+    r"\(\s*(?P<arg>[^,\)]+)",
+    re.IGNORECASE,
+)
 
 
 class SupplementaryAnalyzer:
@@ -229,7 +225,6 @@ class SupplementaryAnalyzer:
         if spec.kind == "candidate_intra":
             return self._run_candidate_intra_lens(
                 graph,
-                spec.pattern,
                 spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
@@ -239,18 +234,16 @@ class SupplementaryAnalyzer:
         if spec.kind == "candidate_semantic":
             return self._run_candidate_semantic_lens(
                 graph,
-                spec.pattern,
                 spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
                 cb,
                 spec.name,
-                relation_keywords=spec.relation_keywords,
             )
         raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
     def _lens_intra(self, graph, max_workers, cb):
-        targets = self._select_intra_targets(graph)
+        targets = self._structural_candidate_nodes(graph)
         if not targets:
             return []
         groups = defaultdict(list)
@@ -289,25 +282,78 @@ class SupplementaryAnalyzer:
                     )
         return results
 
-    def _select_intra_targets(self, graph):
-        all_kw = _RESOURCE_KW | _AUTH_KW | _HW_STATE_KW | _LIFECYCLE_KW
-        all_kw = all_kw | set(self._domain_keywords)
-        seen, targets = set(), []
-        for n in graph.nodes.values():
-            nl = n.name.lower()
-            cl = [c.lower() for c in n.calls]
-            ac = nl + " " + " ".join(cl)
-            if n.is_sink or n.is_source or any(k in ac for k in all_kw) or "goto" in ac:
-                if n.unique_name not in seen:
-                    seen.add(n.unique_name)
-                    targets.append(n)
-        # if we missed any functions (small codebase), include everything
-        if len(targets) < len(graph.nodes) * 0.3:
-            for n in graph.nodes.values():
-                if n.unique_name not in seen:
-                    seen.add(n.unique_name)
-                    targets.append(n)
-        return targets
+    @staticmethod
+    def _add_node_context(
+        graph, reverse_edges, selected, unique_name, *, with_neighbors=False
+    ):
+        node = graph.get_node(unique_name)
+        if not node:
+            return
+        selected[node.unique_name] = node
+        if not with_neighbors:
+            return
+        for callee_name in node.resolved_calls or []:
+            callee = graph.get_node(callee_name)
+            if callee:
+                selected[callee.unique_name] = callee
+        for caller_name in reverse_edges.get(node.unique_name, []):
+            caller = graph.get_node(caller_name)
+            if caller:
+                selected[caller.unique_name] = caller
+
+    def _structural_candidate_nodes(self, graph, *, sinks_only=False):
+        reverse_edges = _build_reverse_edges(
+            graph, lambda item: _node_sort_key(graph, item)
+        )
+        selected = {}
+
+        for node in graph.nodes.values():
+            if node.is_sink or (node.is_source and not sinks_only):
+                self._add_node_context(
+                    graph,
+                    reverse_edges,
+                    selected,
+                    node.unique_name,
+                    with_neighbors=not sinks_only,
+                )
+
+        if not sinks_only:
+            for global_construct in graph.get_globals():
+                for ref in global_construct.referenced_functions:
+                    for unique_name in graph.name_index.get(ref, []):
+                        self._add_node_context(
+                            graph,
+                            reverse_edges,
+                            selected,
+                            unique_name,
+                            with_neighbors=True,
+                        )
+
+            for node in graph.nodes.values():
+                degree = len(node.resolved_calls or []) + len(
+                    reverse_edges.get(node.unique_name, [])
+                )
+                if degree >= 2:
+                    self._add_node_context(
+                        graph, reverse_edges, selected, node.unique_name
+                    )
+
+            if self._domain_keywords:
+                for node in graph.nodes.values():
+                    text = f"{node.name} {' '.join(node.calls or [])}".lower()
+                    if any(keyword in text for keyword in self._domain_keywords):
+                        self._add_node_context(
+                            graph,
+                            reverse_edges,
+                            selected,
+                            node.unique_name,
+                            with_neighbors=True,
+                        )
+
+        return sorted(
+            selected.values(),
+            key=lambda node: (node.file_path, int(node.line_number or 0), node.name),
+        )
 
     def _audit_file(self, file_path, functions):
         bodies = []
@@ -330,10 +376,10 @@ class SupplementaryAnalyzer:
         return _parse_intra(raw, functions)
 
     def _run_candidate_intra_lens(
-        self, graph, pattern, sys_prompt, analysis_type, max_workers, cb, event_prefix
+        self, graph, sys_prompt, analysis_type, max_workers, cb, event_prefix
     ):
-        candidates = _select_nodes_by_regex(
-            graph, self._cb, pattern, extra_keywords=self._domain_keywords
+        candidates = self._structural_candidate_nodes(
+            graph, sinks_only=analysis_type == "classic_c_sink"
         )
         if not candidates:
             return []
@@ -381,26 +427,15 @@ class SupplementaryAnalyzer:
     def _run_candidate_semantic_lens(
         self,
         graph,
-        pattern,
         sys_prompt,
         analysis_type,
         max_workers,
         cb,
         event_prefix,
-        relation_keywords=None,
     ):
-        candidates = _select_nodes_by_regex(
-            graph, self._cb, pattern, extra_keywords=self._domain_keywords
-        )
+        candidates = self._structural_candidate_nodes(graph)
         if not candidates:
             return []
-        if relation_keywords:
-            relation_keywords = frozenset(relation_keywords) | set(
-                self._domain_keywords
-            )
-            candidates = _expand_candidates_with_related_file_functions(
-                graph, candidates, relation_keywords
-            )
         if cb:
             cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
         chunks = _build_file_grouped_node_chunks(
@@ -444,22 +479,31 @@ class SupplementaryAnalyzer:
         if not globals_:
             return []
         nodes_by_unique = {}
+        reverse_edges = _build_reverse_edges(
+            graph, lambda item: _node_sort_key(graph, item)
+        )
+
         for g in globals_:
-            prefix = re.split(r"[_\W]+", g.name.lower())[0] if g.name else ""
             for ref in g.referenced_functions:
                 for unique_name in graph.name_index.get(ref, []):
-                    node = graph.get_node(unique_name)
-                    if node:
-                        nodes_by_unique[node.unique_name] = node
+                    self._add_node_context(
+                        graph,
+                        reverse_edges,
+                        nodes_by_unique,
+                        unique_name,
+                        with_neighbors=True,
+                    )
             for node in graph.get_file_nodes(g.file_path):
-                name_l = node.name.lower()
-                if _GLOBAL_LIFECYCLE_NAME_RE.search(name_l) or (
-                    prefix and name_l.startswith(prefix)
-                ):
-                    nodes_by_unique[node.unique_name] = node
-        nodes = _expand_candidates_with_related_file_functions(
-            graph, list(nodes_by_unique.values()), _RELATED_FILE_FUNCTION_KEYWORDS
-        )
+                if node.is_source or node.is_sink:
+                    self._add_node_context(
+                        graph,
+                        reverse_edges,
+                        nodes_by_unique,
+                        node.unique_name,
+                        with_neighbors=True,
+                    )
+
+        nodes = list(nodes_by_unique.values())
         nodes = sorted(nodes, key=lambda n: (n.file_path, n.line_number, n.name))
         if not nodes:
             return []

@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Supplementary reachability lens registry and static selection rules."""
+"""Supplementary reachability lens registry and prompt metadata."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from .heuristic_data import _words
@@ -25,78 +24,7 @@ class _SupplementaryLensSpec:
     method_name: str = ""
     sys_prompt: str = ""
     analysis_type: str = ""
-    pattern: object = None
-    relation_keywords: object = None
 
-
-_RESOURCE_KW = _words(
-    "free malloc calloc realloc close destroy release delete munmap unref grow "
-    "compact resize kfree vfree devm_kfree put get ref unref"
-)
-_AUTH_KW = _words(
-    "auth login check verify compare validate token password permit deny match "
-    "level permission capable access_ok"
-)
-_HW_STATE_KW = _words(
-    "ready init enable disable reset power suspend resume probe remove shutdown "
-    "flush drain start stop halt abort fence sync register interrupt handler "
-    "callback work timer schedule cancel queue dequeue lock unlock mutex spinlock "
-    "spin_lock spin_unlock"
-)
-_LIFECYCLE_KW = _words(
-    "create alloc open setup teardown cleanup fini exit deinit unregister detach "
-    "load unload bind unbind"
-)
-
-_CLASSIC_C_SINK_RE = re.compile(
-    r"\b(?:sprintf|vsprintf|strcpy|strcat|gets|scanf|sscanf|memcpy|memmove|strncpy|"
-    r"snprintf|system|popen|exec(?:l|le|lp|lpe|v|ve|vp|vpe)?|fopen|open|stat|"
-    r"lstat|access|printf|fprintf|vprintf|vfprintf|malloc|calloc|realloc|free|"
-    r"strlen|strnlen|close)\s*\(",
-    re.IGNORECASE,
-)
-_ERROR_UNWIND_RE = re.compile(
-    r"\b(?:malloc|calloc|realloc|goto|rb_link_node|rb_erase|list_add|list_del|"
-    r"hash_add|insert|register)\b|return\s+(?:NULL|-1)|"
-    r"\b(?:object_count|resource_count|queue_count|ref_count)\b|"
-    r"(?:^|_)(?:insert|register|create)(?:_|$)",
-    re.IGNORECASE,
-)
-_COUNTER_RE = re.compile(
-    r"\b(?:count|refcount|refs|object_count|resource_count|queue_count|"
-    r"nr_pages|total|get|put|create|destroy|map|unmap|shrink|grow)\b|"
-    r"(?:^|_)(?:get|put|ref|unref|create|destroy|map|unmap|shrink|grow)(?:_|$)|"
-    r"\+\+|--|\+=|-=",
-    re.IGNORECASE,
-)
-_ORDERING_GAP_RE = re.compile(
-    r"\b(?:flush|sync|drain|fence|reset|power|pm|suspend|resume|disable|enable|"
-    r"shutdown|term|transition|runtime)\b|"
-    r"(?:^|_)(?:flush|sync|drain|fence|reset|power|pm|suspend|resume|disable|"
-    r"enable|shutdown|term|transition|runtime)(?:_|$)",
-    re.IGNORECASE,
-)
-_PATH_ACCESS_RE = re.compile(
-    r"\b(?:fopen|open|stat|lstat|access|realpath|canonicalize|snprintf)\s*\(|"
-    r"\b(?:path|full_path|file|filename|name)\b",
-    re.IGNORECASE,
-)
-_GLOBAL_LIFECYCLE_NAME_RE = re.compile(
-    r"(?:init|term|shutdown|release|destroy|poll|flush|submit|callback|worker|"
-    r"timer|open|control|unregister|cancel)",
-    re.IGNORECASE,
-)
-_LOCK_EVENT_RE = re.compile(
-    r"\b(?P<fn>pthread_mutex_lock|pthread_mutex_unlock|mutex_lock|mutex_unlock|"
-    r"spin_lock(?:_irqsave|_irq)?|spin_unlock(?:_irqrestore|_irq)?)\s*"
-    r"\(\s*(?P<arg>[^,\)]+)",
-    re.IGNORECASE,
-)
-_RELATED_FILE_FUNCTION_KEYWORDS = _words(
-    "init term shutdown destroy release cancel flush create get put ref unref "
-    "map unmap grow shrink load unload verify open poll enable disable reset "
-    "schedule callback worker work timer"
-)
 
 _FULL_LENS_SPECS = (
     _SupplementaryLensSpec("intra_audit", "method", method_name="_lens_intra"),
@@ -127,24 +55,19 @@ _FULL_LENS_SPECS = (
         "classic_c_sink",
         "candidate_intra",
         sys_prompt=_CLASSIC_C_SINK_SYS,
-        pattern=_CLASSIC_C_SINK_RE,
         analysis_type="classic_c_sink",
     ),
     _SupplementaryLensSpec(
         "error_unwind",
         "candidate_semantic",
         sys_prompt=_ERROR_UNWIND_SYS,
-        pattern=_ERROR_UNWIND_RE,
         analysis_type="error_unwind",
-        relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
     _SupplementaryLensSpec(
         "counter_symmetry",
         "candidate_semantic",
         sys_prompt=_COUNTER_SYMMETRY_SYS,
-        pattern=_COUNTER_RE,
         analysis_type="counter_symmetry",
-        relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
     _SupplementaryLensSpec("global_lifecycle", "method", "_lens_global_lifecycle"),
     _SupplementaryLensSpec("lock_order_extraction", "method", "_lens_lock_order"),
@@ -152,15 +75,12 @@ _FULL_LENS_SPECS = (
         "targeted_ordering_gap",
         "candidate_semantic",
         sys_prompt=_TARGET_ORDERING_GAP_SYS,
-        pattern=_ORDERING_GAP_RE,
         analysis_type="targeted_ordering_gap",
-        relation_keywords=_RELATED_FILE_FUNCTION_KEYWORDS,
     ),
     _SupplementaryLensSpec(
         "targeted_path_access",
         "candidate_semantic",
         sys_prompt=_TARGET_PATH_ACCESS_SYS,
-        pattern=_PATH_ACCESS_RE,
         analysis_type="targeted_path_access",
     ),
 )
