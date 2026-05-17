@@ -47,6 +47,7 @@ class TreeSitterReachabilityService:
         max_path_length=25,
         progress_callback=None,
         reasoning_effort=None,
+        source_functions=None,
         security_functions=None,
         domain_hints=None,
         domain_profiles=None,
@@ -55,6 +56,7 @@ class TreeSitterReachabilityService:
         abs_target, relative_target = self._normalize_target_file(file_path)
         graph = self._graphs.ensure_graph(
             progress_callback=progress_callback,
+            source_functions=source_functions,
             security_functions=security_functions,
         )
         if graph.node_count() == 0:
@@ -158,6 +160,7 @@ class TreeSitterReachabilityService:
         max_path_length=25,
         progress_callback=None,
         reasoning_effort=None,
+        source_functions=None,
         security_functions=None,
         domain_hints=None,
         domain_profiles=None,
@@ -168,6 +171,7 @@ class TreeSitterReachabilityService:
         graph, paths = self.get_codebase_graph_and_paths(
             max_path_length=max_path_length,
             progress_callback=progress_callback,
+            source_functions=source_functions,
             security_functions=security_functions,
         )
         if graph.node_count() == 0:
@@ -251,11 +255,17 @@ class TreeSitterReachabilityService:
         )
 
     def get_codebase_graph_and_paths(
-        self, *, max_path_length=25, progress_callback=None, security_functions=None
+        self,
+        *,
+        max_path_length=25,
+        progress_callback=None,
+        source_functions=None,
+        security_functions=None,
     ):
         return self._graphs.get_codebase_graph_and_paths(
             max_path_length=max_path_length,
             progress_callback=progress_callback,
+            source_functions=source_functions,
             security_functions=security_functions,
         )
 

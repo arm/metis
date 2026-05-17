@@ -105,6 +105,49 @@ class ReachabilityGraph:
                     resolved.extend(same if same else targets)
             node.resolved_calls = list(dict.fromkeys(resolved))
 
+    def unresolved_calls_for(self, node):
+        return [
+            str(call)
+            for call in node.calls or []
+            if call and not self.name_index.get(str(call))
+        ]
+
+    def annotate_automatic_sources(self):
+        """Mark graph roots as sources after calls have been resolved."""
+        incoming = {name: set() for name in self.nodes}
+        for caller in self.nodes.values():
+            for callee in caller.resolved_calls or []:
+                if callee in incoming and callee != caller.unique_name:
+                    incoming[callee].add(caller.unique_name)
+
+        updated = 0
+        for name, node in self.nodes.items():
+            if node.is_source or incoming[name]:
+                continue
+            node.is_source = True
+            node.source_reason = (
+                "no resolved internal callers in tree-sitter call graph"
+            )
+            updated += 1
+        return updated
+
+    def annotate_external_call_sinks(self, classify_call):
+        """Mark functions that call known unresolved external APIs as sinks."""
+        updated = 0
+        for node in self.nodes.values():
+            if node.is_sink:
+                continue
+            for call in self.unresolved_calls_for(node):
+                sink_type = classify_call(call)
+                if not sink_type:
+                    continue
+                node.is_sink = True
+                node.sink_type = sink_type
+                node.sink_reason = f"calls external security API: {call}"
+                updated += 1
+                break
+        return updated
+
     def get_sources(self):
         return [n for n in self.nodes.values() if n.is_source]
 

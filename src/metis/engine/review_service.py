@@ -103,6 +103,9 @@ class ReviewService:
                     reasoning_effort=self._reachability_settings.get(
                         "reasoning_effort"
                     ),
+                    source_functions=self._reachability_settings.get(
+                        "source_functions"
+                    ),
                     security_functions=self._reachability_settings.get(
                         "security_functions"
                     ),

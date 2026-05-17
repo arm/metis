@@ -269,6 +269,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "reachability_max_paths_per_sink",
         "reachability_max_path_length",
         "reachability_reasoning_effort",
+        "reachability_source_functions",
         "reachability_security_functions",
         "reachability_domain_profiles",
         "reachability_domain_hints",

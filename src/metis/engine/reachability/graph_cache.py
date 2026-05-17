@@ -5,7 +5,11 @@
 
 from __future__ import annotations
 
-from .c_family_rules import C_FAMILY_PLUGIN_NAMES, _normalise_security_function_specs
+from .c_family_rules import (
+    C_FAMILY_PLUGIN_NAMES,
+    _normalise_security_function_specs,
+    _normalise_source_function_specs,
+)
 from .tracing import SourceRootedPathTracer
 
 
@@ -30,8 +34,15 @@ class ReachabilityGraphCache:
             progress_callback=progress_callback,
         )
 
-    def ensure_graph(self, *, progress_callback=None, security_functions=None):
+    def ensure_graph(
+        self, *, progress_callback=None, source_functions=None, security_functions=None
+    ):
         if self._graph is not None:
+            self._annotate_configured_source_functions(
+                self._graph,
+                source_functions,
+                progress_callback=progress_callback,
+            )
             self._annotate_configured_security_functions(
                 self._graph,
                 security_functions,
@@ -40,6 +51,11 @@ class ReachabilityGraphCache:
             return self._graph
 
         self._graph = self.build_graph(progress_callback=progress_callback)
+        self._annotate_configured_source_functions(
+            self._graph,
+            source_functions,
+            progress_callback=progress_callback,
+        )
         self._annotate_configured_security_functions(
             self._graph,
             security_functions,
@@ -48,11 +64,21 @@ class ReachabilityGraphCache:
         return self._graph
 
     def get_codebase_graph_and_paths(
-        self, *, max_path_length=25, progress_callback=None, security_functions=None
+        self,
+        *,
+        max_path_length=25,
+        progress_callback=None,
+        source_functions=None,
+        security_functions=None,
     ):
         """Return the cached codebase graph and traced paths for shared analysis."""
         max_path_length = int(max_path_length or 25)
         if self._graph is not None:
+            self._annotate_configured_source_functions(
+                self._graph,
+                source_functions,
+                progress_callback=progress_callback,
+            )
             self._annotate_configured_security_functions(
                 self._graph,
                 security_functions,
@@ -67,6 +93,7 @@ class ReachabilityGraphCache:
 
         graph = self.ensure_graph(
             progress_callback=progress_callback,
+            source_functions=source_functions,
             security_functions=security_functions,
         )
         paths = SourceRootedPathTracer(
@@ -84,6 +111,30 @@ class ReachabilityGraphCache:
                 str(path), C_FAMILY_PLUGIN_NAMES
             )
         ]
+
+    def _annotate_configured_source_functions(
+        self, graph, source_functions, *, progress_callback=None
+    ):
+        specs = _normalise_source_function_specs(source_functions)
+        if not specs:
+            return 0
+        updated = 0
+        for node in graph.nodes.values():
+            spec = specs.get(node.name.lower()) or specs.get(node.unique_name.lower())
+            if spec is None:
+                continue
+            if not node.is_source:
+                updated += 1
+            node.is_source = True
+            node.source_reason = f"configured source function: {spec['reason']}"
+
+        if updated:
+            self._invalidate_paths()
+            if progress_callback:
+                progress_callback(
+                    {"event": "configured_source_functions_done", "sources": updated}
+                )
+        return updated
 
     def _annotate_configured_security_functions(
         self, graph, security_functions, *, progress_callback=None
@@ -112,13 +163,16 @@ class ReachabilityGraphCache:
             updated += 1
 
         if updated:
-            self._paths = None
-            self._paths_max_length = None
+            self._invalidate_paths()
             if progress_callback:
                 progress_callback(
                     {"event": "configured_security_functions_done", "sinks": updated}
                 )
         return updated
+
+    def _invalidate_paths(self):
+        self._paths = None
+        self._paths_max_length = None
 
     def _get_builder(self):
         if self._builder is None:

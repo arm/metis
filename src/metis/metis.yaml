@@ -24,6 +24,7 @@ metis_engine:
   reachability_max_paths: 0
   reachability_max_paths_per_sink: 3
   reachability_max_path_length: 25
+  reachability_source_functions: []
   reachability_security_functions: []
   reachability_domain_profiles: ["gpu"]
   reachability_domain_hints: []

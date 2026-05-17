@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from .c_family_rules import external_sink_type
 from .models import ReachabilityGraph
 from .c_family import CFamilyTreeSitterExtractor
 
@@ -50,6 +51,8 @@ class TreeSitterReachabilityGraphBuilder:
                 )
 
         graph.resolve_all_calls()
+        graph.annotate_automatic_sources()
+        graph.annotate_external_call_sinks(external_sink_type)
         if progress_callback:
             progress_callback(
                 {

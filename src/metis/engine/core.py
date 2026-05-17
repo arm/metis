@@ -92,6 +92,7 @@ class MetisEngine:
                 kwargs.get("reachability_max_path_length"), 25
             ),
             "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
+            "source_functions": kwargs.get("reachability_source_functions") or [],
             "security_functions": kwargs.get("reachability_security_functions") or [],
             "domain_profiles": (
                 ["gpu"]

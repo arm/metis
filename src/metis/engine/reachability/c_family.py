@@ -19,12 +19,7 @@ from metis.engine.analysis.c_family_helpers import CPP_EXTENSIONS
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
 from .models import FunctionNode, GlobalConstruct
-from .c_family_rules import (
-    CONTROL_CALLS,
-    ENTRYPOINT_FIELDS,
-    is_sink_function,
-    is_source_function,
-)
+from .c_family_rules import CONTROL_CALLS
 
 
 @dataclass
@@ -64,10 +59,10 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
         source = bytes(parsed.text, "utf-8")
         root = parsed.tree.root_node
-        global_constructs, entrypoint_refs = self._collect_globals(
+        global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
         )
-        nodes = self._collect_functions(root, source, rel_path, entrypoint_refs)
+        nodes = self._collect_functions(root, source, rel_path, global_function_refs)
         return ParsedFileGraph(nodes=nodes, globals=global_constructs)
 
     def _collect_functions(
@@ -75,7 +70,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         root,
         source: bytes,
         rel_path: str,
-        entrypoint_refs: set[str],
+        global_function_refs: set[str],
     ) -> list[FunctionNode]:
         nodes: list[FunctionNode] = []
         seen: set[str] = set()
@@ -87,12 +82,11 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 if unique not in seen:
                     seen.add(unique)
                     calls = self._collect_call_symbols(node, source)
-                    text = _node_text(node, source)
-                    is_source, source_reason = is_source_function(
-                        name, calls, entrypoint_refs
-                    )
-                    is_sink, sink_type, sink_reason = is_sink_function(
-                        name, calls, text
+                    is_source = name in global_function_refs
+                    source_reason = (
+                        "referenced by a global function table or initializer"
+                        if is_source
+                        else ""
                     )
                     nodes.append(
                         FunctionNode(
@@ -101,11 +95,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                             name=name,
                             line_number=_node_line(node),
                             is_source=is_source,
-                            is_sink=is_sink,
+                            is_sink=False,
                             calls=calls,
                             source_reason=source_reason,
-                            sink_type=sink_type,
-                            sink_reason=sink_reason,
                         )
                     )
         return sorted(
@@ -131,14 +123,14 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         rel_path: str,
     ) -> tuple[list[GlobalConstruct], set[str]]:
         globals_: list[GlobalConstruct] = []
-        entrypoint_refs: set[str] = set()
+        global_function_refs: set[str] = set()
         seen: set[str] = set()
 
         for node in self._iter_nodes(root):
             node_type = str(getattr(node, "type", "") or "")
             if node_type in {"init_declarator", "declaration", "field_declaration"}:
                 text = _node_text(node, source)
-                refs = self._entrypoint_references(text)
+                refs = self._global_function_references(text)
                 if refs:
                     name = (
                         self._global_name(node, source) or f"global_{_node_line(node)}"
@@ -157,18 +149,16 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                                 referenced_functions=refs,
                             )
                         )
-                    entrypoint_refs.update(refs)
-        return globals_, entrypoint_refs
+                    global_function_refs.update(refs)
+        return globals_, global_function_refs
 
-    def _entrypoint_references(self, text: str) -> list[str]:
+    def _global_function_references(self, text: str) -> list[str]:
         refs: list[str] = []
         seen: set[str] = set()
-        for field_name, ref in re.findall(
+        for _field_name, ref in re.findall(
             r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)",
             text or "",
         ):
-            if field_name not in ENTRYPOINT_FIELDS:
-                continue
             if ref in seen:
                 continue
             seen.add(ref)

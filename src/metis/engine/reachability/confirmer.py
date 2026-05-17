@@ -58,7 +58,7 @@ Do not assign a bug to a helper/header unless the actual defective code is in th
 _CONFIRM_SYS = (
     """\
 You are a security researcher specializing in C and C++ code analysis.
-You are given reachable call paths from attacker input sources to reachable endpoints, with relevant source code.
+You are given reachable call paths from tree-sitter graph sources to reachable endpoints, with relevant source code.
 Endpoints are not necessarily security sinks. Inspect every function on the path and report the actual vulnerable
 operation wherever it appears on that path.
 For EACH path determine if it contains a real exploitable vulnerability:
@@ -90,7 +90,7 @@ _FILE_CONFIRM_SYS = (
 You are a security researcher specializing in C and C++ code analysis.
 You are reviewing ONE target file from a larger codebase.
 You are given:
-- reachable call paths from external or attacker-controlled sources
+- reachable call paths from tree-sitter graph sources
 - the relevant code from the target file
 - supporting code for upstream/downstream functions on the path
 Only report a vulnerability when the primary bug mechanism is actually present in the TARGET FILE code shown.
@@ -329,8 +329,13 @@ class VulnerabilityConfirmer:
                     f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}"
                 )
             if sk:
+                endpoint_note = (
+                    f"[{sk.sink_type}] - {sk.sink_reason}"
+                    if sk.is_sink
+                    else "[reachable endpoint; inspect the target-file path]"
+                )
                 ps.append(
-                    f" Sink: {sk.unique_name} (line {sk.line_number}) [{sk.sink_type}] - {sk.sink_reason}"
+                    f" Endpoint: {sk.unique_name} (line {sk.line_number}) {endpoint_note}"
                 )
         tc = ["-- Functions from target file --"]
         for u, n in target_nodes.items():

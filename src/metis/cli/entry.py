@@ -137,6 +137,9 @@ def build_engine(args, runtime):
         reachability_reasoning_effort=_reachability_value(
             "reachability_reasoning_effort"
         ),
+        reachability_source_functions=_reachability_value(
+            "reachability_source_functions", []
+        ),
         reachability_security_functions=_reachability_value(
             "reachability_security_functions", []
         ),
