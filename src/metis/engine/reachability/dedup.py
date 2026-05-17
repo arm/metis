@@ -89,7 +89,7 @@ def _cap_per_function_family(findings, limit):
 
     selected = []
     for group in groups.values():
-        selected.extend(_select_diverse(group, limit))
+        selected.extend(sorted(group, key=_best_finding_sort_key)[:limit])
     return selected
 
 
@@ -112,25 +112,3 @@ def _best_finding_sort_key(finding):
         len(getattr(finding, "path", []) or []),
         -len(str(getattr(finding, "description", "") or "")),
     )
-
-
-def _select_diverse(findings, limit):
-    if len(findings) <= limit:
-        return list(findings)
-    ranked = sorted(findings, key=_best_finding_sort_key)
-    selected, covered_path_nodes = [], set()
-    for finding in ranked:
-        if len(selected) >= limit:
-            break
-        path_nodes = set(getattr(finding, "path", []) or [])
-        if not selected or path_nodes - covered_path_nodes:
-            selected.append(finding)
-            covered_path_nodes.update(path_nodes)
-    if len(selected) < limit:
-        selected_ids = {id(finding) for finding in selected}
-        for finding in ranked:
-            if id(finding) not in selected_ids:
-                selected.append(finding)
-            if len(selected) >= limit:
-                break
-    return selected

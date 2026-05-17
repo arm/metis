@@ -11,7 +11,6 @@ from .finding_normalization import (
     _finding_file,
     _finding_function,
     _finding_line,
-    _finding_text,
     _normalise_vuln_type,
 )
 from .source_context import _read_line_context, _read_named_function_body
@@ -147,35 +146,6 @@ def _finding_code_context(codebase_path, finding, *, context=8, max_chars=6000):
     return body or line_context
 
 
-def _is_leak_misclassified_as_double_free(finding):
-    if (
-        _normalise_vuln_type(getattr(finding, "vulnerability_type", ""))
-        != "double_free"
-    ):
-        return False
-    text = _finding_text(finding).lower()
-    leak_terms = (
-        "leak",
-        "partial cleanup",
-        "missing cleanup",
-        "not freed",
-        "without freeing",
-        "fails to free",
-    )
-    double_free_terms = (
-        "double free",
-        "double-free",
-        "freed twice",
-        "free twice",
-        "same pointer twice",
-        "already freed",
-        "second free",
-    )
-    return any(term in text for term in leak_terms) and not any(
-        term in text for term in double_free_terms
-    )
-
-
 def _post_filter_findings(findings, codebase_path):
     if not findings:
         return []
@@ -183,10 +153,6 @@ def _post_filter_findings(findings, codebase_path):
     for finding in findings:
         vtype = _normalise_vuln_type(getattr(finding, "vulnerability_type", ""))
         finding.vulnerability_type = vtype
-
-        if _is_leak_misclassified_as_double_free(finding):
-            finding.vulnerability_type = "partial_cleanup"
-            vtype = "partial_cleanup"
 
         if vtype == "format_string":
             context = _finding_code_context(codebase_path, finding)
@@ -198,65 +164,9 @@ def _post_filter_findings(findings, codebase_path):
 
 
 def _strict_file_findings(findings):
-    keep = []
-    important_types = {
-        "buffer_overflow",
-        "out_of_bounds",
-        "use_after_free",
-        "double_free",
-        "double_close",
-        "format_string",
-        "integer_overflow",
-        "type_confusion",
-        "info_leak",
-        "stale_length",
-        "missing_auth",
-        "permission_mismatch",
-        "refcount_imbalance",
-        "accounting_drift",
-        "null_deref",
-    }
-    important_analysis = {
-        "reachability",
-        "lifecycle",
-        "ownership",
-        "targeted_callback_lifecycle",
-        "targeted_refcount",
-        "targeted_permission",
-        "classic_c_sink",
-        "counter_symmetry",
-    }
-    low_signal_null_markers = (
-        "caller-supplied",
-        "pointer parameter",
-        "parameters before",
-        "localtime",
-        "calloc",
-        "allocation result",
-    )
-    for finding in findings:
-        vtype = _normalise_vuln_type(finding.vulnerability_type)
-        severity = str(finding.severity or "").lower()
-        confidence = str(finding.confidence or "").lower()
-        text = " ".join(
-            [
-                str(finding.description or ""),
-                str(finding.root_cause or ""),
-                str(finding.evidence or ""),
-            ]
-        ).lower()
-
-        if vtype == "null_deref" and severity != "high":
-            if finding.analysis_type != "classic_c_sink" or not any(
-                marker in text for marker in ("before", "after", "lookup")
-            ):
-                if any(marker in text for marker in low_signal_null_markers):
-                    continue
-        if severity == "high":
-            keep.append(finding)
-            continue
-        if confidence == "high" and (
-            vtype in important_types or finding.analysis_type in important_analysis
-        ):
-            keep.append(finding)
-    return keep
+    return [
+        finding
+        for finding in findings
+        if str(finding.severity or "").lower() == "high"
+        or str(finding.confidence or "").lower() == "high"
+    ]
