@@ -84,6 +84,12 @@ class TriageServiceRuntimeMixin:
             return _FallbackTriageAnalyzer()
         return self._build_triage_analyzer_from_plugin(plugin, extension)
 
+    def _get_triage_plugin(self, file_path: str):
+        ext = os.path.splitext(file_path or "")[1].lower()
+        if not ext:
+            return None
+        return self._get_plugin_for_extension(ext)
+
     def _build_triage_analyzer_from_plugin(self, plugin, extension: str):
         method = getattr(plugin, "get_triage_analyzer_factory", None)
         if not callable(method):

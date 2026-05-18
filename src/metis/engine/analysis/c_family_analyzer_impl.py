@@ -73,9 +73,9 @@ class CFamilyTriageAnalyzer(
         root = tree.root_node()
         node_index, parent_map = self._index_tree(root)
 
-        definitions = self._collect_definitions(root, source)
-        references = self._collect_references(root, source)
-        calls = self._collect_calls(root, source)
+        definitions, references, calls = self._collect_symbol_indexes(
+            node_index, source
+        )
         functions = self._collect_functions(root, source)
 
         wanted = self._select_wanted_symbols(

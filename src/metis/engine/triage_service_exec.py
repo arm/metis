@@ -54,6 +54,7 @@ class TriageServiceExecutionMixin:
         options: TriageOptions,
     ) -> TriageRequest:
         analyzer = self._get_thread_triage_analyzer(finding.file_path)
+        plugin = self._get_triage_plugin(finding.file_path)
         return {
             "finding_message": finding.message,
             "finding_file_path": finding.file_path,
@@ -67,6 +68,7 @@ class TriageServiceExecutionMixin:
             "retriever_docs": retriever_docs,
             "debug_callback": debug_callback,
             "triage_analyzer": analyzer,
+            "triage_plugin": plugin,
             "triage_codebase_path": self.codebase_path,
             "use_retrieval_context": options.use_retrieval_context,
         }

@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 
 from .c_family_analyzer_common import _CrossFileHit
-from .c_family_helpers import is_c_family_xref_file_path
 
 
 class CFamilyXrefMixin:
@@ -53,21 +52,11 @@ class CFamilyXrefMixin:
     def _choose_best_symbol_hit(self, hits: list[_CrossFileHit]) -> _CrossFileHit:
         if not hits:
             return _CrossFileHit(symbol="", file_path="", line=0, kind="none")
-        has_decl = next((h for h in hits if h.kind == "declaration"), None)
-        has_asm = next((h for h in hits if h.kind == "asm_label"), None)
-        if has_decl and has_asm:
-            return _CrossFileHit(
-                symbol=has_decl.symbol,
-                file_path=has_asm.file_path,
-                line=has_asm.line,
-                kind=f"asm_impl(decl:{has_decl.file_path}:{has_decl.line})",
-            )
         priority = {
-            "asm_label": 0,
-            "function_like": 1,
-            "macro": 2,
-            "declaration": 3,
-            "function_ref": 4,
+            "function_like": 0,
+            "macro": 1,
+            "declaration": 2,
+            "function_ref": 3,
         }
         ordered = sorted(
             hits,
@@ -101,9 +90,6 @@ class CFamilyXrefMixin:
         fn_re = re.compile(rf"\b{re.escape(symbol)}\s*\(")
         define_re = re.compile(rf"^\s*#\s*define\s+{re.escape(symbol)}\b")
         decl_re = re.compile(rf"\b{re.escape(symbol)}\b")
-        asm_label_re = re.compile(
-            rf"(\b[A-Z][A-Z0-9_]*\s*\(\s*{re.escape(symbol)}\s*\)|\b{re.escape(symbol)}\s*:)"
-        )
         for rel in self._walk_code_files(
             codebase_path=codebase_path,
             file_path=file_path,
@@ -117,7 +103,6 @@ class CFamilyXrefMixin:
                 )
             except Exception:
                 continue
-            ext = os.path.splitext(rel)[1].lower()
             for idx, raw in enumerate(text.splitlines(), start=1):
                 line = raw.strip()
                 if not line:
@@ -126,15 +111,6 @@ class CFamilyXrefMixin:
                     hits.append(
                         _CrossFileHit(
                             symbol=symbol, file_path=rel, line=idx, kind="macro"
-                        )
-                    )
-                    if len(hits) >= max_hits * 3:
-                        break
-                    continue
-                if asm_label_re.search(line) and ext in {".s"}:
-                    hits.append(
-                        _CrossFileHit(
-                            symbol=symbol, file_path=rel, line=idx, kind="asm_label"
                         )
                     )
                     if len(hits) >= max_hits * 3:
@@ -174,6 +150,11 @@ class CFamilyXrefMixin:
         limit: int,
     ) -> list[str]:
         root = Path(codebase_path).resolve()
+        allowed_ext = {
+            str(ext).lower()
+            for ext in getattr(self, "supported_extensions", ())
+            if ext and "*" not in str(ext)
+        }
         base_top = file_path.split("/", 1)[0] if "/" in file_path else ""
         prefer_set = {base_top} if base_top else set()
         for hint in prefer_hint:
@@ -184,7 +165,8 @@ class CFamilyXrefMixin:
         rest: list[str] = []
         for dirpath, _, filenames in os.walk(root):
             for name in filenames:
-                if not is_c_family_xref_file_path(name):
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in allowed_ext:
                     continue
                 full = Path(dirpath) / name
                 try:

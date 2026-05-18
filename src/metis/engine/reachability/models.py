@@ -18,6 +18,7 @@ class FunctionNode:
     line_number: int
     is_source: bool
     is_sink: bool
+    language: str = ""
     calls: list[str] = field(default_factory=list)
     resolved_calls: list[str] = field(default_factory=list)
     source_reason: str = ""
@@ -31,7 +32,6 @@ class GlobalConstruct:
     file_path: str
     name: str
     line_number: int
-    kind: str
     initializer: str = ""
     referenced_functions: list[str] = field(default_factory=list)
 

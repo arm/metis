@@ -8,6 +8,11 @@ import sys
 from metis.engine.analysis.base import AnalyzerEvidence
 from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 from metis.engine.graphs.triage import triage_node_collect_evidence
+from metis.plugins.c_plugin import CPlugin
+
+
+def _c_plugin():
+    return CPlugin(plugin_config={"plugins": {}})
 
 
 class _Analyzer:
@@ -355,6 +360,7 @@ def test_triage_collect_evidence_resolves_macro_definition_with_tools():
         "finding_rule_id": "R1",
         "finding_snippet": "data = (int*)PROJECT_STACK_ALLOC(10);",
         "triage_analyzer": _Analyzer(),
+        "triage_plugin": _c_plugin(),
         "triage_codebase_path": ".",
     }
 
@@ -374,6 +380,7 @@ def test_triage_collect_evidence_resolves_macro_definition_via_find_name():
         "finding_rule_id": "R1",
         "finding_snippet": "data = (int*)PROJECT_STACK_ALLOC(10);",
         "triage_analyzer": _Analyzer(),
+        "triage_plugin": _c_plugin(),
         "triage_codebase_path": ".",
     }
 

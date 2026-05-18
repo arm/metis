@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
+from .c_family import CFamilyTreeSitterExtractor
 from .c_family_rules import (
     C_FAMILY_PLUGIN_NAMES,
     _normalise_security_function_specs,
     _normalise_source_function_specs,
+    external_sink_type,
 )
+from .models import ReachabilityGraph
 from .tracing import SourceRootedPathTracer
 
 
@@ -21,7 +24,7 @@ class ReachabilityGraphCache:
     def __init__(self, config, repository):
         self._config = config
         self._repository = repository
-        self._builder = None
+        self._extractor = CFamilyTreeSitterExtractor(repository)
         self._graph = None
         self._paths = None
         self._paths_max_length = None
@@ -30,7 +33,7 @@ class ReachabilityGraphCache:
         selected = self._c_cpp_files(
             files if files is not None else self._repository.get_code_files()
         )
-        return self._get_builder().build(
+        return self._build_graph_from_files(
             selected,
             self._config.codebase_path,
             progress_callback=progress_callback,
@@ -176,9 +179,53 @@ class ReachabilityGraphCache:
         self._paths = None
         self._paths_max_length = None
 
-    def _get_builder(self):
-        if self._builder is None:
-            from .builder import TreeSitterReachabilityGraphBuilder
+    def _build_graph_from_files(
+        self, files, codebase_path: str, *, progress_callback=None
+    ) -> ReachabilityGraph:
+        graph = ReachabilityGraph()
+        files = sorted(str(file) for file in files)
+        total = len(files)
+        errors: list[str] = []
+        if progress_callback:
+            progress_callback({"event": "treesitter_graph_start", "total": total})
 
-            self._builder = TreeSitterReachabilityGraphBuilder()
-        return self._builder
+        for completed, file_path in enumerate(files, start=1):
+            parsed = self._extractor.parse_file(
+                codebase_path=codebase_path,
+                file_path=file_path,
+            )
+            errors.extend(parsed.errors)
+            for node in parsed.nodes:
+                graph.add_node(node)
+            for global_construct in parsed.globals:
+                graph.add_global(global_construct)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "event": "treesitter_graph_progress",
+                        "completed": completed,
+                        "total": total,
+                        "file": file_path,
+                        "functions": len(parsed.nodes),
+                        "globals": len(parsed.globals),
+                        "errors": len(parsed.errors),
+                        "error_messages": parsed.errors[:3],
+                    }
+                )
+
+        graph.resolve_all_calls()
+        graph.annotate_automatic_sources()
+        graph.annotate_external_call_sinks(external_sink_type)
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "treesitter_graph_done",
+                    "nodes": graph.node_count(),
+                    "edges": graph.edge_count(),
+                    "sources": len(graph.get_sources()),
+                    "sinks": len(graph.get_sinks()),
+                    "globals": len(graph.get_globals()),
+                    "errors": errors,
+                }
+            )
+        return graph

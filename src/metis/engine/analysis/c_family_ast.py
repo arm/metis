@@ -61,14 +61,8 @@ class CFamilyAstMixin:
         return nodes, parent_map
 
     def _iter_nodes(self, root):
-        if root is None:
-            return
-        stack = [root]
-        while stack:
-            node = stack.pop()
+        for node, _parent in self._iter_nodes_with_parent(root):
             yield node
-            for child in reversed(_node_children(node)):
-                stack.append(child)
 
     def _iter_nodes_with_parent(self, root):
         if root is None:
@@ -148,7 +142,7 @@ class CFamilyAstMixin:
         return guards[:4]
 
     def _collect_calls_in_scope(
-        self, scope_node, source: bytes, *, exclude_symbols=None, sort: bool = True
+        self, scope_node, source: bytes, *, exclude_symbols=None
     ) -> list[_Reference]:
         out: list[_Reference] = []
         if scope_node is None:
@@ -164,8 +158,7 @@ class CFamilyAstMixin:
                         continue
                     out.append(_Reference(symbol=symbol, line=_node_line(node)))
 
-        if sort:
-            out.sort(key=lambda item: (item.line, item.symbol.lower()))
+        out.sort(key=lambda item: (item.line, item.symbol.lower()))
         return out
 
     def _collect_functions(self, root, source: bytes) -> dict[str, list[_FunctionInfo]]:
@@ -256,21 +249,28 @@ class CFamilyAstMixin:
         ordered = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0].lower()))
         return [symbol for symbol, _ in ordered[:limit]]
 
-    def _collect_definitions(self, root, source: bytes) -> dict[str, list[_Definition]]:
-        out: dict[str, list[_Definition]] = {}
+    def _collect_symbol_indexes(self, nodes: list[Any], source: bytes) -> tuple[
+        dict[str, list[_Definition]],
+        dict[str, list[_Reference]],
+        dict[str, list[_Reference]],
+    ]:
+        definitions: dict[str, list[_Definition]] = {}
+        references: dict[str, list[_Reference]] = {}
+        call_refs: list[_Reference] = []
 
-        def add(symbol: str, line: int):
-            if not symbol:
-                return
-            out.setdefault(symbol, []).append(_Definition(symbol=symbol, line=line))
+        def add_definition(symbol: str, line: int):
+            if symbol:
+                definitions.setdefault(symbol, []).append(
+                    _Definition(symbol=symbol, line=line)
+                )
 
-        for node in self._iter_nodes(root):
+        for node in nodes:
             node_type = _node_kind(node)
             line = _node_line(node)
 
             if node_type == "function_definition":
                 symbol = self._function_name_from_definition(node, source)
-                add(symbol, line)
+                add_definition(symbol, line)
 
             if node_type == "declaration":
                 for child in _node_children(node):
@@ -281,37 +281,31 @@ class CFamilyAstMixin:
                         "identifier",
                     }:
                         symbol = _identifier_from_node(child, source)
-                        add(symbol, line)
+                        add_definition(symbol, line)
 
-        for symbol in list(out.keys()):
-            out[symbol] = sorted(out[symbol], key=lambda item: item.line)
-        return out
-
-    def _collect_references(self, root, source: bytes) -> dict[str, list[_Reference]]:
-        out: dict[str, list[_Reference]] = {}
-
-        for node in self._iter_nodes(root):
-            if _node_kind(node) in {"identifier", "field_identifier"}:
+            if node_type in {"identifier", "field_identifier"}:
                 symbol = _node_text(node, source).strip()
                 if symbol:
-                    line = _node_line(node)
-                    out.setdefault(symbol, []).append(
+                    references.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
 
-        for symbol in list(out.keys()):
-            out[symbol] = sorted(out[symbol], key=lambda item: item.line)
-        return out
+            if node_type == "call_expression":
+                function_node = _node_child_by_field_name(node, "function")
+                symbol = _identifier_from_node(function_node or node, source)
+                if symbol:
+                    call_refs.append(_Reference(symbol=symbol, line=line))
 
-    def _collect_calls(self, root, source: bytes) -> dict[str, list[_Reference]]:
-        out: dict[str, list[_Reference]] = {}
+        calls: dict[str, list[_Reference]] = {}
+        for call in sorted(
+            call_refs, key=lambda item: (item.line, item.symbol.lower())
+        ):
+            calls.setdefault(call.symbol, []).append(call)
 
-        for call in self._collect_calls_in_scope(root, source):
-            out.setdefault(call.symbol, []).append(call)
-
-        for symbol in list(out.keys()):
-            out[symbol] = sorted(out[symbol], key=lambda item: item.line)
-        return out
+        for bucket in (definitions, references, calls):
+            for symbol in list(bucket.keys()):
+                bucket[symbol] = sorted(bucket[symbol], key=lambda item: item.line)
+        return definitions, references, calls
 
     def _is_actionable_symbol(self, symbol: str) -> bool:
         text = str(symbol or "").strip()

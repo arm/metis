@@ -17,7 +17,6 @@ from metis.engine.analysis.c_family_analyzer_common import (
     _node_text,
 )
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
-from metis.engine.analysis.c_family_helpers import CPP_EXTENSIONS
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
 from .models import FunctionNode, GlobalConstruct
@@ -34,7 +33,8 @@ class ParsedFileGraph:
 class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     """Convert one C-family source file into graph nodes plus global callbacks."""
 
-    def __init__(self):
+    def __init__(self, repository=None):
+        self._repository = repository
         self._runtimes = {
             "c": TreeSitterRuntime("c"),
             "cpp": TreeSitterRuntime("cpp"),
@@ -64,7 +64,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
         )
-        nodes = self._collect_functions(root, source, rel_path, global_function_refs)
+        nodes = self._collect_functions(
+            root, source, rel_path, global_function_refs, language
+        )
         return ParsedFileGraph(nodes=nodes, globals=global_constructs)
 
     def _collect_functions(
@@ -73,6 +75,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         source: bytes,
         rel_path: str,
         global_function_refs: set[str],
+        language: str = "c",
     ) -> list[FunctionNode]:
         nodes: list[FunctionNode] = []
         seen: set[str] = set()
@@ -98,6 +101,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                             line_number=_node_line(node),
                             is_source=is_source,
                             is_sink=False,
+                            language=language,
                             calls=calls,
                             source_reason=source_reason,
                         )
@@ -110,7 +114,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         calls: list[str] = []
         seen: set[str] = set()
         for call in self._collect_calls_in_scope(
-            scope_node, source, exclude_symbols=CONTROL_CALLS, sort=False
+            scope_node, source, exclude_symbols=CONTROL_CALLS
         ):
             if call.symbol in seen:
                 continue
@@ -146,7 +150,6 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                                 file_path=rel_path,
                                 name=name,
                                 line_number=_node_line(node),
-                                kind=self._global_kind(text),
                                 initializer=text[:2000],
                                 referenced_functions=refs,
                             )
@@ -171,25 +174,17 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         declarator = self._field(node, "declarator")
         return _identifier_from_node(declarator or node, source)
 
-    def _global_kind(self, text: str) -> str:
-        lowered = str(text or "").lower()
-        if "file_operations" in lowered or "fops" in lowered:
-            return "file_operations"
-        if "ops" in lowered:
-            return "ops_table"
-        if "timer" in lowered:
-            return "timer"
-        if "work" in lowered:
-            return "workqueue"
-        return "global_initializer"
-
     def _field(self, node, name: str):
         return _node_child_by_field_name(node, name)
 
     def _language_for_file(self, path: str) -> str:
-        ext = os.path.splitext(path)[1].lower()
-        if ext in CPP_EXTENSIONS:
-            return "cpp"
+        plugin = None
+        get_plugin_for_path = getattr(self._repository, "get_plugin_for_path", None)
+        if callable(get_plugin_for_path):
+            plugin = get_plugin_for_path(path)
+        language = str(getattr(plugin, "get_name", lambda: "")() or "").lower()
+        if language in self._runtimes:
+            return language
         return "c"
 
     def _rel_path(self, file_path: str, codebase_path: str) -> str:

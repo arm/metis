@@ -147,7 +147,6 @@ def review_node_llm(
     system_prompt = state.get("system_prompt") or ""
     payload = {"system_prompt": system_prompt, "body_text": body_text}
     raw = None
-    errors: list[str] = []
     attempts = (
         (structured_node, logger.warning, "Structured review invocation failed: %s"),
         (fallback_node, logger.error, "Fallback review invocation failed: %s"),
@@ -161,14 +160,11 @@ def review_node_llm(
             raw = runnable.invoke(payload)
         except Exception as exc:
             log_fn(message, exc)
-            errors.append(f"{type(exc).__name__}: {exc}")
             raw = None
 
     reviews = _normalize_reviews(raw)
     new_state: ReviewState = dict(state)
     new_state["parsed_reviews"] = reviews
-    if not reviews and raw in (None, "") and errors:
-        new_state["llm_errors"] = errors
     return new_state
 
 
@@ -303,7 +299,6 @@ class ReviewGraph:
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
-        errors = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk in chunks:
             state = {
@@ -319,7 +314,6 @@ class ReviewGraph:
             }
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []
-            errors.extend(out.get("llm_errors", []) or [])
             if chunk_reviews:
                 accumulated.extend(chunk_reviews)
 
@@ -330,8 +324,6 @@ class ReviewGraph:
                 "file_path": file_path,
                 "reviews": [],
             }
-            if errors:
-                result["errors"] = errors
             return result
 
         file_display = relative_file if relative_file else file_path
@@ -340,7 +332,5 @@ class ReviewGraph:
             "file_path": file_path,
             "reviews": accumulated,
         }
-        if errors:
-            result["errors"] = errors
 
         return result

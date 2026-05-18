@@ -13,15 +13,35 @@ from metis.engine.reachability.finding_normalization import (
     _confidence_score,
 )
 from metis.engine.reachability.graph_utils import select_confirmation_paths
-from metis.engine.reachability.builder import (
-    TreeSitterReachabilityGraphBuilder,
-)
 from metis.engine.reachability.c_family import (
     CFamilyTreeSitterExtractor,
 )
 from metis.engine.reachability.file_focus import FileFocusBuilder
 from metis.engine.reachability.finding_paths import FindingPathAnnotator
 from metis.engine.reachability import VulnerabilityFinding
+from metis.engine.reachability.graph_cache import ReachabilityGraphCache
+
+
+class _GraphCacheConfig:
+    def __init__(self, codebase_path):
+        self.codebase_path = codebase_path
+
+
+class _GraphCacheRepository:
+    def get_code_files(self):
+        return []
+
+    def get_plugin_for_path(self, _path):
+        return None
+
+    def is_path_supported_by_plugins(self, _path, _plugin_names):
+        return True
+
+
+def _reachability_cache(codebase_path):
+    return ReachabilityGraphCache(
+        _GraphCacheConfig(codebase_path), _GraphCacheRepository()
+    )
 
 
 def test_confidence_score_matches_review_schema():
@@ -32,7 +52,7 @@ def test_confidence_score_matches_review_schema():
     assert _confidence_score(2.0) == 1.0
 
 
-def test_treesitter_builder_uses_installed_parser_runtime(tmp_path):
+def test_reachability_cache_uses_installed_parser_runtime(tmp_path):
     source = tmp_path / "main.c"
     source.write_text(
         "void foo(void) {}\nint main(void) { foo(); return 0; }\n",
@@ -40,8 +60,8 @@ def test_treesitter_builder_uses_installed_parser_runtime(tmp_path):
     )
 
     events = []
-    graph = TreeSitterReachabilityGraphBuilder().build(
-        [str(source)], str(tmp_path), progress_callback=events.append
+    graph = _reachability_cache(str(tmp_path)).build_graph(
+        [str(source)], progress_callback=events.append
     )
 
     done = [event for event in events if event["event"] == "treesitter_graph_done"]
@@ -127,7 +147,7 @@ class _Runtime:
         return _Parsed(self._root)
 
 
-def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
+def test_reachability_cache_extracts_reachability_graph(monkeypatch):
     import metis.engine.analysis.c_family_ast as c_family_ast
     import metis.engine.reachability.c_family as c_family
 
@@ -160,10 +180,10 @@ def test_treesitter_builder_extracts_reachability_graph(monkeypatch):
 
     root = _Node("translation_unit", children=[main_def, foo_def])
 
-    builder = TreeSitterReachabilityGraphBuilder()
-    builder._extractor._runtimes = {"c": _Runtime(root)}
+    cache = _reachability_cache(".")
+    cache._extractor._runtimes = {"c": _Runtime(root)}
 
-    graph = builder.build(["main.c"], ".")
+    graph = cache.build_graph(["main.c"])
 
     assert graph.node_count() == 2
     assert graph.get_node("main.c::main").is_source is True
@@ -312,8 +332,7 @@ def test_c_family_ast_helpers_handle_deep_trees_without_recursion():
     source = b"deep_call"
 
     nodes, parent_map = harness._index_tree(root)
-    calls = harness._collect_calls(root, source)
-    refs = harness._collect_references(root, source)
+    _definitions, refs, calls = harness._collect_symbol_indexes(nodes, source)
 
     assert len(nodes) == 1502
     assert parent_map[id(root)] is None

@@ -97,6 +97,7 @@ class TriageGraph:
                 "retriever_code": request["retriever_code"],
                 "retriever_docs": request["retriever_docs"],
                 "triage_analyzer": request.get("triage_analyzer"),
+                "triage_plugin": request.get("triage_plugin"),
                 "triage_codebase_path": request.get("triage_codebase_path", "."),
                 "debug_callback": request.get("debug_callback"),
                 "use_retrieval_context": bool(

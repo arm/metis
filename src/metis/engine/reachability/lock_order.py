@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import os
 
 from metis.engine.analysis.c_family_analyzer_common import (
     _identifier_from_node,
@@ -17,7 +16,6 @@ from metis.engine.analysis.c_family_analyzer_common import (
     _node_text,
 )
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
-from metis.engine.analysis.c_family_helpers import CPP_EXTENSIONS
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
 _LOCK_CALLS = frozenset(
@@ -62,7 +60,9 @@ class _TreeSitterLockExtractor(CFamilyAstMixin):
     def extract_edges(self, graph, codebase_path):
         edges = defaultdict(list)
         for file_path, nodes in _nodes_by_file(graph).items():
-            parsed = self._parse_file(codebase_path, file_path)
+            parsed = self._parse_file(
+                codebase_path, file_path, _language_for_nodes(nodes)
+            )
             if parsed is None:
                 continue
             source = bytes(parsed.text, "utf-8")
@@ -83,8 +83,8 @@ class _TreeSitterLockExtractor(CFamilyAstMixin):
                     )
         return edges
 
-    def _parse_file(self, codebase_path, file_path):
-        runtime = self._runtimes.get(_language_for_file(file_path))
+    def _parse_file(self, codebase_path, file_path, language):
+        runtime = self._runtimes.get(language)
         if runtime is None or not runtime.is_available:
             return None
         try:
@@ -168,6 +168,9 @@ def _field(node, name):
     return _node_child_by_field_name(node, name)
 
 
-def _language_for_file(path):
-    ext = os.path.splitext(str(path or ""))[1].lower()
-    return "cpp" if ext in CPP_EXTENSIONS else "c"
+def _language_for_nodes(nodes):
+    for node in nodes:
+        language = str(getattr(node, "language", "") or "").lower()
+        if language:
+            return language
+    return "c"

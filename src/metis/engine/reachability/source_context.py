@@ -132,7 +132,7 @@ def _build_globals_code(graph, max_chars=20000):
     for g in globals_:
         refs = ", ".join(g.referenced_functions)
         entry = (
-            f"GLOBAL {g.unique_name} line {g.line_number} kind={g.kind}\n"
+            f"GLOBAL {g.unique_name} line {g.line_number}\n"
             f"initializer:\n{g.initializer}\n"
             f"referenced_functions: {refs}"
         )

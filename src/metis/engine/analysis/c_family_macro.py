@@ -12,10 +12,7 @@ from .c_family_analyzer_common import (
     _node_children,
     _node_kind,
 )
-from .c_family_helpers import (
-    parse_includes_from_text,
-    resolve_include_path,
-)
+from .c_family_helpers import parse_includes_from_text, resolve_include_path
 
 
 class CFamilyMacroMixin:

@@ -74,6 +74,7 @@ class TriageRequest(TypedDict):
     retriever_docs: NotRequired[Any | None]
     debug_callback: NotRequired[Any]
     triage_analyzer: NotRequired[Any]
+    triage_plugin: NotRequired[Any]
     triage_codebase_path: NotRequired[str]
     use_retrieval_context: NotRequired[bool]
 
@@ -91,6 +92,7 @@ class TriageState(TypedDict, total=False):
     retriever_docs: Any
     debug_callback: Any
     triage_analyzer: Any
+    triage_plugin: Any
     triage_codebase_path: str
     use_retrieval_context: bool
     triage_system_prompt: str

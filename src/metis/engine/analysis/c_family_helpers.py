@@ -6,9 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
-
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _LOW_VALUE_C_FAMILY_PROBE_TERMS = {
     "c",
@@ -20,11 +17,6 @@ _LOW_VALUE_C_FAMILY_PROBE_TERMS = {
     "hpp",
     "hxx",
 }
-CPP_EXTENSIONS = frozenset(CppPlugin.DEFAULT_EXTENSIONS)
-C_FAMILY_EXTENSIONS = frozenset(
-    CPlugin.DEFAULT_EXTENSIONS + CppPlugin.DEFAULT_EXTENSIONS
-)
-C_FAMILY_XREF_EXTENSIONS = frozenset((*C_FAMILY_EXTENSIONS, ".S", ".s"))
 
 
 def extract_code_like_symbols(*texts: str, limit: int = 12) -> list[str]:
@@ -56,16 +48,6 @@ def is_low_value_c_family_probe_term(term: str) -> bool:
     if not text:
         return False
     return text in _LOW_VALUE_C_FAMILY_PROBE_TERMS
-
-
-def is_c_family_file_path(file_path: str) -> bool:
-    ext = Path(file_path or "").suffix.lower()
-    return ext in C_FAMILY_EXTENSIONS
-
-
-def is_c_family_xref_file_path(file_path: str) -> bool:
-    ext = Path(file_path or "").suffix
-    return ext in C_FAMILY_XREF_EXTENSIONS
 
 
 def parse_includes_from_text(text: str) -> list[str]:

@@ -58,6 +58,7 @@ def graph_fingerprint(graph) -> str:
             node.file_path,
             node.name,
             node.line_number,
+            node.language,
             int(bool(node.is_source)),
             int(bool(node.is_sink)),
             node.source_reason,
@@ -73,7 +74,6 @@ def graph_fingerprint(graph) -> str:
             construct.file_path,
             construct.name,
             construct.line_number,
-            construct.kind,
             construct.initializer,
             ",".join(construct.referenced_functions or ()),
         )
@@ -146,6 +146,7 @@ def _copy_graph_nodes(graph, node_names):
                 line_number=node.line_number,
                 is_source=node.is_source,
                 is_sink=node.is_sink,
+                language=node.language,
                 calls=list(node.calls or []),
                 resolved_calls=[],
                 source_reason=node.source_reason,
