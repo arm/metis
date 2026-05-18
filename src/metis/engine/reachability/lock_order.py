@@ -5,24 +5,43 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
+import os
 
-from .source_context import _read_function_body
+from metis.engine.analysis.c_family_analyzer_common import (
+    _identifier_from_node,
+    _node_line,
+    _node_text,
+)
+from metis.engine.analysis.c_family_ast import CFamilyAstMixin
+from metis.engine.analysis.c_family_helpers import CPP_EXTENSIONS
+from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
-_LOCK_EVENT_RE = re.compile(
-    r"\b(?P<fn>pthread_mutex_lock|pthread_mutex_unlock|mutex_lock|mutex_unlock|"
-    r"spin_lock(?:_irqsave|_irq)?|spin_unlock(?:_irqrestore|_irq)?)\s*"
-    r"\(\s*(?P<arg>[^,\)]+)",
-    re.IGNORECASE,
+_LOCK_CALLS = frozenset(
+    "pthread_mutex_lock mutex_lock spin_lock spin_lock_irqsave spin_lock_irq".split()
+)
+_UNLOCK_CALLS = frozenset(
+    "pthread_mutex_unlock mutex_unlock spin_unlock spin_unlock_irqrestore "
+    "spin_unlock_irq".split()
 )
 
 
 def _normalise_lock_expr(expr):
-    expr = re.sub(r"/\*.*?\*/", "", str(expr or ""))
-    expr = re.sub(r"\s+", "", expr).strip("&()")
-    expr = re.sub(r"^\([^)]*\)", "", expr)
-    expr = expr.replace("->", ".").strip("&()")
+    expr = "".join(str(expr or "").strip().split()).replace("->", ".")
+    for _ in range(4):
+        expr = expr.strip("&")
+        if not (expr.startswith("(") and ")" in expr):
+            break
+        close = expr.find(")")
+        inner = expr[1:close]
+        suffix = expr[close + 1 :]
+        if close == len(expr) - 1:
+            expr = inner
+        elif suffix:
+            expr = suffix
+        else:
+            break
+    expr = expr.strip("&()")
     if not expr:
         return ""
     if expr.endswith(".lock"):
@@ -30,30 +49,62 @@ def _normalise_lock_expr(expr):
     return expr
 
 
+class _TreeSitterLockExtractor(CFamilyAstMixin):
+    def __init__(self):
+        self._runtimes = {
+            "c": TreeSitterRuntime("c"),
+            "cpp": TreeSitterRuntime("cpp"),
+        }
+
+    def extract_edges(self, graph, codebase_path):
+        edges = defaultdict(list)
+        for file_path, nodes in _nodes_by_file(graph).items():
+            parsed = self._parse_file(codebase_path, file_path)
+            if parsed is None:
+                continue
+            source = bytes(parsed.text, "utf-8")
+            by_name_line = defaultdict(list)
+            for node in nodes:
+                by_name_line[(node.name, int(node.line_number or 0))].append(node)
+
+            for fn_node in self._iter_function_definitions(
+                parsed.tree.root_node, include_methods=True
+            ):
+                name = self._function_name_from_definition(fn_node, source)
+                graph_nodes = by_name_line.get((name, _node_line(fn_node)), [])
+                if not graph_nodes:
+                    continue
+                for graph_node in graph_nodes:
+                    _record_lock_edges(
+                        edges, graph_node, self._iter_lock_events(fn_node, source)
+                    )
+        return edges
+
+    def _parse_file(self, codebase_path, file_path):
+        runtime = self._runtimes.get(_language_for_file(file_path))
+        if runtime is None or not runtime.is_available:
+            return None
+        try:
+            return runtime.parse_file(codebase_path, file_path)
+        except Exception:
+            return None
+
+    def _iter_lock_events(self, function_node, source):
+        for call in self._iter_nodes(function_node):
+            if str(getattr(call, "type", "") or "") != "call_expression":
+                continue
+            callee_node = _field(call, "function")
+            callee = _identifier_from_node(callee_node or call, source).lower()
+            if callee not in _LOCK_CALLS and callee not in _UNLOCK_CALLS:
+                continue
+            arg = _first_argument(call)
+            lock = _normalise_lock_expr(_node_text(arg, source))
+            if lock:
+                yield callee, lock, _node_line(call)
+
+
 def _extract_lock_conflicts(graph, codebase_path):
-    edges = defaultdict(list)
-    for node in sorted(
-        graph.nodes.values(), key=lambda n: (n.file_path, n.line_number, n.name)
-    ):
-        body = _read_function_body(codebase_path, node, 8000)
-        if not body:
-            continue
-        held = []
-        for match in _LOCK_EVENT_RE.finditer(body):
-            lock = _normalise_lock_expr(match.group("arg"))
-            if not lock:
-                continue
-            line = node.line_number + body[: match.start()].count("\n")
-            fn_name = match.group("fn").lower()
-            if "unlock" in fn_name:
-                if lock in held:
-                    held.remove(lock)
-                continue
-            for prior in held:
-                if prior != lock:
-                    edges[(prior, lock)].append((node, line))
-            if lock not in held:
-                held.append(lock)
+    edges = _TreeSitterLockExtractor().extract_edges(graph, codebase_path)
 
     conflicts, seen = [], set()
     for (a, b), first_edges in edges.items():
@@ -74,3 +125,56 @@ def _extract_lock_conflicts(graph, codebase_path):
                 if len(conflicts) >= 40:
                     return conflicts
     return conflicts
+
+
+def _nodes_by_file(graph):
+    grouped = defaultdict(list)
+    for node in sorted(
+        graph.nodes.values(),
+        key=lambda item: (item.file_path, item.line_number, item.name),
+    ):
+        grouped[node.file_path].append(node)
+    return grouped
+
+
+def _record_lock_edges(edges, node, events):
+    held = []
+    for fn_name, lock, line in events:
+        if fn_name in _UNLOCK_CALLS:
+            if lock in held:
+                held.remove(lock)
+            continue
+        for prior in held:
+            if prior != lock:
+                edges[(prior, lock)].append((node, line))
+        if lock not in held:
+            held.append(lock)
+
+
+def _first_argument(call_node):
+    arguments = _field(call_node, "arguments")
+    if arguments is None:
+        return None
+    named_children = getattr(arguments, "named_children", None)
+    children = list(
+        named_children
+        if named_children is not None
+        else getattr(arguments, "children", []) or []
+    )
+    for child in children:
+        child_type = str(getattr(child, "type", "") or "")
+        if child_type not in {"(", ")", ",", "comment"}:
+            return child
+    return None
+
+
+def _field(node, name):
+    try:
+        return node.child_by_field_name(name)
+    except Exception:
+        return None
+
+
+def _language_for_file(path):
+    ext = os.path.splitext(str(path or ""))[1].lower()
+    return "cpp" if ext in CPP_EXTENSIONS else "c"

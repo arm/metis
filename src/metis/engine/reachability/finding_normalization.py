@@ -8,7 +8,6 @@ import os
 import re
 import uuid
 
-from .finding_taxonomy import _VTYPE_FAMILY, _VULN_TYPE_ALIASES
 from .models import VulnerabilityFinding
 
 
@@ -102,7 +101,9 @@ def _canonical_fields(
     primary_line = _safe_int(entry.get("primary_line"), default_line or 0)
     if primary_line <= 0:
         primary_line = default_line or 0
-    canonical_key = _canonical_key_from_parts(
+    canonical_key = _normalise_explicit_canonical_key(
+        entry.get("canonical_key")
+    ) or _canonical_key_from_parts(
         primary_file,
         primary_function,
         primary_line,
@@ -157,6 +158,7 @@ def _finding_from_llm_entry(
         root_cause=str(entry.get("root_cause") or ""),
         evidence=str(entry.get("evidence") or ""),
         mitigation=str(entry.get("mitigation") or ""),
+        cwe=str(entry.get("cwe") or entry.get("cwe_id") or ""),
         analysis_type=analysis_type,
         primary_file=primary_file,
         primary_function=primary_function,
@@ -166,7 +168,9 @@ def _finding_from_llm_entry(
 
 
 def _canonical_finding_key(finding):
-    return _canonical_key_from_parts(
+    return _normalise_explicit_canonical_key(
+        getattr(finding, "canonical_key", "")
+    ) or _canonical_key_from_parts(
         _finding_file(finding),
         _finding_function(finding),
         _finding_line(finding),
@@ -191,9 +195,8 @@ def _canonical_key_from_parts(
     if not file_key or not function_key:
         return ""
     vtype = _normalise_vuln_type(vulnerability_type)
-    family = _VTYPE_FAMILY.get(vtype, vtype)
     root_token = root_cause_token or f"line_{_line_bucket(primary_line)}"
-    return f"{file_key}:{function_key}:{family}:{root_token}"
+    return f"{file_key}:{function_key}:{vtype}:{root_token}"
 
 
 def _canonical_path(path):
@@ -214,6 +217,13 @@ def _canonical_root_token(value):
     return "_".join(tokens[:8])
 
 
+def _normalise_explicit_canonical_key(value):
+    text = str(value or "").strip().lower().replace("\\", "/").lstrip("./")
+    if text.count(":") < 3:
+        return ""
+    return re.sub(r"\s+", "", text)
+
+
 def _line_bucket(line):
     line = max(0, _safe_int(line, 0))
     if line <= 0:
@@ -222,8 +232,9 @@ def _line_bucket(line):
 
 
 def _normalise_vuln_type(raw):
-    t = str(raw or "other").strip().lower().replace("-", "_").replace(" ", "_")
-    return _VULN_TYPE_ALIASES.get(t, t)
+    text = str(raw or "other").strip().lower().replace("-", "_").replace(" ", "_")
+    text = re.sub(r"[^a-z0-9_]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_") or "other"
 
 
 def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
@@ -234,7 +245,7 @@ def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
     vtype = _normalise_vuln_type(
         vulnerability_type or getattr(finding, "vulnerability_type", "")
     )
-    label = _VTYPE_FAMILY.get(vtype, vtype).replace("_", " ")
+    label = vtype.replace("_", " ")
     return (
         f"Address the {label} issue by adding the missing validation, ordering, "
         "ownership, or cleanup guard before the reachable operation executes."

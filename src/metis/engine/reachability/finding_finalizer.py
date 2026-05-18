@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+
 from .dedup import Deduplicator
 from .finding_paths import FindingPathAnnotator
 from .graph_utils import _same_file
@@ -23,7 +25,7 @@ class FindingFinalizer:
         graph,
         *,
         max_paths_per_sink,
-        max_path_length=25,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         target_file="",
         strict_file=False,
     ):
@@ -48,7 +50,11 @@ class FindingFinalizer:
         return Deduplicator.deduplicate(findings, max_per_sink=max_paths_per_sink)
 
     def annotate_findings_with_source_paths(
-        self, findings, graph, *, max_path_length=25
+        self,
+        findings,
+        graph,
+        *,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
     ):
         annotated = []
         annotators = {}

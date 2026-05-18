@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+
 from .c_family_rules import (
     C_FAMILY_PLUGIN_NAMES,
     _normalise_security_function_specs,
@@ -66,13 +68,13 @@ class ReachabilityGraphCache:
     def get_codebase_graph_and_paths(
         self,
         *,
-        max_path_length=25,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
         source_functions=None,
         security_functions=None,
     ):
         """Return the cached codebase graph and traced paths for shared analysis."""
-        max_path_length = int(max_path_length or 25)
+        max_path_length = int(max_path_length or DEFAULT_REACHABILITY_MAX_PATH_LENGTH)
         if self._graph is not None:
             self._annotate_configured_source_functions(
                 self._graph,

@@ -60,7 +60,7 @@ class ReviewService:
             if self._reachability_cache is None:
                 settings = dict(self._reachability_settings)
                 settings.setdefault("analysis_profile", "review")
-                if not int(settings.get("max_paths") or 0):
+                if not settings.get("max_paths"):
                     settings.setdefault("confirm_paths", False)
                 if progress_callback is not None:
                     settings["progress_callback"] = progress_callback
@@ -87,32 +87,10 @@ class ReviewService:
             and self._is_c_cpp_file(file_path)
         ):
             try:
-                result = self._reachability_service.review_file(
-                    file_path,
-                    confirmation_model=self._reachability_settings.get(
-                        "confirmation_model"
-                    ),
-                    max_workers=int(self._reachability_settings.get("max_workers", 8)),
-                    max_paths=int(self._reachability_settings.get("max_paths", 0)),
-                    max_paths_per_sink=int(
-                        self._reachability_settings.get("max_paths_per_sink", 3)
-                    ),
-                    max_path_length=int(
-                        self._reachability_settings.get("max_path_length", 25)
-                    ),
-                    reasoning_effort=self._reachability_settings.get(
-                        "reasoning_effort"
-                    ),
-                    source_functions=self._reachability_settings.get(
-                        "source_functions"
-                    ),
-                    security_functions=self._reachability_settings.get(
-                        "security_functions"
-                    ),
-                    domain_hints=self._reachability_settings.get("domain_hints"),
-                    domain_profiles=self._reachability_settings.get("domain_profiles"),
-                    progress_callback=progress_callback,
-                )
+                settings = dict(self._reachability_settings)
+                if progress_callback is not None:
+                    settings["progress_callback"] = progress_callback
+                result = self._reachability_service.review_file(file_path, **settings)
             except Exception as e:
                 logger.exception("Tree-sitter file review failed for %s", file_path)
                 if progress_callback is not None:

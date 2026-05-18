@@ -14,7 +14,6 @@ from .finding_normalization import (
     _finding_line,
     _normalise_vuln_type,
 )
-from .finding_taxonomy import _VTYPE_FAMILY
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
 _CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
@@ -36,7 +35,7 @@ class Deduplicator:
 
         normalized = [_normalize_finding(finding) for finding in findings]
         collapsed = _collapse_by_canonical_identity(normalized)
-        selected = _cap_per_function_family(collapsed, max_per_sink)
+        selected = _cap_per_function_type(collapsed, max_per_sink)
         return selected, len(findings), len(findings) - len(selected)
 
 
@@ -70,12 +69,7 @@ def _normalize_function(function):
     return str(function or "").strip()
 
 
-def _dedupe_family(finding):
-    vtype = _normalise_vuln_type(getattr(finding, "vulnerability_type", ""))
-    return _VTYPE_FAMILY.get(vtype, vtype)
-
-
-def _cap_per_function_family(findings, limit):
+def _cap_per_function_type(findings, limit):
     limit = max(1, int(limit or 1))
     groups = defaultdict(list)
     for finding in findings:
@@ -83,7 +77,7 @@ def _cap_per_function_family(findings, limit):
             (
                 _normalize_path(_finding_file(finding)),
                 _normalize_function(_finding_function(finding)),
-                _dedupe_family(finding),
+                _normalise_vuln_type(getattr(finding, "vulnerability_type", "")),
             )
         ].append(finding)
 

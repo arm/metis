@@ -478,7 +478,7 @@ def test_deduplicator_merges_same_canonical_key_across_paths():
     assert len(deduped) == 1
     assert (
         deduped[0].canonical_key
-        == "src/task.c:src/task.c::task_import:memory_bounds:unterminated_title"
+        == "src/task.c:src/task.c::task_import:out_of_bounds:unterminated_title"
     )
 
 
@@ -502,7 +502,7 @@ def test_canonical_fields_build_deterministic_key_from_root_cause_id():
     assert primary_line == 64
     assert (
         canonical_key
-        == "src/task.c:src/task.c::task_import:memory_bounds:unterminated_title"
+        == "src/task.c:src/task.c::task_import:missing_bounds_check:unterminated_title"
     )
 
 
@@ -600,7 +600,7 @@ def test_deduplicator_keeps_different_canonical_keys_in_same_location():
     assert len(deduped) == 2
 
 
-def test_deduplicator_falls_back_to_location_family_when_key_missing():
+def test_deduplicator_falls_back_to_exact_type_when_key_missing():
     findings = [
         _finding(
             "array_index_size_mismatch",
@@ -623,9 +623,12 @@ def test_deduplicator_falls_back_to_location_family_when_key_missing():
     deduped, total, removed = Deduplicator.deduplicate(findings)
 
     assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-    assert deduped[0].vulnerability_type == "array_index_oob"
+    assert removed == 0
+    assert len(deduped) == 2
+    assert [finding.vulnerability_type for finding in deduped] == [
+        "array_index_size_mismatch",
+        "array_oob",
+    ]
 
 
 def test_deduplicator_keeps_different_families_without_canonical_key():

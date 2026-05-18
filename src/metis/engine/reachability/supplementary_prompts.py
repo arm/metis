@@ -157,20 +157,6 @@ Confirm only real lock-order inversions:
 Return {{"findings": []}} if none found. Be conservative.""",
 )
 
-_TARGET_ORDERING_GAP_SYS = _finding_prompt(
-    """\
-You are analyzing stateful C/C++ code for operation ordering gaps.
-Focus only on:
-- flush/sync/drain/fence/reset/state transition ordering bugs.
-- Runtime state changed while mutating address-translation, resource tables, or shared state.
-- State transitions published while dependent structures are still being mutated.
-- Missing wait/flush/barrier before dependent operation.
-- Missing state-management or address-translation lock coordination around transitions.
-""",
-    """\
-Return {{"findings": []}} if none found. Be conservative.""",
-)
-
 _TARGET_PATH_ACCESS_SYS = _finding_prompt(
     """\
 You are analyzing selected C/C++ functions for path traversal and filesystem TOCTOU.

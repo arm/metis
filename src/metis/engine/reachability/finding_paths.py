@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import replace
 from functools import partial
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+
 from .graph_utils import (
     _build_reverse_edges,
     _node_sort_key,
@@ -24,7 +26,13 @@ class FindingPathAnnotator:
     the best source-to-primary-function path from the full tree-sitter graph.
     """
 
-    def __init__(self, graph, target_file: str, *, max_path_length: int = 25):
+    def __init__(
+        self,
+        graph,
+        target_file: str,
+        *,
+        max_path_length: int = DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
+    ):
         self._graph = graph
         self._target_file = _normalize_file_ref(target_file)
         self._max_path_length = max(1, int(max_path_length or 1))

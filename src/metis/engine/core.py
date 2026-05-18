@@ -8,6 +8,7 @@ import logging
 from metis.configuration import load_plugin_config
 from metis.exceptions import PluginNotFoundError, QueryEngineInitError
 from metis.plugin_loader import discover_supported_language_names, load_plugins
+from metis.reachability_settings import coerce_reachability_settings
 from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
@@ -22,12 +23,6 @@ from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
 
 logger = logging.getLogger("metis")
-
-
-def _int_setting(value, default):
-    if value is None or value == "":
-        return default
-    return int(value)
 
 
 class MetisEngine:
@@ -79,28 +74,9 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
-        self.reachability_settings = {
-            "confirmation_model": kwargs.get("reachability_confirmation_model"),
-            "max_workers": _int_setting(
-                kwargs.get("reachability_workers"), self.max_workers
-            ),
-            "max_paths": _int_setting(kwargs.get("reachability_max_paths"), 0),
-            "max_paths_per_sink": _int_setting(
-                kwargs.get("reachability_max_paths_per_sink"), 3
-            ),
-            "max_path_length": _int_setting(
-                kwargs.get("reachability_max_path_length"), 25
-            ),
-            "reasoning_effort": kwargs.get("reachability_reasoning_effort"),
-            "source_functions": kwargs.get("reachability_source_functions") or [],
-            "security_functions": kwargs.get("reachability_security_functions") or [],
-            "domain_profiles": (
-                ["gpu"]
-                if kwargs.get("reachability_domain_profiles") is None
-                else kwargs.get("reachability_domain_profiles")
-            ),
-            "domain_hints": kwargs.get("reachability_domain_hints") or [],
-        }
+        self.reachability_settings = coerce_reachability_settings(
+            kwargs, default_workers=self.max_workers
+        )
 
         self.plugin_config = load_plugin_config()
         self.custom_guidance_precedence = self.plugin_config.get(

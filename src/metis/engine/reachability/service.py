@@ -7,6 +7,13 @@ from __future__ import annotations
 
 import os
 
+from metis.reachability_settings import (
+    DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
+    DEFAULT_REACHABILITY_MAX_PATHS,
+    DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK,
+    DEFAULT_REACHABILITY_WORKERS,
+)
+
 from .confirmer import VulnerabilityConfirmer
 from .finding_finalizer import FindingFinalizer
 from .graph_cache import ReachabilityGraphCache
@@ -41,10 +48,10 @@ class TreeSitterReachabilityService:
         file_path,
         *,
         confirmation_model=None,
-        max_workers=8,
-        max_paths=0,
-        max_paths_per_sink=3,
-        max_path_length=25,
+        max_workers=DEFAULT_REACHABILITY_WORKERS,
+        max_paths=DEFAULT_REACHABILITY_MAX_PATHS,
+        max_paths_per_sink=DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
         reasoning_effort=None,
         source_functions=None,
@@ -154,10 +161,10 @@ class TreeSitterReachabilityService:
         self,
         *,
         confirmation_model=None,
-        max_workers=8,
-        max_paths=0,
-        max_paths_per_sink=3,
-        max_path_length=25,
+        max_workers=DEFAULT_REACHABILITY_WORKERS,
+        max_paths=DEFAULT_REACHABILITY_MAX_PATHS,
+        max_paths_per_sink=DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
         reasoning_effort=None,
         source_functions=None,
@@ -246,7 +253,7 @@ class TreeSitterReachabilityService:
         return reviews
 
     def annotate_findings_with_source_paths(
-        self, findings, graph, *, max_path_length=25
+        self, findings, graph, *, max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH
     ):
         return self._finalizer.annotate_findings_with_source_paths(
             findings,
@@ -257,7 +264,7 @@ class TreeSitterReachabilityService:
     def get_codebase_graph_and_paths(
         self,
         *,
-        max_path_length=25,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
         source_functions=None,
         security_functions=None,

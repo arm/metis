@@ -93,12 +93,9 @@ def build_engine(args, runtime):
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
-    reachability_config = dict(runtime.get("_reachability_config") or {})
     engine_runtime = dict(runtime)
+    engine_runtime.update(dict(runtime.get("_reachability_config") or {}))
     engine_runtime.pop("_reachability_config", None)
-
-    def _reachability_value(config_name, default=None):
-        return reachability_config.get(config_name, default)
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(
@@ -123,30 +120,6 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        reachability_confirmation_model=_reachability_value(
-            "reachability_confirmation_model"
-        ),
-        reachability_workers=_reachability_value("reachability_workers"),
-        reachability_max_paths=_reachability_value("reachability_max_paths"),
-        reachability_max_paths_per_sink=_reachability_value(
-            "reachability_max_paths_per_sink"
-        ),
-        reachability_max_path_length=_reachability_value(
-            "reachability_max_path_length"
-        ),
-        reachability_reasoning_effort=_reachability_value(
-            "reachability_reasoning_effort"
-        ),
-        reachability_source_functions=_reachability_value(
-            "reachability_source_functions", []
-        ),
-        reachability_security_functions=_reachability_value(
-            "reachability_security_functions", []
-        ),
-        reachability_domain_profiles=_reachability_value(
-            "reachability_domain_profiles", ["gpu"]
-        ),
-        reachability_domain_hints=_reachability_value("reachability_domain_hints", []),
         **engine_runtime,
     )
     return engine, vector_backend

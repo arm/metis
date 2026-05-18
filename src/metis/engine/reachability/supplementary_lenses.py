@@ -12,7 +12,6 @@ from .supplementary_prompts import (
     _CLASSIC_C_SINK_SYS,
     _COUNTER_SYMMETRY_SYS,
     _ERROR_UNWIND_SYS,
-    _TARGET_ORDERING_GAP_SYS,
     _TARGET_PATH_ACCESS_SYS,
 )
 
@@ -71,12 +70,6 @@ _FULL_LENS_SPECS = (
     ),
     _SupplementaryLensSpec("global_lifecycle", "method", "_lens_global_lifecycle"),
     _SupplementaryLensSpec("lock_order_extraction", "method", "_lens_lock_order"),
-    _SupplementaryLensSpec(
-        "targeted_ordering_gap",
-        "candidate_semantic",
-        sys_prompt=_TARGET_ORDERING_GAP_SYS,
-        analysis_type="targeted_ordering_gap",
-    ),
     _SupplementaryLensSpec(
         "targeted_path_access",
         "candidate_semantic",

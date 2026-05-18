@@ -9,6 +9,7 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
 
 from .llm_runner import invoke_reachability_prompt
@@ -75,7 +76,12 @@ class SupplementaryAnalyzer:
         return f"{prompt}\n\n{self._domain_prompt_hints}"
 
     def analyze(
-        self, graph, *, max_workers=8, progress_callback=None, analysis_profile="full"
+        self,
+        graph,
+        *,
+        max_workers=DEFAULT_REACHABILITY_WORKERS,
+        progress_callback=None,
+        analysis_profile="full",
     ):
         profile = str(analysis_profile or "full").lower()
         lens_specs = (

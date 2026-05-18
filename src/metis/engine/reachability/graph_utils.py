@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
+
 from .models import FunctionNode, ReachabilityGraph
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
@@ -121,7 +123,9 @@ def _copy_graph_nodes(graph, node_names):
     return focus
 
 
-def select_confirmation_paths(paths, graph, *, max_paths=0):
+def select_confirmation_paths(
+    paths, graph, *, max_paths=DEFAULT_REACHABILITY_MAX_PATHS
+):
     """Pick a bounded, representative set of source-rooted paths for LLM review."""
     paths = _dedupe_paths(paths)
     if max_paths and int(max_paths) > 0:

@@ -13,7 +13,6 @@ from .finding_normalization import (
     _normalise_vuln_type,
     _severity_title,
 )
-from .finding_taxonomy import _VULN_TO_CWE
 from .graph_utils import _same_file
 from .source_context import _read_line_context
 
@@ -110,7 +109,7 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
             if target_file
             else ""
         ),
-        "cwe": _VULN_TO_CWE.get(vtype),
+        "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": _confidence_score(finding.confidence),
         "reasoning": "\n".join(reasoning_parts),

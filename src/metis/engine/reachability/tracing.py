@@ -7,6 +7,8 @@ from __future__ import annotations
 from collections import defaultdict
 from functools import partial
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+
 from .models import ReachabilityPath
 from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort_key
 
@@ -14,7 +16,13 @@ from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort
 class SourceRootedPathTracer:
     """Trace maximal source-rooted paths without relying on sink labels."""
 
-    def __init__(self, graph, *, max_path_length=25, max_paths_per_source=200):
+    def __init__(
+        self,
+        graph,
+        *,
+        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
+        max_paths_per_source=200,
+    ):
         self._g = graph
         self._ml = max(1, int(max_path_length or 1))
         self._mp = max(1, int(max_paths_per_source or 1))

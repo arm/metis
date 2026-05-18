@@ -9,6 +9,7 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
 from metis.utils import parse_json_output
 
@@ -17,7 +18,6 @@ from .finding_normalization import (
     _safe_int,
     _same_file_ref,
 )
-from .finding_taxonomy import _PROMPT_VULNERABILITY_TYPE_LIST
 from .graph_utils import _chunked, _dedupe_paths
 from .llm_runner import invoke_reachability_prompt
 from .source_context import _read_function_body
@@ -34,13 +34,14 @@ def _finding_json_schema(*, path_fields=False, analysis_type="requested_analysis
         '{{"findings": []}}.\n'
         '{{"findings": [{{' + first_fields + f'"analysis_type": "{analysis_type}",\n'
         '"vulnerability_type": "one_allowed_vulnerability_type", "severity": "high",\n'
-        '"confidence": "high", "function_name": "actual_function_name",\n'
+        '"confidence": "high", "cwe": "CWE-123_or_empty",\n'
+        '"function_name": "actual_function_name",\n'
         '"related_function": "related_function_or_empty", "line": 123,\n'
         '"primary_file": "src/file.c", '
         '"primary_function": "src/file.c::actual_function_name",\n'
         '"primary_line": 123, "root_cause_id": "short_snake_case_root_cause",\n'
         '"canonical_key": '
-        '"src/file.c:src/file.c::function_name:vulnerability_family:short_snake_case_root_cause",\n'
+        '"src/file.c:src/file.c::function_name:vulnerability_type:short_snake_case_root_cause",\n'
         '"description": "...", "root_cause": "...", "evidence": "...", '
         '"mitigation": "..."}}]}}\n'
     )
@@ -54,7 +55,8 @@ _CONFIRM_FINDING_JSON_SCHEMA = _finding_json_schema(
 
 def _output_constraints(no_finding_guidance):
     return f"""\
-vulnerability_type must be exactly one of: {_PROMPT_VULNERABILITY_TYPE_LIST}.
+vulnerability_type must be a concise snake_case category chosen from the actual defect.
+cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
 confidence must be exactly one of: high, medium, low.
 Be conservative. {no_finding_guidance}"""
@@ -165,7 +167,14 @@ class VulnerabilityConfirmer:
 
     # --- Bulk confirmation for full-codebase reachability review ---
 
-    def confirm_parallel(self, paths, graph, *, max_workers=8, progress_callback=None):
+    def confirm_parallel(
+        self,
+        paths,
+        graph,
+        *,
+        max_workers=DEFAULT_REACHABILITY_WORKERS,
+        progress_callback=None,
+    ):
         if not paths:
             return []
         groups = defaultdict(list)

@@ -9,12 +9,14 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from functools import partial
 
-from .models import ReachabilityPath
+from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+
 from .graph_utils import (
     _build_reverse_edges,
     _file_focus_path_sort_key,
     _node_sort_key,
 )
+from .models import ReachabilityPath
 
 
 DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64
@@ -46,7 +48,7 @@ class FileFocusBuilder:
         self,
         graph,
         *,
-        max_path_length: int = 25,
+        max_path_length: int = DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         max_incoming_paths: int | None = DEFAULT_MAX_SOURCE_TO_FILE_PATHS,
         max_incoming_paths_per_target: int = DEFAULT_MAX_SOURCE_PATHS_PER_TARGET,
         max_path_variants_per_source_target: int = DEFAULT_MAX_SOURCE_PATH_VARIANTS,
