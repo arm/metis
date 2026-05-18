@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from .base import AnalyzerEvidence, AnalyzerRequest, supports_file_extension
+import os
+
+from .base import AnalyzerEvidence, AnalyzerRequest
 from .c_family_ast import CFamilyAstMixin
 from .c_family_flow import CFamilyFlowMixin
 from .c_family_macro import CFamilyMacroMixin
@@ -32,7 +34,8 @@ class CFamilyTriageAnalyzer(
             self.supported_extensions = set()
 
     def supports_file(self, rel_path: str) -> bool:
-        return supports_file_extension(rel_path, self.supported_extensions)
+        ext = os.path.splitext(rel_path or "")[1].lower()
+        return ext in self.supported_extensions
 
     def collect_evidence(self, request: AnalyzerRequest) -> AnalyzerEvidence:
         if not self.supports_file(request.file_path):

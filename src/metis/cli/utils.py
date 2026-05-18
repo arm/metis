@@ -231,12 +231,8 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     return result
 
 
-def collect_reviews(
-    engine, options: ReviewOptions | None = None, progress_callback=None
-):
-    reviews = engine.review.review_code(
-        options=options, progress_callback=progress_callback
-    )
+def collect_reviews(engine, options: ReviewOptions | None = None):
+    reviews = engine.review.review_code(options=options)
     return {"reviews": [r for r in reviews if r]}
 
 
@@ -262,7 +258,6 @@ def build_standard_progress(*, transient: bool):
         SpinnerColumn(style="cyan"),
         BarColumn(bar_width=None, complete_style="green", finished_style="green"),
         TaskProgressColumn(),
-        TextColumn("{task.description}"),
         TextColumn("[bright_black]elapsed"),
         TimeElapsedColumn(),
         TextColumn("[bright_black]eta"),

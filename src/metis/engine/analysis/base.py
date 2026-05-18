@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import os
 from typing import Protocol
 
 
@@ -39,8 +38,3 @@ class TriageAnalyzer(Protocol):
 
     def collect_evidence(self, request: AnalyzerRequest) -> AnalyzerEvidence:
         """Collect deterministic static evidence for triage."""
-
-
-def supports_file_extension(rel_path: str, supported_extensions) -> bool:
-    ext = os.path.splitext(rel_path or "")[1].lower()
-    return ext in supported_extensions

@@ -3,7 +3,6 @@
 
 
 import importlib
-import logging
 from pathlib import Path
 from rich.markup import escape
 
@@ -24,8 +23,6 @@ from .utils import (
     save_output,
     print_console,
 )
-
-logger = logging.getLogger("metis")
 
 
 def _print_no_index_warning(args, runtime: CommandRuntime):
@@ -104,26 +101,15 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
 
 
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
-    if not Path(str(file_path)).is_file():
-        codebase_path = getattr(engine, "codebase_path", None)
-        if codebase_path:
-            candidate = Path(str(codebase_path)) / str(file_path)
-            if candidate.is_file():
-                file_path = str(candidate)
     if not check_file_exists(file_path):
         return
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-
-    def _progress(event):
-        logger.debug("reachability progress event: %r", event)
-
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
         engine.review.review_file,
         file_path=file_path,
         options=options,
-        progress_callback=_progress,
         quiet=args.quiet,
     )
 
@@ -138,18 +124,22 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-
-    def _progress(event):
-        logger.debug("reachability progress event: %r", event)
-
-    results = with_spinner(
-        "Reviewing codebase...",
-        collect_reviews,
-        engine,
-        options=options,
-        progress_callback=_progress,
-        quiet=args.quiet,
-    )
+    if args.verbose:
+        print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
+        total = len(engine.review.get_code_files(options=options))
+        file_reviews = iterate_with_progress(
+            total,
+            engine.review.review_code(options=options),
+        )
+        results = {"reviews": file_reviews}
+    else:
+        results = with_spinner(
+            "Reviewing codebase...",
+            collect_reviews,
+            engine,
+            options=options,
+            quiet=args.quiet,
+        )
     _finalize_review_output(engine, results, args, runtime)
 
 
