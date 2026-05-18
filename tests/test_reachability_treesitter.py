@@ -32,16 +32,71 @@ def test_confidence_score_matches_review_schema():
     assert _confidence_score(2.0) == 1.0
 
 
+def test_treesitter_builder_uses_installed_parser_runtime(tmp_path):
+    source = tmp_path / "main.c"
+    source.write_text(
+        "void foo(void) {}\nint main(void) { foo(); return 0; }\n",
+        encoding="utf-8",
+    )
+
+    events = []
+    graph = TreeSitterReachabilityGraphBuilder().build(
+        [str(source)], str(tmp_path), progress_callback=events.append
+    )
+
+    done = [event for event in events if event["event"] == "treesitter_graph_done"]
+    assert done and not done[0]["errors"]
+    assert graph.node_count() == 2
+    assert graph.get_node("main.c::main").resolved_calls == ["main.c::foo"]
+
+
+class _Point:
+    def __init__(self, row, column):
+        self.row = row
+        self.column = column
+
+
 class _Node:
-    def __init__(self, node_type, *, text="", line=1, children=None, fields=None):
-        self.type = node_type
+    def __init__(
+        self,
+        node_type,
+        *,
+        text="",
+        line=1,
+        children=None,
+        fields=None,
+        start_byte=0,
+        end_byte=0,
+    ):
+        self._type = node_type
         self.text = text
-        self.start_point = (line - 1, 0)
-        self.end_point = (line - 1, 0)
-        self.start_byte = 0
-        self.end_byte = 0
-        self.children = children or []
+        self._start_position = _Point(line - 1, 0)
+        self._end_position = _Point(line - 1, 0)
+        self._start_byte = start_byte
+        self._end_byte = end_byte
+        self._children = children or []
         self._fields = fields or {}
+
+    def kind(self):
+        return self._type
+
+    def start_position(self):
+        return self._start_position
+
+    def end_position(self):
+        return self._end_position
+
+    def start_byte(self):
+        return self._start_byte
+
+    def end_byte(self):
+        return self._end_byte
+
+    def child_count(self):
+        return len(self._children)
+
+    def child(self, index):
+        return self._children[index]
 
     def child_by_field_name(self, name):
         return self._fields.get(name)
@@ -49,7 +104,10 @@ class _Node:
 
 class _Tree:
     def __init__(self, root):
-        self.root_node = root
+        self._root = root
+
+    def root_node(self):
+        return self._root
 
 
 class _Parsed:
@@ -244,9 +302,7 @@ class _AstHarness(CFamilyAstMixin):
 
 def test_c_family_ast_helpers_handle_deep_trees_without_recursion():
     harness = _AstHarness()
-    ident = _Node("identifier")
-    ident.start_byte = 0
-    ident.end_byte = 9
+    ident = _Node("identifier", start_byte=0, end_byte=9)
     call = _Node(
         "call_expression",
         children=[ident],

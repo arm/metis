@@ -10,6 +10,9 @@ import os
 
 from metis.engine.analysis.c_family_analyzer_common import (
     _identifier_from_node,
+    _node_child_by_field_name,
+    _node_children,
+    _node_kind,
     _node_line,
     _node_text,
 )
@@ -68,7 +71,7 @@ class _TreeSitterLockExtractor(CFamilyAstMixin):
                 by_name_line[(node.name, int(node.line_number or 0))].append(node)
 
             for fn_node in self._iter_function_definitions(
-                parsed.tree.root_node, include_methods=True
+                parsed.tree.root_node(), include_methods=True
             ):
                 name = self._function_name_from_definition(fn_node, source)
                 graph_nodes = by_name_line.get((name, _node_line(fn_node)), [])
@@ -91,7 +94,7 @@ class _TreeSitterLockExtractor(CFamilyAstMixin):
 
     def _iter_lock_events(self, function_node, source):
         for call in self._iter_nodes(function_node):
-            if str(getattr(call, "type", "") or "") != "call_expression":
+            if _node_kind(call) != "call_expression":
                 continue
             callee_node = _field(call, "function")
             callee = _identifier_from_node(callee_node or call, source).lower()
@@ -155,24 +158,14 @@ def _first_argument(call_node):
     arguments = _field(call_node, "arguments")
     if arguments is None:
         return None
-    named_children = getattr(arguments, "named_children", None)
-    children = list(
-        named_children
-        if named_children is not None
-        else getattr(arguments, "children", []) or []
-    )
-    for child in children:
-        child_type = str(getattr(child, "type", "") or "")
-        if child_type not in {"(", ")", ",", "comment"}:
+    for child in _node_children(arguments):
+        if _node_kind(child) not in {"(", ")", ",", "comment"}:
             return child
     return None
 
 
 def _field(node, name):
-    try:
-        return node.child_by_field_name(name)
-    except Exception:
-        return None
+    return _node_child_by_field_name(node, name)
 
 
 def _language_for_file(path):

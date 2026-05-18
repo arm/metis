@@ -11,6 +11,8 @@ import re
 
 from metis.engine.analysis.c_family_analyzer_common import (
     _identifier_from_node,
+    _node_child_by_field_name,
+    _node_kind,
     _node_line,
     _node_text,
 )
@@ -58,7 +60,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 
         source = bytes(parsed.text, "utf-8")
-        root = parsed.tree.root_node
+        root = parsed.tree.root_node()
         global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
         )
@@ -127,7 +129,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         seen: set[str] = set()
 
         for node in self._iter_nodes(root):
-            node_type = str(getattr(node, "type", "") or "")
+            node_type = _node_kind(node)
             if node_type in {"init_declarator", "declaration", "field_declaration"}:
                 text = _node_text(node, source)
                 refs = self._global_function_references(text)
@@ -182,10 +184,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         return "global_initializer"
 
     def _field(self, node, name: str):
-        try:
-            return node.child_by_field_name(name)
-        except Exception:
-            return None
+        return _node_child_by_field_name(node, name)
 
     def _language_for_file(self, path: str) -> str:
         ext = os.path.splitext(path)[1].lower()
