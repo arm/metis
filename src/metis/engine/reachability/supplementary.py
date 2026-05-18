@@ -26,11 +26,8 @@ from .supplementary_parsing import _parse_combined, _parse_intra, _parse_semanti
 from .supplementary_prompts import (
     _COMBINED_GRAPH_SYS,
     _COMBINED_GRAPH_USR,
-    _GLOBAL_LIFECYCLE_SYS,
     _INTRA_SYS,
     _INTRA_USR,
-    _LOCK_ORDER_SYS,
-    _SEM_USR,
 )
 from .source_context import (
     _build_file_grouped_chunks,
@@ -95,17 +92,29 @@ class SupplementaryAnalyzer:
         combined_specs = [
             spec for spec in lens_specs if spec.kind in _COMBINED_GRAPH_LENS_KINDS
         ]
+        candidate_semantic_specs = [
+            spec for spec in lens_specs if spec.kind == "candidate_semantic"
+        ]
         lens_jobs = [
-            spec for spec in lens_specs if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
+            spec
+            for spec in lens_specs
+            if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
+            and spec.kind != "candidate_semantic"
         ]
         if combined_specs:
             lens_jobs.insert(0, tuple(combined_specs))
+        if candidate_semantic_specs:
+            lens_jobs.append(tuple(candidate_semantic_specs))
         worker_budget = max(1, int(max_workers or 1))
         lens_parallelism = max(1, min(len(lens_jobs), worker_budget, 8))
         lens_workers = max(1, worker_budget // lens_parallelism)
 
         def _job_name(job):
-            return "combined_graph_lenses" if isinstance(job, tuple) else job.name
+            if isinstance(job, tuple):
+                if job and job[0].kind == "candidate_semantic":
+                    return "combined_candidate_semantic"
+                return "combined_graph_lenses"
+            return job.name
 
         def _run_lens(job):
             try:
@@ -150,41 +159,64 @@ class SupplementaryAnalyzer:
             )
         return findings
 
-    def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
-        analysis_types = [spec.analysis_type for spec in specs]
-        fns = list(graph.nodes.values())
-        if not fns:
-            return []
-        if cb:
-            cb(
-                {
-                    "event": "combined_graph_lenses_start",
-                    "functions": len(fns),
-                    "lenses": [spec.name for spec in specs],
-                }
-            )
-        chunks = _build_file_grouped_chunks(
-            self._cb, fns, max_total_chars=60000, per_fn_chars=3000
-        )
-        if not chunks:
-            return []
-        globals_code = _build_globals_code(graph)
-        if globals_code:
-            chunks = [
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}"
-                for chunk in chunks
-            ]
-
-        allowed = ", ".join(analysis_types)
+    def _combined_prompt_variables(self, analysis_types, code):
+        analysis_types = list(analysis_types)
         lens_instructions = "\n".join(
             _COMBINED_GRAPH_LENS_NOTES.get(analysis_type, analysis_type)
             for analysis_type in analysis_types
         )
         if self._domain_prompt_hints:
             lens_instructions = f"{lens_instructions}\n\n{self._domain_prompt_hints}"
+        return {
+            "all_functions_code": code,
+            "allowed_analysis_types": ", ".join(analysis_types),
+            "lens_instructions": lens_instructions,
+        }
+
+    def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
+        candidate_only = bool(specs and specs[0].kind == "candidate_semantic")
+        event_name = (
+            "combined_candidate_semantic" if candidate_only else "combined_graph_lenses"
+        )
+        analysis_types = [spec.analysis_type for spec in specs]
+        fns = (
+            self._structural_candidate_nodes(graph)
+            if candidate_only
+            else list(graph.nodes.values())
+        )
+        if not fns:
+            return []
+        if cb:
+            cb(
+                {
+                    "event": f"{event_name}_start",
+                    "functions": len(fns),
+                    "lenses": [spec.name for spec in specs],
+                }
+            )
+        if candidate_only:
+            chunks = _build_file_grouped_node_chunks(
+                self._cb, fns, max_total_chars=60000, per_fn_chars=4000
+            )
+        else:
+            chunks = [
+                (fns, chunk)
+                for chunk in _build_file_grouped_chunks(
+                    self._cb, fns, max_total_chars=60000, per_fn_chars=3000
+                )
+            ]
+        if not chunks:
+            return []
+        globals_code = "" if candidate_only else _build_globals_code(graph)
+        if globals_code:
+            chunks = [
+                (nodes, f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}")
+                for nodes, chunk in chunks
+            ]
+
         results = []
 
-        def _run_chunk(code_chunk):
+        def _run_chunk(chunk_nodes, code_chunk):
             raw = invoke_reachability_prompt(
                 self._p,
                 self._u,
@@ -192,30 +224,26 @@ class SupplementaryAnalyzer:
                 max_tokens=self._st,
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
-                variables={
-                    "all_functions_code": code_chunk,
-                    "allowed_analysis_types": allowed,
-                    "lens_instructions": lens_instructions,
-                },
+                variables=self._combined_prompt_variables(analysis_types, code_chunk),
                 reasoning_effort=self._reasoning_effort,
             )
-            return _parse_combined(raw, fns, frozenset(analysis_types))
+            return _parse_combined(raw, chunk_nodes, frozenset(analysis_types))
 
         if len(chunks) == 1:
-            results = _run_chunk(chunks[0])
+            results = _run_chunk(*chunks[0])
         else:
             with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
                 futs = {
-                    submit_with_current_context(ex, _run_chunk, chunk): i
-                    for i, chunk in enumerate(chunks)
+                    submit_with_current_context(ex, _run_chunk, nodes, chunk): i
+                    for i, (nodes, chunk) in enumerate(chunks)
                 }
                 for fut in as_completed(futs):
                     try:
                         results.extend(fut.result())
                     except Exception as e:
-                        logger.warning("Combined graph lens chunk fail: %s", e)
+                        logger.warning("%s chunk fail: %s", event_name, e)
         if cb:
-            cb({"event": "combined_graph_lenses_done", "findings": len(results)})
+            cb({"event": f"{event_name}_done", "findings": len(results)})
         return results
 
     def _run_lens_spec(self, spec, graph, max_workers, cb):
@@ -224,27 +252,13 @@ class SupplementaryAnalyzer:
         if spec.kind == "candidate_intra":
             return self._run_candidate_lens(
                 graph,
-                spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
                 cb,
                 spec.name,
-                parse_mode="intra",
                 max_total_chars=50000,
                 per_fn_chars=5000,
                 sinks_only=spec.analysis_type == "classic_c_sink",
-            )
-        if spec.kind == "candidate_semantic":
-            return self._run_candidate_lens(
-                graph,
-                spec.sys_prompt,
-                spec.analysis_type,
-                max_workers,
-                cb,
-                spec.name,
-                parse_mode="semantic",
-                max_total_chars=60000,
-                per_fn_chars=4000,
             )
         raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
@@ -384,13 +398,11 @@ class SupplementaryAnalyzer:
     def _run_candidate_lens(
         self,
         graph,
-        sys_prompt,
         analysis_type,
         max_workers,
         cb,
         event_prefix,
         *,
-        parse_mode,
         max_total_chars,
         per_fn_chars,
         sinks_only=False,
@@ -409,7 +421,6 @@ class SupplementaryAnalyzer:
         if not chunks:
             return []
         results = []
-        is_intra = parse_mode == "intra"
 
         def _run_chunk(chunk_nodes, code_chunk):
             raw = invoke_reachability_prompt(
@@ -417,18 +428,12 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=self._with_domain_hints(sys_prompt),
-                user_prompt=_INTRA_USR if is_intra else _SEM_USR,
-                variables=(
-                    {"file_path": "candidate functions", "functions_code": code_chunk}
-                    if is_intra
-                    else {"all_functions_code": code_chunk}
-                ),
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables([analysis_type], code_chunk),
                 reasoning_effort=self._reasoning_effort,
             )
-            if is_intra:
-                return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
-            return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
+            return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
         with ThreadPoolExecutor(
             max_workers=max(1, min(max_workers, len(chunks)))
@@ -500,9 +505,9 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=self._with_domain_hints(_GLOBAL_LIFECYCLE_SYS),
-                user_prompt=_SEM_USR,
-                variables={"all_functions_code": code},
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables(["global_lifecycle"], code),
                 reasoning_effort=self._reasoning_effort,
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
@@ -556,9 +561,11 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._sm,
                 max_tokens=self._st,
-                system_prompt=self._with_domain_hints(_LOCK_ORDER_SYS),
-                user_prompt=_SEM_USR,
-                variables={"all_functions_code": code},
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables(
+                    ["lock_order_extraction"], code
+                ),
                 reasoning_effort=self._reasoning_effort,
             )
             results.extend(

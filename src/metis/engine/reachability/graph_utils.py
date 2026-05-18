@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
 
@@ -40,6 +41,43 @@ def _build_reverse_edges(graph, sort_key):
     for callers in reverse.values():
         callers.sort(key=sort_key)
     return dict(reverse)
+
+
+def graph_fingerprint(graph) -> str:
+    """Return a deterministic identity for graph content that affects analysis."""
+    digest = hashlib.sha256()
+
+    def update(*parts) -> None:
+        digest.update("\x1f".join(str(part or "") for part in parts).encode("utf-8"))
+        digest.update(b"\n")
+
+    for node in sorted(graph.nodes.values(), key=lambda item: item.unique_name):
+        update(
+            "node",
+            node.unique_name,
+            node.file_path,
+            node.name,
+            node.line_number,
+            int(bool(node.is_source)),
+            int(bool(node.is_sink)),
+            node.source_reason,
+            node.sink_type,
+            node.sink_reason,
+            ",".join(node.calls or ()),
+            ",".join(node.resolved_calls or ()),
+        )
+    for construct in sorted(graph.get_globals(), key=lambda item: item.unique_name):
+        update(
+            "global",
+            construct.unique_name,
+            construct.file_path,
+            construct.name,
+            construct.line_number,
+            construct.kind,
+            construct.initializer,
+            ",".join(construct.referenced_functions or ()),
+        )
+    return digest.hexdigest()
 
 
 def _normalize_file_ref(value):

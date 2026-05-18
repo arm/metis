@@ -19,6 +19,7 @@ from .finding_finalizer import FindingFinalizer
 from .graph_cache import ReachabilityGraphCache
 from .graph_utils import (
     _copy_graph_nodes,
+    graph_fingerprint,
     select_confirmation_paths,
 )
 from .models import VulnerabilityFinding
@@ -296,8 +297,7 @@ class TreeSitterReachabilityService:
             str(analysis_profile or "full"),
             repr(domain_hints or ()),
             repr(domain_profiles or ()),
-            str(graph.node_count()),
-            int(max_workers),
+            graph_fingerprint(graph),
         )
         cached = self._supplementary_cache.get(key)
         if cached is not None:
