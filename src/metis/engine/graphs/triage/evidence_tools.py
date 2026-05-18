@@ -7,6 +7,13 @@ import os
 import re
 from typing import Any
 
+from metis.engine.analysis.c_family_analyzer_common import (
+    _node_children,
+    _node_end_line,
+    _node_kind,
+    _node_line,
+    _node_text,
+)
 from metis.engine.analysis.c_family_macro import (
     collect_c_macro_definition_sections,
     collect_c_macro_like_calls_from_scope,
@@ -176,14 +183,14 @@ def _collect_treesitter_scope_symbols(
         return [], []
 
     source = bytes(parsed.text, "utf-8")
-    root = parsed.tree.root_node
+    root = parsed.tree.root_node()
     nodes: list[Any] = []
     parent_map: dict[int, Any | None] = {}
 
     def _walk(node: Any, parent: Any | None) -> None:
         nodes.append(node)
         parent_map[id(node)] = parent
-        for child in getattr(node, "children", []) or []:
+        for child in _node_children(node):
             _walk(child, node)
 
     _walk(root, None)
@@ -195,10 +202,10 @@ def _collect_treesitter_scope_symbols(
     if scope is None:
         scope = anchor
 
-    scope_start = int(getattr(scope, "start_point", (0, 0))[0]) + 1
-    scope_end = int(getattr(scope, "end_point", (0, 0))[0]) + 1
+    scope_start = _node_line(scope)
+    scope_end = _node_end_line(scope)
     sections.append(
-        f"[TREE_SITTER_SCOPE {file_path}:{scope_start}-{scope_end}]\ntype={getattr(scope, 'type', '')}"
+        f"[TREE_SITTER_SCOPE {file_path}:{scope_start}-{scope_end}]\ntype={_node_kind(scope)}"
     )
 
     line_symbols = _collect_identifier_symbols(
@@ -239,8 +246,8 @@ def _find_anchor_node(nodes: list[Any], *, line: int) -> Any | None:
     best_score = 1_000_000
     best_span = 1_000_000
     for node in nodes:
-        start = int(getattr(node, "start_point", (0, 0))[0]) + 1
-        end = int(getattr(node, "end_point", (0, 0))[0]) + 1
+        start = _node_line(node)
+        end = _node_end_line(node)
         if start <= line <= end:
             score = 0
             span = max(1, end - start + 1)
@@ -270,7 +277,7 @@ def _nearest_enclosing_scope(
     }
     cur = node
     while cur is not None:
-        if str(getattr(cur, "type", "") or "") in scope_types:
+        if _node_kind(cur) in scope_types:
             return cur
         cur = parent_map.get(id(cur))
     return None
@@ -286,13 +293,12 @@ def _collect_identifier_symbols(
         nonlocal out
         if len(out) >= max_symbols:
             return
-        node_type = str(getattr(cur, "type", "") or "")
-        if node_type in {"identifier", "field_identifier"}:
+        if _node_kind(cur) in {"identifier", "field_identifier"}:
             text = _node_text(cur, source).strip()
             if _is_symbol_like(text) and text not in seen:
                 seen.add(text)
                 out.append(text)
-        for child in getattr(cur, "children", []) or []:
+        for child in _node_children(cur):
             _walk(child)
 
     _walk(node)
@@ -309,11 +315,10 @@ def _collect_identifier_symbols_until_line(
     scored: dict[str, int] = {}
 
     def _walk(cur: Any) -> None:
-        start = int(getattr(cur, "start_point", (0, 0))[0]) + 1
+        start = _node_line(cur)
         if start > line:
             return
-        node_type = str(getattr(cur, "type", "") or "")
-        if node_type in {"identifier", "field_identifier"}:
+        if _node_kind(cur) in {"identifier", "field_identifier"}:
             text = _node_text(cur, source).strip()
             if _is_symbol_like(text):
                 distance = abs(line - start)
@@ -321,21 +326,12 @@ def _collect_identifier_symbols_until_line(
                 prev = scored.get(text)
                 if prev is None or score > prev:
                     scored[text] = score
-        for child in getattr(cur, "children", []) or []:
+        for child in _node_children(cur):
             _walk(child)
 
     _walk(node)
     ordered = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0].lower()))
     return [symbol for symbol, _ in ordered[:max_symbols]]
-
-
-def _node_text(node: Any, source: bytes) -> str:
-    start = int(getattr(node, "start_byte", 0) or 0)
-    end = int(getattr(node, "end_byte", 0) or 0)
-    try:
-        return source[start:end].decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
 
 
 def _is_symbol_like(text: str) -> bool:

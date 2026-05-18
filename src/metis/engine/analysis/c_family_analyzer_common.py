@@ -8,36 +8,51 @@ from typing import Any
 
 
 def _node_text(node, source: bytes) -> str:
-    start = getattr(node, "start_byte", 0)
-    end = getattr(node, "end_byte", 0)
+    start = node.start_byte()
+    end = node.end_byte()
     try:
         return source[start:end].decode("utf-8", errors="ignore")
     except Exception:
         return ""
 
 
+def _node_kind(node) -> str:
+    return str(node.kind() or "")
+
+
+def _node_children(node) -> list[Any]:
+    return [
+        child
+        for index in range(node.child_count())
+        if (child := node.child(index)) is not None
+    ]
+
+
+def _node_child_by_field_name(node, name: str):
+    return node.child_by_field_name(name)
+
+
 def _identifier_from_node(node, source: bytes) -> str:
     if node is None:
         return ""
-    node_type = str(getattr(node, "type", "") or "")
-    if node_type in {"identifier", "field_identifier"}:
-        return _node_text(node, source).strip()
-    for child in getattr(node, "children", []) or []:
-        ident = _identifier_from_node(child, source)
-        if ident:
-            return ident
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if _node_kind(current) in {"identifier", "field_identifier"}:
+            ident = _node_text(current, source).strip()
+            if ident:
+                return ident
+        for child in reversed(_node_children(current)):
+            stack.append(child)
     return ""
 
 
 def _node_line(node: Any) -> int:
-    return int(getattr(node, "start_point", (0, 0))[0]) + 1
+    return int(node.start_position().row) + 1
 
 
 def _node_end_line(node: Any) -> int:
-    end = getattr(node, "end_point", None)
-    if isinstance(end, tuple) and len(end) >= 1:
-        return int(end[0]) + 1
-    return _node_line(node)
+    return int(node.end_position().row) + 1
 
 
 @dataclass(frozen=True)

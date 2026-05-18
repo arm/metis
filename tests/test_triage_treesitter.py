@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from metis.engine.analysis.base import AnalyzerEvidence
+from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 from metis.engine.graphs.triage import triage_node_collect_evidence
 
 
@@ -149,6 +150,42 @@ def test_triage_collect_evidence_includes_analyzer_sections_and_scope_section():
     assert out.get("evidence_obligations")
     assert isinstance(out.get("obligation_coverage"), dict)
     assert runner.sed_calls > 0
+
+
+def test_triage_collect_evidence_scope_uses_installed_treesitter_api(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.c").write_text(
+        "static int helper(int value) { return value + 1; }\n"
+        "int main(void) {\n"
+        "  int value = helper(41);\n"
+        "  return value;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    runner = _ToolRunner()
+    state = {
+        "finding_message": "Possible issue around helper",
+        "finding_file_path": "src/main.c",
+        "finding_line": 3,
+        "finding_rule_id": "R1",
+        "finding_snippet": "helper(41);",
+        "triage_analyzer": CFamilyTriageAnalyzer(
+            codebase_path=str(tmp_path),
+            language_name="c",
+            supported_extensions=[".c", ".h", ".cc"],
+        ),
+        "triage_codebase_path": str(tmp_path),
+    }
+
+    out = triage_node_collect_evidence(state, toolbox=runner)
+
+    evidence_pack = out.get("evidence_pack", "")
+    assert "parse_failed" not in evidence_pack
+    assert "[TREE_SITTER_SCOPE src/main.c:" in evidence_pack
+    assert "type=compound_statement" in evidence_pack
+    assert "[TREE_SITTER_SCOPE_SYMBOLS]" in evidence_pack
+    assert "helper" in evidence_pack
 
 
 def test_triage_collect_evidence_runs_definition_grep_when_analyzer_weak():

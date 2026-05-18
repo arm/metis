@@ -68,7 +68,7 @@ class CFamilyTriageAnalyzer(
             )
 
         source = bytes(parsed.text, "utf-8")
-        root = parsed.tree.root_node
+        root = parsed.tree.root_node()
         node_index, parent_map = self._index_tree(root)
 
         definitions = self._collect_definitions(root, source)
