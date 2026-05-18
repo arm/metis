@@ -383,7 +383,16 @@ def main():
         )
         exit(1)
     if args.version:
-        COMMANDS["version"].invoke(None, [], args)
+        COMMANDS["version"].invoke(
+            None,
+            [],
+            args,
+            CommandRuntime(
+                command="version",
+                command_args=[],
+                use_retrieval_context=False,
+            ),
+        )
         return
 
     configure_logger(logger, args)

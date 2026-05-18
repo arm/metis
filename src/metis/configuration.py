@@ -7,13 +7,153 @@ import yaml
 
 from importlib.resources import files, as_file
 from pathlib import Path
+from typing import TypedDict
 
 logger = logging.getLogger("metis")
+
+
+class _ApiKeySources(TypedDict):
+    required: bool
+    config_keys: tuple[str, ...]
+    config_env_keys: tuple[str, ...]
+    env_vars: tuple[str, ...]
+
+
+_LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "openai": "OpenAI",
+    "azure_openai": "Azure OpenAI",
+    "vllm": "vLLM",
+    "ollama": "Ollama",
+}
+
+_LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
+    "openai": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "azure_openai": (
+        "azure_endpoint",
+        "azure_api_version",
+        "engine",
+        "chat_deployment_model",
+        "code_embedding_model",
+        "docs_embedding_model",
+        "code_embedding_deployment",
+        "docs_embedding_deployment",
+    ),
+    "vllm": (
+        "base_url",
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "ollama": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+}
+
+_LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
+    "openai": {
+        "required": True,
+        "config_keys": (),
+        "config_env_keys": (),
+        "env_vars": ("OPENAI_API_KEY",),
+    },
+    "azure_openai": {
+        "required": True,
+        "config_keys": (),
+        "config_env_keys": (),
+        "env_vars": ("AZURE_OPENAI_API_KEY",),
+    },
+    "vllm": {
+        "required": False,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": ("VLLM_API_KEY",),
+    },
+    "ollama": {
+        "required": False,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": (),
+    },
+}
 
 
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _missing_required_keys(config: dict, keys: tuple[str, ...]) -> list[str]:
+    missing = []
+    for key in keys:
+        value = config.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(key)
+    return missing
+
+
+def _validate_llm_provider_config(provider_name: str, provider_config: dict) -> None:
+    required_keys = _LLM_PROVIDER_REQUIRED_KEYS.get(provider_name)
+    if not required_keys:
+        return
+    missing_keys = _missing_required_keys(provider_config, required_keys)
+    if not missing_keys:
+        return
+
+    display_name = _LLM_PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name)
+    missing = ", ".join(f"llm_provider.{key}" for key in missing_keys)
+    required = ", ".join(f"llm_provider.{key}" for key in required_keys)
+    raise ValueError(
+        f"{display_name} provider requires additional metis.yaml configuration. "
+        f"Missing: {missing}. Required keys: {required}."
+    )
+
+
+def _resolve_llm_api_key(provider_name: str, provider_config: dict) -> str:
+    sources = _LLM_PROVIDER_API_KEY_SOURCES.get(provider_name)
+    if sources is None:
+        return ""
+
+    for config_key in sources["config_keys"]:
+        value = provider_config.get(config_key)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    for config_env_key in sources["config_env_keys"]:
+        env_var = provider_config.get(config_env_key)
+        if isinstance(env_var, str) and env_var.strip():
+            value = os.environ.get(env_var)
+            if value:
+                return value
+
+    for env_var in sources["env_vars"]:
+        value = os.environ.get(env_var)
+        if value:
+            return value
+
+    if sources["required"]:
+        display_name = _LLM_PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name)
+        source_descriptions = [
+            f"{env_var} environment variable" for env_var in sources["env_vars"]
+        ]
+        source_descriptions.extend(
+            f"llm_provider.{key}" for key in sources["config_keys"]
+        )
+        source_descriptions.extend(
+            f"environment variable named by llm_provider.{key}"
+            for key in sources["config_env_keys"]
+        )
+        sources_text = " or ".join(source_descriptions)
+        raise RuntimeError(
+            f"{sources_text} is required for {display_name} provider but not set."
+        )
+
+    return ""
 
 
 def load_runtime_config(config_path=None, enable_psql=False):
@@ -56,20 +196,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
 
     llm_provider_name = cfg.get("llm_provider", {}).get("name", "").lower()
     runtime["llm_provider_name"] = llm_provider_name
+    _validate_llm_provider_config(llm_provider_name, llm_cfg)
+    llm_api_key = _resolve_llm_api_key(llm_provider_name, llm_cfg)
     if llm_provider_name == "openai":
-        llm_api_key = os.environ.get("OPENAI_API_KEY")
-        if not llm_api_key:
-            raise RuntimeError(
-                "OPENAI_API_KEY environment variable is required for OpenAI provider but not set."
-            )
         runtime["llm_api_key"] = llm_api_key
         runtime["model"] = llm_cfg.get("model", "")
     elif llm_provider_name == "azure_openai":
-        llm_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-        if not llm_api_key:
-            raise RuntimeError(
-                "AZURE_OPENAI_API_KEY environment variable is required for Azure OpenAI provider but not set."
-            )
         runtime["llm_api_key"] = llm_api_key
         runtime["azure_endpoint"] = llm_cfg.get("azure_endpoint", "")
         runtime["azure_api_version"] = llm_cfg.get("azure_api_version", "")
@@ -86,20 +218,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
         )
         runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
     elif llm_provider_name == "vllm":
-        runtime["llm_api_key"] = llm_cfg.get("api_key")
-        api_key_env = llm_cfg.get("api_key_env")
-        if not runtime["llm_api_key"] and api_key_env:
-            runtime["llm_api_key"] = os.environ.get(api_key_env)
-        if not runtime["llm_api_key"]:
-            runtime["llm_api_key"] = os.environ.get("VLLM_API_KEY")
+        runtime["llm_api_key"] = llm_api_key
         runtime["openai_api_base"] = llm_cfg.get("base_url", "")
         runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
     elif llm_provider_name == "ollama":
-        runtime["llm_api_key"] = llm_cfg.get("api_key") or ""
-        api_key_env = llm_cfg.get("api_key_env")
-        if not runtime["llm_api_key"] and api_key_env:
-            runtime["llm_api_key"] = os.environ.get(api_key_env, "")
+        runtime["llm_api_key"] = llm_api_key
         runtime["openai_api_base"] = llm_cfg.get(
             "base_url", "http://localhost:11434/v1"
         )
