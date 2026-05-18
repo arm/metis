@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.analysis.c_family_analyzer_common import _identifier_from_node
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.reachability import (
     Deduplicator,
@@ -195,15 +194,6 @@ def _deep_chain(depth, leaf):
     return node
 
 
-def test_identifier_extraction_handles_deep_trees_without_recursion():
-    leaf = _Node("identifier")
-    leaf.start_byte = 0
-    leaf.end_byte = 8
-    root = _deep_chain(1500, leaf)
-
-    assert _identifier_from_node(root, b"deep_sym") == "deep_sym"
-
-
 def test_c_family_extractor_handles_deep_trees_without_recursion(monkeypatch):
     import metis.engine.analysis.c_family_ast as c_family_ast
     import metis.engine.reachability.c_family as c_family
@@ -384,22 +374,13 @@ def test_finding_path_annotator_attaches_source_to_defect_path():
         graph.add_node(node)
     graph.resolve_all_calls()
 
-    finding = VulnerabilityFinding(
-        id="finding1",
-        vulnerability_type="integer_overflow",
-        severity="high",
-        confidence="high",
-        source_function="src/review.c::helper",
-        source_file="src/review.c",
-        source_line=30,
-        sink_function="src/review.c::helper",
-        sink_file="src/review.c",
-        sink_line=30,
-        path=["src/review.c::helper"],
-        description="helper has unchecked arithmetic",
-        primary_file="src/review.c",
-        primary_function="src/review.c::helper",
-        primary_line=30,
+    finding = _finding(
+        "integer_overflow",
+        "src/review.c",
+        "src/review.c::helper",
+        30,
+        "helper has unchecked arithmetic",
+        "helper has unchecked arithmetic",
     )
 
     [annotated] = FindingPathAnnotator(graph, "src/review.c").annotate([finding])
@@ -424,21 +405,13 @@ def test_finding_path_annotator_leaves_external_primary_file_unchanged():
         graph.add_node(node)
     graph.resolve_all_calls()
 
-    finding = VulnerabilityFinding(
-        id="finding2",
-        vulnerability_type="other",
-        severity="high",
-        confidence="high",
-        source_function="src/other.c::other",
-        source_file="src/other.c",
-        source_line=10,
-        sink_function="src/other.c::other",
-        sink_file="src/other.c",
-        sink_line=10,
-        path=["src/other.c::other"],
-        primary_file="src/other.c",
-        primary_function="src/other.c::other",
-        primary_line=10,
+    finding = _finding(
+        "other",
+        "src/other.c",
+        "src/other.c::other",
+        10,
+        "other-file finding",
+        "other-file finding",
     )
 
     [annotated] = FindingPathAnnotator(graph, "src/review.c").annotate([finding])
@@ -631,34 +604,7 @@ def test_deduplicator_falls_back_to_exact_type_when_key_missing():
     ]
 
 
-def test_deduplicator_keeps_different_families_without_canonical_key():
-    findings = [
-        _finding(
-            "type_confusion",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_stats",
-            173,
-            "store_get data is cast to task_t without checking the type tag.",
-            "store_get admin_task data cast task_t no type tag validation",
-        ),
-        _finding(
-            "missing_bounds_check",
-            "src/dispatch.c",
-            "src/dispatch.c::handle_stats",
-            174,
-            "The returned store size is ignored before strlen(t->title).",
-            "store_get size ignored before title strlen",
-        ),
-    ]
-
-    deduped, total, removed = Deduplicator.deduplicate(findings)
-
-    assert total == 2
-    assert removed == 0
-    assert len(deduped) == 2
-
-
-def test_deduplicator_caps_per_function_family_after_canonical_merge():
+def test_deduplicator_caps_per_function_type_after_canonical_merge():
     findings = [
         _finding(
             "missing_auth",

@@ -31,7 +31,7 @@ class TreeSitterRuntime:
             self._init_error = (
                 f"{exc}. Install a compatible parser pack with: "
                 "uv pip install --reinstall --no-cache --link-mode=copy "
-                "'tree-sitter-language-pack>=0.13.0,<1.0.0'"
+                "'tree-sitter-language-pack!=1.6.3,>=1.6.2'"
             )
 
     @property
