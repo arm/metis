@@ -6,7 +6,12 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from .c_family_analyzer_common import _CrossFileHit
+from .c_family_analyzer_common import (
+    _CrossFileHit,
+    _node_child_by_field_name,
+    _node_children,
+    _node_kind,
+)
 from .c_family_helpers import parse_includes_from_text, resolve_include_path
 
 
@@ -215,13 +220,8 @@ def collect_c_macro_like_calls_from_scope(
     def _walk(cur) -> None:
         if len(macros) >= max_macros:
             return
-        node_type = str(getattr(cur, "type", "") or "")
-        if node_type == "call_expression":
-            fn_node = None
-            try:
-                fn_node = cur.child_by_field_name("function")
-            except Exception:
-                fn_node = None
+        if _node_kind(cur) == "call_expression":
+            fn_node = _node_child_by_field_name(cur, "function")
             if fn_node is not None:
                 fn_name = collect_identifier_symbols(fn_node, source, max_symbols=1)
                 if fn_name:
@@ -229,7 +229,7 @@ def collect_c_macro_like_calls_from_scope(
                     if is_c_macro_like_symbol(candidate) and candidate not in seen:
                         seen.add(candidate)
                         macros.append(candidate)
-        for child in getattr(cur, "children", []) or []:
+        for child in _node_children(cur):
             _walk(child)
 
     _walk(node)

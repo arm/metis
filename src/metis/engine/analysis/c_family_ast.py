@@ -13,7 +13,10 @@ from .c_family_analyzer_common import (
     _FunctionInfo,
     _Reference,
     _identifier_from_node,
+    _node_child_by_field_name,
+    _node_children,
     _node_end_line,
+    _node_kind,
     _node_line,
     _node_text,
 )
@@ -51,7 +54,7 @@ class CFamilyAstMixin:
         def walk(node, parent):
             nodes.append(node)
             parent_map[id(node)] = parent
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child, node)
 
         walk(root, None)
@@ -81,7 +84,7 @@ class CFamilyAstMixin:
     ):
         cur = node
         while cur is not None:
-            if str(getattr(cur, "type", "") or "") in types:
+            if _node_kind(cur) in types:
                 return cur
             cur = parent_map.get(id(cur))
         return None
@@ -94,25 +97,21 @@ class CFamilyAstMixin:
             return guards
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
+            node_type = _node_kind(node)
             if node_type in {
                 "if_statement",
                 "while_statement",
                 "for_statement",
                 "switch_statement",
             }:
-                cond = None
-                try:
-                    cond = node.child_by_field_name("condition")
-                except Exception:
-                    cond = None
+                cond = _node_child_by_field_name(node, "condition")
                 detail = _identifier_from_node(cond or node, source) or node_type
                 guards.append(
                     _FlowHop(
                         role="check", line=_node_line(node), detail=f"guard '{detail}'"
                     )
                 )
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(scope_node)
@@ -125,17 +124,12 @@ class CFamilyAstMixin:
             return out
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
-            if node_type == "call_expression":
-                function_node = None
-                try:
-                    function_node = node.child_by_field_name("function")
-                except Exception:
-                    function_node = None
+            if _node_kind(node) == "call_expression":
+                function_node = _node_child_by_field_name(node, "function")
                 symbol = _identifier_from_node(function_node or node, source)
                 if symbol:
                     out.append(_Reference(symbol=symbol, line=_node_line(node)))
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(scope_node)
@@ -146,13 +140,9 @@ class CFamilyAstMixin:
         out: dict[str, list[_FunctionInfo]] = {}
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
+            node_type = _node_kind(node)
             if node_type == "function_definition":
-                declarator = None
-                try:
-                    declarator = node.child_by_field_name("declarator")
-                except Exception:
-                    declarator = None
+                declarator = _node_child_by_field_name(node, "declarator")
                 name = _identifier_from_node(declarator or node, source)
                 if name:
                     info = _FunctionInfo(
@@ -164,7 +154,7 @@ class CFamilyAstMixin:
                         checks=self._collect_guard_hops(node, source, _node_line(node)),
                     )
                     out.setdefault(name, []).append(info)
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(root)
@@ -249,21 +239,17 @@ class CFamilyAstMixin:
             out.setdefault(symbol, []).append(_Definition(symbol=symbol, line=line))
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
+            node_type = _node_kind(node)
             line = _node_line(node)
 
             if node_type == "function_definition":
-                declarator = None
-                try:
-                    declarator = node.child_by_field_name("declarator")
-                except Exception:
-                    declarator = None
+                declarator = _node_child_by_field_name(node, "declarator")
                 symbol = _identifier_from_node(declarator or node, source)
                 add(symbol, line)
 
             if node_type == "declaration":
-                for child in getattr(node, "children", []) or []:
-                    if str(getattr(child, "type", "") or "") in {
+                for child in _node_children(node):
+                    if _node_kind(child) in {
                         "init_declarator",
                         "function_declarator",
                         "pointer_declarator",
@@ -272,7 +258,7 @@ class CFamilyAstMixin:
                         symbol = _identifier_from_node(child, source)
                         add(symbol, line)
 
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(root)
@@ -284,15 +270,14 @@ class CFamilyAstMixin:
         out: dict[str, list[_Reference]] = {}
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
-            if node_type in {"identifier", "field_identifier"}:
+            if _node_kind(node) in {"identifier", "field_identifier"}:
                 symbol = _node_text(node, source).strip()
                 if symbol:
                     line = _node_line(node)
                     out.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(root)
@@ -304,20 +289,15 @@ class CFamilyAstMixin:
         out: dict[str, list[_Reference]] = {}
 
         def walk(node):
-            node_type = str(getattr(node, "type", "") or "")
-            if node_type == "call_expression":
-                function_node = None
-                try:
-                    function_node = node.child_by_field_name("function")
-                except Exception:
-                    function_node = None
+            if _node_kind(node) == "call_expression":
+                function_node = _node_child_by_field_name(node, "function")
                 symbol = _identifier_from_node(function_node or node, source)
                 if symbol:
                     line = _node_line(node)
                     out.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
-            for child in getattr(node, "children", []) or []:
+            for child in _node_children(node):
                 walk(child)
 
         walk(root)

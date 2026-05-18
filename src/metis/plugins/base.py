@@ -6,6 +6,21 @@ from abc import ABC, abstractmethod
 from llama_index.core.node_parser import CodeSplitter
 
 
+def build_code_splitter(language: str, splitting_cfg: dict):
+    """Build a CodeSplitter with a parser compatible with llama-index."""
+    from tree_sitter import Parser
+    import tree_sitter_language_pack
+
+    kwargs = {
+        "language": language,
+        "parser": Parser(tree_sitter_language_pack.get_language(language)),
+    }
+    for key in ("chunk_lines", "chunk_lines_overlap", "max_chars"):
+        if splitting_cfg.get(key) is not None:
+            kwargs[key] = splitting_cfg[key]
+    return CodeSplitter(**kwargs)
+
+
 class BaseLanguagePlugin(ABC):
     @abstractmethod
     def get_name(self) -> str:
@@ -74,12 +89,7 @@ class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
 
     def get_splitter(self):
         splitting_cfg = self._plugin_section().get("splitting", {})
-        return CodeSplitter(
-            language=self.get_name(),
-            chunk_lines=splitting_cfg.get("chunk_lines"),
-            chunk_lines_overlap=splitting_cfg.get("chunk_lines_overlap"),
-            max_chars=splitting_cfg.get("max_chars"),
-        )
+        return build_code_splitter(self.get_name(), splitting_cfg)
 
     def get_prompts(self) -> dict:
         return self._plugin_section().get("prompts", {})

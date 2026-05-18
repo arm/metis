@@ -7,15 +7,43 @@ from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 C_EXTENSIONS = [".c", ".h", ".cc"]
 
 
+class _Point:
+    def __init__(self, row, column):
+        self.row = row
+        self.column = column
+
+
 class _Node:
     def __init__(self, node_type, *, text="", line=1, children=None, fields=None):
-        self.type = node_type
+        self._type = node_type
         self.text = text
-        self.start_point = (line - 1, 0)
-        self.start_byte = 0
-        self.end_byte = 0
-        self.children = children or []
+        self._start_position = _Point(line - 1, 0)
+        self._end_position = _Point(line - 1, 0)
+        self._start_byte = 0
+        self._end_byte = 0
+        self._children = children or []
         self._fields = fields or {}
+
+    def kind(self):
+        return self._type
+
+    def start_position(self):
+        return self._start_position
+
+    def end_position(self):
+        return self._end_position
+
+    def start_byte(self):
+        return self._start_byte
+
+    def end_byte(self):
+        return self._end_byte
+
+    def child_count(self):
+        return len(self._children)
+
+    def child(self, index):
+        return self._children[index]
 
     def child_by_field_name(self, name):
         return self._fields.get(name)
@@ -23,7 +51,10 @@ class _Node:
 
 class _Tree:
     def __init__(self, root):
-        self.root_node = root
+        self._root = root
+
+    def root_node(self):
+        return self._root
 
 
 class _Parsed:

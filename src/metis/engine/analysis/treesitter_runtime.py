@@ -60,7 +60,6 @@ class TreeSitterRuntime:
                 if cached[2] == digest:
                     return cached[3]
 
-            tree = self._parser.parse(bytes(text, "utf-8"))
-            parsed = ParsedUnit(text=text, tree=tree)
+            parsed = ParsedUnit(text=text, tree=self._parser.parse(text))
             self._cache[key] = (stat.st_mtime_ns, stat.st_size, digest, parsed)
             return parsed
