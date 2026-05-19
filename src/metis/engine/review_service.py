@@ -59,16 +59,24 @@ class ReviewService:
 
         with self._reachability_lock:
             if self._reachability_cache is None:
-                settings = dict(self._reachability_settings)
-                settings.setdefault("lens_profile", "review")
-                if not settings.get("max_paths"):
-                    settings.setdefault("confirm_paths", False)
-                if progress_callback is not None:
-                    settings["progress_callback"] = progress_callback
+                settings = self._reachability_call_settings(
+                    progress_callback=progress_callback,
+                    codebase=True,
+                )
                 self._reachability_cache = self._reachability_service.review_codebase(
                     **settings
                 )
         return list(self._reachability_cache)
+
+    def _reachability_call_settings(self, *, progress_callback=None, codebase=False):
+        settings = dict(self._reachability_settings)
+        if codebase:
+            settings.setdefault("lens_profile", "review")
+            if not settings.get("max_paths"):
+                settings.setdefault("confirm_paths", False)
+        if progress_callback is not None:
+            settings["progress_callback"] = progress_callback
+        return settings
 
     def review_file(
         self,
@@ -88,9 +96,9 @@ class ReviewService:
             and self._is_c_cpp_file(file_path)
         ):
             try:
-                settings = dict(self._reachability_settings)
-                if progress_callback is not None:
-                    settings["progress_callback"] = progress_callback
+                settings = self._reachability_call_settings(
+                    progress_callback=progress_callback
+                )
                 result = self._reachability_service.review_file(file_path, **settings)
             except Exception:
                 logger.debug(

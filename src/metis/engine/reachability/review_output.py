@@ -27,7 +27,6 @@ def group_findings_as_reviews(findings, *, codebase_path):
         items = reviews_for_findings(
             by_file[target_file],
             codebase_path=codebase_path,
-            target_file=target_file,
         )
         if items:
             reviews.append(
@@ -40,12 +39,11 @@ def group_findings_as_reviews(findings, *, codebase_path):
     return reviews
 
 
-def reviews_for_findings(findings, *, codebase_path, target_file):
+def reviews_for_findings(findings, *, codebase_path):
     reviews = [
         finding_to_review(
             finding,
             codebase_path=codebase_path,
-            target_file=target_file,
         )
         for finding in findings
     ]
@@ -61,7 +59,7 @@ def review_sort_key(item):
     )
 
 
-def finding_to_review(finding, *, codebase_path, target_file=""):
+def finding_to_review(finding, *, codebase_path):
     line_number = int(
         finding.primary_line or finding.sink_line or finding.source_line or 1
     )
