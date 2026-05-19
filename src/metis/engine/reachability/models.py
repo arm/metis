@@ -16,7 +16,7 @@ class ReachabilityFindingEntryModel(BaseModel):
     analysis_type: str = ""
     vulnerability_type: str = ""
     severity: str = "medium"
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: str | float = "medium"
     cwe: str = ""
     function_name: str = ""
     related_function: str = ""

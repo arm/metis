@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
-import re
 
 from metis.engine.analysis.c_family_analyzer_common import (
     _identifier_from_node,
@@ -61,12 +60,16 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
         source = bytes(parsed.text, "utf-8")
         root = parsed.tree.root_node()
+        nodes = self._collect_functions(root, source, rel_path, language)
         global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
         )
-        nodes = self._collect_functions(
-            root, source, rel_path, global_function_refs, language
-        )
+        for node in nodes:
+            if node.name in global_function_refs:
+                node.is_source = True
+                node.source_reason = (
+                    "referenced by a global function table or initializer"
+                )
         return ParsedFileGraph(nodes=nodes, globals=global_constructs)
 
     def _collect_functions(
@@ -74,7 +77,6 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         root,
         source: bytes,
         rel_path: str,
-        global_function_refs: set[str],
         language: str = "c",
     ) -> list[FunctionNode]:
         nodes: list[FunctionNode] = []
@@ -89,23 +91,16 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 continue
             seen.add(unique)
             calls = self._collect_call_symbols(node, source)
-            is_source = name in global_function_refs
-            source_reason = (
-                "referenced by a global function table or initializer"
-                if is_source
-                else ""
-            )
             nodes.append(
                 FunctionNode(
                     unique_name=unique,
                     file_path=rel_path,
                     name=name,
                     line_number=_node_line(node),
-                    is_source=is_source,
+                    is_source=False,
                     is_sink=False,
                     language=language,
                     calls=calls,
-                    source_reason=source_reason,
                 )
             )
         return sorted(
@@ -135,11 +130,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         seen: set[str] = set()
 
         for node in self._iter_nodes(root):
-            node_type = _node_kind(node)
-            if node_type not in {"init_declarator", "declaration", "field_declaration"}:
+            if _node_kind(node) != "init_declarator":
                 continue
-            text = _node_text(node, source)
-            refs = self._global_function_references(text)
+            refs = self._global_function_references(node, source)
             if not refs:
                 continue
             name = self._global_name(node, source) or f"global_{_node_line(node)}"
@@ -152,19 +145,23 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                         file_path=rel_path,
                         name=name,
                         line_number=_node_line(node),
-                        initializer=text[:2000],
+                        initializer=_node_text(node, source)[:2000],
                         referenced_functions=refs,
                     )
                 )
             global_function_refs.update(refs)
         return globals_, global_function_refs
 
-    def _global_function_references(self, text: str) -> list[str]:
-        matches = re.findall(
-            r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)",
-            text or "",
+    def _global_function_references(self, node, source: bytes) -> list[str]:
+        value = _node_child_by_field_name(node, "value")
+        if value is None:
+            return []
+        refs = (
+            _node_text(candidate, source).strip()
+            for candidate in self._iter_nodes(value)
+            if _node_kind(candidate) == "identifier"
         )
-        return list(dict.fromkeys(ref for _field_name, ref in matches))
+        return list(dict.fromkeys(ref for ref in refs if ref))
 
     def _global_name(self, node, source: bytes) -> str:
         declarator = _node_child_by_field_name(node, "declarator")

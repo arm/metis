@@ -31,6 +31,29 @@ def _severity_title(value, default="Medium"):
     return text[:1].upper() + text[1:]
 
 
+def _confidence_score(value, default=0.75):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0.0, min(1.0, round(float(value), 2)))
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    try:
+        return max(0.0, min(1.0, round(float(text), 2)))
+    except ValueError:
+        pass
+    return {
+        "very high": 0.99,
+        "high": 0.95,
+        "medium": 0.75,
+        "moderate": 0.75,
+        "low": 0.55,
+        "very low": 0.35,
+        "informational": 0.5,
+        "info": 0.5,
+    }.get(text, default)
+
+
 def _safe_int(value, default=0):
     try:
         return int(value)
@@ -119,7 +142,7 @@ def _finding_from_llm_entry(
         id=uuid.uuid4().hex[:16],
         vulnerability_type=vulnerability_type,
         severity=str(entry.get("severity") or default_severity),
-        confidence=float(entry["confidence"]),
+        confidence=_confidence_score(entry.get("confidence")),
         source_function=source_function,
         source_file=source_file,
         source_line=source_line,

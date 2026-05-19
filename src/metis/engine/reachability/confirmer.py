@@ -37,7 +37,7 @@ For path confirmation, each finding must include path_index and is_vulnerable.
 vulnerability_type must be a concise snake_case category chosen from the actual defect.
 cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
-confidence must be a float between 0.0 and 1.0.
+confidence may be high, medium, low, or a float between 0.0 and 1.0.
 Be conservative. {no_finding_guidance}"""
 
 

@@ -297,16 +297,24 @@ def test_c_family_extractor_handles_deep_trees_without_recursion(monkeypatch):
     )
     function_root = _deep_chain(1500, deep_fn)
 
-    nodes = extractor._collect_functions(function_root, b"", "deep.c", set())
+    nodes = extractor._collect_functions(function_root, b"", "deep.c")
 
     assert [node.name for node in nodes] == ["deep_fn"]
     assert nodes[0].calls == ["memcpy"]
 
     global_decl = _Node(
-        "declaration",
-        text="static const struct file_operations ops = { .open = deep_open };",
+        "init_declarator",
+        text="ops = { .open = deep_open }",
         line=7,
-        fields={"declarator": _Node("identifier", text="ops", line=7)},
+        fields={
+            "declarator": _Node("identifier", text="ops", line=7),
+            "value": _Node(
+                "initializer_list",
+                text="{ .open = deep_open }",
+                line=7,
+                children=[_Node("identifier", text="deep_open", line=7)],
+            ),
+        },
     )
     global_root = _deep_chain(1500, global_decl)
 

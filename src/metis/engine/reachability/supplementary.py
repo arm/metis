@@ -46,8 +46,7 @@ class SupplementaryAnalyzer:
     def __init__(
         self,
         llm_provider,
-        audit_model,
-        strong_model,
+        model,
         usage_runtime,
         codebase_path,
         audit_max_tokens=8192,
@@ -57,8 +56,7 @@ class SupplementaryAnalyzer:
         domain_profiles=None,
     ):
         self._p = llm_provider
-        self._am = audit_model
-        self._sm = strong_model
+        self._m = model
         self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path)
         self._at = audit_max_tokens
@@ -221,7 +219,7 @@ class SupplementaryAnalyzer:
             raw = invoke_reachability_prompt(
                 self._p,
                 self._u,
-                model=self._sm,
+                model=self._m,
                 max_tokens=self._st,
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
@@ -388,7 +386,7 @@ class SupplementaryAnalyzer:
         raw = invoke_reachability_prompt(
             self._p,
             self._u,
-            model=self._am,
+            model=self._m,
             max_tokens=self._at,
             system_prompt=self._with_domain_hints(_INTRA_SYS),
             user_prompt=_INTRA_USR,
@@ -429,7 +427,7 @@ class SupplementaryAnalyzer:
             raw = invoke_reachability_prompt(
                 self._p,
                 self._u,
-                model=self._sm,
+                model=self._m,
                 max_tokens=self._st,
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
@@ -507,7 +505,7 @@ class SupplementaryAnalyzer:
             raw = invoke_reachability_prompt(
                 self._p,
                 self._u,
-                model=self._sm,
+                model=self._m,
                 max_tokens=self._st,
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
@@ -564,7 +562,7 @@ class SupplementaryAnalyzer:
             raw = invoke_reachability_prompt(
                 self._p,
                 self._u,
-                model=self._sm,
+                model=self._m,
                 max_tokens=self._st,
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,

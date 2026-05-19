@@ -304,7 +304,6 @@ class TreeSitterReachabilityService:
         findings = SupplementaryAnalyzer(
             self._llm_provider,
             model,
-            model,
             self._usage_runtime,
             self._config.codebase_path,
             reasoning_effort=reasoning_effort,
