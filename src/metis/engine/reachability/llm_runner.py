@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 
@@ -30,6 +29,7 @@ def invoke_reachability_prompt(
     system_prompt,
     user_prompt,
     variables,
+    response_model,
     reasoning_effort=None,
     temperature=0.1,
 ):
@@ -43,4 +43,15 @@ def invoke_reachability_prompt(
     prompt = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", user_prompt)]
     )
-    return (prompt | chat | StrOutputParser()).invoke(variables).strip()
+    structured_model = chat.with_structured_output(
+        response_model, method="function_calling"
+    )
+    return (prompt | structured_model).invoke(variables)
+
+
+def reachability_response_payload(raw):
+    if hasattr(raw, "model_dump"):
+        return raw.model_dump()
+    if isinstance(raw, dict):
+        return raw
+    return {}

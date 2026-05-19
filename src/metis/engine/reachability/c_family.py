@@ -82,30 +82,32 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
         for node in self._iter_function_definitions(root, include_methods=True):
             name = self._function_name_from_definition(node, source)
-            if name:
-                unique = f"{rel_path}::{name}"
-                if unique not in seen:
-                    seen.add(unique)
-                    calls = self._collect_call_symbols(node, source)
-                    is_source = name in global_function_refs
-                    source_reason = (
-                        "referenced by a global function table or initializer"
-                        if is_source
-                        else ""
-                    )
-                    nodes.append(
-                        FunctionNode(
-                            unique_name=unique,
-                            file_path=rel_path,
-                            name=name,
-                            line_number=_node_line(node),
-                            is_source=is_source,
-                            is_sink=False,
-                            language=language,
-                            calls=calls,
-                            source_reason=source_reason,
-                        )
-                    )
+            if not name:
+                continue
+            unique = f"{rel_path}::{name}"
+            if unique in seen:
+                continue
+            seen.add(unique)
+            calls = self._collect_call_symbols(node, source)
+            is_source = name in global_function_refs
+            source_reason = (
+                "referenced by a global function table or initializer"
+                if is_source
+                else ""
+            )
+            nodes.append(
+                FunctionNode(
+                    unique_name=unique,
+                    file_path=rel_path,
+                    name=name,
+                    line_number=_node_line(node),
+                    is_source=is_source,
+                    is_sink=False,
+                    language=language,
+                    calls=calls,
+                    source_reason=source_reason,
+                )
+            )
         return sorted(
             nodes, key=lambda item: (item.file_path, item.line_number, item.name)
         )
@@ -134,48 +136,39 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
         for node in self._iter_nodes(root):
             node_type = _node_kind(node)
-            if node_type in {"init_declarator", "declaration", "field_declaration"}:
-                text = _node_text(node, source)
-                refs = self._global_function_references(text)
-                if refs:
-                    name = (
-                        self._global_name(node, source) or f"global_{_node_line(node)}"
+            if node_type not in {"init_declarator", "declaration", "field_declaration"}:
+                continue
+            text = _node_text(node, source)
+            refs = self._global_function_references(text)
+            if not refs:
+                continue
+            name = self._global_name(node, source) or f"global_{_node_line(node)}"
+            unique = f"{rel_path}::{name}"
+            if unique not in seen:
+                seen.add(unique)
+                globals_.append(
+                    GlobalConstruct(
+                        unique_name=unique,
+                        file_path=rel_path,
+                        name=name,
+                        line_number=_node_line(node),
+                        initializer=text[:2000],
+                        referenced_functions=refs,
                     )
-                    unique = f"{rel_path}::{name}"
-                    if unique not in seen:
-                        seen.add(unique)
-                        globals_.append(
-                            GlobalConstruct(
-                                unique_name=unique,
-                                file_path=rel_path,
-                                name=name,
-                                line_number=_node_line(node),
-                                initializer=text[:2000],
-                                referenced_functions=refs,
-                            )
-                        )
-                    global_function_refs.update(refs)
+                )
+            global_function_refs.update(refs)
         return globals_, global_function_refs
 
     def _global_function_references(self, text: str) -> list[str]:
-        refs: list[str] = []
-        seen: set[str] = set()
-        for _field_name, ref in re.findall(
+        matches = re.findall(
             r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)",
             text or "",
-        ):
-            if ref in seen:
-                continue
-            seen.add(ref)
-            refs.append(ref)
-        return refs
+        )
+        return list(dict.fromkeys(ref for _field_name, ref in matches))
 
     def _global_name(self, node, source: bytes) -> str:
-        declarator = self._field(node, "declarator")
+        declarator = _node_child_by_field_name(node, "declarator")
         return _identifier_from_node(declarator or node, source)
-
-    def _field(self, node, name: str):
-        return _node_child_by_field_name(node, name)
 
     def _language_for_file(self, path: str) -> str:
         plugin = None

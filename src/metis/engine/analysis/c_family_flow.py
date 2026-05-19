@@ -17,7 +17,6 @@ class CFamilyFlowMixin:
         root,
         source: bytes,
         node_index: list[Any],
-        parent_map: dict[int, Any | None],
         functions: dict[str, list[_FunctionInfo]],
         max_hops: int,
         max_depth: int,
@@ -34,7 +33,6 @@ class CFamilyFlowMixin:
         anchor_fn = self._select_anchor_function(
             request_line=request.line,
             anchor_node=anchor,
-            parent_map=parent_map,
             functions=functions,
         )
 

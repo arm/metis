@@ -16,6 +16,7 @@ from .llm_runner import invoke_reachability_prompt
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _build_reverse_edges, _chunked, _node_sort_key
 from .lock_order import _extract_lock_conflicts
+from .models import ReachabilityFindingResponseModel
 from .supplementary_lenses import (
     _COMBINED_GRAPH_LENS_KINDS,
     _COMBINED_GRAPH_LENS_NOTES,
@@ -225,6 +226,7 @@ class SupplementaryAnalyzer:
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
                 variables=self._combined_prompt_variables(analysis_types, code_chunk),
+                response_model=ReachabilityFindingResponseModel,
                 reasoning_effort=self._reasoning_effort,
             )
             return _parse_combined(raw, chunk_nodes, frozenset(analysis_types))
@@ -391,6 +393,7 @@ class SupplementaryAnalyzer:
             system_prompt=self._with_domain_hints(_INTRA_SYS),
             user_prompt=_INTRA_USR,
             variables={"file_path": file_path, "functions_code": "\n\n".join(bodies)},
+            response_model=ReachabilityFindingResponseModel,
             reasoning_effort=self._reasoning_effort,
         )
         return _parse_intra(raw, functions)
@@ -431,6 +434,7 @@ class SupplementaryAnalyzer:
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
                 variables=self._combined_prompt_variables([analysis_type], code_chunk),
+                response_model=ReachabilityFindingResponseModel,
                 reasoning_effort=self._reasoning_effort,
             )
             return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
@@ -508,6 +512,7 @@ class SupplementaryAnalyzer:
                 system_prompt=_COMBINED_GRAPH_SYS,
                 user_prompt=_COMBINED_GRAPH_USR,
                 variables=self._combined_prompt_variables(["global_lifecycle"], code),
+                response_model=ReachabilityFindingResponseModel,
                 reasoning_effort=self._reasoning_effort,
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
@@ -566,6 +571,7 @@ class SupplementaryAnalyzer:
                 variables=self._combined_prompt_variables(
                     ["lock_order_extraction"], code
                 ),
+                response_model=ReachabilityFindingResponseModel,
                 reasoning_effort=self._reasoning_effort,
             )
             results.extend(

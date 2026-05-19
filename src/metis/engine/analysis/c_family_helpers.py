@@ -7,16 +7,6 @@ from pathlib import Path
 import re
 
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
-_LOW_VALUE_C_FAMILY_PROBE_TERMS = {
-    "c",
-    "cc",
-    "cpp",
-    "cxx",
-    "h",
-    "hh",
-    "hpp",
-    "hxx",
-}
 
 
 def extract_code_like_symbols(*texts: str, limit: int = 12) -> list[str]:
@@ -31,23 +21,6 @@ def extract_code_like_symbols(*texts: str, limit: int = 12) -> list[str]:
             if len(symbols) >= limit:
                 return symbols
     return symbols
-
-
-def extract_c_family_seed_symbols(
-    snippet: str,
-    rule_id: str,
-    file_path: str,
-    *,
-    limit: int = 20,
-) -> list[str]:
-    return extract_code_like_symbols(snippet or "", limit=limit)
-
-
-def is_low_value_c_family_probe_term(term: str) -> bool:
-    text = str(term or "").strip().lower()
-    if not text:
-        return False
-    return text in _LOW_VALUE_C_FAMILY_PROBE_TERMS
 
 
 def parse_includes_from_text(text: str) -> list[str]:

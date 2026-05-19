@@ -7,6 +7,67 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ReachabilityFindingEntryModel(BaseModel):
+    """Structured LLM finding entry shared by reachability analysis lenses."""
+
+    analysis_type: str = ""
+    vulnerability_type: str = ""
+    severity: str = "medium"
+    confidence: str = "medium"
+    cwe: str = ""
+    function_name: str = ""
+    related_function: str = ""
+    line: int | None = None
+    primary_file: str = ""
+    primary_function: str = ""
+    primary_line: int | None = None
+    root_cause_id: str = ""
+    canonical_key: str = ""
+    description: str = ""
+    root_cause: str = ""
+    evidence: str = ""
+    mitigation: str = ""
+    source_function: str = ""
+    sink_function: str = ""
+    free_function: str = ""
+    teardown_function: str = ""
+    use_function: str = ""
+    function_a: str = ""
+    function_b: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReachabilityConfirmationFindingEntryModel(ReachabilityFindingEntryModel):
+    """Structured finding entry for candidate path confirmation."""
+
+    path_index: int = Field(
+        ge=0, description="Index of the candidate path that proves this finding."
+    )
+    is_vulnerable: bool = Field(
+        description="Whether the candidate path proves a real vulnerability."
+    )
+
+
+class ReachabilityFindingResponseModel(BaseModel):
+    findings: list[ReachabilityFindingEntryModel] = Field(
+        default_factory=list, description="Structured reachability findings."
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReachabilityConfirmationResponseModel(BaseModel):
+    findings: list[ReachabilityConfirmationFindingEntryModel] = Field(
+        default_factory=list,
+        description="Confirmed vulnerabilities for candidate paths.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
 
 @dataclass
 class FunctionNode:

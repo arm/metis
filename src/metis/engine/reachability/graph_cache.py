@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
+from metis.plugins.c_plugin import CPlugin
+from metis.plugins.cpp_plugin import CppPlugin
 
 from .c_family import CFamilyTreeSitterExtractor
 from .c_family_rules import (
-    C_FAMILY_PLUGIN_NAMES,
     _normalise_security_function_specs,
     _normalise_source_function_specs,
     external_sink_type,
@@ -112,8 +113,8 @@ class ReachabilityGraphCache:
         return [
             str(path)
             for path in files
-            if self._repository.is_path_supported_by_plugins(
-                str(path), C_FAMILY_PLUGIN_NAMES
+            if isinstance(
+                self._repository.get_plugin_for_path(str(path)), (CPlugin, CppPlugin)
             )
         ]
 

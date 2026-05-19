@@ -5,16 +5,15 @@
 
 from __future__ import annotations
 
-from metis.utils import parse_json_output
-
 from .finding_normalization import (
     _finding_from_llm_entry,
     _lookup_fn,
 )
+from .llm_runner import reachability_response_payload
 
 
 def _finding_entries(raw):
-    parsed = parse_json_output(raw)
+    parsed = reachability_response_payload(raw)
     if not isinstance(parsed, dict):
         return []
     fl = parsed.get("findings")

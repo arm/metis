@@ -20,6 +20,7 @@ from metis.engine.reachability.file_focus import FileFocusBuilder
 from metis.engine.reachability.finding_paths import FindingPathAnnotator
 from metis.engine.reachability import VulnerabilityFinding
 from metis.engine.reachability.graph_cache import ReachabilityGraphCache
+from metis.plugins.c_plugin import CPlugin
 
 
 class _GraphCacheConfig:
@@ -28,14 +29,14 @@ class _GraphCacheConfig:
 
 
 class _GraphCacheRepository:
+    def __init__(self):
+        self._plugin = CPlugin(plugin_config={"plugins": {}})
+
     def get_code_files(self):
         return []
 
     def get_plugin_for_path(self, _path):
-        return None
-
-    def is_path_supported_by_plugins(self, _path, _plugin_names):
-        return True
+        return self._plugin
 
 
 def _reachability_cache(codebase_path):
@@ -96,6 +97,11 @@ class _Node:
         self._end_byte = end_byte
         self._children = children or []
         self._fields = fields or {}
+        self._parent = None
+        for child in self._children:
+            child._parent = self
+        for child in self._fields.values():
+            child._parent = self
 
     def kind(self):
         return self._type
@@ -120,6 +126,9 @@ class _Node:
 
     def child_by_field_name(self, name):
         return self._fields.get(name)
+
+    def parent(self):
+        return self._parent
 
 
 class _Tree:
@@ -331,11 +340,11 @@ def test_c_family_ast_helpers_handle_deep_trees_without_recursion():
     root = _deep_chain(1500, call)
     source = b"deep_call"
 
-    nodes, parent_map = harness._index_tree(root)
-    _definitions, refs, calls = harness._collect_symbol_indexes(nodes, source)
+    nodes = harness._index_tree(root)
+    calls = harness._collect_calls(root, source)
+    refs = harness._collect_references(root, source)
 
     assert len(nodes) == 1502
-    assert parent_map[id(root)] is None
     assert calls["deep_call"][0].symbol == "deep_call"
     assert refs["deep_call"][0].symbol == "deep_call"
 

@@ -5,13 +5,20 @@
 
 from __future__ import annotations
 
-from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS, _GENERIC_FINDING_JSON_SCHEMA
+from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
+
+
+_STRUCTURED_FINDING_INSTRUCTIONS = """\
+Use the structured findings schema supplied by the caller.
+Populate only real values from the shown code. Do not invent files, functions, or lines.
+Return an empty findings list when the evidence does not prove a vulnerability.
+"""
 
 
 def _finding_prompt(body, response_guidance):
     return (
         body
-        + _GENERIC_FINDING_JSON_SCHEMA
+        + _STRUCTURED_FINDING_INSTRUCTIONS
         + response_guidance
         + _CANONICAL_FINDING_INSTRUCTIONS
     )
@@ -41,7 +48,7 @@ Look for:
 13. STALE METADATA: Modifying buffer content without updating associated length/size field.
 """,
     """\
-Return {{"findings": []}} if none found. Be thorough but report each distinct bug only ONCE.""",
+Return no findings if none are proven. Be thorough but report each distinct bug only ONCE.""",
 )
 
 _INTRA_USR = "File: {file_path}\n\n{functions_code}"
@@ -60,7 +67,7 @@ Requested analysis:
 analysis_type must exactly be one of: {allowed_analysis_types}
 Use function_name for the primary defective function and related_function only when
 another shown function is needed to explain the bug. Prefer precise file/function/line
-evidence and ignore style-only or unsupported issues. Return {{"findings": []}} if none found.""",
+evidence and ignore style-only or unsupported issues. Return no findings if none are proven.""",
 )
 
 _COMBINED_GRAPH_USR = "{all_functions_code}"

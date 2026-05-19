@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
-from metis.utils import parse_json_output
 
 from .finding_normalization import (
     _finding_from_llm_entry,
@@ -19,42 +18,17 @@ from .finding_normalization import (
     _same_file_ref,
 )
 from .graph_utils import _chunked, _dedupe_paths
-from .llm_runner import invoke_reachability_prompt
+from .llm_runner import invoke_reachability_prompt, reachability_response_payload
+from .models import ReachabilityConfirmationResponseModel
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
 
 
-def _finding_json_schema(*, path_fields=False, analysis_type="requested_analysis_type"):
-    first_fields = '"path_index": 0, "is_vulnerable": true, ' if path_fields else ""
-    return (
-        "Return ONLY valid JSON using the exact field names in this shape. Use real "
-        "values from the shown code and requested analysis; never copy placeholder "
-        "tokens or ellipses into findings. If the evidence is insufficient, return "
-        '{{"findings": []}}.\n'
-        '{{"findings": [{{' + first_fields + f'"analysis_type": "{analysis_type}",\n'
-        '"vulnerability_type": "one_allowed_vulnerability_type", "severity": "high",\n'
-        '"confidence": "high", "cwe": "CWE-123_or_empty",\n'
-        '"function_name": "actual_function_name",\n'
-        '"related_function": "related_function_or_empty", "line": 123,\n'
-        '"primary_file": "src/file.c", '
-        '"primary_function": "src/file.c::actual_function_name",\n'
-        '"primary_line": 123, "root_cause_id": "short_snake_case_root_cause",\n'
-        '"canonical_key": '
-        '"src/file.c:src/file.c::function_name:vulnerability_type:short_snake_case_root_cause",\n'
-        '"description": "...", "root_cause": "...", "evidence": "...", '
-        '"mitigation": "..."}}]}}\n'
-    )
-
-
-_GENERIC_FINDING_JSON_SCHEMA = _finding_json_schema()
-_CONFIRM_FINDING_JSON_SCHEMA = _finding_json_schema(
-    path_fields=True, analysis_type="reachability"
-)
-
-
 def _output_constraints(no_finding_guidance):
     return f"""\
+Use the structured findings schema supplied by the caller.
+For path confirmation, each finding must include path_index and is_vulnerable.
 vulnerability_type must be a concise snake_case category chosen from the actual defect.
 cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
@@ -92,7 +66,16 @@ Be conservative. Report each distinct root cause once.
 Do not report a caller/path duplicate if the same primary defect is already represented.
 Do not assign a bug to a helper/header unless the actual defective code is in that helper/header."""
 
-_CONFIRM_SYS = (
+
+def _confirm_system_prompt(body, no_finding_guidance):
+    return (
+        body
+        + _output_constraints(no_finding_guidance)
+        + _CANONICAL_FINDING_INSTRUCTIONS
+    )
+
+
+_CONFIRM_SYS = _confirm_system_prompt(
     """\
 You are a security researcher specializing in C and C++ code analysis.
 You are given reachable call paths from tree-sitter graph sources to reachable endpoints, with relevant source code.
@@ -102,19 +85,15 @@ For EACH path determine if it contains a real exploitable vulnerability:
 1. Does attacker-controlled execution, input, state, or object lifetime reach the vulnerable operation through the path?
 2. Are there sanitization, bounds, permission, or lifecycle checks that prevent exploitation?
 3. Is the dangerous operation or missing check truly reachable as called?
-"""
-    + _CONFIRM_FINDING_JSON_SCHEMA
-    + _output_constraints(
-        'If the path does not prove a vulnerability, return {{"findings": []}}.'
-    )
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    "If the path does not prove a vulnerability, return no findings.",
 )
 
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
 
 # --- Inbound: bugs rooted IN the target file ---
 
-_FILE_CONFIRM_SYS = (
+_FILE_CONFIRM_SYS = _confirm_system_prompt(
     """\
 You are a security researcher specializing in C and C++ code analysis.
 You are reviewing ONE target file from a larger codebase.
@@ -129,12 +108,8 @@ For EACH path determine if it is a real exploitable vulnerability in the target 
 2. Does the target file contain the missing validation, unsafe state transition, or dangerous sink usage?
 3. Are there checks or lifecycle constraints that make the path non-exploitable?
 4. Is the root cause in the target file rather than merely elsewhere on the path?
-"""
-    + _CONFIRM_FINDING_JSON_SCHEMA
-    + _output_constraints(
-        'If the target file does not contain the primary bug, return {{"findings": []}}.'
-    )
-    + _CANONICAL_FINDING_INSTRUCTIONS
+""",
+    "If the target file does not contain the primary bug, return no findings.",
 )
 
 _FILE_CONFIRM_USR = """Target file: {target_file}
@@ -165,6 +140,47 @@ class VulnerabilityConfirmer:
         self._t = max_tokens
         self._reasoning_effort = reasoning_effort
 
+    def _path_nodes(self, batch, graph):
+        nodes = {}
+        for p in batch:
+            for u in p.path:
+                n = graph.get_node(u)
+                if n:
+                    nodes[u] = n
+        return nodes
+
+    def _paths_section(self, batch, graph, endpoint_fallback):
+        section = ["== CANDIDATE PATHS =="]
+        for i, p in enumerate(batch):
+            sn, sk = graph.get_node(p.source), graph.get_node(p.sink)
+            section.append(f"\nPath {i}:\n Chain: {' -> '.join(p.path)}")
+            if sn:
+                section.append(
+                    f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}"
+                )
+            if sk:
+                endpoint_note = (
+                    f"[{sk.sink_type}] - {sk.sink_reason}"
+                    if sk.is_sink
+                    else endpoint_fallback
+                )
+                section.append(
+                    f" Endpoint: {sk.unique_name} (line {sk.line_number}) {endpoint_note}"
+                )
+        return "\n".join(section)
+
+    def _code_section(self, title, nodes, *, max_chars=None):
+        section = [title]
+        for u, n in nodes.items():
+            body = (
+                _read_function_body(self._cb, n)
+                if max_chars is None
+                else _read_function_body(self._cb, n, max_chars)
+            )
+            if body:
+                section.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
+        return "\n".join(section)
+
     # --- Bulk confirmation for full-codebase reachability review ---
 
     def confirm_parallel(
@@ -192,7 +208,7 @@ class VulnerabilityConfirmer:
             progress_callback({"event": "confirmation_start", "total": total})
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {
-                submit_with_current_context(ex, self._group, sn, batch, graph): sn
+                submit_with_current_context(ex, self._group, batch, graph): sn
                 for sn, batch in batches
             }
             for fut in as_completed(futs):
@@ -225,36 +241,8 @@ class VulnerabilityConfirmer:
             progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
         return all_f
 
-    def _group(self, sink_name, paths, graph):
+    def _group(self, paths, graph):
         batch = list(paths)
-        needed = {}
-        for p in batch:
-            for u in p.path:
-                n = graph.get_node(u)
-                if n:
-                    needed[u] = n
-        ps = ["== CANDIDATE PATHS =="]
-        for i, p in enumerate(batch):
-            sn, sk = graph.get_node(p.source), graph.get_node(p.sink)
-            ps.append(f"\nPath {i}:\n Chain: {' -> '.join(p.path)}")
-            if sn:
-                ps.append(
-                    f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}"
-                )
-            if sk:
-                endpoint_note = (
-                    f"[{sk.sink_type}] - {sk.sink_reason}"
-                    if sk.is_sink
-                    else "[reachable endpoint; inspect the whole path]"
-                )
-                ps.append(
-                    f" Endpoint: {sk.unique_name} (line {sk.line_number}) {endpoint_note}"
-                )
-        cs = ["== SOURCE CODE =="]
-        for u, n in needed.items():
-            b = _read_function_body(self._cb, n)
-            if b:
-                cs.append(f"\n--- {u} (line {n.line_number}) ---\n{b}")
         raw = invoke_reachability_prompt(
             self._p,
             self._u,
@@ -263,15 +251,20 @@ class VulnerabilityConfirmer:
             system_prompt=_CONFIRM_SYS,
             user_prompt=_CONFIRM_USR,
             variables={
-                "paths_section": "\n".join(ps),
-                "code_section": "\n".join(cs),
+                "paths_section": self._paths_section(
+                    batch, graph, "[reachable endpoint; inspect the whole path]"
+                ),
+                "code_section": self._code_section(
+                    "== SOURCE CODE ==", self._path_nodes(batch, graph)
+                ),
             },
+            response_model=ReachabilityConfirmationResponseModel,
             reasoning_effort=self._reasoning_effort,
         )
         return self._parse_confirm(raw, batch, graph)
 
     def _parse_confirm(self, raw, batch, graph, *, target_file=None):
-        parsed = parse_json_output(raw)
+        parsed = reachability_response_payload(raw)
         if not isinstance(parsed, dict):
             return []
         fl = parsed.get("findings")
@@ -345,42 +338,11 @@ class VulnerabilityConfirmer:
 
     def _confirm_file_batch(self, target_file, batch, graph):
         target_nodes, related_nodes = {}, {}
-        for p in batch:
-            for u in p.path:
-                n = graph.get_node(u)
-                if not n:
-                    continue
-                if n.file_path == target_file:
-                    target_nodes[u] = n
-                else:
-                    related_nodes[u] = n
-        ps = ["== CANDIDATE PATHS =="]
-        for i, p in enumerate(batch):
-            sn, sk = graph.get_node(p.source), graph.get_node(p.sink)
-            ps.append(f"\nPath {i}:\n Chain: {' -> '.join(p.path)}")
-            if sn:
-                ps.append(
-                    f" Source: {sn.unique_name} (line {sn.line_number}) - {sn.source_reason}"
-                )
-            if sk:
-                endpoint_note = (
-                    f"[{sk.sink_type}] - {sk.sink_reason}"
-                    if sk.is_sink
-                    else "[reachable endpoint; inspect the target-file path]"
-                )
-                ps.append(
-                    f" Endpoint: {sk.unique_name} (line {sk.line_number}) {endpoint_note}"
-                )
-        tc = ["-- Functions from target file --"]
-        for u, n in target_nodes.items():
-            body = _read_function_body(self._cb, n, 5000)
-            if body:
-                tc.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
-        rc = ["-- Supporting code from other files --"]
-        for u, n in related_nodes.items():
-            body = _read_function_body(self._cb, n, 2500)
-            if body:
-                rc.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
+        for u, n in self._path_nodes(batch, graph).items():
+            if n.file_path == target_file:
+                target_nodes[u] = n
+            else:
+                related_nodes[u] = n
         raw = invoke_reachability_prompt(
             self._p,
             self._u,
@@ -390,10 +352,21 @@ class VulnerabilityConfirmer:
             user_prompt=_FILE_CONFIRM_USR,
             variables={
                 "target_file": target_file,
-                "paths_section": "\n".join(ps),
-                "target_file_code": "\n".join(tc),
-                "related_code_section": "\n".join(rc),
+                "paths_section": self._paths_section(
+                    batch,
+                    graph,
+                    "[reachable endpoint; inspect the target-file path]",
+                ),
+                "target_file_code": self._code_section(
+                    "-- Functions from target file --", target_nodes, max_chars=5000
+                ),
+                "related_code_section": self._code_section(
+                    "-- Supporting code from other files --",
+                    related_nodes,
+                    max_chars=2500,
+                ),
             },
+            response_model=ReachabilityConfirmationResponseModel,
             reasoning_effort=self._reasoning_effort,
         )
         return self._parse_confirm(raw, batch, graph, target_file=target_file)

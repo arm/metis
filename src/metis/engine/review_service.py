@@ -13,6 +13,8 @@ from typing import Any
 
 import unidiff
 
+from metis.plugins.c_plugin import CPlugin
+from metis.plugins.cpp_plugin import CppPlugin
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
 
@@ -21,7 +23,6 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
-from .reachability.c_family_rules import C_FAMILY_PLUGIN_NAMES
 from .runtime import EngineConfig
 
 logger = logging.getLogger("metis")
@@ -156,8 +157,8 @@ class ReviewService:
             return False
 
     def _is_c_cpp_file(self, file_path):
-        return self._repository.is_path_supported_by_plugins(
-            str(file_path), C_FAMILY_PLUGIN_NAMES
+        return isinstance(
+            self._repository.get_plugin_for_path(str(file_path)), (CPlugin, CppPlugin)
         )
 
     def _invoke_review_file(

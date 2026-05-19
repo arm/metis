@@ -17,7 +17,7 @@ def _node_text(node, source: bytes) -> str:
 
 
 def _node_kind(node) -> str:
-    return str(node.kind() or "")
+    return node.kind() or ""
 
 
 def _node_children(node) -> list[Any]:
