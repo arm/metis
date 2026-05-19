@@ -10,7 +10,6 @@ from metis.engine.reachability import (
 )
 from metis.engine.reachability.finding_normalization import (
     _canonical_fields,
-    _confidence_score,
 )
 from metis.engine.reachability.graph_utils import select_confirmation_paths
 from metis.engine.reachability.c_family import (
@@ -43,14 +42,6 @@ def _reachability_cache(codebase_path):
     return ReachabilityGraphCache(
         _GraphCacheConfig(codebase_path), _GraphCacheRepository()
     )
-
-
-def test_confidence_score_matches_review_schema():
-    assert _confidence_score("high") == 0.95
-    assert _confidence_score("medium") == 0.75
-    assert _confidence_score("low") == 0.55
-    assert _confidence_score("0.81") == 0.81
-    assert _confidence_score(2.0) == 1.0
 
 
 def test_reachability_cache_uses_installed_parser_runtime(tmp_path):
@@ -377,7 +368,7 @@ def _finding(
         id=f"{vtype}-{line}",
         vulnerability_type=vtype,
         severity="high",
-        confidence="high",
+        confidence=0.95,
         source_function=function,
         source_file=file_path,
         source_line=line,

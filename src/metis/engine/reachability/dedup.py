@@ -16,7 +16,6 @@ from .finding_normalization import (
 )
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
-_CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
 class Deduplicator:
@@ -97,7 +96,7 @@ def _best_finding_sort_key(finding):
     canonical_key = str(getattr(finding, "canonical_key", "") or "")
     return (
         _SEVERITY_RANK.get(str(getattr(finding, "severity", "")).lower(), 5),
-        _CONFIDENCE_RANK.get(str(getattr(finding, "confidence", "")).lower(), 3),
+        -float(getattr(finding, "confidence", 0.0) or 0.0),
         not bool(_finding_file(finding)),
         not bool(_finding_function(finding)),
         _finding_line(finding) <= 0,

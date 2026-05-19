@@ -16,7 +16,7 @@ class ReachabilityFindingEntryModel(BaseModel):
     analysis_type: str = ""
     vulnerability_type: str = ""
     severity: str = "medium"
-    confidence: str = "medium"
+    confidence: float = Field(ge=0.0, le=1.0)
     cwe: str = ""
     function_name: str = ""
     related_function: str = ""
@@ -107,12 +107,12 @@ class ReachabilityPath:
 
 @dataclass
 class VulnerabilityFinding:
-    """Internal finding model before conversion to the legacy review JSON shape."""
+    """Internal finding model before conversion to the review JSON shape."""
 
     id: str
     vulnerability_type: str
     severity: str
-    confidence: str
+    confidence: float
     source_function: str
     source_file: str
     source_line: int

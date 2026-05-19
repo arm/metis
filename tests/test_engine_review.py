@@ -59,14 +59,6 @@ def test_review_code_uses_legacy_for_non_c_cpp(engine):
     engine.review.review_file.assert_called_once()
 
 
-def test_review_code_reports_when_no_supported_files(engine):
-    results = list(engine.review.review_code(get_code_files_func=lambda: []))
-
-    assert len(results) == 1
-    assert results[0]["reviews"] == []
-    assert "No supported code files found" in results[0]["errors"][0]
-
-
 def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     patch = """--- a/test.py
 +++ b/test.py

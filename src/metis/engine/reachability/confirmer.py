@@ -25,6 +25,11 @@ from .source_context import _read_function_body
 logger = logging.getLogger("metis")
 
 
+def _emit_progress(callback, event, **payload):
+    if callback:
+        callback({"event": event, **payload})
+
+
 def _output_constraints(no_finding_guidance):
     return f"""\
 Use the structured findings schema supplied by the caller.
@@ -32,7 +37,7 @@ For path confirmation, each finding must include path_index and is_vulnerable.
 vulnerability_type must be a concise snake_case category chosen from the actual defect.
 cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
-confidence must be exactly one of: high, medium, low.
+confidence must be a float between 0.0 and 1.0.
 Be conservative. {no_finding_guidance}"""
 
 
@@ -181,9 +186,42 @@ class VulnerabilityConfirmer:
                 section.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
         return "\n".join(section)
 
+    def _run_batches(
+        self,
+        batches,
+        worker,
+        *,
+        max_workers,
+        progress_callback=None,
+    ):
+        results = []
+        total = len(batches)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                submit_with_current_context(executor, worker, batch): key
+                for key, batch in batches
+            }
+            for completed, future in enumerate(as_completed(futures), start=1):
+                key = futures[future]
+                try:
+                    results.extend(future.result())
+                except Exception as exc:
+                    logger.warning(
+                        "Reachability confirmation failed for %s: %s", key, exc
+                    )
+                _emit_progress(
+                    progress_callback,
+                    "confirmation_progress",
+                    completed=completed,
+                    total=total,
+                    sink=key,
+                    endpoint=key,
+                )
+        return results
+
     # --- Bulk confirmation for full-codebase reachability review ---
 
-    def confirm_parallel(
+    def confirm_paths(
         self,
         paths,
         graph,
@@ -202,46 +240,17 @@ class VulnerabilityConfirmer:
             for batch in _chunked(group_paths, 8)
         ]
         total = len(batches)
-        all_f = []
-        done = 0
-        if progress_callback:
-            progress_callback({"event": "confirmation_start", "total": total})
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {
-                submit_with_current_context(ex, self._group, batch, graph): sn
-                for sn, batch in batches
-            }
-            for fut in as_completed(futs):
-                sn = futs[fut]
-                try:
-                    all_f.extend(fut.result())
-                except Exception as e:
-                    logger.warning("Confirm fail %s: %s", sn, e)
-                    if progress_callback:
-                        progress_callback(
-                            {
-                                "event": "confirmation_error",
-                                "sink": sn,
-                                "endpoint": sn,
-                                "error": f"{type(e).__name__}: {e}",
-                            }
-                        )
-                done += 1
-                if progress_callback:
-                    progress_callback(
-                        {
-                            "event": "confirmation_progress",
-                            "completed": done,
-                            "total": total,
-                            "sink": sn,
-                            "endpoint": sn,
-                        }
-                    )
-        if progress_callback:
-            progress_callback({"event": "confirmation_done", "confirmed": len(all_f)})
-        return all_f
+        _emit_progress(progress_callback, "confirmation_start", total=total)
+        findings = self._run_batches(
+            batches,
+            lambda batch: self._confirm_batch(batch, graph),
+            max_workers=max_workers,
+            progress_callback=progress_callback,
+        )
+        _emit_progress(progress_callback, "confirmation_done", confirmed=len(findings))
+        return findings
 
-    def _group(self, paths, graph):
+    def _confirm_batch(self, paths, graph):
         batch = list(paths)
         raw = invoke_reachability_prompt(
             self._p,
@@ -310,31 +319,17 @@ class VulnerabilityConfirmer:
             )
         return results
 
-    def confirm_for_file(
-        self, target_file, paths, graph, *, max_workers=4, progress_callback=None
-    ):
+    def confirm_paths_for_file(self, target_file, paths, graph, *, max_workers=4):
         paths = _dedupe_paths(paths)
         if not paths:
             return []
-        batches = list(_chunked(paths, 8))
-        all_findings = []
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(max_workers, len(batches)))
-        ) as ex:
-            futs = {
-                submit_with_current_context(
-                    ex, self._confirm_file_batch, target_file, batch, graph
-                ): idx
-                for idx, batch in enumerate(batches)
-            }
-            for fut in as_completed(futs):
-                try:
-                    all_findings.extend(fut.result())
-                except Exception as e:
-                    logger.warning(
-                        "Error confirming inbound paths for %s: %s", target_file, e
-                    )
-        return all_findings
+        batches = [(target_file, batch) for batch in _chunked(paths, 8)]
+
+        return self._run_batches(
+            batches,
+            lambda batch: self._confirm_file_batch(target_file, batch, graph),
+            max_workers=max(1, min(max_workers, len(batches))),
+        )
 
     def _confirm_file_batch(self, target_file, batch, graph):
         target_nodes, related_nodes = {}, {}

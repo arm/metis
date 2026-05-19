@@ -168,5 +168,5 @@ def _strict_file_findings(findings):
         finding
         for finding in findings
         if str(finding.severity or "").lower() == "high"
-        or str(finding.confidence or "").lower() == "high"
+        or float(finding.confidence or 0.0) >= 0.9
     ]

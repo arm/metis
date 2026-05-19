@@ -115,12 +115,11 @@ class TreeSitterReachabilityService:
         path_findings = []
         if source_to_file_paths:
             path_findings.extend(
-                confirmer.confirm_for_file(
+                confirmer.confirm_paths_for_file(
                     relative_target,
                     source_to_file_paths,
                     graph,
                     max_workers=max_workers,
-                    progress_callback=progress_callback,
                 )
             )
 
@@ -220,7 +219,7 @@ class TreeSitterReachabilityService:
                 self._config.codebase_path,
                 reasoning_effort=reasoning_effort,
             )
-            path_findings = confirmer.confirm_parallel(
+            path_findings = confirmer.confirm_paths(
                 selected_paths,
                 graph,
                 max_workers=max_workers,

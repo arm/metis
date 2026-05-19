@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .heuristic_data import _words
-
 
 @dataclass(frozen=True)
 class _SupplementaryLensSpec:
@@ -73,7 +71,7 @@ _REVIEW_LENS_NAMES = set(
     "classic_c_sink error_unwind counter_symmetry targeted_path_access".split()
 )
 
-_COMBINED_GRAPH_LENS_KINDS = _words("cross semantic targeted")
+_COMBINED_GRAPH_LENS_KINDS = frozenset("cross semantic targeted".split())
 _COMBINED_GRAPH_LENS_NOTES = {
     "lifecycle": """\
 analysis_type lifecycle:

@@ -42,13 +42,6 @@ class EngineRepository:
                 return plugin
         return None
 
-    def is_path_supported_by_plugins(self, path: str, plugin_names) -> bool:
-        plugin = self.get_plugin_for_path(path)
-        if plugin is None:
-            return False
-        supported_names = {str(name).lower() for name in plugin_names}
-        return str(plugin.get_name()).lower() in supported_names
-
     def get_all_supported_code_extensions(self):
         return sorted(self._config.code_exts)
 

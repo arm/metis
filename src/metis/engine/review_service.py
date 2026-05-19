@@ -92,19 +92,28 @@ class ReviewService:
                 if progress_callback is not None:
                     settings["progress_callback"] = progress_callback
                 result = self._reachability_service.review_file(file_path, **settings)
-            except Exception as e:
-                logger.exception("Tree-sitter file review failed for %s", file_path)
-                if progress_callback is not None:
-                    progress_callback(
-                        {
-                            "event": "treesitter_file_review_error",
-                            "file": file_path,
-                            "error": f"{type(e).__name__}: {e}",
-                        }
-                    )
+            except Exception:
+                logger.debug(
+                    "Tree-sitter file review failed for %s; falling back to standard review",
+                    file_path,
+                    exc_info=True,
+                )
             else:
                 if result is not None:
                     return result
+        return self._review_file_standard(file_path, options=options)
+
+    def _review_file_standard(
+        self,
+        file_path,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
+    ):
+        options = coerce_review_options(
+            options,
+            use_retrieval_context=use_retrieval_context,
+        )
         qe_code = qe_docs = None
         if options.use_retrieval_context:
             qe_code, qe_docs = self._get_query_engines()
@@ -141,12 +150,7 @@ class ReviewService:
             return self._review_graph_factory().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
-            return {
-                "file": relative_path,
-                "file_path": file_path,
-                "reviews": [],
-                "errors": [f"{type(e).__name__}: {e}"],
-            }
+            return None
 
     def _is_file_in_codebase(self, file_path):
         try:
@@ -212,15 +216,6 @@ class ReviewService:
             else self.get_code_files(options=options)
         )
         if not files:
-            yield {
-                "file": "",
-                "file_path": self._config.codebase_path,
-                "reviews": [],
-                "errors": [
-                    "No supported code files found under codebase_path. "
-                    "Check --codebase-path and the configured language plugins."
-                ],
-            }
             return
 
         run_codebase_reachability = (
@@ -228,17 +223,30 @@ class ReviewService:
             and review_file_func is None
             and any(self._is_c_cpp_file(path) for path in files)
         )
+        reachability_failed = False
         if run_codebase_reachability:
-            results = self._get_reachability_reviews(
-                progress_callback=progress_callback
-            )
-            for result in results:
-                yield result
-            files = [path for path in files if not self._is_c_cpp_file(path)]
-            if not files:
-                return
+            try:
+                results = self._get_reachability_reviews(
+                    progress_callback=progress_callback
+                )
+            except Exception:
+                logger.debug(
+                    "Tree-sitter codebase review failed; falling back to standard review",
+                    exc_info=True,
+                )
+                reachability_failed = True
+            else:
+                for result in results:
+                    yield result
+                files = [path for path in files if not self._is_c_cpp_file(path)]
+                if not files:
+                    return
 
-        review_fn = self.review_file if review_file_func is None else review_file_func
+        review_fn = (
+            self._review_file_standard
+            if review_file_func is None and reachability_failed
+            else review_file_func or self.review_file
+        )
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
@@ -256,14 +264,7 @@ class ReviewService:
                     result = future.result()
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
-                    yield {
-                        "file": os.path.relpath(
-                            path, os.path.abspath(self._config.codebase_path)
-                        ),
-                        "file_path": path,
-                        "reviews": [],
-                        "errors": [f"{type(e).__name__}: {e}"],
-                    }
+                    yield None
                     continue
                 if result:
                     yield result

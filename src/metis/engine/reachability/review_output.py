@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 
 from .finding_normalization import (
-    _confidence_score,
     _mitigation_text,
     _normalise_vuln_type,
     _severity_title,
@@ -111,7 +110,7 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
         ),
         "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
-        "confidence": _confidence_score(finding.confidence),
+        "confidence": finding.confidence,
         "reasoning": "\n".join(reasoning_parts),
         "mitigation": _mitigation_text(finding, vtype),
     }
