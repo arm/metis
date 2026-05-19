@@ -34,6 +34,7 @@ class Deduplicator:
 
         normalized = [_normalize_finding(finding) for finding in findings]
         collapsed = _collapse_by_canonical_identity(normalized)
+        collapsed = _collapse_by_primary_location(collapsed)
         selected = _cap_per_function_type(collapsed, max_per_sink)
         return selected, len(findings), len(findings) - len(selected)
 
@@ -52,6 +53,29 @@ def _collapse_by_canonical_identity(findings):
     groups = defaultdict(list)
     for finding in findings:
         key = _canonical_finding_key(finding) or f"unkeyed:{id(finding)}"
+        groups[key].append(finding)
+
+    collapsed = []
+    for group in groups.values():
+        collapsed.append(_pick_best(group))
+    return collapsed
+
+
+def _collapse_by_primary_location(findings):
+    groups = defaultdict(list)
+    for finding in findings:
+        file_path = _normalize_path(_finding_file(finding))
+        function = _normalize_function(_finding_function(finding))
+        line = _finding_line(finding)
+        if not file_path or not function or line <= 0:
+            key = f"unlocated:{id(finding)}"
+        else:
+            key = (
+                file_path,
+                function,
+                line,
+                _normalise_vuln_type(getattr(finding, "vulnerability_type", "")),
+            )
         groups[key].append(finding)
 
     collapsed = []

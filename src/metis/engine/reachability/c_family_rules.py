@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from .finding_normalization import _normalise_vuln_type
+from .models import ALLOWED_VULNERABILITY_TYPES
 
 CONTROL_CALLS = {
     "if",
@@ -115,8 +116,14 @@ def _normalise_security_function_specs(raw):
         reason = _optional_string(
             entry, "reason", setting_name=setting_name, index=index
         )
+        sink_type = _normalise_vuln_type(sink_type or "other")
+        if sink_type not in ALLOWED_VULNERABILITY_TYPES:
+            allowed = ", ".join(ALLOWED_VULNERABILITY_TYPES)
+            raise ValueError(
+                f"{setting_name}[{index}].sink_type must be one of: {allowed}"
+            )
         specs[name.lower()] = {
-            "sink_type": _normalise_vuln_type(sink_type or "other"),
+            "sink_type": sink_type,
             "reason": reason or "configured in metis.yaml",
         }
     return specs
@@ -134,7 +141,6 @@ def _normalise_source_function_specs(raw):
             entry, "reason", setting_name=setting_name, index=index
         )
         specs[name.lower()] = {
-            "sink_type": "other",
             "reason": reason or "configured in metis.yaml",
         }
     return specs

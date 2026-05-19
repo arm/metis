@@ -151,7 +151,6 @@ class TreeSitterReachabilityService:
 
         reviews = reviews_for_findings(
             deduped,
-            graph,
             codebase_path=self._config.codebase_path,
             target_file=relative_target,
         )
@@ -172,7 +171,7 @@ class TreeSitterReachabilityService:
         domain_hints=None,
         domain_profiles=None,
         confirm_paths=True,
-        analysis_profile="full",
+        lens_profile="all",
         **_kwargs,
     ):
         graph, paths = self.get_codebase_graph_and_paths(
@@ -201,12 +200,12 @@ class TreeSitterReachabilityService:
         model = confirmation_model or self._config.llama_query_model
         supplementary = self._ensure_supplementary(
             graph,
-            scope_id="full",
+            scope_id="whole_graph",
             model=model,
             max_workers=max_workers,
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
-            analysis_profile=analysis_profile,
+            lens_profile=lens_profile,
             domain_hints=domain_hints,
             domain_profiles=domain_profiles,
         )
@@ -235,7 +234,6 @@ class TreeSitterReachabilityService:
 
         reviews = group_findings_as_reviews(
             deduped_findings,
-            graph,
             codebase_path=self._config.codebase_path,
         )
         if progress_callback:
@@ -280,20 +278,20 @@ class TreeSitterReachabilityService:
         self,
         graph,
         *,
-        scope_id="full",
+        scope_id="whole_graph",
         model,
         max_workers,
         progress_callback=None,
         reasoning_effort=None,
-        analysis_profile="full",
+        lens_profile="all",
         domain_hints=None,
         domain_profiles=None,
     ):
         key = (
-            str(scope_id or "full"),
+            str(scope_id or "whole_graph"),
             str(model or ""),
             str(reasoning_effort or ""),
-            str(analysis_profile or "full"),
+            str(lens_profile or "all"),
             repr(domain_hints or ()),
             repr(domain_profiles or ()),
             graph_fingerprint(graph),
@@ -313,7 +311,7 @@ class TreeSitterReachabilityService:
             graph,
             max_workers=max_workers,
             progress_callback=progress_callback,
-            analysis_profile=analysis_profile,
+            lens_profile=lens_profile,
         )
         self._supplementary_cache[key] = list(findings)
         return list(findings)

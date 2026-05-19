@@ -60,7 +60,7 @@ class ReviewService:
         with self._reachability_lock:
             if self._reachability_cache is None:
                 settings = dict(self._reachability_settings)
-                settings.setdefault("analysis_profile", "review")
+                settings.setdefault("lens_profile", "review")
                 if not settings.get("max_paths"):
                     settings.setdefault("confirm_paths", False)
                 if progress_callback is not None:

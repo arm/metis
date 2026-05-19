@@ -6,21 +6,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
+
+ALLOWED_VULNERABILITY_TYPES = (
+    "buffer_overflow",
+    "command_injection",
+    "counter_symmetry",
+    "double_free",
+    "format_string",
+    "information_leak",
+    "integer_overflow",
+    "lifecycle_asymmetry",
+    "lock_order",
+    "missing_auth",
+    "missing_validation",
+    "null_dereference",
+    "out_of_bounds",
+    "partial_cleanup",
+    "path_traversal",
+    "race_condition",
+    "refcount_mismatch",
+    "state_ordering",
+    "stale_metadata",
+    "toctou",
+    "type_confusion",
+    "use_after_free",
+    "use_after_release",
+    "other",
+)
+
+VulnerabilityType: TypeAlias = Literal[*ALLOWED_VULNERABILITY_TYPES]
+Severity: TypeAlias = Literal["critical", "high", "medium", "low"]
 
 
 class ReachabilityFindingEntryModel(BaseModel):
     """Structured LLM finding entry shared by reachability analysis lenses."""
 
     analysis_type: str = Field("", description="Requested analysis type.")
-    vulnerability_type: str = Field(
-        "", description="Concise snake_case category for the actual defect."
+    vulnerability_type: VulnerabilityType = Field(
+        "other", description="Exact vulnerability category from the allowed enum."
     )
-    severity: str = Field("medium", description="One of: critical, high, medium, low.")
+    severity: Severity = Field(
+        "medium", description="One of: critical, high, medium, low."
+    )
     confidence: str | float = Field(
         "medium",
-        description="One of high, medium, low, or a float between 0.0 and 1.0.",
+        description=(
+            "One of high, medium, low; numeric values are accepted for compatibility."
+        ),
     )
     cwe: str = Field("", description="Best matching CWE ID such as CWE-120, or empty.")
     function_name: str = Field(
@@ -58,16 +93,6 @@ class ReachabilityFindingEntryModel(BaseModel):
     mitigation: str = Field(
         "", description="Fix recommendation, not restated evidence."
     )
-    source_function: str = Field("", description="Source function if relevant.")
-    sink_function: str = Field("", description="Sink function if relevant.")
-    free_function: str = Field("", description="Free/release function if relevant.")
-    teardown_function: str = Field(
-        "", description="Teardown/cancel/unregister function if relevant."
-    )
-    use_function: str = Field("", description="Use/deref function if relevant.")
-    function_a: str = Field("", description="First pairwise function if relevant.")
-    function_b: str = Field("", description="Second pairwise function if relevant.")
-
     model_config = ConfigDict(extra="forbid")
 
 

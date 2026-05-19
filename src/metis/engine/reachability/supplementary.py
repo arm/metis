@@ -77,9 +77,9 @@ class SupplementaryAnalyzer:
         *,
         max_workers=DEFAULT_REACHABILITY_WORKERS,
         progress_callback=None,
-        analysis_profile="full",
+        lens_profile="all",
     ):
-        profile = str(analysis_profile or "full").lower()
+        profile = str(lens_profile or "all").lower()
         lens_specs = (
             [spec for spec in _FULL_LENS_SPECS if spec.name in _REVIEW_LENS_NAMES]
             if profile == "review"
