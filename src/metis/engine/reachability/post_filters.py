@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from .finding_normalization import (
+    _confidence_score,
     _finding_file,
     _finding_function,
     _finding_line,
@@ -163,10 +164,16 @@ def _post_filter_findings(findings, codebase_path):
     return filtered
 
 
+def _is_high_confidence(value):
+    if str(value or "").strip().lower() == "high":
+        return True
+    return _confidence_score(value, default=0.0) >= 0.9
+
+
 def _strict_file_findings(findings):
     return [
         finding
         for finding in findings
         if str(finding.severity or "").lower() == "high"
-        or float(finding.confidence or 0.0) >= 0.9
+        or _is_high_confidence(finding.confidence)
     ]

@@ -13,30 +13,60 @@ from pydantic import BaseModel, ConfigDict, Field
 class ReachabilityFindingEntryModel(BaseModel):
     """Structured LLM finding entry shared by reachability analysis lenses."""
 
-    analysis_type: str = ""
-    vulnerability_type: str = ""
-    severity: str = "medium"
-    confidence: str | float = "medium"
-    cwe: str = ""
-    function_name: str = ""
-    related_function: str = ""
-    line: int | None = None
-    primary_file: str = ""
-    primary_function: str = ""
-    primary_line: int | None = None
-    root_cause_id: str = ""
-    canonical_key: str = ""
-    description: str = ""
-    root_cause: str = ""
-    evidence: str = ""
-    mitigation: str = ""
-    source_function: str = ""
-    sink_function: str = ""
-    free_function: str = ""
-    teardown_function: str = ""
-    use_function: str = ""
-    function_a: str = ""
-    function_b: str = ""
+    analysis_type: str = Field("", description="Requested analysis type.")
+    vulnerability_type: str = Field(
+        "", description="Concise snake_case category for the actual defect."
+    )
+    severity: str = Field("medium", description="One of: critical, high, medium, low.")
+    confidence: str | float = Field(
+        "medium",
+        description="One of high, medium, low, or a float between 0.0 and 1.0.",
+    )
+    cwe: str = Field("", description="Best matching CWE ID such as CWE-120, or empty.")
+    function_name: str = Field(
+        "", description="Actual function name where the issue is observed."
+    )
+    related_function: str = Field(
+        "", description="Related function involved in the same root cause."
+    )
+    line: int | None = Field(
+        None, description="Actual source line for the observed issue."
+    )
+    primary_file: str = Field(
+        "", description="Source file containing the actual defective code."
+    )
+    primary_function: str = Field(
+        "",
+        description="Exact shown function identifier containing the defective code.",
+    )
+    primary_line: int | None = Field(
+        None, description="Line of the actual defective operation or missing check."
+    )
+    root_cause_id: str = Field(
+        "", description="Stable short snake_case token for this specific root cause."
+    )
+    canonical_key: str = Field(
+        "",
+        description=(
+            "Stable key: src/file.c:src/file.c::function:vulnerability_type:"
+            "root_cause_id."
+        ),
+    )
+    description: str = Field("", description="Brief description of the vulnerability.")
+    root_cause: str = Field("", description="Specific root cause, not a mitigation.")
+    evidence: str = Field("", description="Concrete code evidence from shown source.")
+    mitigation: str = Field(
+        "", description="Fix recommendation, not restated evidence."
+    )
+    source_function: str = Field("", description="Source function if relevant.")
+    sink_function: str = Field("", description="Sink function if relevant.")
+    free_function: str = Field("", description="Free/release function if relevant.")
+    teardown_function: str = Field(
+        "", description="Teardown/cancel/unregister function if relevant."
+    )
+    use_function: str = Field("", description="Use/deref function if relevant.")
+    function_a: str = Field("", description="First pairwise function if relevant.")
+    function_b: str = Field("", description="Second pairwise function if relevant.")
 
     model_config = ConfigDict(extra="forbid")
 
