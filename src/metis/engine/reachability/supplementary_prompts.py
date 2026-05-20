@@ -6,18 +6,12 @@
 from __future__ import annotations
 
 from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
-from .models import ALLOWED_VULNERABILITY_TYPES
-
-_ALLOWED_VULNERABILITY_TYPES_TEXT = ", ".join(ALLOWED_VULNERABILITY_TYPES)
 
 
-_STRUCTURED_FINDING_INSTRUCTIONS = f"""\
+_STRUCTURED_FINDING_INSTRUCTIONS = """\
 Use the structured findings schema supplied by the caller.
 Populate only real values from the shown code. Do not invent files, functions, or lines.
-vulnerability_type must exactly be one of: {_ALLOWED_VULNERABILITY_TYPES_TEXT}.
-Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
-error-unwind/rollback/resource-leak variants, and use_after_free for dangling
-use-after-release lifetime variants unless a narrower allowed type fits better.
+vulnerability_type must be a concise snake_case category chosen from the actual defect.
 confidence must be exactly one of: high, medium, low.
 Return an empty findings list when the evidence does not prove a vulnerability.
 """
