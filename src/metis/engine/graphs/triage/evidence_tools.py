@@ -18,8 +18,7 @@ from metis.engine.analysis.c_family_macro import (
     collect_c_macro_definition_sections,
     collect_c_macro_like_calls_from_scope,
 )
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
+from metis.plugins.c_family import is_c_family_plugin
 
 from . import constants as C
 from .debug import _emit_debug
@@ -34,12 +33,8 @@ from .evidence_text import (
 )
 
 
-def _is_c_family_plugin(plugin) -> bool:
-    return isinstance(plugin, (CPlugin, CppPlugin))
-
-
 def _has_c_family_triage_analyzer(state: TriageState, file_path: str) -> bool:
-    if not _is_c_family_plugin(state.get("triage_plugin")):
+    if not is_c_family_plugin(state.get("triage_plugin")):
         return False
     analyzer = state.get("triage_analyzer")
     supports_file = getattr(analyzer, "supports_file", None)

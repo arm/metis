@@ -13,8 +13,7 @@ from typing import Any
 
 import unidiff
 
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
+from metis.plugins.c_family import is_c_family_plugin
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
 
@@ -93,7 +92,7 @@ class ReviewService:
         if (
             self._reachability_service is not None
             and self._is_file_in_codebase(file_path)
-            and self._is_c_cpp_file(file_path)
+            and self._is_c_family_file(file_path)
         ):
             try:
                 settings = self._reachability_call_settings(
@@ -168,10 +167,8 @@ class ReviewService:
         except (OSError, ValueError):
             return False
 
-    def _is_c_cpp_file(self, file_path):
-        return isinstance(
-            self._repository.get_plugin_for_path(str(file_path)), (CPlugin, CppPlugin)
-        )
+    def _is_c_family_file(self, file_path):
+        return is_c_family_plugin(self._repository.get_plugin_for_path(str(file_path)))
 
     def _invoke_review_file(
         self,
@@ -229,7 +226,7 @@ class ReviewService:
         run_codebase_reachability = (
             self._reachability_service is not None
             and review_file_func is None
-            and any(self._is_c_cpp_file(path) for path in files)
+            and any(self._is_c_family_file(path) for path in files)
         )
         reachability_failed = False
         if run_codebase_reachability:
@@ -246,7 +243,7 @@ class ReviewService:
             else:
                 for result in results:
                     yield result
-                files = [path for path in files if not self._is_c_cpp_file(path)]
+                files = [path for path in files if not self._is_c_family_file(path)]
                 if not files:
                     return
 

@@ -151,7 +151,9 @@ class TreeSitterReachabilityService:
 
         reviews = reviews_for_findings(
             deduped,
+            graph,
             codebase_path=self._config.codebase_path,
+            target_file=relative_target,
         )
         return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
@@ -233,6 +235,7 @@ class TreeSitterReachabilityService:
 
         reviews = group_findings_as_reviews(
             deduped_findings,
+            graph,
             codebase_path=self._config.codebase_path,
         )
         if progress_callback:

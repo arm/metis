@@ -6,8 +6,7 @@
 from __future__ import annotations
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
-from metis.plugins.c_plugin import CPlugin
-from metis.plugins.cpp_plugin import CppPlugin
+from metis.plugins.c_family import is_c_family_plugin
 
 from .c_family import CFamilyTreeSitterExtractor
 from .c_family_rules import (
@@ -31,7 +30,7 @@ class ReachabilityGraphCache:
         self._paths_max_length = None
 
     def build_graph(self, files=None, *, progress_callback=None):
-        selected = self._c_cpp_files(
+        selected = self._c_family_files(
             files if files is not None else self._repository.get_code_files()
         )
         return self._build_graph_from_files(
@@ -109,13 +108,11 @@ class ReachabilityGraphCache:
         self._paths_max_length = max_path_length
         return graph, list(paths)
 
-    def _c_cpp_files(self, files) -> list[str]:
+    def _c_family_files(self, files) -> list[str]:
         return [
             str(path)
             for path in files
-            if isinstance(
-                self._repository.get_plugin_for_path(str(path)), (CPlugin, CppPlugin)
-            )
+            if is_c_family_plugin(self._repository.get_plugin_for_path(str(path)))
         ]
 
     def _annotate_configured_source_functions(
