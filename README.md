@@ -20,7 +20,7 @@ Metis is an open-source, agentic AI security framework for deep security code re
   Unlike linters or traditional static analysis tools, Metis doesn’t rely on hardcoded rules. It uses LLMs capable of semantic understanding and reasoning.
 
 - **Context-Aware Reviews**
-  RAG ensures that the model has access to broader code context and related logic, resulting in more accurate and actionable suggestions.
+RAG ensures that the model has access to broader code context and related logic, resulting in more accurate and actionable suggestions.
 
 - **Plugin-Friendly and Extensible**
   Designed with extensibility in mind: support for additional languages, models, and new prompts is straightforward.
