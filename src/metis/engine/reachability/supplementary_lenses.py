@@ -87,44 +87,92 @@ _COMBINED_GRAPH_LENS_KINDS = frozenset("cross semantic targeted".split())
 _COMBINED_GRAPH_LENS_NOTES = {
     "lifecycle": """\
 analysis_type lifecycle:
-- Report shown use-after-free, dangling/stale pointer, callback context lifetime,
-  or realloc/grow invalidation bugs across functions.
-- Require evidence that the resource lifetime ends before a later use.""",
+- Use-after-free: one function frees a resource and another later dereferences it.
+- Dangling pointers: global/shared structures keep pointers that are not cleared when
+  the pointed-to object is freed.
+- Lifetime mismatch: object A stores a pointer to object B, but B can be destroyed
+  while A still exists.
+- Deferred callback UAF: timer/work/callback context points at an object
+  that teardown frees without canceling/flushing/unregistering the callback.
+- Stale pointer after realloc/grow/compact: code caches a pointer, then a later
+  operation may move or invalidate the backing store.""",
     "ownership": """\
 analysis_type ownership:
-- Report ownership transfer mistakes, double release, refcount imbalance,
-  missing cleanup symmetry, or rollback gaps.
-- Require a concrete owner/releaser mismatch, not just unusual style.""",
+- Double-free/double-close across functions: callee frees on error and caller also
+  frees, or caller frees unconditionally after ownership was transferred.
+- Refcount imbalance: get/ref and put/unref are not matched, or helpers named get,
+  put, ref, unref, acquire, release, retain, or drop are no-ops.
+- Cleanup symmetry: setup/register allocates N resources but teardown releases fewer.
+- Partial cleanup on error: init allocates A, B, C, then if C fails it forgets A/B.
+- Rollback gap: list/rbtree/hash/register publishes an object and a later failure
+  does not remove/unregister it.
+- Callback registration lifecycle: callback context is an object that can be freed
+  without unregistering or canceling the callback first.""",
     "semantic": """\
 analysis_type semantic:
-- Report wrong field/constant/domain, boolean coercion, type confusion,
-  stale metadata, width/truncation, overflow/indexing, info leak, or missing auth.
-- Prefer semantic correctness bugs with a shown bad consequence.""",
+- Boolean coercion of rich returns: callers treat level/enum/count as boolean.
+- Wrong enum/constant/domain: permission or resource checks use the wrong constant.
+- Type confusion or void* miscast without a type tag/check.
+- Wrong field or stale metadata: raw_len used as data_len, nr_pages vs size, old
+  length/count retained after data mutation.
+- Width mismatch/truncation: 32-bit checks guard size_t/uint64_t values.
+- Array index vs size mismatch, integer overflow in allocation/copy sizes.
+- Uninitialized data exposure, wrong flag semantics, accounting drift, info leaks.
+- Missing auth/permission checks before privileged reset, diagnostics, raw resource
+  access, filesystem, or control operations.""",
     "state_concurrency": """\
 analysis_type state_concurrency:
-- Report premature state flags, missing ordering before teardown/reset/power changes,
-  stale-after-unlock, teardown races, missing locks, or lock inversions.
-- Require shared mutable state or concurrent execution evidence.""",
+- Premature state transition: ready/enabled/initialized flag set before validation,
+  allocation, registration, dependency initialization, or permission checks.
+- Ordering gap: flush/sync/drain/fence must complete before power-off, teardown, or
+  reset, but the ordering is not enforced.
+- Stale-after-unlock: value read under lock is used after unlock while mutable.
+- Lock order inversion across functions.
+- Teardown race: destroys mutex/workqueue/resource while pending work/timers/callbacks
+  can still reference it.
+- Missing lock on shared structure, stale software state after runtime disable.""",
     "targeted_state_order": """\
 analysis_type targeted_state_order:
-- Report only state/ready flag ordering bugs where a state is published before
-  prerequisites complete and later trusted without rollback.""",
+- Only report ready/state flag ordering bugs.
+- Look for ready, loaded, active, initialized, enabled, runtime_active, powered,
+  or online being set before prerequisites complete.
+- Confirm an error path after the transition does not roll state back, or another
+  function trusts that state to access resources, queues, shared state, or privileged
+  operations.""",
     "targeted_callback_lifecycle": """\
 analysis_type targeted_callback_lifecycle:
-- Report only callback teardown bugs where registered callback/work/timer context
-  can outlive its object because cancel/flush/unregister is missing.""",
+- Only report callback teardown symmetry bugs.
+- timer/work/callback fn/data/context is initialized with an object pointer.
+- Teardown/release/remove/shutdown/error cleanup/free does not cancel, deactivate,
+  flush, unregister, or clear the callback before freeing the object or destroying
+  its mutex/workqueue.
+- operation tables show lifecycle asymmetry, such as release without
+  a needed flush/cancel path.""",
     "targeted_refcount": """\
 analysis_type targeted_refcount:
-- Report only no-op or imbalanced reference helpers that callers rely on for
-  lifetime/accounting.""",
+- Only report no-op reference counting helpers that callers rely on.
+- Functions named like *_get, *_put, *_ref, *_unref, acquire, release, retain, or drop
+  have empty/no-op bodies, only return a pointer, only cast, or only log.
+- They do not update refcount/atomic/kref/state and do not free on final put.""",
     "targeted_permission": """\
 analysis_type targeted_permission:
-- Report only missing privileged checks, wrong permission/resource/domain checks,
-  or unsafe boolean coercion of roles/capabilities.""",
+- Only report permission-domain mismatches or missing privileged checks.
+- Operation-specific access checks use the wrong resource, role, or permission
+  constant for the requested operation.
+- Channel/message/reset/diagnostic/destructive operation checks the
+  wrong resource constant.
+- Numeric permission/role is treated as boolean, allowing low-privilege nonzero
+  values through high-privilege checks.
+- Generic boolean permission check used where a domain-specific capability is needed.
+- reset, diagnostic, raw resource access, or privileged operation lacks
+  permission checks.""",
     "targeted_toctou": """\
 analysis_type targeted_toctou:
-- Report only filesystem check/use races where a path check is followed by open or
-  mutation without an atomic/safe handle-based pattern.""",
+- Only report filesystem time-of-check/time-of-use bugs.
+- stat, lstat, access, faccessat, or related path checks are followed by fopen, open,
+  unlink, rename, chmod, chown, truncate, or mutation/open on the same path.
+- There is no safe open-by-handle, O_NOFOLLOW/openat discipline, directory fd pinning,
+  or post-open validation that closes the race.""",
     "error_unwind": """\
 analysis_type error_unwind:
 - Report partial cleanup, ownership overwrite, missing rollback after publish/register,
