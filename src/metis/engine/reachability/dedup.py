@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .finding_taxonomy import vulnerability_family
 from .finding_normalization import (
     _canonical_finding_key,
     _finding_file,
@@ -35,7 +36,7 @@ class Deduplicator:
         normalized = [_normalize_finding(finding) for finding in findings]
         collapsed = _collapse_by_canonical_identity(normalized)
         collapsed = _collapse_by_primary_location(collapsed)
-        selected = _cap_per_function_type(collapsed, max_per_sink)
+        selected = _cap_per_function_family(collapsed, max_per_sink)
         return selected, len(findings), len(findings) - len(selected)
 
 
@@ -43,7 +44,9 @@ def _normalize_finding(finding):
     finding.vulnerability_type = _normalise_vuln_type(
         getattr(finding, "vulnerability_type", "")
     )
-    canonical_key = _canonical_finding_key(finding)
+    canonical_key = str(getattr(finding, "canonical_key", "") or "").strip()
+    if not canonical_key:
+        canonical_key = _canonical_finding_key(finding)
     if canonical_key:
         finding.canonical_key = canonical_key
     return finding
@@ -74,7 +77,7 @@ def _collapse_by_primary_location(findings):
                 file_path,
                 function,
                 line,
-                _normalise_vuln_type(getattr(finding, "vulnerability_type", "")),
+                vulnerability_family(getattr(finding, "vulnerability_type", "")),
             )
         groups[key].append(finding)
 
@@ -92,7 +95,7 @@ def _normalize_function(function):
     return str(function or "").strip()
 
 
-def _cap_per_function_type(findings, limit):
+def _cap_per_function_family(findings, limit):
     limit = max(1, int(limit or 1))
     groups = defaultdict(list)
     for finding in findings:
@@ -100,13 +103,16 @@ def _cap_per_function_type(findings, limit):
             (
                 _normalize_path(_finding_file(finding)),
                 _normalize_function(_finding_function(finding)),
-                _normalise_vuln_type(getattr(finding, "vulnerability_type", "")),
+                vulnerability_family(getattr(finding, "vulnerability_type", "")),
             )
         ].append(finding)
 
     selected = []
     for group in groups.values():
-        selected.extend(sorted(group, key=_best_finding_sort_key)[:limit])
+        if len(group) <= limit:
+            selected.extend(group)
+        else:
+            selected.extend(sorted(group, key=_best_finding_sort_key)[:limit])
     return selected
 
 

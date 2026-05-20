@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 
+from .finding_taxonomy import VULN_TO_CWE
 from .finding_normalization import (
     _mitigation_text,
     _normalise_vuln_type,
@@ -108,7 +109,7 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
             if primary_file
             else ""
         ),
-        "cwe": str(getattr(finding, "cwe", "") or ""),
+        "cwe": str(getattr(finding, "cwe", "") or VULN_TO_CWE.get(vtype, "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": finding.confidence,
         "reasoning": "\n".join(reasoning_parts),

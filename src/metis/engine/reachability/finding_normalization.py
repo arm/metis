@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 
+from .finding_taxonomy import normalize_vulnerability_type, vulnerability_family
 from .models import VulnerabilityFinding
 
 
@@ -97,14 +98,13 @@ def _canonical_fields(
     primary_line = _safe_int(entry.get("primary_line"), default_line or 0)
     if primary_line <= 0:
         primary_line = default_line or 0
-    canonical_key = _normalise_explicit_canonical_key(
-        entry.get("canonical_key")
-    ) or _canonical_key_from_parts(
+    canonical_key = _canonical_key_from_parts(
         primary_file,
         primary_function,
         primary_line,
         vulnerability_type,
         _entry_root_cause_token(entry),
+        use_family=False,
     )
     return primary_file, primary_function, primary_line, canonical_key
 
@@ -164,14 +164,15 @@ def _finding_from_llm_entry(
 
 
 def _canonical_finding_key(finding):
-    return _normalise_explicit_canonical_key(
-        getattr(finding, "canonical_key", "")
-    ) or _canonical_key_from_parts(
+    root_token = _canonical_root_token(getattr(finding, "canonical_key", ""))
+    if root_token.startswith("line_"):
+        root_token = ""
+    return _canonical_key_from_parts(
         _finding_file(finding),
         _finding_function(finding),
         _finding_line(finding),
         getattr(finding, "vulnerability_type", ""),
-        _canonical_root_token(getattr(finding, "canonical_key", "")),
+        root_token,
     )
 
 
@@ -184,15 +185,22 @@ def _entry_root_cause_token(entry):
 
 
 def _canonical_key_from_parts(
-    primary_file, primary_function, primary_line, vulnerability_type, root_cause_token
+    primary_file,
+    primary_function,
+    primary_line,
+    vulnerability_type,
+    root_cause_token,
+    *,
+    use_family=True,
 ):
     file_key = _canonical_path(primary_file)
     function_key = _canonical_function(primary_function)
     if not file_key or not function_key:
         return ""
     vtype = _normalise_vuln_type(vulnerability_type)
+    family = vulnerability_family(vtype) if use_family and root_cause_token else vtype
     root_token = root_cause_token or f"line_{_line_bucket(primary_line)}"
-    return f"{file_key}:{function_key}:{vtype}:{root_token}"
+    return f"{file_key}:{function_key}:{family}:{root_token}"
 
 
 def _canonical_path(path):
@@ -213,13 +221,6 @@ def _canonical_root_token(value):
     return "_".join(tokens[:8])
 
 
-def _normalise_explicit_canonical_key(value):
-    text = str(value or "").strip().lower().replace("\\", "/").lstrip("./")
-    if text.count(":") < 3:
-        return ""
-    return re.sub(r"\s+", "", text)
-
-
 def _line_bucket(line):
     line = max(0, _safe_int(line, 0))
     if line <= 0:
@@ -230,7 +231,7 @@ def _line_bucket(line):
 def _normalise_vuln_type(raw):
     text = str(raw or "other").strip().lower().replace("-", "_").replace(" ", "_")
     text = re.sub(r"[^a-z0-9_]+", "_", text)
-    return re.sub(r"_+", "_", text).strip("_") or "other"
+    return normalize_vulnerability_type(re.sub(r"_+", "_", text).strip("_"))
 
 
 def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
@@ -241,7 +242,7 @@ def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
     vtype = _normalise_vuln_type(
         vulnerability_type or getattr(finding, "vulnerability_type", "")
     )
-    label = vtype.replace("_", " ")
+    label = vulnerability_family(vtype).replace("_", " ")
     return (
         f"Address the {label} issue by adding the missing validation, ordering, "
         "ownership, or cleanup guard before the reachable operation executes."
