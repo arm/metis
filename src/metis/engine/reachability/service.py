@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import copy
 import os
 
 from metis.reachability_settings import (
@@ -27,7 +26,6 @@ from .models import VulnerabilityFinding
 from .supplementary import SupplementaryAnalyzer
 from .file_focus import FileFocusBuilder
 from .review_output import group_findings_as_reviews, reviews_for_findings
-from .scope import ReachabilityReviewScope, ReachabilityScopeResult
 
 
 class TreeSitterReachabilityService:
@@ -42,7 +40,6 @@ class TreeSitterReachabilityService:
         self._supplementary_cache: dict[
             tuple[str | int, ...], list[VulnerabilityFinding]
         ] = {}
-        self._file_review_cache = {}
 
     def build_graph(self, files=None, *, progress_callback=None):
         return self._graphs.build_graph(files, progress_callback=progress_callback)
@@ -73,66 +70,90 @@ class TreeSitterReachabilityService:
         if graph.node_count() == 0:
             return None
 
-        scope = self._file_scope(
+        focus = FileFocusBuilder(
             graph,
-            abs_target=abs_target,
-            relative_target=relative_target,
-            max_paths=max_paths,
             max_path_length=max_path_length,
-            progress_callback=progress_callback,
-        )
-        if scope is None:
-            return None
+            max_incoming_paths=max_paths if max_paths > 0 else None,
+        ).build(relative_target)
+        source_to_file_paths = focus.incoming_paths
+        outgoing_context_paths = focus.outgoing_context_paths
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "treesitter_file_paths_done",
+                    "file": relative_target,
+                    "paths": len(source_to_file_paths),
+                    "source_to_file_paths": len(source_to_file_paths),
+                    "outgoing_context_paths": len(outgoing_context_paths),
+                    "focus_nodes": len(focus.node_names),
+                }
+            )
 
         model = confirmation_model or self._config.llama_query_model
-        cache_key = self._file_review_cache_key(
-            scope,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            max_paths_per_sink=max_paths_per_sink,
-            max_path_length=max_path_length,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
-        )
-        cached = self._file_review_cache.get(cache_key)
-        if cached is not None:
-            result, stats = cached
-            self._emit_file_done(progress_callback, relative_target, **stats)
-            return copy.deepcopy(result)
-
-        scope_result = self._analyze_scope(
-            scope,
+        focus_graph = _copy_graph_nodes(graph, focus.node_names)
+        if focus_graph.node_count() == 0:
+            return None
+        supplementary = self._ensure_supplementary(
+            focus_graph,
+            scope_id=relative_target,
             model=model,
             max_workers=max_workers,
-            max_paths_per_sink=max_paths_per_sink,
-            max_path_length=max_path_length,
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
             domain_hints=domain_hints,
             domain_profiles=domain_profiles,
         )
-        result = self._render_file_scope(scope, scope_result.findings)
-        stats = {
-            "supplementary_findings": scope_result.supplementary_count,
-            "path_findings": scope_result.path_count,
-        }
-        self._file_review_cache[cache_key] = (copy.deepcopy(result), stats)
-        self._emit_file_done(progress_callback, relative_target, **stats)
-        return result
 
-    @staticmethod
-    def _emit_file_done(
-        progress_callback, relative_target, *, supplementary_findings, path_findings
-    ):
+        confirmer = VulnerabilityConfirmer(
+            self._llm_provider,
+            model,
+            self._usage_runtime,
+            self._config.codebase_path,
+            reasoning_effort=reasoning_effort,
+        )
+
+        path_findings = []
+        if source_to_file_paths:
+            path_findings.extend(
+                confirmer.confirm_paths_for_file(
+                    relative_target,
+                    source_to_file_paths,
+                    graph,
+                    max_workers=max_workers,
+                )
+            )
+
         if progress_callback:
             progress_callback(
                 {
                     "event": "treesitter_file_review_done",
                     "file": relative_target,
-                    "supplementary_findings": supplementary_findings,
-                    "path_findings": path_findings,
+                    "supplementary_findings": len(supplementary),
+                    "path_findings": len(path_findings),
                 }
             )
+
+        all_findings = [
+            finding
+            for finding in list(supplementary) + list(path_findings)
+            if self._finalizer.participates_in_file(finding, relative_target, graph)
+        ]
+        deduped, _total, _removed = self._finalizer.finalize(
+            all_findings,
+            graph,
+            max_paths_per_sink=max_paths_per_sink,
+            max_path_length=max_path_length,
+            target_file=relative_target,
+            strict_file=True,
+        )
+        if not deduped:
+            return {"file": relative_target, "file_path": abs_target, "reviews": []}
+
+        reviews = reviews_for_findings(
+            deduped,
+            codebase_path=self._config.codebase_path,
+        )
+        return {"file": relative_target, "file_path": abs_target, "reviews": reviews}
 
     def review_codebase(
         self,
@@ -165,13 +186,6 @@ class TreeSitterReachabilityService:
             selected_paths = select_confirmation_paths(
                 paths, graph, max_paths=max_paths
             )
-        scope = ReachabilityReviewScope(
-            scope_id="whole_graph",
-            analysis_graph=graph,
-            finalizer_graph=graph,
-            paths_to_confirm=selected_paths,
-            lens_profile=lens_profile,
-        )
         if progress_callback:
             progress_callback(
                 {
@@ -183,206 +197,57 @@ class TreeSitterReachabilityService:
             )
 
         model = confirmation_model or self._config.llama_query_model
-        scope_result = self._analyze_scope(
-            scope,
+        supplementary = self._ensure_supplementary(
+            graph,
+            scope_id="whole_graph",
             model=model,
             max_workers=max_workers,
-            max_paths_per_sink=max_paths_per_sink,
-            max_path_length=max_path_length,
             progress_callback=progress_callback,
             reasoning_effort=reasoning_effort,
+            lens_profile=lens_profile,
             domain_hints=domain_hints,
             domain_profiles=domain_profiles,
         )
+        path_findings = []
+        if selected_paths:
+            confirmer = VulnerabilityConfirmer(
+                self._llm_provider,
+                model,
+                self._usage_runtime,
+                self._config.codebase_path,
+                reasoning_effort=reasoning_effort,
+            )
+            path_findings = confirmer.confirm_paths(
+                selected_paths,
+                graph,
+                max_workers=max_workers,
+                progress_callback=progress_callback,
+            )
+
+        deduped_findings, total_before, removed = self._finalizer.finalize(
+            list(supplementary) + list(path_findings),
+            graph,
+            max_path_length=max_path_length,
+            max_paths_per_sink=max_paths_per_sink,
+        )
+
         reviews = group_findings_as_reviews(
-            scope_result.findings,
+            deduped_findings,
             codebase_path=self._config.codebase_path,
         )
         if progress_callback:
             progress_callback(
                 {
                     "event": "treesitter_code_review_done",
-                    "supplementary_findings": scope_result.supplementary_count,
-                    "path_findings": scope_result.path_count,
-                    "raw_findings": scope_result.total_before,
-                    "deduped_findings": len(scope_result.findings),
-                    "removed_findings": scope_result.removed,
+                    "supplementary_findings": len(supplementary),
+                    "path_findings": len(path_findings),
+                    "raw_findings": total_before,
+                    "deduped_findings": len(deduped_findings),
+                    "removed_findings": removed,
                     "files": len(reviews),
                 }
             )
         return reviews
-
-    def _file_scope(
-        self,
-        graph,
-        *,
-        abs_target,
-        relative_target,
-        max_paths,
-        max_path_length,
-        progress_callback=None,
-    ):
-        focus = FileFocusBuilder(
-            graph,
-            max_path_length=max_path_length,
-            max_incoming_paths=max_paths if max_paths > 0 else None,
-        ).build(relative_target)
-        if progress_callback:
-            progress_callback(
-                {
-                    "event": "treesitter_file_paths_done",
-                    "file": relative_target,
-                    "paths": len(focus.incoming_paths),
-                    "source_to_file_paths": len(focus.incoming_paths),
-                    "outgoing_context_paths": len(focus.outgoing_context_paths),
-                    "focus_nodes": len(focus.node_names),
-                }
-            )
-        focus_graph = _copy_graph_nodes(graph, focus.node_names)
-        if focus_graph.node_count() == 0:
-            return None
-        return ReachabilityReviewScope(
-            scope_id=relative_target,
-            analysis_graph=focus_graph,
-            finalizer_graph=graph,
-            paths_to_confirm=focus.incoming_paths,
-            target_file=relative_target,
-            file_path=abs_target,
-            strict_file=True,
-        )
-
-    def _analyze_scope(
-        self,
-        scope: ReachabilityReviewScope,
-        *,
-        model,
-        max_workers,
-        max_paths_per_sink,
-        max_path_length,
-        progress_callback=None,
-        reasoning_effort=None,
-        domain_hints=None,
-        domain_profiles=None,
-    ):
-        supplementary = self._ensure_supplementary(
-            scope.analysis_graph,
-            scope_id=scope.scope_id,
-            model=model,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
-            lens_profile=scope.lens_profile,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
-        )
-        path_findings = self._confirm_scope_paths(
-            scope,
-            model=model,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
-        )
-        findings = list(supplementary) + list(path_findings)
-        if scope.target_file:
-            findings = [
-                finding
-                for finding in findings
-                if self._finalizer.participates_in_file(
-                    finding, scope.target_file, scope.finalizer_graph
-                )
-            ]
-        deduped, total_before, removed = self._finalizer.finalize(
-            findings,
-            scope.finalizer_graph,
-            max_path_length=max_path_length,
-            max_paths_per_sink=max_paths_per_sink,
-            target_file=scope.target_file,
-            strict_file=scope.strict_file,
-        )
-        return ReachabilityScopeResult(
-            findings=deduped,
-            total_before=total_before,
-            removed=removed,
-            supplementary_count=len(supplementary),
-            path_count=len(path_findings),
-        )
-
-    def _confirm_scope_paths(
-        self,
-        scope: ReachabilityReviewScope,
-        *,
-        model,
-        max_workers,
-        progress_callback=None,
-        reasoning_effort=None,
-    ):
-        if not scope.paths_to_confirm:
-            return []
-        confirmer = VulnerabilityConfirmer(
-            self._llm_provider,
-            model,
-            self._usage_runtime,
-            self._config.codebase_path,
-            reasoning_effort=reasoning_effort,
-        )
-        if scope.is_file_review:
-            return confirmer.confirm_paths_for_file(
-                scope.target_file,
-                scope.paths_to_confirm,
-                scope.finalizer_graph,
-                max_workers=max_workers,
-            )
-        return confirmer.confirm_paths(
-            scope.paths_to_confirm,
-            scope.finalizer_graph,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-        )
-
-    def _render_file_scope(self, scope: ReachabilityReviewScope, findings):
-        result = {
-            "file": scope.target_file,
-            "file_path": scope.file_path,
-            "reviews": [],
-        }
-        if findings:
-            result["reviews"] = reviews_for_findings(
-                findings,
-                codebase_path=self._config.codebase_path,
-            )
-        return result
-
-    @staticmethod
-    def _file_review_paths_key(scope: ReachabilityReviewScope):
-        return tuple(
-            (path.source, path.sink, tuple(path.path or ()), path.sink_type)
-            for path in scope.paths_to_confirm
-        )
-
-    def _file_review_cache_key(
-        self,
-        scope: ReachabilityReviewScope,
-        *,
-        model,
-        reasoning_effort,
-        max_paths_per_sink,
-        max_path_length,
-        domain_hints,
-        domain_profiles,
-    ):
-        return (
-            scope.target_file,
-            str(model or ""),
-            str(reasoning_effort or ""),
-            int(max_paths_per_sink or 0),
-            int(max_path_length or 0),
-            str(scope.lens_profile or ""),
-            repr(domain_hints or ()),
-            repr(domain_profiles or ()),
-            graph_fingerprint(scope.analysis_graph),
-            graph_fingerprint(scope.finalizer_graph),
-            self._file_review_paths_key(scope),
-        )
 
     def annotate_findings_with_source_paths(
         self, findings, graph, *, max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH

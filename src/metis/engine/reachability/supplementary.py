@@ -172,56 +172,6 @@ class SupplementaryAnalyzer:
             "lens_instructions": lens_instructions,
         }
 
-    def _run_prompt_chunks(
-        self,
-        chunks,
-        *,
-        max_workers,
-        max_tokens,
-        analysis_types,
-        parser,
-        event_name,
-        direct_single=False,
-        code_transform=None,
-    ):
-        chunks = list(chunks)
-        if not chunks:
-            return []
-
-        def _run_chunk(chunk_nodes, code_chunk):
-            if code_transform is not None:
-                code_chunk = code_transform(code_chunk)
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._m,
-                max_tokens=max_tokens,
-                system_prompt=_COMBINED_GRAPH_SYS,
-                user_prompt=_COMBINED_GRAPH_USR,
-                variables=self._combined_prompt_variables(analysis_types, code_chunk),
-                response_model=ReachabilityFindingResponseModel,
-                reasoning_effort=self._reasoning_effort,
-            )
-            return parser(raw, chunk_nodes)
-
-        if direct_single and len(chunks) == 1:
-            return _run_chunk(*chunks[0])
-
-        results = []
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(max_workers, len(chunks)))
-        ) as ex:
-            futs = {
-                submit_with_current_context(ex, _run_chunk, nodes, chunk): i
-                for i, (nodes, chunk) in enumerate(chunks)
-            }
-            for fut in as_completed(futs):
-                try:
-                    results.extend(fut.result())
-                except Exception as e:
-                    logger.warning("%s chunk fail: %s", event_name, e)
-        return results
-
     def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
         candidate_only = bool(specs and specs[0].kind == "candidate_semantic")
         event_name = (
@@ -263,17 +213,35 @@ class SupplementaryAnalyzer:
                 for nodes, chunk in chunks
             ]
 
-        results = self._run_prompt_chunks(
-            chunks,
-            max_workers=max_workers,
-            max_tokens=self._st,
-            analysis_types=analysis_types,
-            parser=lambda raw, nodes: _parse_combined(
-                raw, nodes, frozenset(analysis_types)
-            ),
-            event_name=event_name,
-            direct_single=True,
-        )
+        results = []
+
+        def _run_chunk(chunk_nodes, code_chunk):
+            raw = invoke_reachability_prompt(
+                self._p,
+                self._u,
+                model=self._m,
+                max_tokens=self._st,
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables(analysis_types, code_chunk),
+                response_model=ReachabilityFindingResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
+            return _parse_combined(raw, chunk_nodes, frozenset(analysis_types))
+
+        if len(chunks) == 1:
+            results = _run_chunk(*chunks[0])
+        else:
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
+                futs = {
+                    submit_with_current_context(ex, _run_chunk, nodes, chunk): i
+                    for i, (nodes, chunk) in enumerate(chunks)
+                }
+                for fut in as_completed(futs):
+                    try:
+                        results.extend(fut.result())
+                    except Exception as e:
+                        logger.warning("%s chunk fail: %s", event_name, e)
         if cb:
             cb({"event": f"{event_name}_done", "findings": len(results)})
         return results
@@ -453,16 +421,34 @@ class SupplementaryAnalyzer:
         )
         if not chunks:
             return []
-        results = self._run_prompt_chunks(
-            chunks,
-            max_workers=max_workers,
-            max_tokens=self._st,
-            analysis_types=[analysis_type],
-            parser=lambda raw, nodes: _parse_intra(
-                raw, nodes, analysis_type=analysis_type
-            ),
-            event_name=event_prefix,
-        )
+        results = []
+
+        def _run_chunk(chunk_nodes, code_chunk):
+            raw = invoke_reachability_prompt(
+                self._p,
+                self._u,
+                model=self._m,
+                max_tokens=self._st,
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables([analysis_type], code_chunk),
+                response_model=ReachabilityFindingResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
+            return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(chunks)))
+        ) as ex:
+            futs = {
+                submit_with_current_context(ex, _run_chunk, nodes, text): i
+                for i, (nodes, text) in enumerate(chunks)
+            }
+            for fut in as_completed(futs):
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("%s chunk fail: %s", event_prefix, e)
         if cb:
             cb({"event": f"{event_prefix}_done", "findings": len(results)})
         return results
@@ -512,19 +498,35 @@ class SupplementaryAnalyzer:
             self._cb, nodes, max_total_chars=50000, per_fn_chars=4000
         )
         globals_code = _build_globals_code(graph, max_chars=30000)
-        results = self._run_prompt_chunks(
-            chunks,
-            max_workers=max_workers,
-            max_tokens=self._st,
-            analysis_types=["global_lifecycle"],
-            parser=lambda raw, nodes: _parse_semantic(
-                raw, nodes, analysis_type="global_lifecycle"
-            ),
-            event_name="global_lifecycle",
-            code_transform=lambda code: (
-                f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{code}"
-            ),
-        )
+        results = []
+
+        def _run_chunk(chunk_nodes, code_chunk):
+            code = f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{code_chunk}"
+            raw = invoke_reachability_prompt(
+                self._p,
+                self._u,
+                model=self._m,
+                max_tokens=self._st,
+                system_prompt=_COMBINED_GRAPH_SYS,
+                user_prompt=_COMBINED_GRAPH_USR,
+                variables=self._combined_prompt_variables(["global_lifecycle"], code),
+                response_model=ReachabilityFindingResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
+            return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(chunks)))
+        ) as ex:
+            futs = {
+                submit_with_current_context(ex, _run_chunk, chunk_nodes, text): i
+                for i, (chunk_nodes, text) in enumerate(chunks)
+            }
+            for fut in as_completed(futs):
+                try:
+                    results.extend(fut.result())
+                except Exception as e:
+                    logger.warning("Global lifecycle chunk fail: %s", e)
         if cb:
             cb({"event": "global_lifecycle_done", "findings": len(results)})
         return results
