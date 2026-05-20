@@ -66,10 +66,40 @@ def _parse_combined(raw, all_fns, allowed_analysis_types):
         if analysis_type not in allowed_analysis_types:
             continue
 
-        source_name = entry.get("related_function")
-        target_name = entry.get("function_name") or entry.get("primary_function")
+        if analysis_type == "lifecycle":
+            source_name = (
+                entry.get("free_function")
+                or entry.get("teardown_function")
+                or entry.get("source_function")
+                or entry.get("related_function")
+            )
+            sink_name = (
+                entry.get("use_function")
+                or entry.get("sink_function")
+                or entry.get("primary_function")
+                or entry.get("function_name")
+            )
+        elif analysis_type == "ownership":
+            source_name = (
+                entry.get("function_a")
+                or entry.get("source_function")
+                or entry.get("related_function")
+            )
+            sink_name = (
+                entry.get("function_b")
+                or entry.get("sink_function")
+                or entry.get("primary_function")
+                or entry.get("function_name")
+            )
+        else:
+            source_name = entry.get("related_function") or entry.get("source_function")
+            sink_name = (
+                entry.get("function_name")
+                or entry.get("sink_function")
+                or entry.get("primary_function")
+            )
 
-        sink_fn = _lookup_fn(str(target_name or ""), bn, bu, all_fns)
+        sink_fn = _lookup_fn(str(sink_name or ""), bn, bu, all_fns)
         source_fn = _lookup_fn(str(source_name or ""), bn, bu, all_fns)
         if not sink_fn:
             continue
