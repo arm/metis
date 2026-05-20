@@ -10,9 +10,9 @@
 ![Logo](.github/logo-light.png#gh-light-mode-only)
 ![Logo](.github/logo-dark.png#gh-dark-mode-only)
 
-Metis is an open-source, AI-driven tool for deep security code review, created by [Arm's Product Security Team](https://www.arm.com/products/product-security). It helps engineers detect subtle vulnerabilities, improve secure coding practices, and reduce review fatigue. This is especially valuable in large, complex, or legacy codebases where traditional tooling often falls short.
+Metis is an open-source, agentic AI security framework for deep security code review, created by [Arm's Product Security Team](https://www.arm.com/products/product-security). It helps engineers detect subtle vulnerabilities, improve secure coding practices, and reduce review fatigue. This is especially valuable in large, complex, or legacy codebases where traditional tooling often falls short.
 
-The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and counsel.
+**Metis** is named after the Greek goddess of wisdom, deep thought and counsel.
 
 ## Features
 
@@ -20,13 +20,16 @@ The tool is named after **Metis**, the Greek goddess of wisdom, deep thought and
   Unlike linters or traditional static analysis tools, Metis doesn’t rely on hardcoded rules. It uses LLMs capable of semantic understanding and reasoning.
 
 - **Context-Aware Reviews**
-	RAG ensures that the model has access to broader code context and related logic, resulting in more accurate and actionable suggestions.
+  RAG ensures that the model has access to broader code context and related logic, resulting in more accurate and actionable suggestions.
 
 - **Plugin-Friendly and Extensible**
   Designed with extensibility in mind: support for additional languages, models, and new prompts is straightforward.
-
+  
+- **Issue validation**
+  Validates findings from its own analysis and third-party SAST tools, gathering evidence to reduce false positives.
+  
 - **Provider Flexibility**
-  Works with OpenAI and other OpenAI-compatible endpoints (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
+  Works with all major AI providers and OpenAI-compatible endpoints (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
 
 ![Demo](.github/demo.gif)
 
