@@ -63,10 +63,9 @@ _INTRA_USR = "File: {file_path}\n\n{functions_code}"
 
 _COMBINED_GRAPH_SYS = _finding_prompt(
     """\
-You are analyzing a C/C++ codebase with several requested security analyses in one review.
-Evaluate each requested analysis independently, then return one finding per distinct
-primary root cause. Do not merge different defects just because they share a function.
-Run only the requested analyses below.
+Review the provided C/C++ code for the requested security analysis types only.
+Evaluate each requested type independently and report one finding per distinct
+root cause.
 
 Requested analysis:
 {lens_instructions}
@@ -74,18 +73,9 @@ Requested analysis:
 """,
     """\
 analysis_type must exactly be one of: {allowed_analysis_types}
-For lifecycle findings, set function_name to the use/deref function and related_function
-to the free, teardown, or lifetime-ending function when known.
-For ownership findings, set function_name to the defective cleanup/caller function and
-related_function to the paired function when known.
-For all other findings, set function_name to the primary defective function and
-related_function only when another shown function is needed to explain the bug.
-Prefer the narrowest primary defective statement over a broad caller, wrapper, or
-endpoint. If two candidate findings describe the same root cause, keep the one with
-the more specific primary_file, primary_function, primary_line, evidence, and mitigation.
-Do not report style issues, hypothetical risks without shown code evidence/mechanism, or
-duplicates already represented by the same root cause. Return no findings if none are proven.
-Be conservative but thorough.""",
+Use function_name for the primary defective function and related_function only when
+another shown function is needed to explain the bug. Prefer precise file/function/line
+evidence and ignore style-only or unsupported issues. Return no findings if none are proven.""",
 )
 
 _COMBINED_GRAPH_USR = "{all_functions_code}"
