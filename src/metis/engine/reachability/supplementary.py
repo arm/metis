@@ -91,27 +91,17 @@ class SupplementaryAnalyzer:
         combined_specs = [
             spec for spec in lens_specs if spec.kind in _COMBINED_GRAPH_LENS_KINDS
         ]
-        candidate_semantic_specs = [
-            spec for spec in lens_specs if spec.kind == "candidate_semantic"
-        ]
         lens_jobs = [
-            spec
-            for spec in lens_specs
-            if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
-            and spec.kind != "candidate_semantic"
+            spec for spec in lens_specs if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
         ]
         if combined_specs:
             lens_jobs.insert(0, tuple(combined_specs))
-        if candidate_semantic_specs:
-            lens_jobs.append(tuple(candidate_semantic_specs))
         worker_budget = max(1, int(max_workers or 1))
         lens_parallelism = max(1, min(len(lens_jobs), worker_budget, 8))
         lens_workers = max(1, worker_budget // lens_parallelism)
 
         def _job_name(job):
             if isinstance(job, tuple):
-                if job and job[0].kind == "candidate_semantic":
-                    return "combined_candidate_semantic"
                 return "combined_graph_lenses"
             return job.name
 
@@ -173,16 +163,9 @@ class SupplementaryAnalyzer:
         }
 
     def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
-        candidate_only = bool(specs and specs[0].kind == "candidate_semantic")
-        event_name = (
-            "combined_candidate_semantic" if candidate_only else "combined_graph_lenses"
-        )
+        event_name = "combined_graph_lenses"
         analysis_types = [spec.analysis_type for spec in specs]
-        fns = (
-            self._structural_candidate_nodes(graph)
-            if candidate_only
-            else list(graph.nodes.values())
-        )
+        fns = list(graph.nodes.values())
         if not fns:
             return []
         if cb:
@@ -193,20 +176,15 @@ class SupplementaryAnalyzer:
                     "lenses": [spec.name for spec in specs],
                 }
             )
-        if candidate_only:
-            chunks = _build_file_grouped_node_chunks(
-                self._cb, fns, max_total_chars=60000, per_fn_chars=4000
+        chunks = [
+            (fns, chunk)
+            for chunk in _build_file_grouped_chunks(
+                self._cb, fns, max_total_chars=60000, per_fn_chars=3000
             )
-        else:
-            chunks = [
-                (fns, chunk)
-                for chunk in _build_file_grouped_chunks(
-                    self._cb, fns, max_total_chars=60000, per_fn_chars=3000
-                )
-            ]
+        ]
         if not chunks:
             return []
-        globals_code = "" if candidate_only else _build_globals_code(graph)
+        globals_code = _build_globals_code(graph)
         if globals_code:
             chunks = [
                 (nodes, f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{chunk}")
@@ -249,16 +227,18 @@ class SupplementaryAnalyzer:
     def _run_lens_spec(self, spec, graph, max_workers, cb):
         if spec.kind == "method":
             return getattr(self, spec.method_name)(graph, max_workers, cb)
-        if spec.kind == "candidate_intra":
+        if spec.kind in {"candidate_intra", "candidate_semantic"}:
             return self._run_candidate_lens(
                 graph,
+                spec.sys_prompt,
                 spec.analysis_type,
                 max_workers,
                 cb,
                 spec.name,
                 max_total_chars=50000,
-                per_fn_chars=5000,
+                per_fn_chars=5000 if spec.kind == "candidate_intra" else 4000,
                 sinks_only=spec.analysis_type == "classic_c_sink",
+                semantic=spec.kind == "candidate_semantic",
             )
         raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
@@ -399,6 +379,7 @@ class SupplementaryAnalyzer:
     def _run_candidate_lens(
         self,
         graph,
+        sys_prompt,
         analysis_type,
         max_workers,
         cb,
@@ -407,6 +388,7 @@ class SupplementaryAnalyzer:
         max_total_chars,
         per_fn_chars,
         sinks_only=False,
+        semantic=False,
     ):
         candidates = self._structural_candidate_nodes(graph, sinks_only=sinks_only)
         if not candidates:
@@ -429,12 +411,17 @@ class SupplementaryAnalyzer:
                 self._u,
                 model=self._m,
                 max_tokens=self._st,
-                system_prompt=_COMBINED_GRAPH_SYS,
-                user_prompt=_COMBINED_GRAPH_USR,
-                variables=self._combined_prompt_variables([analysis_type], code_chunk),
+                system_prompt=self._with_domain_hints(sys_prompt),
+                user_prompt=_INTRA_USR,
+                variables={
+                    "file_path": "candidate functions",
+                    "functions_code": code_chunk,
+                },
                 response_model=ReachabilityFindingResponseModel,
                 reasoning_effort=self._reasoning_effort,
             )
+            if semantic:
+                return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
             return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
         with ThreadPoolExecutor(

@@ -7,12 +7,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .supplementary_prompts import (
+    _CLASSIC_C_SINK_SYS,
+    _COUNTER_SYMMETRY_SYS,
+    _ERROR_UNWIND_SYS,
+    _TARGET_PATH_ACCESS_SYS,
+)
+
 
 @dataclass(frozen=True)
 class _SupplementaryLensSpec:
     name: str
     kind: str
     method_name: str = ""
+    sys_prompt: str = ""
     analysis_type: str = ""
 
 
@@ -44,16 +52,19 @@ _FULL_LENS_SPECS = (
     _SupplementaryLensSpec(
         "classic_c_sink",
         "candidate_intra",
+        sys_prompt=_CLASSIC_C_SINK_SYS,
         analysis_type="classic_c_sink",
     ),
     _SupplementaryLensSpec(
         "error_unwind",
         "candidate_semantic",
+        sys_prompt=_ERROR_UNWIND_SYS,
         analysis_type="error_unwind",
     ),
     _SupplementaryLensSpec(
         "counter_symmetry",
         "candidate_semantic",
+        sys_prompt=_COUNTER_SYMMETRY_SYS,
         analysis_type="counter_symmetry",
     ),
     _SupplementaryLensSpec("global_lifecycle", "method", "_lens_global_lifecycle"),
@@ -61,6 +72,7 @@ _FULL_LENS_SPECS = (
     _SupplementaryLensSpec(
         "targeted_path_access",
         "candidate_semantic",
+        sys_prompt=_TARGET_PATH_ACCESS_SYS,
         analysis_type="targeted_path_access",
     ),
 )

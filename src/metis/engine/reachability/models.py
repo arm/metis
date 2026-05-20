@@ -10,6 +10,34 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
+ALLOWED_VULNERABILITY_TYPES = (
+    "buffer_overflow",
+    "command_injection",
+    "counter_symmetry",
+    "double_free",
+    "format_string",
+    "information_leak",
+    "integer_overflow",
+    "lifecycle_asymmetry",
+    "lock_order",
+    "missing_auth",
+    "missing_validation",
+    "null_dereference",
+    "out_of_bounds",
+    "partial_cleanup",
+    "path_traversal",
+    "race_condition",
+    "refcount_mismatch",
+    "state_ordering",
+    "stale_metadata",
+    "toctou",
+    "type_confusion",
+    "use_after_free",
+    "use_after_release",
+    "other",
+)
+
+VulnerabilityType: TypeAlias = Literal[*ALLOWED_VULNERABILITY_TYPES]
 Severity: TypeAlias = Literal["critical", "high", "medium", "low"]
 
 
@@ -17,12 +45,8 @@ class ReachabilityFindingEntryModel(BaseModel):
     """Structured LLM finding entry shared by reachability analysis lenses."""
 
     analysis_type: str = Field("", description="Requested analysis type.")
-    vulnerability_type: str = Field(
-        "other",
-        description=(
-            "Concise snake_case category for the specific defect, such as "
-            "use_after_free, partial_cleanup, or unchecked_queue_id."
-        ),
+    vulnerability_type: VulnerabilityType = Field(
+        "other", description="Exact vulnerability category from the allowed enum."
     )
     severity: Severity = Field(
         "medium", description="One of: critical, high, medium, low."

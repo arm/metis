@@ -19,7 +19,10 @@ from .finding_normalization import (
 )
 from .graph_utils import _chunked, _dedupe_paths
 from .llm_runner import invoke_reachability_prompt, reachability_response_payload
-from .models import ReachabilityConfirmationResponseModel
+from .models import (
+    ALLOWED_VULNERABILITY_TYPES,
+    ReachabilityConfirmationResponseModel,
+)
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
@@ -31,10 +34,14 @@ def _emit_progress(callback, event, **payload):
 
 
 def _output_constraints(no_finding_guidance):
+    allowed_vulnerability_types = ", ".join(ALLOWED_VULNERABILITY_TYPES)
     return f"""\
 Use the structured findings schema supplied by the caller.
 For path confirmation, each finding must include path_index and is_vulnerable.
-vulnerability_type must be a concise snake_case category chosen from the actual defect.
+vulnerability_type must exactly be one of: {allowed_vulnerability_types}.
+Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
+error-unwind/rollback/resource-leak variants, and use_after_free for dangling
+use-after-release lifetime variants unless a narrower allowed type fits better.
 cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
 confidence must be exactly one of: high, medium, low.

@@ -6,12 +6,18 @@
 from __future__ import annotations
 
 from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
+from .models import ALLOWED_VULNERABILITY_TYPES
+
+_ALLOWED_VULNERABILITY_TYPES_TEXT = ", ".join(ALLOWED_VULNERABILITY_TYPES)
 
 
-_STRUCTURED_FINDING_INSTRUCTIONS = """\
+_STRUCTURED_FINDING_INSTRUCTIONS = f"""\
 Use the structured findings schema supplied by the caller.
 Populate only real values from the shown code. Do not invent files, functions, or lines.
-vulnerability_type must be a concise snake_case category chosen from the actual defect.
+vulnerability_type must exactly be one of: {_ALLOWED_VULNERABILITY_TYPES_TEXT}.
+Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
+error-unwind/rollback/resource-leak variants, and use_after_free for dangling
+use-after-release lifetime variants unless a narrower allowed type fits better.
 confidence must be exactly one of: high, medium, low.
 Return an empty findings list when the evidence does not prove a vulnerability.
 """
@@ -73,3 +79,77 @@ evidence and ignore style-only or unsupported issues. Return no findings if none
 )
 
 _COMBINED_GRAPH_USR = "{all_functions_code}"
+
+_CLASSIC_C_SINK_SYS = _finding_prompt(
+    """\
+You are analyzing selected C/C++ functions that contain classic dangerous APIs.
+Only report concrete bugs in the shown functions:
+1. Unbounded sprintf/vsprintf/strcpy/strcat into fixed-size or caller-provided buffers.
+2. memcpy/memmove/strncpy where the copy size may exceed destination capacity.
+3. Integer overflow in allocation or copy size calculations.
+4. Format string bugs ONLY when attacker-controlled data is the actual format parameter.
+   Do NOT report fprintf(out, "%s\\n", msg), printf("%s", msg), or other fixed-literal
+   formats as format-string vulnerabilities.
+5. Command injection through system/popen/exec* with attacker-controlled command strings.
+6. Path traversal/arbitrary file access when caller-controlled paths reach fopen/open/stat/access
+   without canonicalization and base-directory restriction.
+7. TOCTOU when stat/access/lstat is followed by open/fopen/unlink/etc. on the same path.
+8. NULL dereference after failed allocation/lookup and out-of-bounds indexing.
+""",
+    """\
+analysis_type must be classic_c_sink. Return no findings if none are proven.
+Be conservative and report each root cause once.""",
+)
+
+_ERROR_UNWIND_SYS = _finding_prompt(
+    """\
+You are analyzing selected C/C++ functions for error-unwind, cleanup, and rollback bugs.
+Focus only on:
+- Partial cleanup: a loop allocates multiple objects and a later failure leaks earlier objects.
+- Ownership overwrite: object fields are overwritten without releasing old storage.
+- Rollback gap: rb_link_node/list_add/hash_add/insert/register publishes an object, then later
+  validation or registration fails without rb_erase/list_del/hash removal/unregister.
+- No-op rollback helper: cleanup calls a helper like rb_erase/list_del/unregister, but the
+  helper body shown is empty or ineffective.
+- Object publication before full initialization succeeds.
+- Do not report borrowed pointer fields being set to NULL as leaks unless this function
+  actually owns the pointed-to memory.
+""",
+    """\
+analysis_type must be error_unwind. Return no findings if none are proven.
+Be conservative and do not report style-only cleanup issues.""",
+)
+
+_COUNTER_SYMMETRY_SYS = _finding_prompt(
+    """\
+You are analyzing selected C/C++ functions for counter, refcount, and accounting symmetry bugs.
+Compare add/remove, create/destroy, map/unmap, get/put,
+grow/shrink, and allocation/free pairs.
+Report only concrete mismatches:
+- active_mappings++ on map but no decrement on unmap.
+- object_count checked but never incremented on creation, or not decremented on destroy.
+- resource/page/queue/context counts incremented but not decremented.
+- Delta computed after overwriting the old value.
+- No-op get/put/ref/unref helpers that callers rely on for lifetime or accounting.
+""",
+    """\
+analysis_type must be counter_symmetry. Return no findings if none are proven.
+Be conservative.""",
+)
+
+_TARGET_PATH_ACCESS_SYS = _finding_prompt(
+    """\
+You are analyzing selected C/C++ functions for path traversal and filesystem TOCTOU.
+Target only:
+- Caller/user-controlled path used directly in fopen/open/stat/access.
+- No canonicalization and no restriction to a base directory.
+- Base-directory path built from unchecked filename allowing ../ traversal.
+- Direct full_path opened with no validation.
+- stat/access/lstat followed by fopen/open on the same path.
+Prefer vulnerability_type path_traversal or toctou. Do not classify as missing_auth
+unless the real root cause is authorization rather than filesystem path validation.
+""",
+    """\
+analysis_type must be targeted_path_access. Return no findings if none are proven.
+Be conservative.""",
+)
