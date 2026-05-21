@@ -26,6 +26,13 @@ Your task is narrow:
 - Do not decide whether a finding is true, false, exploitable, or severe.
 - A duplicate can still be a valid finding; it is duplicate if it has the same
   underlying defect and would be fixed by the same code change.
+- Treat CWE, exact line numbers, analysis_type, vulnerability_type, and
+  canonical_key as weak hints only. These fields may be model-generated or
+  taxonomy-dependent, so they must not prevent a duplicate merge when the prose
+  evidence shows the same resource, same error path, and same fix.
+- Merge root-cause and later-symptom findings when the later finding is only
+  evidence of the same published stale object, missing cleanup, or unbalanced
+  acquire/release operation.
 
 Use these labels:
 - duplicate: same final-report issue and same fix surface.
@@ -34,7 +41,10 @@ Use these labels:
 - uncertain: insufficient evidence to merge safely.
 
 Keep separate when findings involve different buffers, counters, callbacks,
-timers, state variables, operations, or fix locations.
+timers, state variables, operations, or fix locations that need separate code
+changes.
+The same recurring bug pattern in different functions or commands is not a
+duplicate unless one code change would necessarily fix all members.
 When uncertain, do not merge.
 
 Return JSON only:
