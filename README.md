@@ -24,10 +24,10 @@ Metis is an open-source, agentic AI security framework for deep security code re
 
 - **Plugin-Friendly and Extensible**
   Designed with extensibility in mind: support for additional languages, models, and new prompts is straightforward.
-  
+
 - **Issue validation**
   Validates findings from its own analysis and third-party SAST tools, gathering evidence to reduce false positives.
-  
+
 - **Provider Flexibility**
   Support for major LLM services and local models (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
 
