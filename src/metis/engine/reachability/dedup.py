@@ -33,6 +33,11 @@ Your task is narrow:
 - Merge root-cause and later-symptom findings when the later finding is only
   evidence of the same published stale object, missing cleanup, or unbalanced
   acquire/release operation.
+- Use this decision test: if one finding describes the bad action that creates
+  the unsafe state (for example, publishing then freeing without rollback) and
+  another describes the later consequence of that same unsafe state (for
+  example, dereferencing the stale published object), merge them when the same
+  rollback, ordering, or cleanup fix would address both.
 
 Use these labels:
 - duplicate: same final-report issue and same fix surface.
