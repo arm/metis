@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from metis.utils import parse_json_output
 from metis.reachability_settings import (
     DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
     DEFAULT_REACHABILITY_MAX_PATHS,
@@ -15,6 +19,7 @@ from metis.reachability_settings import (
 )
 
 from .confirmer import VulnerabilityConfirmer
+from .dedup import FINAL_DEDUP_SYSTEM_PROMPT
 from .finding_finalizer import FindingFinalizer
 from .graph_cache import ReachabilityGraphCache
 from .graph_utils import (
@@ -22,6 +27,7 @@ from .graph_utils import (
     graph_fingerprint,
     select_confirmation_paths,
 )
+from .llm_runner import _chat_model_kwargs
 from .models import VulnerabilityFinding
 from .supplementary import SupplementaryAnalyzer
 from .file_focus import FileFocusBuilder
@@ -145,6 +151,11 @@ class TreeSitterReachabilityService:
             max_path_length=max_path_length,
             target_file=relative_target,
             strict_file=True,
+            duplicate_adjudicator=lambda candidates: self._adjudicate_duplicates(
+                candidates,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            ),
         )
         if not deduped:
             return {"file": relative_target, "file_path": abs_target, "reviews": []}
@@ -231,6 +242,11 @@ class TreeSitterReachabilityService:
             graph,
             max_path_length=max_path_length,
             max_paths_per_sink=max_paths_per_sink,
+            duplicate_adjudicator=lambda candidates: self._adjudicate_duplicates(
+                candidates,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            ),
         )
 
         reviews = group_findings_as_reviews(
@@ -260,6 +276,33 @@ class TreeSitterReachabilityService:
             graph,
             max_path_length=max_path_length,
         )
+
+    def _adjudicate_duplicates(self, candidates, *, model, reasoning_effort=None):
+        if not candidates:
+            return None
+        try:
+            chat = self._llm_provider.get_chat_model(
+                model=model,
+                max_tokens=2000,
+                temperature=0.1,
+                **_chat_model_kwargs(
+                    self._usage_runtime,
+                    reasoning_effort=reasoning_effort,
+                ),
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", FINAL_DEDUP_SYSTEM_PROMPT),
+                    ("user", "Candidate findings JSON:\n{candidate_findings}"),
+                ]
+            )
+            raw = (prompt | chat | StrOutputParser()).invoke(
+                {"candidate_findings": json.dumps(candidates, indent=2)}
+            )
+            parsed = parse_json_output(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
 
     def get_codebase_graph_and_paths(
         self,
