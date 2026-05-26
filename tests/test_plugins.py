@@ -4,8 +4,6 @@
 from llama_index.core.schema import Document
 import pytest
 
-from llama_index.core.schema import Document
-
 from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
 from metis.plugins.c_plugin import CPlugin
 from metis.plugins.cpp_plugin import CppPlugin
