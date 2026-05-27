@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any
+
 from langchain_openai import AzureChatOpenAI
 from llama_index.core.callbacks import CallbackManager
 from llama_index.llms.langchain import LangChainLLM
@@ -10,7 +12,7 @@ from unittest.mock import Mock
 from metis.providers.azure_openai import AzureOpenAIProvider
 
 
-def _config():
+def _config() -> dict[str, Any]:
     return {
         "llm_api_key": "test-key",
         "azure_endpoint": "https://example.openai.azure.com/",
@@ -22,7 +24,7 @@ def _config():
     }
 
 
-def test_query_engine_uses_langchain_adapter():
+def test_query_engine_uses_langchain_adapter() -> None:
     provider = AzureOpenAIProvider(_config())
 
     assert provider.get_query_engine_class() is LangChainLLM
@@ -31,9 +33,10 @@ def test_query_engine_uses_langchain_adapter():
     assert isinstance(llm, AzureChatOpenAI)
     assert llm.deployment_name == "chat-deployment"
     assert llm.model_name == "gpt-4o-mini"
+    assert llm.use_responses_api is True
 
 
-def test_embedding_adapter_preserves_azure_config():
+def test_embedding_adapter_preserves_azure_config() -> None:
     provider = AzureOpenAIProvider(_config())
 
     code_embeddings = provider.get_embed_model_code()
@@ -45,7 +48,7 @@ def test_embedding_adapter_preserves_azure_config():
     assert docs_embeddings._client.model == "text-embedding-3-small"
 
 
-def test_provider_accepts_callback_manager_for_query_and_embeddings():
+def test_provider_accepts_callback_manager_for_query_and_embeddings() -> None:
     provider = AzureOpenAIProvider(_config())
     callback_manager = CallbackManager([])
     callback = Mock(spec=BaseCallbackHandler)
@@ -61,7 +64,7 @@ def test_provider_accepts_callback_manager_for_query_and_embeddings():
     assert embeddings.callback_manager is callback_manager
 
 
-def test_provider_uses_explicit_callbacks_without_mutation():
+def test_provider_uses_explicit_callbacks_without_mutation() -> None:
     provider = AzureOpenAIProvider(_config())
     callback_manager = Mock(name="callback_manager")
     callback = Mock(spec=BaseCallbackHandler)
@@ -77,7 +80,7 @@ def test_provider_uses_explicit_callbacks_without_mutation():
     assert code_embeddings.callback_manager is not callback_manager
 
 
-def test_provider_passes_reasoning_effort_to_chat_model():
+def test_provider_passes_reasoning_effort_to_chat_model() -> None:
     config = _config()
     config["llama_query_reasoning_effort"] = "medium"
     provider = AzureOpenAIProvider(config)
@@ -85,3 +88,4 @@ def test_provider_passes_reasoning_effort_to_chat_model():
     llm = provider.get_chat_model()
 
     assert llm.reasoning_effort == "medium"
+    assert llm.use_responses_api is True

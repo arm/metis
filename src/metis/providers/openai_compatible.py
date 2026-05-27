@@ -3,23 +3,25 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from langchain_openai import ChatOpenAI
 from llama_index.embeddings.openai import (
     OpenAIEmbedding,
     OpenAIEmbeddingModelType,
 )
-from llama_index.llms.openai import OpenAI as LlamaOpenAI
+from llama_index.llms.openai import OpenAIResponses
 
 from metis.providers.base import LLMProvider
 
 _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
+ProviderConfig = dict[str, Any]
+ModelKwargs = dict[str, Any]
 
 
 class OpenAICompatibleProvider(LLMProvider):
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: ProviderConfig) -> None:
         self.config = config
         self.api_key = config.get("llm_api_key")
         self.base_url = (
@@ -42,7 +44,9 @@ class OpenAICompatibleProvider(LLMProvider):
         self.code_embedding_extra_kwargs = config.get("code_embedding_extra_kwargs", {})
         self.docs_embedding_extra_kwargs = config.get("docs_embedding_extra_kwargs", {})
 
-    def get_embed_model_code(self, *, callback_manager=None):
+    def get_embed_model_code(
+        self, *, callback_manager: Any | None = None
+    ) -> OpenAIEmbedding:
         return self._build_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
@@ -50,7 +54,9 @@ class OpenAICompatibleProvider(LLMProvider):
             callback_manager=callback_manager,
         )
 
-    def get_embed_model_docs(self, *, callback_manager=None):
+    def get_embed_model_docs(
+        self, *, callback_manager: Any | None = None
+    ) -> OpenAIEmbedding:
         return self._build_embedding_model(
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
@@ -61,14 +67,14 @@ class OpenAICompatibleProvider(LLMProvider):
     def _build_embedding_model(
         self,
         model_name: str | None,
-        extra_kwargs: Dict[str, Any],
+        extra_kwargs: ModelKwargs,
         config_key: str,
-        callback_manager=None,
-    ):
+        callback_manager: Any | None = None,
+    ) -> OpenAIEmbedding:
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
 
-        params: Dict[str, Any] = {}
+        params: ModelKwargs = {}
         params["model"] = (
             model_name
             if model_name in _ALLOWED_OPENAI_EMBED_MODELS
@@ -95,19 +101,20 @@ class OpenAICompatibleProvider(LLMProvider):
     def get_chat_model(
         self,
         *args: Any,
-        callbacks=None,
-        **kwargs,
-    ):
+        callbacks: Any | None = None,
+        **kwargs: Any,
+    ) -> ChatOpenAI:
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
         model_name = requested_model or positional_model or self.query_model
         if not model_name:
             raise ValueError("Missing chat model configuration")
 
-        params: Dict[str, Any] = {
+        params: ModelKwargs = {
             "model": model_name,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "use_responses_api": True,
         }
 
         if self.api_key:
@@ -135,26 +142,22 @@ class OpenAICompatibleProvider(LLMProvider):
 
         return ChatOpenAI(**params)
 
-    def get_query_engine_class(self):
-        if self._should_use_openai_like():
-            try:
-                from llama_index.llms.openai_like import OpenAILike
-            except (ImportError, ModuleNotFoundError) as exc:
-                raise ModuleNotFoundError(
-                    "llama-index-llms-openai-like is required for OpenAI-compatible "
-                    "providers targeting custom endpoints."
-                ) from exc
-            return OpenAILike
-        return LlamaOpenAI
+    def get_query_engine_class(self) -> type[OpenAIResponses]:
+        return OpenAIResponses
 
-    def get_query_model_kwargs(self, *, callback_manager=None, callbacks=None):
+    def get_query_model_kwargs(
+        self,
+        *,
+        callback_manager: Any | None = None,
+        callbacks: Any | None = None,
+    ) -> ModelKwargs:
         if not self.query_model:
             raise ValueError("Missing chat model configuration for query engine")
 
-        params: Dict[str, Any] = {
+        params: ModelKwargs = {
             "model": self.query_model,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_output_tokens": self.max_tokens,
         }
         if self.api_key:
             params["api_key"] = self.api_key
@@ -165,31 +168,34 @@ class OpenAICompatibleProvider(LLMProvider):
         if callback_manager is not None:
             params["callback_manager"] = callback_manager
         if self.reasoning_effort:
-            params["reasoning_effort"] = self.reasoning_effort
-        if self._should_use_openai_like():
+            reasoning = {"effort": self.reasoning_effort}
+            params["reasoning_options"] = reasoning
+            params["additional_kwargs"] = {"reasoning": reasoning}
+        if self._uses_custom_openai_base():
             params["context_window"] = self._resolve_context_window()
-            params.setdefault("is_chat_model", True)
-            params.setdefault("is_function_calling_model", True)
 
         return params
 
-    def _should_use_openai_like(self):
+    def _uses_custom_openai_base(self) -> bool:
         forced = bool(self.config.get("force_openai_like"))
         if forced:
             return True
         if not self.base_url:
             return False
         normalized = str(self.base_url).strip().lower()
-        # Treat the official OpenAI endpoint as the only case where we keep the default class.
+        # Official OpenAI endpoints can use model metadata; custom endpoints
+        # need an explicit context window.
         return "api.openai.com" not in normalized
 
-    def _resolve_context_window(self):
+    def _resolve_context_window(self) -> int:
         candidates = [
             self.context_window,
             self.config.get("max_token_length"),
             8192,
         ]
         for value in candidates:
+            if value is None:
+                continue
             try:
                 ivalue = int(value)
                 if ivalue > 0:

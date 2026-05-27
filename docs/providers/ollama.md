@@ -1,6 +1,6 @@
 # Ollama Provider
 
-Metis can talk directly to [Ollama](https://github.com/ollama/ollama) through its OpenAI-compatible API, letting you run chat and embedding models locally with minimal configuration. Ollama listens on `http://localhost:11434` by default, accepts OpenAI-format requests, and supports the `/v1/chat/completions`, `/v1/completions`, `/v1/models`, and `/v1/embeddings` endpoints.
+Metis can talk directly to [Ollama](https://github.com/ollama/ollama) through its OpenAI-compatible API, letting you run chat and embedding models locally with minimal configuration. Ollama listens on `http://localhost:11434` by default, accepts OpenAI-format requests, and supports the `/v1/responses`, `/v1/chat/completions`, `/v1/completions`, `/v1/models`, and `/v1/embeddings` endpoints.
 
 ## Prerequisites
 
@@ -27,4 +27,4 @@ llm_provider:
 
 ## Metis usage
 
-Once the service responds, run `uv run metis --codebase-path <path>` (or `metis` inside your virtual environment) and use the usual `index`, `review_code`, or `review_file` commands. Metis will route chat and embedding requests to Ollama using the OpenAI-compatible client APIs.
+Once the service responds, run `uv run metis --codebase-path <path>` (or `metis` inside your virtual environment) and use the usual `index`, `review_code`, or `review_file` commands. Metis will route model requests through the OpenAI Responses API and embedding requests through the OpenAI-compatible embeddings API.

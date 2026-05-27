@@ -10,7 +10,6 @@ dependencies = [
     "llama-index>=0.14.21",
     "llama-index-llms-langchain>=0.8.0",
     "llama-index-vector-stores-chroma>=0.5.5",
-    "llama-index-llms-openai-like>=0.7.1",
     "langchain>=1.2.15",
     "langchain-openai>=1.2.0",
     "langgraph>=1.1.9",
