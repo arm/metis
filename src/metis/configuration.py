@@ -265,7 +265,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     query_cfg = cfg.get("query", {})
     runtime["llama_query_model"] = query_cfg.get("model") or runtime.get("model", "")
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
-    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
+    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 3072)
     runtime["llama_query_reasoning_effort"] = (
         query_cfg.get("reasoning_effort")
         or query_cfg.get("reasoning_level")

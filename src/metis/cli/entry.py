@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+from typing import cast
 
 from rich.markup import escape
 from prompt_toolkit import prompt
@@ -15,6 +16,7 @@ from metis.engine import MetisEngine
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_provider
+from metis.providers.base import ProviderRuntimeConfig
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -89,7 +91,7 @@ def resolve_custom_prompt(args):
 def build_engine(args, runtime):
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
-    llm_provider = provider_cls(runtime)
+    llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(

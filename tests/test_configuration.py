@@ -47,6 +47,7 @@ query:
     runtime = load_runtime_config(config_path)
 
     assert runtime["llama_query_reasoning_effort"] == "high"
+    assert runtime["llama_query_max_tokens"] == 3072
 
 
 def test_load_runtime_config_accepts_query_reasoning_level_alias(tmp_path, monkeypatch):

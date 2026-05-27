@@ -7,7 +7,7 @@ backends you run.
 
 This walkthrough launches:
 
-- One vLLM instance serving your preferred chat/completions model.
+- One vLLM instance serving your preferred Responses API-capable chat model.
 - A second vLLM instance serving an embedding model.
 - A LiteLLM router that joins them behind a single `/v1` endpoint.
 
@@ -98,7 +98,7 @@ sudo docker run --rm \
   litellm --config /app/config.yaml
 ```
 
-Clients now send chat and embedding calls to `http://$LLM_HOST_IP:8888/v1`
+Clients now send Responses API model calls and embedding calls to `http://$LLM_HOST_IP:8888/v1`
 with `Authorization: Bearer $VLLM_API_KEY`.
 
 ## 4. Configure Metis
