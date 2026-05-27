@@ -4,6 +4,7 @@
 from llama_index.core.schema import Document
 import pytest
 
+from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
 from metis.plugins.c_plugin import CPlugin
 from metis.plugins.cpp_plugin import CppPlugin
 from metis.plugins.go_plugin import GoPlugin
@@ -36,6 +37,18 @@ def test_python_plugin_exposes_generic_triage_analyzer_factory():
     plugin = PythonPlugin(plugin_config={"plugins": {}})
     factory = plugin.get_triage_analyzer_factory()
     assert callable(factory)
+
+
+def test_aarch64_assembly_splitter_parses_source_text():
+    plugin = AArch64AssemblyPlugin(plugin_config={"plugins": {}})
+    splitter = plugin.get_splitter()
+
+    nodes = splitter.get_nodes_from_documents(
+        [Document(text="start:\n    mov x0, x0\n    ret\n", id_="example.s")]
+    )
+
+    assert nodes
+    assert "mov x0, x0" in nodes[0].text
 
 
 @pytest.mark.parametrize(
