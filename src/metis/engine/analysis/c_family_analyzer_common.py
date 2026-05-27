@@ -80,7 +80,7 @@ class _FunctionInfo:
     name: str
     line_start: int
     line_end: int
-    node: Any
+    signature: str
     calls: list[_Reference]
     checks: list[_FlowHop]
 

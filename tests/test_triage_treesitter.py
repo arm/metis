@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import sys
+
 from metis.engine.analysis.base import AnalyzerEvidence
 from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 from metis.engine.graphs.triage import triage_node_collect_evidence
@@ -34,6 +38,22 @@ class _WeakAnalyzer:
             unresolved_hops=["wrapper unresolved"],
             sections=[],
         )
+
+
+def _collect_unraisable_errors(fn):
+    errors = []
+    original_hook = sys.unraisablehook
+
+    def hook(args):
+        errors.append(args)
+
+    sys.unraisablehook = hook
+    try:
+        fn()
+        gc.collect()
+    finally:
+        sys.unraisablehook = original_hook
+    return errors
 
 
 class _ToolRunner:
@@ -186,6 +206,46 @@ def test_triage_collect_evidence_scope_uses_installed_treesitter_api(tmp_path):
     assert "type=compound_statement" in evidence_pack
     assert "[TREE_SITTER_SCOPE_SYMBOLS]" in evidence_pack
     assert "helper" in evidence_pack
+
+
+def test_triage_scope_releases_native_nodes_in_worker_thread(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.c").write_text(
+        "static int helper(int value) { return value + 1; }\n"
+        "int main(void) {\n"
+        "  int value = helper(41);\n"
+        "  return value;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    def run_evidence_collection():
+        state = {
+            "finding_message": "Possible issue around helper",
+            "finding_file_path": "src/main.c",
+            "finding_line": 3,
+            "finding_rule_id": "R1",
+            "finding_snippet": "helper(41);",
+            "triage_analyzer": CFamilyTriageAnalyzer(
+                codebase_path=str(tmp_path),
+                language_name="c",
+                supported_extensions=[".c", ".h", ".cc"],
+            ),
+            "triage_codebase_path": str(tmp_path),
+        }
+        out = triage_node_collect_evidence(state, toolbox=_ToolRunner())
+        assert "[TREE_SITTER_SCOPE src/main.c:" in out.get("evidence_pack", "")
+
+    def run_in_worker():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(run_evidence_collection).result()
+
+    errors = _collect_unraisable_errors(run_in_worker)
+
+    assert not [
+        err for err in errors if "unsendable" in str(getattr(err, "exc_value", ""))
+    ]
 
 
 def test_triage_collect_evidence_runs_definition_grep_when_analyzer_weak():

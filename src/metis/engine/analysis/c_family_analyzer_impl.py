@@ -67,8 +67,10 @@ class CFamilyTriageAnalyzer(
                 ],
             )
 
-        source = bytes(parsed.text, "utf-8")
-        root = parsed.tree.root_node()
+        source_text = parsed.text
+        source = bytes(source_text, "utf-8")
+        tree = parsed.tree
+        root = tree.root_node()
         node_index, parent_map = self._index_tree(root)
 
         definitions = self._collect_definitions(root, source)
@@ -95,6 +97,11 @@ class CFamilyTriageAnalyzer(
                 max_depth=3,
             )
         )
+        node_index.clear()
+        parent_map.clear()
+        root = None
+        tree = None
+        del parsed
 
         citations: list[str] = []
         resolution_chain: list[str] = []
@@ -162,7 +169,7 @@ class CFamilyTriageAnalyzer(
         include_context_files = self._collect_include_context_files(
             codebase_path=request.codebase_path,
             file_path=request.file_path,
-            source_text=parsed.text,
+            source_text=source_text,
             depth=2,
         )
         macro_sections, macro_citations, macro_resolution, macro_unresolved = (

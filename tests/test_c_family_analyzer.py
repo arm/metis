@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import sys
+
 from metis.engine.analysis.base import AnalyzerRequest
 from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 
@@ -73,6 +77,22 @@ class _Runtime:
         return _Parsed(self._root)
 
 
+def _collect_unraisable_errors(fn):
+    errors = []
+    original_hook = sys.unraisablehook
+
+    def hook(args):
+        errors.append(args)
+
+    sys.unraisablehook = hook
+    try:
+        fn()
+        gc.collect()
+    finally:
+        sys.unraisablehook = original_hook
+    return errors
+
+
 def test_c_family_analyzer_collects_definition_and_call(monkeypatch):
     from metis.engine.analysis import c_family_analyzer_common as mod
 
@@ -125,6 +145,39 @@ def test_c_family_analyzer_collects_definition_and_call(monkeypatch):
     assert any(
         "sink at " in step or "unknown at " in step for step in out.flow_chain
     ) or any(hop.startswith("FLOW_SINK_NOT_FOUND") for hop in out.unresolved_hops)
+
+
+def test_c_family_analyzer_releases_native_nodes_in_worker_thread(tmp_path):
+    (tmp_path / "x.h").write_text("struct S { int foo; };\n", encoding="utf-8")
+
+    def run_analyzer():
+        analyzer = CFamilyTriageAnalyzer(
+            codebase_path=str(tmp_path),
+            language_name="c",
+            supported_extensions=[".h"],
+        )
+        return analyzer.collect_evidence(
+            AnalyzerRequest(
+                codebase_path=str(tmp_path),
+                file_path="x.h",
+                line=1,
+                finding_message="unused member foo",
+                finding_snippet="",
+                finding_rule_id="unused",
+                candidate_symbols=["foo"],
+                max_citations=4,
+            )
+        ).summary
+
+    def run_in_worker():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(run_analyzer).result()
+
+    errors = _collect_unraisable_errors(run_in_worker)
+
+    assert not [
+        err for err in errors if "unsendable" in str(getattr(err, "exc_value", ""))
+    ]
 
 
 def test_c_family_analyzer_reports_unavailable_runtime():
