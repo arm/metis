@@ -149,7 +149,7 @@ class CFamilyAstMixin:
                         name=name,
                         line_start=_node_line(node),
                         line_end=_node_end_line(node),
-                        node=node,
+                        signature=self._read_signature(node, source),
                         calls=self._collect_calls_in_scope(node, source),
                         checks=self._collect_guard_hops(node, source, _node_line(node)),
                     )

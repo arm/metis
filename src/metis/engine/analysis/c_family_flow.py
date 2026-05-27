@@ -154,7 +154,7 @@ class CFamilyFlowMixin:
             if not fn_variants:
                 continue
             fn = fn_variants[0]
-            sig = self._read_signature(fn.node, source)
+            sig = fn.signature
             packet_sections.append(
                 f"path.hop: {fn.name} [{fn.line_start}-{fn.line_end}] sig='{sig}'"
             )
