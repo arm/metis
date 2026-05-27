@@ -1,22 +1,27 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack, cast
 
 import logging
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_core.callbacks import Callbacks
+from pydantic import SecretStr
 from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
 from llama_index.core.callbacks import CallbackManager
 from llama_index.llms.langchain import LangChainLLM
 
-from metis.providers.base import LLMProvider
+from metis.providers.base import (
+    AzureOpenAIProviderConfig,
+    ChatModelOptions,
+    LLMProvider,
+    QueryModelKwargs,
+)
 from metis.providers.registry import register_provider
 
 logger = logging.getLogger(__name__)
-ProviderConfig = dict[str, Any]
-ModelKwargs = dict[str, Any]
 
 
 class AzureOpenAIEmbeddingAdapter(BaseEmbedding):
@@ -56,7 +61,7 @@ class AzureOpenAIEmbeddingAdapter(BaseEmbedding):
 
 class AzureOpenAIProvider(LLMProvider):
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: AzureOpenAIProviderConfig) -> None:
         self.api_key = config["llm_api_key"]
         self.azure_endpoint = config["azure_endpoint"]
         self.api_version = config["azure_api_version"]
@@ -82,7 +87,7 @@ class AzureOpenAIProvider(LLMProvider):
         )
 
         self.temperature = float(config.get("llama_query_temperature", 0.0))
-        self.max_tokens = int(config.get("llama_query_max_tokens", 512))
+        self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.reasoning_effort = config.get("llama_query_reasoning_effort")
 
         self.model_token_param = config.get(
@@ -119,9 +124,9 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         *,
         callback_manager: CallbackManager | None = None,
-        callbacks: Any | None = None,
-    ) -> ModelKwargs:
-        params: ModelKwargs = {
+        callbacks: Callbacks = None,
+    ) -> QueryModelKwargs:
+        params: dict[str, object] = {
             "llm": self.get_chat_model(
                 response_format=None,
                 callbacks=callbacks,
@@ -133,13 +138,14 @@ class AzureOpenAIProvider(LLMProvider):
 
     def get_chat_model(
         self,
-        deployment_name: str | None = None,
-        *,
-        callbacks: Any | None = None,
-        **kwargs: Any,
+        *args: str,
+        callbacks: Callbacks = None,
+        **kwargs: Unpack[ChatModelOptions],
     ) -> AzureChatOpenAI:
-        deployment = deployment_name or self.engine
-        params: ModelKwargs = {
+        requested_deployment = kwargs.pop("deployment_name", None)
+        positional_deployment = args[0] if args else None
+        deployment = requested_deployment or positional_deployment or self.engine
+        params: dict[str, object] = {
             "api_key": self.api_key,
             "azure_endpoint": self.azure_endpoint,
             "api_version": self.api_version,
@@ -169,7 +175,7 @@ class AzureOpenAIProvider(LLMProvider):
         ):
             if optional_key in kwargs and optional_key != "response_format":
                 params[optional_key] = kwargs[optional_key]
-        return AzureChatOpenAI(**params)
+        return AzureChatOpenAI(**cast(dict[str, Any], params))
 
     def _build_embeddings_client(
         self, model: str, deployment: str
@@ -177,7 +183,7 @@ class AzureOpenAIProvider(LLMProvider):
         return AzureOpenAIEmbeddings(
             model=model,
             azure_deployment=deployment,
-            api_key=self.api_key,
+            api_key=SecretStr(self.api_key),
             azure_endpoint=self.azure_endpoint,
             api_version=self.api_version,
             base_url=None,

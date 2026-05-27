@@ -1,27 +1,32 @@
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack, cast
 
 from langchain_openai import ChatOpenAI
+from langchain_core.callbacks import Callbacks
 from llama_index.embeddings.openai import (
     OpenAIEmbedding,
     OpenAIEmbeddingModelType,
 )
 from llama_index.llms.openai import OpenAIResponses
+from llama_index.core.callbacks import CallbackManager
 
-from metis.providers.base import LLMProvider
+from metis.providers.base import (
+    ChatModelOptions,
+    LLMProvider,
+    OpenAICompatibleProviderConfig,
+    QueryModelKwargs,
+)
 
 _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
-ProviderConfig = dict[str, Any]
-ModelKwargs = dict[str, Any]
 
 
 class OpenAICompatibleProvider(LLMProvider):
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: OpenAICompatibleProviderConfig) -> None:
         self.config = config
         self.api_key = config.get("llm_api_key")
         self.base_url = (
@@ -29,23 +34,27 @@ class OpenAICompatibleProvider(LLMProvider):
             or config.get("api_base")
             or config.get("base_url")
         )
-        self.default_headers = (
+        self.default_headers = dict(
             config.get("openai_default_headers") or config.get("default_headers") or {}
         )
         self.query_model = config.get("llama_query_model") or config.get("model")
-        self.temperature = config.get("llama_query_temperature", 0.0)
-        self.max_tokens = config.get("llama_query_max_tokens", 512)
+        self.temperature = float(config.get("llama_query_temperature", 0.0))
+        self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.reasoning_effort = config.get("llama_query_reasoning_effort")
         self.context_window = config.get("llama_query_context_window") or config.get(
             "max_token_length"
         )
         self.code_embedding_model = config.get("code_embedding_model")
         self.docs_embedding_model = config.get("docs_embedding_model")
-        self.code_embedding_extra_kwargs = config.get("code_embedding_extra_kwargs", {})
-        self.docs_embedding_extra_kwargs = config.get("docs_embedding_extra_kwargs", {})
+        self.code_embedding_extra_kwargs = dict(
+            config.get("code_embedding_extra_kwargs", {})
+        )
+        self.docs_embedding_extra_kwargs = dict(
+            config.get("docs_embedding_extra_kwargs", {})
+        )
 
     def get_embed_model_code(
-        self, *, callback_manager: Any | None = None
+        self, *, callback_manager: CallbackManager | None = None
     ) -> OpenAIEmbedding:
         return self._build_embedding_model(
             self.code_embedding_model,
@@ -55,7 +64,7 @@ class OpenAICompatibleProvider(LLMProvider):
         )
 
     def get_embed_model_docs(
-        self, *, callback_manager: Any | None = None
+        self, *, callback_manager: CallbackManager | None = None
     ) -> OpenAIEmbedding:
         return self._build_embedding_model(
             self.docs_embedding_model,
@@ -67,14 +76,14 @@ class OpenAICompatibleProvider(LLMProvider):
     def _build_embedding_model(
         self,
         model_name: str | None,
-        extra_kwargs: ModelKwargs,
+        extra_kwargs: dict[str, object],
         config_key: str,
-        callback_manager: Any | None = None,
+        callback_manager: CallbackManager | None = None,
     ) -> OpenAIEmbedding:
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
 
-        params: ModelKwargs = {}
+        params: dict[str, object] = {}
         params["model"] = (
             model_name
             if model_name in _ALLOWED_OPENAI_EMBED_MODELS
@@ -91,7 +100,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if extra_kwargs:
             params.update(extra_kwargs)
 
-        embed = OpenAIEmbedding(**params)
+        embed = OpenAIEmbedding(**cast(dict[str, Any], params))
         if model_name not in _ALLOWED_OPENAI_EMBED_MODELS:
             embed._query_engine = model_name
             embed._text_engine = model_name
@@ -100,9 +109,9 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def get_chat_model(
         self,
-        *args: Any,
-        callbacks: Any | None = None,
-        **kwargs: Any,
+        *args: str,
+        callbacks: Callbacks = None,
+        **kwargs: Unpack[ChatModelOptions],
     ) -> ChatOpenAI:
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
@@ -110,7 +119,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if not model_name:
             raise ValueError("Missing chat model configuration")
 
-        params: ModelKwargs = {
+        params: dict[str, object] = {
             "model": model_name,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
@@ -140,7 +149,7 @@ class OpenAICompatibleProvider(LLMProvider):
             if optional_key in kwargs:
                 params[optional_key] = kwargs[optional_key]
 
-        return ChatOpenAI(**params)
+        return ChatOpenAI(**cast(dict[str, Any], params))
 
     def get_query_engine_class(self) -> type[OpenAIResponses]:
         return OpenAIResponses
@@ -148,13 +157,13 @@ class OpenAICompatibleProvider(LLMProvider):
     def get_query_model_kwargs(
         self,
         *,
-        callback_manager: Any | None = None,
-        callbacks: Any | None = None,
-    ) -> ModelKwargs:
+        callback_manager: CallbackManager | None = None,
+        callbacks: Callbacks = None,
+    ) -> QueryModelKwargs:
         if not self.query_model:
             raise ValueError("Missing chat model configuration for query engine")
 
-        params: ModelKwargs = {
+        params: dict[str, object] = {
             "model": self.query_model,
             "temperature": self.temperature,
             "max_output_tokens": self.max_tokens,

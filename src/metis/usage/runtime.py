@@ -9,11 +9,17 @@ from threading import Lock
 from typing import Any, Iterator
 
 from llama_index.core.callbacks import CallbackManager
+from langchain_core.callbacks import BaseCallbackHandler
 
 from .collector import UsageCollector
 from .context import usage_operation, usage_scope
 from .langchain import UsageCallbackHandler
 from .llamaindex import UsageLlamaIndexHandler
+from metis.providers.base import (
+    EmbedModelKwargs,
+    ProviderChatModelKwargs,
+    QueryEngineKwargs,
+)
 
 
 def _utc_now() -> str:
@@ -36,15 +42,15 @@ class UsageCommand:
 @dataclass(frozen=True)
 class UsageHooks:
     callback_manager: CallbackManager
-    callbacks: list[Any]
+    callbacks: list[BaseCallbackHandler]
 
-    def embed_model_kwargs(self) -> dict[str, Any]:
+    def embed_model_kwargs(self) -> EmbedModelKwargs:
         return {"callback_manager": self.callback_manager}
 
-    def chat_model_kwargs(self) -> dict[str, Any]:
+    def chat_model_kwargs(self) -> ProviderChatModelKwargs:
         return {"callbacks": self.callbacks}
 
-    def query_engine_kwargs(self) -> dict[str, Any]:
+    def query_engine_kwargs(self) -> QueryEngineKwargs:
         return {
             "callback_manager": self.callback_manager,
             "callbacks": self.callbacks,
@@ -66,7 +72,7 @@ class UsageRuntime:
         self._completed_commands: list[dict[str, Any]] = []
 
     @property
-    def langchain_callbacks(self) -> list[Any]:
+    def langchain_callbacks(self) -> list[BaseCallbackHandler]:
         return self.hooks.callbacks
 
     @property
