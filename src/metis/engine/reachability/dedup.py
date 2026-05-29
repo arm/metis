@@ -27,9 +27,12 @@ finding exactly as-is.
 For duplicates:
 - A duplicate can still be a valid finding. It is duplicate when it describes
   the same underlying defect, the same unsafe state, or the same required fix.
-- Make the decision from the explanation text: description, root cause,
-  evidence, and mitigation. File and function are provided only as context and
-  batching scope.
+- Make the decision from each candidate's explanation package: description,
+  root cause, and evidence. Read those fields together as one explanation of the
+  issue; do not strictly compare description-to-description, root-cause-to-root-
+  cause, or evidence-to-evidence in isolation.
+- Try to understand whether the candidates are reporting the same issue overall.
+  File and function are provided only as context and batching scope.
 - Prefer grouping repeated explanations that name the same object or state
   variable, same failure path, same callback/resource lifetime, same bounds
   calculation, or same cleanup/rollback/refcount/accounting error.
@@ -262,7 +265,6 @@ def _finding_adjudication_payload(index, finding):
         "description": str(getattr(finding, "description", "") or ""),
         "root_cause": str(getattr(finding, "root_cause", "") or "")[:800],
         "evidence": str(getattr(finding, "evidence", "") or "")[:900],
-        "mitigation": str(getattr(finding, "mitigation", "") or "")[:400],
         "primary_file": _finding_file(finding),
         "primary_function": _finding_function(finding),
     }
