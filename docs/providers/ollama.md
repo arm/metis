@@ -5,7 +5,7 @@ Metis can talk directly to [Ollama](https://github.com/ollama/ollama) through it
 ## Prerequisites
 
 1. Install Ollama on the machine that will host the models.
-2. Pull at least one chat model (for example `ollama pull llama3.2`) and one embedding model (for example `ollama pull nomic-embed-text:v1.5`).
+2. Pull at least one chat model (for example `ollama pull llama3.1:8b`) and one embedding model (for example `ollama pull nomic-embed-text:v1.5`).
 3. Ensure the Ollama service is running. On macOS it auto-starts; on Linux run `ollama serve`. If the service runs on a different host, set `OLLAMA_HOST` (e.g. `0.0.0.0:11434`) so Metis can reach it over the network.
 
 ## Configuration
@@ -16,7 +16,7 @@ Add or adjust the `llm_provider` block in your `metis.yaml`:
 llm_provider:
   name: "ollama"
   base_url: "http://localhost:11434/v1"
-  model: "llama3.2"
+  model: "llama3.1:8b"
   code_embedding_model: "nomic-embed-text:v1.5"
   docs_embedding_model: "nomic-embed-text:v1.5"
 ```

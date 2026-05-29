@@ -23,7 +23,7 @@ metis_engine:
 llm_provider:
   name: "ollama"
   base_url: "http://YOUR-OLLAMA-HOST:11434/v1"
-  model: "YOUR-CHAT-MODEL"
+  model: "llama3.1:8b"
   code_embedding_model: "nomic-embed-text:v1.5"
   docs_embedding_model: "nomic-embed-text:v1.5"
 
