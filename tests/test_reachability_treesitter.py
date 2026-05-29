@@ -502,7 +502,7 @@ def test_finding_path_annotator_leaves_external_primary_file_unchanged():
     assert annotated is finding
 
 
-def test_deduplicator_merges_same_canonical_key_across_paths():
+def test_deduplicator_keeps_same_canonical_key_without_llm_grouping():
     key = "src/task.c:src/task.c::task_import:out_of_bounds:unterminated_title"
     findings = [
         _finding(
@@ -530,12 +530,8 @@ def test_deduplicator_merges_same_canonical_key_across_paths():
     deduped, total, removed = Deduplicator.deduplicate(findings)
 
     assert total == 2
-    assert removed == 1
-    assert len(deduped) == 1
-    assert (
-        deduped[0].canonical_key
-        == "src/task.c:src/task.c::task_import:out_of_bounds:unterminated_title"
-    )
+    assert removed == 0
+    assert deduped == findings
 
 
 def test_canonical_fields_build_deterministic_key_from_root_cause_id():
@@ -562,7 +558,7 @@ def test_canonical_fields_build_deterministic_key_from_root_cause_id():
     )
 
 
-def test_deduplicator_normalizes_raw_canonical_key_to_structured_identity():
+def test_deduplicator_drops_later_duplicate_indexes_from_llm_grouping():
     findings = [
         _finding(
             "missing_bounds_check",
@@ -584,14 +580,34 @@ def test_deduplicator_normalizes_raw_canonical_key_to_structured_identity():
         ),
     ]
 
-    deduped, total, removed = Deduplicator.deduplicate(findings)
+    seen_indexes = []
+
+    def adjudicator(candidates):
+        seen_indexes.extend(candidate["index"] for candidate in candidates)
+        return {
+            "groups": [
+                {
+                    "member_indexes": [0, 1],
+                    "relationship": "duplicate",
+                    "reason": "same issue",
+                }
+            ]
+        }
+
+    deduped, total, removed = Deduplicator.deduplicate(
+        findings,
+        final_adjudicator=adjudicator,
+    )
 
     assert total == 2
     assert removed == 1
-    assert len(deduped) == 1
+    assert seen_indexes == [0, 1]
+    assert deduped == [findings[0]]
+    assert findings[0].vulnerability_type == "missing_bounds_check"
+    assert findings[1].canonical_key == "task_import:memory_bounds:unterminated_title"
 
 
-def test_deduplicator_prefers_specific_primary_location_for_same_root():
+def test_deduplicator_always_keeps_lowest_duplicate_index():
     key = "src/dispatch.c:src/dispatch.c::handle_reset:missing_auth:reset_missing_permission"
     vague = _finding(
         "missing_auth",
@@ -620,11 +636,25 @@ def test_deduplicator_prefers_specific_primary_location_for_same_root():
         "Require reset-specific permission before calling device_reset."
     )
 
-    deduped, total, removed = Deduplicator.deduplicate([vague, specific])
+    def adjudicator(_candidates):
+        return {
+            "groups": [
+                {
+                    "member_indexes": [0, 1],
+                    "relationship": "duplicate",
+                    "representative_index": 1,
+                }
+            ]
+        }
+
+    deduped, total, removed = Deduplicator.deduplicate(
+        [vague, specific],
+        final_adjudicator=adjudicator,
+    )
 
     assert total == 2
     assert removed == 1
-    assert deduped == [specific]
+    assert deduped == [vague]
 
 
 def test_deduplicator_keeps_different_canonical_keys_in_same_location():
@@ -656,7 +686,7 @@ def test_deduplicator_keeps_different_canonical_keys_in_same_location():
     assert len(deduped) == 2
 
 
-def test_deduplicator_falls_back_to_exact_type_when_key_missing():
+def test_deduplicator_keeps_all_findings_when_adjudicator_is_invalid():
     findings = [
         _finding(
             "array_index_size_mismatch",
@@ -676,18 +706,21 @@ def test_deduplicator_falls_back_to_exact_type_when_key_missing():
         ),
     ]
 
-    deduped, total, removed = Deduplicator.deduplicate(findings)
+    deduped, total, removed = Deduplicator.deduplicate(
+        findings,
+        final_adjudicator=lambda _candidates: {"not_groups": []},
+    )
 
     assert total == 2
     assert removed == 0
-    assert len(deduped) == 2
+    assert deduped == findings
     assert [finding.vulnerability_type for finding in deduped] == [
         "array_index_size_mismatch",
         "array_oob",
     ]
 
 
-def test_deduplicator_caps_per_function_type_after_canonical_merge():
+def test_deduplicator_does_not_cap_without_llm_grouping():
     findings = [
         _finding(
             "missing_auth",
@@ -705,5 +738,5 @@ def test_deduplicator_caps_per_function_type_after_canonical_merge():
     deduped, total, removed = Deduplicator.deduplicate(findings, max_per_sink=2)
 
     assert total == 4
-    assert removed == 2
-    assert len(deduped) == 2
+    assert removed == 0
+    assert deduped == findings

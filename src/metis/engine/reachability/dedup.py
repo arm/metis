@@ -8,37 +8,26 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable
 
-from .finding_taxonomy import vulnerability_family
 from .finding_normalization import (
-    _canonical_finding_key,
     _finding_file,
     _finding_function,
     _finding_line,
-    _normalise_vuln_type,
 )
-from .prompt_guidance import TRIAGE_NOISE_FILTER_CRITERIA
 
-_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+FINAL_CONSOLIDATION_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
 
-FINAL_CONSOLIDATION_SYSTEM_PROMPT = (
-    """You consolidate reachability security findings before the final report.
+You receive the candidate findings for one review scope. Your task is only to
+identify findings that are the same, look the same, or point to the same
+underlying issue.
 
-Your task is narrow and conservative:
-1. Filter p5/noise findings only when the evidence clearly shows they should not
-   appear in the final report.
-2. Deduplicate the remaining final-report entries.
-
-Filter a finding by adding it to filtered_indexes when it matches this p5/noise
-policy: """
-    + TRIAGE_NOISE_FILTER_CRITERIA
-    + """.
-
-Do not filter a finding merely because severity is low, confidence is imperfect,
-or the bug is hard to exploit. When uncertain, keep it.
+Do not classify, reprioritize, rewrite, merge fields, add findings, or change any
+values. Do not suppress findings because they are weak, low severity, hard to
+exploit, or outside a preferred vulnerability class. Keep every non-duplicate
+finding exactly as-is.
 
 For duplicates:
-- A duplicate can still be a valid finding; it is duplicate if it has the same
-  underlying defect and would be fixed by the same code change.
+- A duplicate can still be a valid finding. It is duplicate when it describes
+  the same underlying defect, the same unsafe state, or the same required fix.
 - Treat CWE, exact line numbers, analysis_type, vulnerability_type, and
   canonical_key as weak hints only. These fields may be model-generated or
   taxonomy-dependent, so they must not prevent a duplicate merge when the prose
@@ -65,25 +54,20 @@ The same recurring bug pattern in different functions or commands is not a
 duplicate unless one code change would necessarily fix all members.
 When uncertain, do not merge.
 
+The input indexes are zero-based. For each duplicate group, return all duplicate
+member_indexes in ascending order. The first/lowest index in each duplicate group
+is the finding that will be kept; every later member will be dropped unchanged.
+
 Return JSON only:
 {
-  "filtered_indexes": [
-    {
-      "index": 2,
-      "reason": "One concise reason this is p5/noise."
-    }
-  ],
   "groups": [
     {
-      "member_indexes": [0, 1],
+      "member_indexes": [0, 3, 4],
       "relationship": "duplicate",
-      "representative_index": 0,
-      "reason": "One concise reason.",
-      "merged_issue": "One concise final-report issue sentence."
+      "reason": "One concise reason these are the same issue."
     }
   ]
 }"""
-)
 
 FINAL_DEDUP_SYSTEM_PROMPT = FINAL_CONSOLIDATION_SYSTEM_PROMPT
 
@@ -99,107 +83,30 @@ class FindingConsolidator:
         final_adjudicator=None,
     ):
         """
-        Consolidate reachability findings using stable fields and final adjudication.
+        Drop only later duplicate findings identified by final_adjudicator.
 
-        Parsers normalize model output into a deterministic canonical key built from
-        primary file/function, vulnerability family, and a short root-cause token.
-        This intentionally avoids prose/token matching so different bugs in the same
-        area are not merged by wording alone. When supplied, final_adjudicator may
-        additionally filter p5/noise findings and merge prose-only duplicates.
+        This function does not classify, normalize, rewrite, cap, or merge fields.
+        If no valid LLM duplicate grouping is available, the input findings are kept
+        unchanged.
         """
         if not findings:
             return [], 0, 0
 
         total = len(findings)
-        normalized = [_normalize_finding(finding) for finding in findings]
-        collapsed = _collapse_by_canonical_identity(normalized)
-        collapsed = _collapse_by_primary_location(collapsed)
-        collapsed = _apply_final_adjudication(collapsed, final_adjudicator)
-        selected = _cap_per_function_family(collapsed, max_per_sink)
-        return selected, total, total - len(selected)
+        original = list(findings)
+        adjudicated = _apply_final_adjudication(original, final_adjudicator)
+        if adjudicated is not None:
+            return adjudicated, total, total - len(adjudicated)
+        return original, total, 0
 
 
 Deduplicator = FindingConsolidator
 
 
-def _normalize_finding(finding):
-    finding.vulnerability_type = _normalise_vuln_type(
-        getattr(finding, "vulnerability_type", "")
-    )
-    canonical_key = str(getattr(finding, "canonical_key", "") or "").strip()
-    if not canonical_key:
-        canonical_key = _canonical_finding_key(finding)
-    if canonical_key:
-        finding.canonical_key = canonical_key
-    return finding
-
-
-def _collapse_by_canonical_identity(findings):
-    groups = defaultdict(list)
-    for finding in findings:
-        key = _canonical_finding_key(finding) or f"unkeyed:{id(finding)}"
-        groups[key].append(finding)
-
-    collapsed = []
-    for group in groups.values():
-        collapsed.append(_pick_best(group))
-    return collapsed
-
-
-def _collapse_by_primary_location(findings):
-    groups = defaultdict(list)
-    for finding in findings:
-        file_path = _normalize_path(_finding_file(finding))
-        function = _normalize_function(_finding_function(finding))
-        line = _finding_line(finding)
-        if not file_path or not function or line <= 0:
-            key = f"unlocated:{id(finding)}"
-        else:
-            key = (
-                file_path,
-                function,
-                line,
-                vulnerability_family(getattr(finding, "vulnerability_type", "")),
-            )
-        groups[key].append(finding)
-
-    collapsed = []
-    for group in groups.values():
-        collapsed.append(_pick_best(group))
-    return collapsed
-
-
-def _normalize_path(path):
-    return str(path or "").strip().replace("\\", "/").lstrip("./")
-
-
-def _normalize_function(function):
-    return str(function or "").strip()
-
-
-def _cap_per_function_family(findings, limit):
-    limit = max(1, int(limit or 1))
-    groups = defaultdict(list)
-    for finding in findings:
-        groups[
-            (
-                _normalize_path(_finding_file(finding)),
-                _normalize_function(_finding_function(finding)),
-                vulnerability_family(getattr(finding, "vulnerability_type", "")),
-            )
-        ].append(finding)
-
-    selected = []
-    for group in groups.values():
-        if len(group) <= limit:
-            selected.extend(group)
-        else:
-            selected.extend(sorted(group, key=_best_finding_sort_key)[:limit])
-    return selected
-
-
 def _apply_final_adjudication(findings, adjudicator):
     if not callable(adjudicator) or not findings:
+        return None
+    if len(findings) < 2:
         return findings
 
     decision = adjudicator(
@@ -209,82 +116,29 @@ def _apply_final_adjudication(findings, adjudicator):
         ]
     )
     if not isinstance(decision, dict):
-        return findings
+        return None
 
     original_limit = len(findings)
-    filtered = _valid_filtered_indexes(decision.get("filtered_indexes"), original_limit)
-    if filtered:
-        index_map = {}
-        filtered_findings = []
-        for old_index, finding in enumerate(findings):
-            if old_index in filtered:
-                continue
-            index_map[old_index] = len(filtered_findings)
-            filtered_findings.append(finding)
-        findings = filtered_findings
-    else:
-        index_map = {index: index for index in range(len(findings))}
-
-    if len(findings) < 2:
-        return findings
-
     groups = decision.get("groups")
     if not isinstance(groups, list):
-        return findings
+        return None
 
     merged = _UnionFind(len(findings))
-    preferred: dict[int, int] = {}
     for group in groups:
         if not isinstance(group, dict):
             continue
-        if str(group.get("relationship") or "").strip().lower() != "duplicate":
+        relationship = str(group.get("relationship") or "").strip().lower()
+        if relationship and relationship != "duplicate":
             continue
-        members = [
-            index_map[index]
-            for index in _valid_member_indexes(
-                group.get("member_indexes"), original_limit
-            )
-            if index in index_map
-        ]
+        members = _valid_member_indexes(group.get("member_indexes"), original_limit)
         if len(members) < 2:
             continue
-        representative = index_map.get(
-            _safe_int(group.get("representative_index"), -1), members[0]
-        )
-        if representative not in members:
-            representative = members[0]
+        representative = min(members)
         for member in members:
-            preferred[member] = representative
             merged.union(representative, member)
 
-    selected = []
-    for members in merged.groups().values():
-        representative = next(
-            (
-                preferred[member]
-                for member in members
-                if preferred.get(member) in members
-            ),
-            None,
-        )
-        if representative is None:
-            selected.append(_pick_best([findings[member] for member in members]))
-        else:
-            selected.append(findings[representative])
-    return selected
-
-
-def _valid_filtered_indexes(raw, limit):
-    if not isinstance(raw, list):
-        return set()
-    indexes = set()
-    for value in raw:
-        if isinstance(value, dict):
-            value = value.get("index")
-        index = _safe_int(value, -1)
-        if 0 <= index < limit:
-            indexes.add(index)
-    return indexes
+    keep_indexes = {min(members) for members in merged.groups().values()}
+    return [finding for index, finding in enumerate(findings) if index in keep_indexes]
 
 
 class _UnionFind:
@@ -346,24 +200,3 @@ def _finding_adjudication_payload(index, finding):
         "canonical_key": str(getattr(finding, "canonical_key", "") or ""),
         "path": list(getattr(finding, "path", []) or [])[:12],
     }
-
-
-def _pick_best(findings):
-    best = min(findings, key=_best_finding_sort_key)
-    best.vulnerability_type = _normalise_vuln_type(best.vulnerability_type)
-    return best
-
-
-def _best_finding_sort_key(finding):
-    canonical_key = str(getattr(finding, "canonical_key", "") or "")
-    return (
-        _SEVERITY_RANK.get(str(getattr(finding, "severity", "")).lower(), 5),
-        -float(getattr(finding, "confidence", 0.0) or 0.0),
-        not bool(_finding_file(finding)),
-        not bool(_finding_function(finding)),
-        _finding_line(finding) <= 0,
-        not bool(canonical_key),
-        ":line_" in canonical_key,
-        len(getattr(finding, "path", []) or []),
-        -len(str(getattr(finding, "description", "") or "")),
-    )
