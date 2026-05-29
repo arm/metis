@@ -41,17 +41,10 @@ def test_review_code_uses_reachability_for_c_cpp(engine):
     engine.review.review_file.assert_not_called()
 
 
-def test_review_file_uses_global_reachability_for_c_cpp(engine):
+def test_review_file_uses_focused_reachability_when_global_cache_empty(engine):
     reachability = Mock()
-    expected = {
-        "file": "test.c",
-        "file_path": "./tests/data/test.c",
-        "reviews": [{"issue": "global"}],
-    }
-    reachability.review_codebase.return_value = [
-        expected,
-        {"file": "other.c", "reviews": [{"issue": "other"}]},
-    ]
+    expected = {"file": "test.c", "reviews": [{"issue": "focused"}]}
+    reachability.review_file.return_value = expected
     engine.review._reachability_service = reachability
     engine.review._reachability_cache = None
     engine.review._review_file_standard = Mock(
@@ -61,8 +54,8 @@ def test_review_file_uses_global_reachability_for_c_cpp(engine):
     result = engine.review.review_file("./tests/data/test.c")
 
     assert result == expected
-    reachability.review_codebase.assert_called_once()
-    reachability.review_file.assert_not_called()
+    reachability.review_file.assert_called_once()
+    reachability.review_codebase.assert_not_called()
     engine.review._review_file_standard.assert_not_called()
 
 

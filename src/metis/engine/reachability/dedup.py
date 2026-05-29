@@ -53,9 +53,10 @@ When two findings look like alternate reports of the same final-report issue,
 group them. When they clearly require separate fixes, keep them separate by
 omitting them from groups.
 
-The input indexes are zero-based. For each duplicate group, return all duplicate
-member_indexes in ascending order. The first/lowest index in each duplicate group
-is the finding that will be kept; every later member will be dropped unchanged.
+The `index` field in each candidate is the canonical zero-based finding index.
+For each duplicate group, return those exact index values in member_indexes in
+ascending order. The first/lowest index in each duplicate group is the finding
+that will be kept; every later member will be dropped unchanged.
 
 Return JSON only:
 {
@@ -71,6 +72,9 @@ Return JSON only:
 FINAL_DEDUP_SYSTEM_PROMPT = FINAL_CONSOLIDATION_SYSTEM_PROMPT
 
 FinalAdjudicator = Callable[[list[dict[str, Any]]], dict[str, Any] | None]
+
+_FINAL_DEDUP_BATCH_SIZE = 40
+_FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE = 120
 
 
 class FindingConsolidator:
@@ -108,21 +112,87 @@ def _apply_final_adjudication(findings, adjudicator):
     if len(findings) < 2:
         return findings
 
-    decision = adjudicator(
-        [
-            _finding_adjudication_payload(index, finding)
-            for index, finding in enumerate(findings)
-        ]
-    )
-    if not isinstance(decision, dict):
+    payloads = [
+        _finding_adjudication_payload(index, finding)
+        for index, finding in enumerate(findings)
+    ]
+    original_limit = len(findings)
+    merged = _UnionFind(original_limit)
+    saw_valid_decision = False
+
+    for batch in _adjudication_batches(payloads):
+        decision = adjudicator(batch)
+        if _merge_decision_groups(merged, decision, original_limit):
+            saw_valid_decision = True
+
+    representative_payloads = [
+        payloads[index]
+        for index in sorted(
+            {min(members) for members in merged.groups().values()},
+            key=lambda index: _payload_sort_key(payloads[index]),
+        )
+    ]
+    if len(representative_payloads) > 1 and len(payloads) > _FINAL_DEDUP_BATCH_SIZE:
+        for batch in _adjudication_batches(
+            representative_payloads,
+            batch_size=_FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE,
+            scope="file",
+        ):
+            decision = adjudicator(batch)
+            if _merge_decision_groups(merged, decision, original_limit):
+                saw_valid_decision = True
+
+    if not saw_valid_decision:
         return None
 
-    original_limit = len(findings)
+    keep_indexes = {min(members) for members in merged.groups().values()}
+    return [finding for index, finding in enumerate(findings) if index in keep_indexes]
+
+
+def _adjudication_batches(
+    payloads,
+    *,
+    batch_size=_FINAL_DEDUP_BATCH_SIZE,
+    scope="function",
+):
+    if len(payloads) <= batch_size:
+        return [payloads]
+    batches = []
+    by_scope = defaultdict(list)
+    for payload in sorted(payloads, key=_payload_sort_key):
+        by_scope[_payload_scope_key(payload, scope)].append(payload)
+    for scope_payloads in by_scope.values():
+        batches.extend(_chunk_payloads(scope_payloads, batch_size))
+    return batches
+
+
+def _chunk_payloads(payloads, size):
+    return [payloads[index : index + size] for index in range(0, len(payloads), size)]
+
+
+def _payload_scope_key(payload, scope):
+    file_path = str(payload.get("primary_file") or "")
+    if scope == "file":
+        return (file_path,)
+    return (file_path, str(payload.get("primary_function") or ""))
+
+
+def _payload_sort_key(payload):
+    return (
+        str(payload.get("primary_file") or ""),
+        str(payload.get("primary_function") or ""),
+        int(payload.get("index") or 0),
+    )
+
+
+def _merge_decision_groups(merged, decision, original_limit):
+    if not isinstance(decision, dict):
+        return False
     groups = decision.get("groups")
     if not isinstance(groups, list):
-        return None
+        return False
 
-    merged = _UnionFind(len(findings))
+    accepted = False
     for group in groups:
         if not isinstance(group, dict):
             continue
@@ -135,9 +205,8 @@ def _apply_final_adjudication(findings, adjudicator):
         representative = min(members)
         for member in members:
             merged.union(representative, member)
-
-    keep_indexes = {min(members) for members in merged.groups().values()}
-    return [finding for index, finding in enumerate(findings) if index in keep_indexes]
+        accepted = True
+    return accepted
 
 
 class _UnionFind:

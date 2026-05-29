@@ -95,12 +95,18 @@ class ReviewService:
             and self._is_c_family_file(file_path)
         ):
             try:
-                result = self._get_global_reachability_review_for_file(
-                    file_path, progress_callback=progress_callback
-                )
+                if self._reachability_cache is not None:
+                    result = self._get_global_reachability_review_for_file(file_path)
+                else:
+                    settings = self._reachability_call_settings(
+                        progress_callback=progress_callback
+                    )
+                    result = self._reachability_service.review_file(
+                        file_path, **settings
+                    )
             except Exception:
                 logger.debug(
-                    "Tree-sitter global review lookup failed for %s; falling back to standard review",
+                    "Tree-sitter file review failed for %s; falling back to standard review",
                     file_path,
                     exc_info=True,
                 )
