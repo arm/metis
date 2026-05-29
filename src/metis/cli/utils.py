@@ -649,5 +649,5 @@ def build_chroma_backend(args, runtime, embed_model_code, embed_model_docs):
         persist_dir=args.chroma_dir,
         embed_model_code=embed_model_code,
         embed_model_docs=embed_model_docs,
-        query_config=runtime.get("query", {}),
+        query_config=runtime,
     )

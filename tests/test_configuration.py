@@ -71,6 +71,30 @@ query:
     assert runtime["llama_query_reasoning_effort"] == "low"
 
 
+def test_load_runtime_config_reads_openai_base_url_and_headers(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    base_url = "https://example.test/openai/v1"
+    config_path.write_text(
+        f"""
+llm_provider:
+  name: openai
+  base_url: {base_url}
+  default_headers:
+    X-Test-Header: test
+  model: gpt-test
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["openai_api_base"] == base_url
+    assert runtime["openai_default_headers"] == {"X-Test-Header": "test"}
+
+
 def test_load_runtime_config_reads_provider_reasoning_effort(tmp_path, monkeypatch):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(

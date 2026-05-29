@@ -200,6 +200,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
     llm_api_key = _resolve_llm_api_key(llm_provider_name, llm_cfg)
     if llm_provider_name == "openai":
         runtime["llm_api_key"] = llm_api_key
+        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
     elif llm_provider_name == "azure_openai":
         runtime["llm_api_key"] = llm_api_key
