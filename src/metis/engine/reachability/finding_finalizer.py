@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finding path annotation, filtering, and deduplication."""
+"""Finding path annotation, filtering, and final consolidation."""
 
 from __future__ import annotations
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
-from .dedup import Deduplicator
+from .dedup import FindingConsolidator
 from .finding_paths import FindingPathAnnotator
 from .graph_utils import _same_file
 from .post_filters import _post_filter_findings, _strict_file_findings
@@ -28,7 +28,7 @@ class FindingFinalizer:
         max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         target_file="",
         strict_file=False,
-        duplicate_adjudicator=None,
+        final_adjudicator=None,
     ):
         if target_file:
             findings = FindingPathAnnotator(
@@ -48,10 +48,10 @@ class FindingFinalizer:
         findings = _post_filter_findings(findings, self._codebase_path)
         if not findings:
             return [], 0, 0
-        return Deduplicator.deduplicate(
+        return FindingConsolidator.deduplicate(
             findings,
             max_per_sink=max_paths_per_sink,
-            duplicate_adjudicator=duplicate_adjudicator,
+            final_adjudicator=final_adjudicator,
         )
 
     def annotate_findings_with_source_paths(

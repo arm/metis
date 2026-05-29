@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic deduplication for reachability findings."""
+"""Final consolidation for reachability findings."""
 
 from __future__ import annotations
 
@@ -16,14 +16,27 @@ from .finding_normalization import (
     _finding_line,
     _normalise_vuln_type,
 )
+from .prompt_guidance import TRIAGE_NOISE_FILTER_CRITERIA
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
 
-FINAL_DEDUP_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
+FINAL_CONSOLIDATION_SYSTEM_PROMPT = (
+    """You consolidate reachability security findings before the final report.
 
-Your task is narrow:
-- Decide only whether findings are duplicate final-report entries.
-- Do not decide whether a finding is true, false, exploitable, or severe.
+Your task is narrow and conservative:
+1. Filter p5/noise findings only when the evidence clearly shows they should not
+   appear in the final report.
+2. Deduplicate the remaining final-report entries.
+
+Filter a finding by adding it to filtered_indexes when it matches this p5/noise
+policy: """
+    + TRIAGE_NOISE_FILTER_CRITERIA
+    + """.
+
+Do not filter a finding merely because severity is low, confidence is imperfect,
+or the bug is hard to exploit. When uncertain, keep it.
+
+For duplicates:
 - A duplicate can still be a valid finding; it is duplicate if it has the same
   underlying defect and would be fixed by the same code change.
 - Treat CWE, exact line numbers, analysis_type, vulnerability_type, and
@@ -54,6 +67,12 @@ When uncertain, do not merge.
 
 Return JSON only:
 {
+  "filtered_indexes": [
+    {
+      "index": 2,
+      "reason": "One concise reason this is p5/noise."
+    }
+  ],
   "groups": [
     {
       "member_indexes": [0, 1],
@@ -64,32 +83,43 @@ Return JSON only:
     }
   ]
 }"""
+)
 
-DuplicateAdjudicator = Callable[[list[dict[str, Any]]], dict[str, Any] | None]
+FINAL_DEDUP_SYSTEM_PROMPT = FINAL_CONSOLIDATION_SYSTEM_PROMPT
+
+FinalAdjudicator = Callable[[list[dict[str, Any]]], dict[str, Any] | None]
 
 
-class Deduplicator:
+class FindingConsolidator:
     @staticmethod
-    def deduplicate(findings, *, max_per_sink=3, duplicate_adjudicator=None):
+    def deduplicate(
+        findings,
+        *,
+        max_per_sink=3,
+        final_adjudicator=None,
+    ):
         """
-        Collapse duplicate reachability findings using stable canonical fields.
+        Consolidate reachability findings using stable fields and final adjudication.
 
         Parsers normalize model output into a deterministic canonical key built from
         primary file/function, vulnerability family, and a short root-cause token.
         This intentionally avoids prose/token matching so different bugs in the same
-        area are not merged by wording alone.
+        area are not merged by wording alone. When supplied, final_adjudicator may
+        additionally filter p5/noise findings and merge prose-only duplicates.
         """
         if not findings:
             return [], 0, 0
 
+        total = len(findings)
         normalized = [_normalize_finding(finding) for finding in findings]
         collapsed = _collapse_by_canonical_identity(normalized)
         collapsed = _collapse_by_primary_location(collapsed)
-        collapsed = _collapse_by_duplicate_adjudication(
-            collapsed, duplicate_adjudicator
-        )
+        collapsed = _apply_final_adjudication(collapsed, final_adjudicator)
         selected = _cap_per_function_family(collapsed, max_per_sink)
-        return selected, len(findings), len(findings) - len(selected)
+        return selected, total, total - len(selected)
+
+
+Deduplicator = FindingConsolidator
 
 
 def _normalize_finding(finding):
@@ -168,8 +198,8 @@ def _cap_per_function_family(findings, limit):
     return selected
 
 
-def _collapse_by_duplicate_adjudication(findings, adjudicator):
-    if not callable(adjudicator) or len(findings) < 2:
+def _apply_final_adjudication(findings, adjudicator):
+    if not callable(adjudicator) or not findings:
         return findings
 
     decision = adjudicator(
@@ -179,6 +209,23 @@ def _collapse_by_duplicate_adjudication(findings, adjudicator):
         ]
     )
     if not isinstance(decision, dict):
+        return findings
+
+    original_limit = len(findings)
+    filtered = _valid_filtered_indexes(decision.get("filtered_indexes"), original_limit)
+    if filtered:
+        index_map = {}
+        filtered_findings = []
+        for old_index, finding in enumerate(findings):
+            if old_index in filtered:
+                continue
+            index_map[old_index] = len(filtered_findings)
+            filtered_findings.append(finding)
+        findings = filtered_findings
+    else:
+        index_map = {index: index for index in range(len(findings))}
+
+    if len(findings) < 2:
         return findings
 
     groups = decision.get("groups")
@@ -192,10 +239,18 @@ def _collapse_by_duplicate_adjudication(findings, adjudicator):
             continue
         if str(group.get("relationship") or "").strip().lower() != "duplicate":
             continue
-        members = _valid_member_indexes(group.get("member_indexes"), len(findings))
+        members = [
+            index_map[index]
+            for index in _valid_member_indexes(
+                group.get("member_indexes"), original_limit
+            )
+            if index in index_map
+        ]
         if len(members) < 2:
             continue
-        representative = _safe_int(group.get("representative_index"), members[0])
+        representative = index_map.get(
+            _safe_int(group.get("representative_index"), -1), members[0]
+        )
         if representative not in members:
             representative = members[0]
         for member in members:
@@ -217,6 +272,19 @@ def _collapse_by_duplicate_adjudication(findings, adjudicator):
         else:
             selected.append(findings[representative])
     return selected
+
+
+def _valid_filtered_indexes(raw, limit):
+    if not isinstance(raw, list):
+        return set()
+    indexes = set()
+    for value in raw:
+        if isinstance(value, dict):
+            value = value.get("index")
+        index = _safe_int(value, -1)
+        if 0 <= index < limit:
+            indexes.add(index)
+    return indexes
 
 
 class _UnionFind:

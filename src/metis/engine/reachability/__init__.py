@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from .dedup import Deduplicator
+from .dedup import Deduplicator, FindingConsolidator
 from .models import (
     FunctionNode,
     GlobalConstruct,
@@ -17,6 +17,7 @@ from .tracing import SourceRootedPathTracer
 
 __all__ = [
     "Deduplicator",
+    "FindingConsolidator",
     "FunctionNode",
     "GlobalConstruct",
     "ReachabilityGraph",

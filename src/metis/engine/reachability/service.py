@@ -19,7 +19,7 @@ from metis.reachability_settings import (
 )
 
 from .confirmer import VulnerabilityConfirmer
-from .dedup import FINAL_DEDUP_SYSTEM_PROMPT
+from .dedup import FINAL_CONSOLIDATION_SYSTEM_PROMPT
 from .finding_finalizer import FindingFinalizer
 from .graph_cache import ReachabilityGraphCache
 from .graph_utils import (
@@ -151,7 +151,7 @@ class TreeSitterReachabilityService:
             max_path_length=max_path_length,
             target_file=relative_target,
             strict_file=True,
-            duplicate_adjudicator=lambda candidates: self._adjudicate_duplicates(
+            final_adjudicator=lambda candidates: self._adjudicate_final_findings(
                 candidates,
                 model=model,
                 reasoning_effort=reasoning_effort,
@@ -242,7 +242,7 @@ class TreeSitterReachabilityService:
             graph,
             max_path_length=max_path_length,
             max_paths_per_sink=max_paths_per_sink,
-            duplicate_adjudicator=lambda candidates: self._adjudicate_duplicates(
+            final_adjudicator=lambda candidates: self._adjudicate_final_findings(
                 candidates,
                 model=model,
                 reasoning_effort=reasoning_effort,
@@ -277,7 +277,7 @@ class TreeSitterReachabilityService:
             max_path_length=max_path_length,
         )
 
-    def _adjudicate_duplicates(self, candidates, *, model, reasoning_effort=None):
+    def _adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
         if not candidates:
             return None
         try:
@@ -292,7 +292,7 @@ class TreeSitterReachabilityService:
             )
             prompt = ChatPromptTemplate.from_messages(
                 [
-                    ("system", FINAL_DEDUP_SYSTEM_PROMPT),
+                    ("system", FINAL_CONSOLIDATION_SYSTEM_PROMPT),
                     ("user", "Candidate findings JSON:\n{candidate_findings}"),
                 ]
             )
