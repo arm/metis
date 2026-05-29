@@ -21,7 +21,7 @@ metis_engine:
 
 llm_provider:
   name: "anthropic"
-  model: "claude-opus-4-1-20250805"
+  model: "opus"
   api_key_env: "ANTHROPIC_API_KEY"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"

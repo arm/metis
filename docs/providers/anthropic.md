@@ -11,7 +11,7 @@ Add or adjust the `llm_provider` block in your `metis.yaml`:
 ```yaml
 llm_provider:
   name: "anthropic"
-  model: "claude-opus-4-1-20250805"
+  model: "opus"
   api_key_env: "ANTHROPIC_API_KEY"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"
@@ -25,9 +25,13 @@ query:
   temperature: 0.0
 ```
 
-- `model` must be an exact Claude model ID, such as
-  `claude-opus-4-1-20250805`.
-  Short aliases such as `opus` are not mapped by Metis.
+- `model` can be an exact Claude model ID or one of Metis' short aliases.
+- Short aliases map to Claude API model aliases as follows:
+  - `opus` -> `claude-opus-4-8`
+  - `sonnet` -> `claude-sonnet-4-6`
+  - `haiku` -> `claude-haiku-4-5`
+- You can still use an exact Claude model ID when you need stricter version
+  control.
 - The Anthropic API key is resolved from `llm_provider.api_key`, then
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
 - The embedding API key is resolved from `llm_provider.embedding_api_key`, then

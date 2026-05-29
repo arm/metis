@@ -94,7 +94,11 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
     },
 }
 
-_ANTHROPIC_MODEL_ALIASES = {"opus", "sonnet", "haiku"}
+_ANTHROPIC_MODEL_ALIASES = {
+    "opus": "claude-opus-4-8",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5",
+}
 
 
 def load_yaml(path):
@@ -170,14 +174,16 @@ def _resolve_llm_api_key(provider_name: str, provider_config: dict) -> str:
     return ""
 
 
-def _validate_anthropic_model_id(provider_config: dict) -> None:
-    model = str(provider_config.get("model") or "").strip()
+def _resolve_anthropic_model_name(model: str | None) -> str:
+    model = str(model or "").strip()
     normalized = model.lower()
-    if normalized in _ANTHROPIC_MODEL_ALIASES or not normalized.startswith("claude-"):
+    resolved = _ANTHROPIC_MODEL_ALIASES.get(normalized, model)
+    if not resolved.startswith("claude-"):
         raise ValueError(
-            "Anthropic provider requires an exact Claude model ID such as "
-            "'claude-opus-4-1-20250805'. Aliases like 'opus' are not supported."
+            "Anthropic provider requires an exact Claude model ID or a supported "
+            "short alias: opus, sonnet, or haiku."
         )
+    return resolved
 
 
 def _resolve_anthropic_embedding_api_key(provider_config: dict) -> str:
@@ -277,10 +283,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["model"] = llm_cfg.get("model", "")
         runtime["force_openai_like"] = True
     elif llm_provider_name == "anthropic":
-        _validate_anthropic_model_id(llm_cfg)
+        model = _resolve_anthropic_model_name(llm_cfg.get("model"))
         runtime["llm_api_key"] = llm_api_key
         runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(llm_cfg)
-        runtime["model"] = llm_cfg.get("model", "")
+        runtime["model"] = model
         runtime["anthropic_api_url"] = llm_cfg.get("base_url") or llm_cfg.get(
             "anthropic_api_url"
         )
@@ -323,7 +329,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
 
     # Query config
     query_cfg = cfg.get("query", {})
-    runtime["llama_query_model"] = query_cfg.get("model") or runtime.get("model", "")
+    llama_query_model = query_cfg.get("model") or runtime.get("model", "")
+    if llm_provider_name == "anthropic":
+        llama_query_model = _resolve_anthropic_model_name(llama_query_model)
+    runtime["llama_query_model"] = llama_query_model
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
     runtime["llama_query_reasoning_effort"] = (

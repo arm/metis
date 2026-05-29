@@ -317,7 +317,7 @@ def test_load_runtime_config_accepts_complete_anthropic_provider_config(
         """
 llm_provider:
   name: anthropic
-  model: claude-opus-4-1-20250805
+  model: opus
   api_key_env: CUSTOM_ANTHROPIC_KEY
   code_embedding_model: text-embedding-3-large
   docs_embedding_model: text-embedding-3-small
@@ -340,7 +340,8 @@ query:
     assert runtime["llm_provider_name"] == "anthropic"
     assert runtime["llm_api_key"] == "anthropic-key"
     assert runtime["embedding_api_key"] == "embedding-key"
-    assert runtime["model"] == "claude-opus-4-1-20250805"
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["llama_query_model"] == "claude-opus-4-8"
     assert runtime["code_embedding_model"] == "text-embedding-3-large"
     assert runtime["docs_embedding_model"] == "text-embedding-3-small"
     assert runtime["embed_dim"] == 3072
@@ -415,13 +416,69 @@ llm_provider:
     assert "required for Anthropic provider embeddings" in str(exc_info.value)
 
 
-def test_load_runtime_config_rejects_anthropic_model_alias(tmp_path, monkeypatch):
+def test_load_runtime_config_accepts_anthropic_query_model_alias(tmp_path, monkeypatch):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(
         """
 llm_provider:
   name: anthropic
-  model: opus
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+query:
+  model: sonnet
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == "claude-opus-4-1-20250805"
+    assert runtime["llama_query_model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.parametrize(
+    ("alias", "resolved"),
+    [
+        ("opus", "claude-opus-4-8"),
+        ("sonnet", "claude-sonnet-4-6"),
+        ("haiku", "claude-haiku-4-5"),
+    ],
+)
+def test_load_runtime_config_accepts_anthropic_model_aliases(
+    tmp_path, monkeypatch, alias, resolved
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        f"""
+llm_provider:
+  name: anthropic
+  model: {alias}
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == resolved
+    assert runtime["llama_query_model"] == resolved
+
+
+def test_load_runtime_config_rejects_unknown_anthropic_model_alias(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: mythos
   code_embedding_model: text-embedding-3-large
   docs_embedding_model: text-embedding-3-large
 """,
@@ -433,7 +490,7 @@ llm_provider:
     with pytest.raises(ValueError) as exc_info:
         load_runtime_config(config_path)
 
-    assert "Aliases like 'opus' are not supported" in str(exc_info.value)
+    assert "supported short alias" in str(exc_info.value)
 
 
 def test_load_runtime_config_accepts_complete_azure_provider_config(
