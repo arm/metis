@@ -24,6 +24,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "azure_openai": "Azure OpenAI",
     "vllm": "vLLM",
     "ollama": "Ollama",
+    "anthropic": "Anthropic",
 }
 
 _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
@@ -49,6 +50,11 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "docs_embedding_model",
     ),
     "ollama": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "anthropic": (
         "model",
         "code_embedding_model",
         "docs_embedding_model",
@@ -80,7 +86,15 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_env_keys": ("api_key_env",),
         "env_vars": (),
     },
+    "anthropic": {
+        "required": True,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": ("ANTHROPIC_API_KEY",),
+    },
 }
+
+_ANTHROPIC_MODEL_ALIASES = {"opus", "sonnet", "haiku"}
 
 
 def load_yaml(path):
@@ -154,6 +168,38 @@ def _resolve_llm_api_key(provider_name: str, provider_config: dict) -> str:
         )
 
     return ""
+
+
+def _validate_anthropic_model_id(provider_config: dict) -> None:
+    model = str(provider_config.get("model") or "").strip()
+    normalized = model.lower()
+    if normalized in _ANTHROPIC_MODEL_ALIASES or not normalized.startswith("claude-"):
+        raise ValueError(
+            "Anthropic provider requires an exact Claude model ID such as "
+            "'claude-opus-4-1-20250805'. Aliases like 'opus' are not supported."
+        )
+
+
+def _resolve_anthropic_embedding_api_key(provider_config: dict) -> str:
+    value = provider_config.get("embedding_api_key")
+    if isinstance(value, str) and value.strip():
+        return value
+
+    env_var = provider_config.get("embedding_api_key_env")
+    if isinstance(env_var, str) and env_var.strip():
+        value = os.environ.get(env_var)
+        if value:
+            return value
+
+    value = os.environ.get("OPENAI_API_KEY")
+    if value:
+        return value
+
+    raise RuntimeError(
+        "llm_provider.embedding_api_key or environment variable named by "
+        "llm_provider.embedding_api_key_env or OPENAI_API_KEY environment variable "
+        "is required for Anthropic provider embeddings but not set."
+    )
 
 
 def load_runtime_config(config_path=None, enable_psql=False):
@@ -230,6 +276,20 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
         runtime["force_openai_like"] = True
+    elif llm_provider_name == "anthropic":
+        _validate_anthropic_model_id(llm_cfg)
+        runtime["llm_api_key"] = llm_api_key
+        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(llm_cfg)
+        runtime["model"] = llm_cfg.get("model", "")
+        runtime["anthropic_api_url"] = llm_cfg.get("base_url") or llm_cfg.get(
+            "anthropic_api_url"
+        )
+        runtime["embedding_api_base"] = llm_cfg.get(
+            "embedding_base_url"
+        ) or llm_cfg.get("embedding_api_base")
+        runtime["embedding_default_headers"] = llm_cfg.get(
+            "embedding_default_headers", {}
+        )
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 

@@ -29,7 +29,7 @@ Metis is an open-source, agentic AI security framework for deep security code re
   Validates findings from its own analysis and third-party SAST tools, gathering evidence to reduce false positives.
 
 - **Provider Flexibility**
-  Support for major LLM services and local models (vLLM, Ollama, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md) and the [Ollama guide](docs/providers/ollama.md) for local setup examples.
+  Support for major LLM services and local models (Anthropic, vLLM, Ollama, LiteLLM etc.). See the [Anthropic guide](docs/providers/anthropic.md), the [vLLM guide](docs/providers/vllm.md), and the [Ollama guide](docs/providers/ollama.md) for setup examples.
 
 ![Demo](.github/demo.gif)
 
@@ -103,6 +103,10 @@ Export your OpenAI API key before using Metis:
 ```bash
 export OPENAI_API_KEY="your-key-here"
 ```
+
+**Anthropic**
+
+Metis can use Claude Opus for chat/review while using OpenAI-compatible embeddings for indexing. See the [Anthropic guide](docs/providers/anthropic.md).
 
 ### 3. Index and Run Analysis
 

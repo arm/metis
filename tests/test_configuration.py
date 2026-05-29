@@ -309,6 +309,133 @@ llm_provider:
     assert runtime["llm_api_key"] == ""
 
 
+def test_load_runtime_config_accepts_complete_anthropic_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  api_key_env: CUSTOM_ANTHROPIC_KEY
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+  embedding_api_key_env: CUSTOM_EMBEDDING_KEY
+metis_engine:
+  embed_dim: 3072
+query:
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_ANTHROPIC_KEY", "anthropic-key")
+    monkeypatch.setenv("CUSTOM_EMBEDDING_KEY", "embedding-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "anthropic"
+    assert runtime["llm_api_key"] == "anthropic-key"
+    assert runtime["embedding_api_key"] == "embedding-key"
+    assert runtime["model"] == "claude-opus-4-1-20250805"
+    assert runtime["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["docs_embedding_model"] == "text-embedding-3-small"
+    assert runtime["embed_dim"] == 3072
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_reports_missing_anthropic_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: ""
+  code_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "Anthropic provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.model" in message
+    assert "llm_provider.docs_embedding_model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_reports_missing_anthropic_api_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "ANTHROPIC_API_KEY environment variable" in message
+    assert "Anthropic provider" in message
+
+
+def test_load_runtime_config_reports_missing_anthropic_embedding_api_key(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_runtime_config(config_path)
+
+    assert "required for Anthropic provider embeddings" in str(exc_info.value)
+
+
+def test_load_runtime_config_rejects_anthropic_model_alias(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: opus
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    assert "Aliases like 'opus' are not supported" in str(exc_info.value)
+
+
 def test_load_runtime_config_accepts_complete_azure_provider_config(
     tmp_path, monkeypatch
 ):

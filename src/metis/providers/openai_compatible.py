@@ -6,15 +6,10 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from langchain_openai import ChatOpenAI
-from llama_index.embeddings.openai import (
-    OpenAIEmbedding,
-    OpenAIEmbeddingModelType,
-)
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 
 from metis.providers.base import LLMProvider
-
-_ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
+from metis.providers.openai_embeddings import build_openai_compatible_embedding_model
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -65,32 +60,15 @@ class OpenAICompatibleProvider(LLMProvider):
         config_key: str,
         callback_manager=None,
     ):
-        if not model_name:
-            raise ValueError(f"Missing '{config_key}' in configuration")
-
-        params: Dict[str, Any] = {}
-        params["model"] = (
-            model_name
-            if model_name in _ALLOWED_OPENAI_EMBED_MODELS
-            else OpenAIEmbeddingModelType.TEXT_EMBED_ADA_002.value
+        return build_openai_compatible_embedding_model(
+            model_name,
+            extra_kwargs,
+            config_key,
+            api_key=self.api_key,
+            api_base=self.base_url,
+            default_headers=self.default_headers,
+            callback_manager=callback_manager,
         )
-        if self.api_key:
-            params["api_key"] = self.api_key
-        if self.base_url:
-            params["api_base"] = self.base_url
-        if self.default_headers:
-            params["default_headers"] = self.default_headers
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
-        if extra_kwargs:
-            params.update(extra_kwargs)
-
-        embed = OpenAIEmbedding(**params)
-        if model_name not in _ALLOWED_OPENAI_EMBED_MODELS:
-            embed._query_engine = model_name
-            embed._text_engine = model_name
-            embed.model_name = model_name
-        return embed
 
     def get_chat_model(
         self,

@@ -1,0 +1,34 @@
+psql_database:
+  provider: "config"
+  credentials:
+    username: "metis_user"
+    password: "metis_password"
+    host: "localhost"
+    port: 5432
+    database_name: "metis_db"
+
+metis_engine:
+  max_token_length: 250000
+  max_workers: 5
+  triage_checkpoint_every: 50
+  triage_tool_timeout_seconds: 12
+  embed_dim: 3072
+  hnsw_kwargs:
+    hnsw_m: 16
+    hnsw_ef_construction: 64
+    hnsw_ef_search: 40
+    hnsw_dist_method: "vector_cosine_ops"
+
+llm_provider:
+  name: "anthropic"
+  model: "claude-opus-4-1-20250805"
+  api_key_env: "ANTHROPIC_API_KEY"
+  code_embedding_model: "text-embedding-3-large"
+  docs_embedding_model: "text-embedding-3-large"
+  embedding_api_key_env: "OPENAI_API_KEY"
+
+query:
+  similarity_top_k: 5
+  response_mode: "tree_summarize"
+  max_tokens: 5000
+  temperature: 0.0

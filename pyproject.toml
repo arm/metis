@@ -12,6 +12,7 @@ dependencies = [
     "llama-index-vector-stores-chroma>=0.5.5",
     "llama-index-llms-openai-like>=0.7.1",
     "langchain>=1.2.15",
+    "langchain-anthropic>=1.4.3",
     "langchain-openai>=1.2.0",
     "langgraph>=1.1.9",
     "rich>=15.0.0",

@@ -71,3 +71,4 @@ register_provider_loader(
 )
 register_provider_loader("vllm", "metis.providers.vllm:VLLMProvider")
 register_provider_loader("ollama", "metis.providers.ollama:OllamaProvider")
+register_provider_loader("anthropic", "metis.providers.anthropic:AnthropicProvider")
