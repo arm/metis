@@ -24,8 +24,8 @@ llm_provider:
   name: "ollama"
   base_url: "http://YOUR-OLLAMA-HOST:11434/v1"
   model: "YOUR-CHAT-MODEL"
-  code_embedding_model: "YOUR-EMBEDDING-MODEL"
-  docs_embedding_model: "YOUR-EMBEDDING-MODEL"
+  code_embedding_model: "nomic-embed-text:v1.5"
+  docs_embedding_model: "nomic-embed-text:v1.5"
 
 query:
   similarity_top_k: 5

@@ -323,8 +323,8 @@ def test_load_runtime_config_keeps_ollama_api_key_optional(tmp_path):
 llm_provider:
   name: ollama
   model: llama3
-  code_embedding_model: all-minilm
-  docs_embedding_model: all-minilm
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
 """,
         encoding="utf-8",
     )
