@@ -28,6 +28,9 @@ finding exactly as-is.
 For duplicates:
 - A duplicate can still be a valid finding. It is duplicate when it describes
   the same underlying defect, the same unsafe state, or the same required fix.
+- Prefer grouping repeated reports that name the same file/function, same object
+  or state variable, same failure path, same callback/resource lifetime, same
+  bounds calculation, or same cleanup/rollback/refcount/accounting error.
 - Treat CWE, exact line numbers, analysis_type, vulnerability_type, and
   canonical_key as weak hints only. These fields may be model-generated or
   taxonomy-dependent, so they must not prevent a duplicate merge when the prose
@@ -41,18 +44,14 @@ For duplicates:
   example, dereferencing the stale published object), merge them when the same
   rollback, ordering, or cleanup fix would address both.
 
-Use these labels:
-- duplicate: same final-report issue and same fix surface.
-- related_keep_separate: related theme/resource, but distinct final-report issues.
-- distinct: not the same issue.
-- uncertain: insufficient evidence to merge safely.
-
 Keep separate when findings involve different buffers, counters, callbacks,
 timers, state variables, operations, or fix locations that need separate code
 changes.
 The same recurring bug pattern in different functions or commands is not a
 duplicate unless one code change would necessarily fix all members.
-When uncertain, do not merge.
+When two findings look like alternate reports of the same final-report issue,
+group them. When they clearly require separate fixes, keep them separate by
+omitting them from groups.
 
 The input indexes are zero-based. For each duplicate group, return all duplicate
 member_indexes in ascending order. The first/lowest index in each duplicate group
@@ -186,9 +185,9 @@ def _finding_adjudication_payload(index, finding):
     return {
         "index": index,
         "description": str(getattr(finding, "description", "") or ""),
-        "root_cause": str(getattr(finding, "root_cause", "") or ""),
-        "evidence": str(getattr(finding, "evidence", "") or "")[:2000],
-        "mitigation": str(getattr(finding, "mitigation", "") or "")[:1000],
+        "root_cause": str(getattr(finding, "root_cause", "") or "")[:800],
+        "evidence": str(getattr(finding, "evidence", "") or "")[:900],
+        "mitigation": str(getattr(finding, "mitigation", "") or "")[:400],
         "primary_file": _finding_file(finding),
         "primary_function": _finding_function(finding),
         "primary_line": _finding_line(finding),
@@ -198,5 +197,5 @@ def _finding_adjudication_payload(index, finding):
         "severity": str(getattr(finding, "severity", "") or ""),
         "confidence": getattr(finding, "confidence", None),
         "canonical_key": str(getattr(finding, "canonical_key", "") or ""),
-        "path": list(getattr(finding, "path", []) or [])[:12],
+        "path": list(getattr(finding, "path", []) or [])[:6],
     }

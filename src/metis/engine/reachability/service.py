@@ -283,7 +283,7 @@ class TreeSitterReachabilityService:
         try:
             chat = self._llm_provider.get_chat_model(
                 model=model,
-                max_tokens=2000,
+                max_tokens=6000,
                 temperature=0.1,
                 **_chat_model_kwargs(
                     self._usage_runtime,
@@ -297,7 +297,7 @@ class TreeSitterReachabilityService:
                 ]
             )
             raw = (prompt | chat | StrOutputParser()).invoke(
-                {"candidate_findings": json.dumps(candidates, indent=2)}
+                {"candidate_findings": json.dumps(candidates, separators=(",", ":"))}
             )
             parsed = parse_json_output(raw)
             return parsed if isinstance(parsed, dict) else None
