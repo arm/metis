@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
 from .models import ALLOWED_VULNERABILITY_TYPES
-from .prompt_guidance import TRIAGE_NOISE_FILTER_GUIDANCE
 
 _ALLOWED_VULNERABILITY_TYPES_TEXT = ", ".join(ALLOWED_VULNERABILITY_TYPES)
 
@@ -20,7 +19,6 @@ Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
 error-unwind/rollback/resource-leak variants, and use_after_free for dangling
 use-after-release lifetime variants unless a narrower allowed type fits better.
 confidence must be exactly one of: high, medium, low.
-{TRIAGE_NOISE_FILTER_GUIDANCE}
 Return an empty findings list when the evidence does not prove a vulnerability.
 """
 

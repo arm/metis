@@ -23,7 +23,6 @@ from .models import (
     ALLOWED_VULNERABILITY_TYPES,
     ReachabilityConfirmationResponseModel,
 )
-from .prompt_guidance import TRIAGE_NOISE_FILTER_GUIDANCE
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
@@ -46,7 +45,6 @@ use-after-release lifetime variants unless a narrower allowed type fits better.
 cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
 severity must be exactly one of: critical, high, medium, low.
 confidence must be exactly one of: high, medium, low.
-{TRIAGE_NOISE_FILTER_GUIDANCE}
 Be conservative. {no_finding_guidance}"""
 
 
