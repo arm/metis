@@ -95,13 +95,12 @@ class ReviewService:
             and self._is_c_family_file(file_path)
         ):
             try:
-                settings = self._reachability_call_settings(
-                    progress_callback=progress_callback
+                result = self._get_global_reachability_review_for_file(
+                    file_path, progress_callback=progress_callback
                 )
-                result = self._reachability_service.review_file(file_path, **settings)
             except Exception:
                 logger.debug(
-                    "Tree-sitter file review failed for %s; falling back to standard review",
+                    "Tree-sitter global review lookup failed for %s; falling back to standard review",
                     file_path,
                     exc_info=True,
                 )
@@ -109,6 +108,27 @@ class ReviewService:
                 if result is not None:
                     return result
         return self._review_file_standard(file_path, options=options)
+
+    def _get_global_reachability_review_for_file(
+        self,
+        file_path,
+        *,
+        progress_callback=None,
+    ):
+        abs_path = os.path.abspath(str(file_path))
+        relative_path = self._repository.normalize_match_path(abs_path)
+        for review in self._get_reachability_reviews(
+            progress_callback=progress_callback
+        ):
+            if self._same_review_file(review.get("file"), relative_path):
+                return review
+        return {"file": relative_path, "file_path": abs_path, "reviews": []}
+
+    @staticmethod
+    def _same_review_file(left, right):
+        return os.path.normcase(os.path.normpath(str(left or ""))) == os.path.normcase(
+            os.path.normpath(str(right or ""))
+        )
 
     def _review_file_standard(
         self,
