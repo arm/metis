@@ -24,6 +24,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "azure_openai": "Azure OpenAI",
     "vllm": "vLLM",
     "ollama": "Ollama",
+    "llamacpp": "llama.cpp",
 }
 
 _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
@@ -49,6 +50,11 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "docs_embedding_model",
     ),
     "ollama": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "llamacpp": (
         "model",
         "code_embedding_model",
         "docs_embedding_model",
@@ -79,6 +85,12 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": (),
+    },
+    "llamacpp": {
+        "required": False,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": ("LLAMACPP_API_KEY",),
     },
 }
 
@@ -232,6 +244,11 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
         runtime["force_openai_like"] = True
+    elif llm_provider_name == "llamacpp":
+        runtime["llm_api_key"] = llm_api_key
+        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
+        runtime["model"] = llm_cfg.get("model", "")
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
