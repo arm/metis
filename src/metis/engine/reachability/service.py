@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage
 from metis.utils import parse_json_output
 from metis.reachability_settings import (
     DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
@@ -32,6 +34,8 @@ from .models import VulnerabilityFinding
 from .supplementary import SupplementaryAnalyzer
 from .file_focus import FileFocusBuilder
 from .review_output import group_findings_as_reviews, reviews_for_findings
+
+logger = logging.getLogger(__name__)
 
 
 class TreeSitterReachabilityService:
@@ -280,29 +284,54 @@ class TreeSitterReachabilityService:
     def _adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
         if not candidates:
             return None
-        try:
-            chat = self._llm_provider.get_chat_model(
-                model=model,
-                max_tokens=6000,
-                temperature=0.1,
-                **_chat_model_kwargs(
-                    self._usage_runtime,
-                    reasoning_effort=reasoning_effort,
-                ),
-            )
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", FINAL_CONSOLIDATION_SYSTEM_PROMPT),
-                    ("user", "Candidate findings JSON:\n{candidate_findings}"),
-                ]
-            )
-            raw = (prompt | chat | StrOutputParser()).invoke(
-                {"candidate_findings": json.dumps(candidates, separators=(",", ":"))}
-            )
-            parsed = parse_json_output(raw)
-            return parsed if isinstance(parsed, dict) else None
-        except Exception:
-            return None
+        last_failure = "unknown final dedup adjudication failure"
+        for attempt in range(2):
+            try:
+                chat = self._llm_provider.get_chat_model(
+                    model=model,
+                    max_tokens=6000,
+                    temperature=0.1,
+                    **_chat_model_kwargs(
+                        self._usage_runtime,
+                        reasoning_effort=reasoning_effort,
+                    ),
+                )
+                prompt = ChatPromptTemplate.from_messages(
+                    [
+                        SystemMessage(content=FINAL_CONSOLIDATION_SYSTEM_PROMPT),
+                        ("user", "Candidate findings JSON:\n{candidate_findings}"),
+                    ]
+                )
+                raw = (prompt | chat | StrOutputParser()).invoke(
+                    {
+                        "candidate_findings": json.dumps(
+                            candidates, separators=(",", ":")
+                        )
+                    }
+                )
+                parsed = parse_json_output(raw)
+                if isinstance(parsed, dict) and isinstance(parsed.get("groups"), list):
+                    return parsed
+                last_failure = (
+                    f"invalid response shape {type(parsed).__name__}; "
+                    "expected JSON object with groups list"
+                )
+            except Exception as exc:
+                last_failure = str(exc)
+            if attempt == 0:
+                logger.warning(
+                    "Final reachability dedup adjudication failed for %d candidates; "
+                    "retrying once: %s",
+                    len(candidates),
+                    last_failure,
+                )
+        logger.warning(
+            "Final reachability dedup adjudication failed for %d candidates; "
+            "keeping this batch unchanged: %s",
+            len(candidates),
+            last_failure,
+        )
+        return None
 
     def get_codebase_graph_and_paths(
         self,
