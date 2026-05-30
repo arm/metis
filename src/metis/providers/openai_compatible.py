@@ -25,7 +25,6 @@ _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelT
 
 
 class OpenAICompatibleProvider(LLMProvider):
-
     def __init__(self, config: OpenAICompatibleProviderConfig) -> None:
         self.config = config
         self.api_key = config.get("llm_api_key")

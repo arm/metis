@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(OpenAICompatibleProvider):
-
     def __init__(self, config):
         super().__init__(config)
         if not self.base_url:
