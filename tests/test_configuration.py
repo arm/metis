@@ -300,7 +300,7 @@ def test_load_runtime_config_reports_missing_ollama_provider_keys(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3
+  model: llama3.1:8b
   code_embedding_model: ""
 """,
         encoding="utf-8",
@@ -322,7 +322,7 @@ def test_load_runtime_config_keeps_ollama_api_key_optional(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3
+  model: llama3.1:8b
   code_embedding_model: nomic-embed-text:v1.5
   docs_embedding_model: nomic-embed-text:v1.5
 """,

@@ -22,8 +22,11 @@ metis_engine:
 
 llm_provider:
   name: "ollama"
-  base_url: "http://YOUR-OLLAMA-HOST:11434/v1"
-  model: "YOUR-CHAT-MODEL"
+  base_url: "http://localhost:11434/v1"
+  # Models recommendation depends on hardware capabilities
+  model: "llama3.1:8b" # for 8GB system
+#  model: "qwen3.5:9b" # for 16GB system
+#  model: "qwen3.6:35b-a3b" # for 24GB system
   code_embedding_model: "nomic-embed-text:v1.5"
   docs_embedding_model: "nomic-embed-text:v1.5"
 
