@@ -33,6 +33,9 @@ For duplicates:
   cause, or evidence-to-evidence in isolation.
 - Try to understand whether the candidates are reporting the same issue overall.
   File and function are provided only as context and batching scope.
+- Different reachability paths, callers, connected functions, entrypoints, or
+  command types are duplicate evidence when the same code operation, object or
+  state, root cause, and unsafe effect are being reported.
 - Prefer grouping repeated explanations that name the same object or state
   variable, same failure path, same callback/resource lifetime, same bounds
   calculation, or same cleanup/rollback/refcount/accounting error.
@@ -47,6 +50,9 @@ For duplicates:
 - Merge root-cause and later-symptom findings when the later finding is only
   evidence of the same published stale object, missing cleanup, or unbalanced
   acquire/release operation.
+- When grouping root-cause and symptom findings, choose the candidate that best
+  explains the root cause and actionable fix as representative_index. Prefer
+  the clearer root-cause report over an earlier or downstream symptom report.
 - Use this decision test: if one finding describes the bad action that creates
   the unsafe state (for example, publishing then freeing without rollback) and
   another describes the later consequence of that same unsafe state (for
@@ -61,17 +67,22 @@ duplicate unless one code change would necessarily fix all members.
 When two findings look like alternate reports of the same final-report issue,
 group them. When they clearly require separate fixes, keep them separate by
 omitting them from groups.
+If a candidate is weak or hedged but duplicates a stronger explanation, group it
+with the stronger explanation and choose the stronger explanation as
+representative_index. Do not use this dedup pass to remove weak non-duplicates.
 
 The `index` field in each candidate is the canonical zero-based finding index.
 For each duplicate group, return those exact index values in member_indexes in
-ascending order. The first/lowest index in each duplicate group is the finding
-that will be kept; every later member will be dropped unchanged.
+ascending order. Return representative_index for the one finding that should be
+kept unchanged. If all members are equally good, use the lowest member index.
+Every other member will be dropped unchanged.
 
 Return JSON only:
 {
   "groups": [
     {
       "member_indexes": [0, 3, 4],
+      "representative_index": 3,
       "relationship": "duplicate",
       "reason": "One concise reason these are the same issue."
     }
@@ -95,7 +106,7 @@ class FindingConsolidator:
         final_adjudicator=None,
     ):
         """
-        Drop only later duplicate findings identified by final_adjudicator.
+        Drop duplicate findings identified by final_adjudicator.
 
         This function does not classify, normalize, rewrite, cap, or merge fields.
         If no valid LLM duplicate grouping is available, the input findings are kept
@@ -127,19 +138,22 @@ def _apply_final_adjudication(findings, adjudicator):
     ]
     original_limit = len(findings)
     merged = _UnionFind(original_limit)
+    representative_preferences = []
     saw_valid_decision = False
 
     for batch in _adjudication_batches(payloads):
         decision = adjudicator(batch)
-        if _merge_decision_groups(merged, decision, original_limit):
+        if _merge_decision_groups(
+            merged,
+            representative_preferences,
+            decision,
+            original_limit,
+        ):
             saw_valid_decision = True
 
     representative_payloads = [
         payloads[index]
-        for index in sorted(
-            {min(members) for members in merged.groups().values()},
-            key=lambda index: _payload_sort_key(payloads[index]),
-        )
+        for index in _representative_indexes(merged, representative_preferences)
     ]
     if len(representative_payloads) > 1 and len(payloads) > _FINAL_DEDUP_BATCH_SIZE:
         for batch in _adjudication_batches(
@@ -148,13 +162,18 @@ def _apply_final_adjudication(findings, adjudicator):
             scope="file",
         ):
             decision = adjudicator(batch)
-            if _merge_decision_groups(merged, decision, original_limit):
+            if _merge_decision_groups(
+                merged,
+                representative_preferences,
+                decision,
+                original_limit,
+            ):
                 saw_valid_decision = True
 
     if not saw_valid_decision:
         return None
 
-    keep_indexes = {min(members) for members in merged.groups().values()}
+    keep_indexes = set(_representative_indexes(merged, representative_preferences))
     return [finding for index, finding in enumerate(findings) if index in keep_indexes]
 
 
@@ -194,7 +213,28 @@ def _payload_sort_key(payload):
     )
 
 
-def _merge_decision_groups(merged, decision, original_limit):
+def _representative_indexes(merged, representative_preferences):
+    representatives = []
+    for members in merged.groups().values():
+        representative = _preferred_representative(members, representative_preferences)
+        representatives.append(representative)
+    return sorted(representatives)
+
+
+def _preferred_representative(members, representative_preferences):
+    member_set = set(members)
+    for representative in reversed(representative_preferences):
+        if representative in member_set:
+            return representative
+    return min(members)
+
+
+def _merge_decision_groups(
+    merged,
+    representative_preferences,
+    decision,
+    original_limit,
+):
     if not isinstance(decision, dict):
         return False
     groups = decision.get("groups")
@@ -211,7 +251,13 @@ def _merge_decision_groups(merged, decision, original_limit):
         members = _valid_member_indexes(group.get("member_indexes"), original_limit)
         if len(members) < 2:
             continue
-        representative = min(members)
+        representative = _representative_index(
+            group.get("representative_index"), members
+        )
+        if representative is None:
+            representative = min(members)
+        else:
+            representative_preferences.append(representative)
         for member in members:
             merged.union(representative, member)
         accepted = True
@@ -250,6 +296,11 @@ def _valid_member_indexes(raw, limit):
         if 0 <= index < limit and index not in members:
             members.append(index)
     return members
+
+
+def _representative_index(raw, members):
+    index = _safe_int(raw, -1)
+    return index if index in members else None
 
 
 def _safe_int(value, default=0):

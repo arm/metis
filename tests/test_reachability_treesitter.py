@@ -607,7 +607,7 @@ def test_deduplicator_drops_later_duplicate_indexes_from_llm_grouping():
     assert findings[1].canonical_key == "task_import:memory_bounds:unterminated_title"
 
 
-def test_deduplicator_always_keeps_lowest_duplicate_index():
+def test_deduplicator_keeps_llm_representative_duplicate_index():
     key = "src/dispatch.c:src/dispatch.c::handle_reset:missing_auth:reset_missing_permission"
     vague = _finding(
         "missing_auth",
@@ -654,7 +654,7 @@ def test_deduplicator_always_keeps_lowest_duplicate_index():
 
     assert total == 2
     assert removed == 1
-    assert deduped == [vague]
+    assert deduped == [specific]
 
 
 def test_deduplicator_keeps_different_canonical_keys_in_same_location():
