@@ -3,6 +3,11 @@
 
 from unittest.mock import Mock
 
+from metis.engine.review_service import (
+    _parse_review_validation_response,
+    _rescue_filtered_duplicate_cluster_representatives,
+)
+
 
 def test_ask_question(engine):
     result = engine.ask_question("What is this?")
@@ -75,6 +80,133 @@ def test_review_code_uses_legacy_for_non_c_cpp(engine):
     assert results == [{"file": "test.py", "reviews": ["legacy"]}]
     reachability.review_codebase.assert_not_called()
     engine.review.review_file.assert_called_once()
+
+
+def test_review_code_validates_reachability_results_before_returning(engine):
+    reachability = Mock()
+    reachability._adjudicate_final_findings = None
+    reachability.review_codebase.return_value = [
+        {
+            "file": "test.c",
+            "reviews": [
+                {
+                    "issue": "real",
+                    "primary_file": "test.c",
+                    "primary_function": "target",
+                    "line_number": 10,
+                    "analysis_type": "reachability",
+                    "severity": "High",
+                    "confidence": 0.7,
+                    "reasoning": "Root cause: concrete bug",
+                },
+                {
+                    "issue": "fake",
+                    "primary_file": "test.c",
+                    "primary_function": "target",
+                    "line_number": 11,
+                    "analysis_type": "reachability",
+                    "severity": "Medium",
+                    "confidence": 0.8,
+                    "reasoning": "Root cause: speculative concern",
+                },
+            ],
+        }
+    ]
+    engine.review._reachability_service = reachability
+    engine.review._reachability_cache = None
+    engine.review._validate_review_candidates = Mock(
+        return_value=[
+            {
+                "index": 0,
+                "keep": True,
+                "confidence": 0.91,
+                "reason": "concrete",
+            },
+            {
+                "index": 1,
+                "keep": False,
+                "confidence": 0.21,
+                "reason": "speculative",
+            },
+        ]
+    )
+
+    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
+
+    assert len(results) == 1
+    assert [item["issue"] for item in results[0]["reviews"]] == ["real"]
+    assert results[0]["reviews"][0]["confidence"] == 0.91
+    assert results[0]["reviews"][0]["review_validation_keep"] is True
+    filtered = results[0]["review_validation_filtered_reviews"]
+    assert [item["issue"] for item in filtered] == ["fake"]
+    assert filtered[0]["review_validation_reason"] == "speculative"
+
+
+def test_review_validation_rescues_duplicate_cluster_representative():
+    candidates = [
+        {
+            "index": 0,
+            "issue": "queue use after free",
+            "primary_file": "driver.c",
+            "primary_function": "delete_queue",
+            "line_number": 42,
+            "severity": "High",
+            "confidence": 0.9,
+            "cwe": "CWE-416",
+        },
+        {
+            "index": 1,
+            "issue": "queue callback use after free",
+            "primary_file": "driver.c",
+            "primary_function": "delete_queue",
+            "line_number": 42,
+            "severity": "High",
+            "confidence": 0.85,
+            "cwe": "CWE-416",
+        },
+    ]
+    decisions = [
+        {
+            "index": 0,
+            "keep": False,
+            "confidence": 0.4,
+            "reason": "duplicate of stronger candidate",
+        },
+        {
+            "index": 1,
+            "keep": False,
+            "confidence": 0.5,
+            "reason": "same root cause duplicate",
+        },
+    ]
+
+    rescued = _rescue_filtered_duplicate_cluster_representatives(
+        candidates, decisions
+    )
+
+    kept = [decision for decision in rescued if decision["keep"]]
+    assert len(kept) == 1
+    assert kept[0]["index"] == 0
+    assert kept[0]["confidence"] >= 0.9
+    assert "strongest representative" in kept[0]["reason"]
+
+
+def test_review_validation_parser_accepts_double_encoded_json():
+    parsed = _parse_review_validation_response(
+        '"{\\"decisions\\":[{\\"index\\":0,\\"keep\\":true,'
+        '\\"confidence\\":0.82,\\"reason\\":\\"ok\\"}]}"'
+    )
+
+    assert parsed == {
+        "decisions": [
+            {
+                "index": 0,
+                "keep": True,
+                "confidence": 0.82,
+                "reason": "ok",
+            }
+        ]
+    }
 
 
 def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):

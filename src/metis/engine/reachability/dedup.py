@@ -104,6 +104,7 @@ class FindingConsolidator:
         *,
         max_per_sink=3,
         final_adjudicator=None,
+        representative_scope="file",
     ):
         """
         Drop duplicate findings identified by final_adjudicator.
@@ -117,7 +118,11 @@ class FindingConsolidator:
 
         total = len(findings)
         original = list(findings)
-        adjudicated = _apply_final_adjudication(original, final_adjudicator)
+        adjudicated = _apply_final_adjudication(
+            original,
+            final_adjudicator,
+            representative_scope=representative_scope,
+        )
         if adjudicated is not None:
             return adjudicated, total, total - len(adjudicated)
         return original, total, 0
@@ -126,7 +131,7 @@ class FindingConsolidator:
 Deduplicator = FindingConsolidator
 
 
-def _apply_final_adjudication(findings, adjudicator):
+def _apply_final_adjudication(findings, adjudicator, *, representative_scope="file"):
     if not callable(adjudicator) or not findings:
         return None
     if len(findings) < 2:
@@ -155,11 +160,15 @@ def _apply_final_adjudication(findings, adjudicator):
         payloads[index]
         for index in _representative_indexes(merged, representative_preferences)
     ]
-    if len(representative_payloads) > 1 and len(payloads) > _FINAL_DEDUP_BATCH_SIZE:
+    if (
+        representative_scope
+        and len(representative_payloads) > 1
+        and len(payloads) > _FINAL_DEDUP_BATCH_SIZE
+    ):
         for batch in _adjudication_batches(
             representative_payloads,
             batch_size=_FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE,
-            scope="file",
+            scope=representative_scope,
         ):
             decision = adjudicator(batch)
             if _merge_decision_groups(
