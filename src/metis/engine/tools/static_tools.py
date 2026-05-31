@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 from pathlib import Path
 import re
@@ -109,6 +110,22 @@ class StaticToolRunner:
         except re.error as exc:
             raise ValueError(f"Invalid grep pattern: {exc}") from exc
 
+        # TODO: Late night untested idea to add parity with the
+        # grep subprocess timeout.
+        # There is no risk of an external process hanging. So, the
+        # only reason issue is a bad regex or massive number of files.
+        # Would certainly need testing before considering offering the change.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._python_grep, regex, target)
+            try:
+                lines = future.result(timeout=self.timeout_seconds)
+            except concurrent.futures.TimeoutError:
+                raise RuntimeError(
+                    f"grep pattern timed out after {self.timeout_seconds}s"
+                )
+            return self._clip("\n".join(lines))
+
+    def _python_grep(self, regex: re.Pattern, target: Path) -> list[str]:
         lines: list[str] = []
         for file_path in self._iter_files(target):
             rel = file_path.relative_to(self.codebase_path).as_posix()
@@ -120,8 +137,8 @@ class StaticToolRunner:
                 if regex.search(line):
                     lines.append(f"{rel}:{lineno}:{line}")
                     if sum(len(x) + 1 for x in lines) >= self.max_chars:
-                        return self._clip("\n".join(lines))
-        return self._clip("\n".join(lines))
+                        return lines
+        return lines
 
     def find_name(self, name: str, max_results: int = 20) -> list[str]:
         if not name or "/" in name or "\\" in name:
