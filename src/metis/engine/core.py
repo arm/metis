@@ -72,6 +72,7 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
+        self.defer_embed_models = bool(kwargs.get("defer_embed_models", False))
 
         self.plugin_config = load_plugin_config()
         self.custom_guidance_precedence = self.plugin_config.get(
@@ -101,8 +102,10 @@ class MetisEngine:
             plugin_config=self.plugin_config,
             custom_prompt_text=self.custom_prompt_text,
             custom_guidance_precedence=self.custom_guidance_precedence,
-            embed_model_code=self.get_embed_model_code(),
-            embed_model_docs=self.get_embed_model_docs(),
+            embed_model_code=self._embed_model_code,
+            embed_model_docs=self._embed_model_docs,
+            engine_get_embed_model_code=self.get_embed_model_code,
+            engine_get_embed_model_docs=self.get_embed_model_docs,
             max_workers=self.max_workers,
             max_token_length=self.max_token_length,
             llama_query_model=self.llama_query_model,
@@ -142,6 +145,15 @@ class MetisEngine:
             self.vector_backend.embed_model_docs = self._embed_model_docs
 
     def _init_embed_models(self, injected_usage_runtime) -> None:
+        if self.defer_embed_models:
+            self._embed_model_code = getattr(
+                self.vector_backend, "embed_model_code", None
+            )
+            self._embed_model_docs = getattr(
+                self.vector_backend, "embed_model_docs", None
+            )
+            self._attach_embed_models_to_backend()
+            return
         self._embed_model_code = self._resolve_embed_model(
             "code",
             existing_model=getattr(self.vector_backend, "embed_model_code", None),
@@ -173,9 +185,19 @@ class MetisEngine:
         return self._build_embed_model(kind)
 
     def get_embed_model_code(self):
+        if self._embed_model_code is None:
+            self._embed_model_code = self._build_embed_model("code")
+            self._attach_embed_models_to_backend()
+            if hasattr(self, "_config"):
+                self._config.embed_model_code = self._embed_model_code
         return self._embed_model_code
 
     def get_embed_model_docs(self):
+        if self._embed_model_docs is None:
+            self._embed_model_docs = self._build_embed_model("docs")
+            self._attach_embed_models_to_backend()
+            if hasattr(self, "_config"):
+                self._config.embed_model_docs = self._embed_model_docs
         return self._embed_model_docs
 
     def usage_command(
@@ -291,6 +313,8 @@ class MetisEngine:
         return parsed
 
     def _create_query_engines(self, top_k: int):
+        self.get_embed_model_code()
+        self.get_embed_model_docs()
         self.vector_backend.init()
         qe_code, qe_docs = self.vector_backend.get_query_engines(
             self.llm_provider,

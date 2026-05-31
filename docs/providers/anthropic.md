@@ -39,6 +39,12 @@ query:
 - `metis_engine.embed_dim` must match the configured embedding model output
   dimension.
 
+Embedding settings are only required when Metis needs indexes: `index`, `update`,
+`ask`, or review/triage commands that use retrieval. You can omit the embedding
+model and embedding API key for index-free scans, for example
+`review_file <path> --ignore-index`, `review_code --ignore-index`,
+`review_patch <path> --ignore-index`, or `triage <path.sarif> --ignore-index`.
+
 Run Metis normally after the service credentials are available:
 
 ```bash

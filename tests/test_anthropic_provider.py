@@ -120,3 +120,21 @@ def test_custom_openai_compatible_embedding_model_name_is_preserved():
     embeddings = provider.get_embed_model_code()
 
     assert embeddings.model_name == "custom-embedding"
+
+
+def test_provider_allows_chat_without_embedding_api_key():
+    provider = AnthropicProvider(_config(embedding_api_key=""))
+
+    llm = provider.get_chat_model()
+
+    assert isinstance(llm, ChatAnthropic)
+    assert llm.model == "claude-opus-4-1-20250805"
+
+
+def test_embedding_model_requires_embedding_api_key_when_used():
+    provider = AnthropicProvider(_config(embedding_api_key=""))
+
+    with pytest.raises(ValueError) as exc_info:
+        provider.get_embed_model_code()
+
+    assert "embedding_api_key" in str(exc_info.value)

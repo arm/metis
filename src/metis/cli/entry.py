@@ -92,12 +92,17 @@ def build_engine(args, runtime):
     llm_provider = provider_cls(runtime)
 
     usage_runtime = UsageRuntime(args.codebase_path)
-    embed_model_code = llm_provider.get_embed_model_code(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
-    embed_model_docs = llm_provider.get_embed_model_docs(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
+    defer_embed_models = _should_defer_embed_models(args)
+    if defer_embed_models:
+        embed_model_code = None
+        embed_model_docs = None
+    else:
+        embed_model_code = llm_provider.get_embed_model_code(
+            **usage_runtime.hooks.embed_model_kwargs()
+        )
+        embed_model_docs = llm_provider.get_embed_model_docs(
+            **usage_runtime.hooks.embed_model_kwargs()
+        )
 
     if args.backend == "postgres":
         vector_backend = build_pg_backend(
@@ -114,6 +119,7 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
+        defer_embed_models=defer_embed_models,
         **runtime,
     )
     return engine, vector_backend
@@ -195,6 +201,37 @@ def _prepare_command_runtime(cmd, cmd_args, args):
         command_args=filtered_args,
         use_retrieval_context=True,
     )
+
+
+def _noninteractive_command_needs_embeddings(args) -> bool:
+    if not getattr(args, "non_interactive", False):
+        return False
+    if not getattr(args, "command", ""):
+        return False
+    parts = args.command.strip().split()
+    if not parts:
+        return False
+    cmd, cmd_args = parts[0], parts[1:]
+    spec = COMMANDS.get(cmd)
+    if spec is None:
+        return False
+    _filtered_args, ignore_index = _command_requests_ignore_index(args, cmd_args)
+    triage_requested = bool(getattr(args, "triage", False))
+    if triage_requested and cmd != "triage" and not spec.supports_triage:
+        return False
+    if ignore_index and spec.index_policy != "optional":
+        return False
+    if spec.invocation_mode == "index":
+        return True
+    if spec.index_policy == "none":
+        return False
+    if ignore_index and spec.index_policy == "optional":
+        return False
+    return True
+
+
+def _should_defer_embed_models(args) -> bool:
+    return not _noninteractive_command_needs_embeddings(args)
 
 
 def _interactive_command_ignores_index(cmd, cmd_args, args):

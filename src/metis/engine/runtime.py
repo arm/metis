@@ -21,6 +21,8 @@ class EngineConfig:
     custom_guidance_precedence: str
     embed_model_code: Any
     embed_model_docs: Any
+    engine_get_embed_model_code: Any
+    engine_get_embed_model_docs: Any
     max_workers: int
     max_token_length: int
     llama_query_model: str

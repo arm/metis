@@ -106,7 +106,7 @@ export OPENAI_API_KEY="your-key-here"
 
 **Anthropic**
 
-Metis can use Claude Opus for chat/review while using OpenAI-compatible embeddings for indexing. See the [Anthropic guide](docs/providers/anthropic.md).
+Metis can use Claude Opus for chat/review while using OpenAI-compatible embeddings for indexing. Embedding credentials are only needed for index-backed workflows. See the [Anthropic guide](docs/providers/anthropic.md).
 
 ### 3. Index and Run Analysis
 

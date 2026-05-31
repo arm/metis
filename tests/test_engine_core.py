@@ -172,6 +172,39 @@ def test_create_query_engines_passes_usage_callback_manager():
     )
 
 
+def test_engine_defers_embed_models_until_retrieval_is_used():
+    backend = Mock()
+    backend.init = Mock()
+    backend.embed_model_code = None
+    backend.embed_model_docs = None
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    code_embed_model = Mock()
+    docs_embed_model = Mock()
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = code_embed_model
+    llm_provider.get_embed_model_docs.return_value = docs_embed_model
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+        defer_embed_models=True,
+    )
+
+    llm_provider.get_embed_model_code.assert_not_called()
+    llm_provider.get_embed_model_docs.assert_not_called()
+
+    assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
+    assert backend.embed_model_code is code_embed_model
+    assert backend.embed_model_docs is docs_embed_model
+    assert engine._config.embed_model_code is code_embed_model
+    assert engine._config.embed_model_docs is docs_embed_model
+
+
 def test_review_graph_uses_usage_callbacks():
     backend = Mock()
     backend.init = Mock()
