@@ -40,6 +40,7 @@ REPORT_TEMPLATE = (
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
+    from sqlalchemy.engine.url import URL
 
     PG_SUPPORTED = True
 except ImportError:
@@ -628,9 +629,17 @@ def build_pg_backend(args, runtime, embed_model_code, embed_model_docs, quiet=Fa
         print_console("  uv pip install '.[postgres]'", quiet, markup=False)
         exit(1)
 
-    connection_string = (
-        f"postgresql://{runtime['pg_username']}:{runtime['pg_password']}"
-        f"@{runtime['pg_host']}:{int(runtime['pg_port'])}/{runtime['pg_db_name']}"
+    # TODO: PGVectorStoreImpl handles this via make_url()
+    # Though it stores the url locally and the class keeps
+    # the raw string. Can be caught by code review if someone
+    # wants to log it. It is low-risk though
+    connection_string = URL.create(
+        drivername="postgresql",
+        username=runtime["pg_username"],
+        password=runtime["pg_password"],
+        host=runtime["pg_host"],
+        port=int(runtime["pg_port"]),
+        database=runtime["pg_db_name"],
     )
     return PGVectorStoreImpl(
         connection_string=connection_string,
