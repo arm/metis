@@ -355,6 +355,7 @@ def test_load_runtime_config_reports_missing_anthropic_provider_keys(tmp_path):
 llm_provider:
   name: anthropic
   model: ""
+  code_embedding_model: text-embedding-3-large
 """,
         encoding="utf-8",
     )
@@ -365,6 +366,7 @@ llm_provider:
     message = str(exc_info.value)
     assert "Anthropic provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.model" in message
+    assert "llm_provider.docs_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -391,7 +393,7 @@ llm_provider:
     assert "Anthropic provider" in message
 
 
-def test_load_runtime_config_allows_anthropic_without_embedding_api_key(
+def test_load_runtime_config_reports_missing_anthropic_embedding_api_key(
     tmp_path, monkeypatch
 ):
     config_path = tmp_path / "metis.yaml"
@@ -408,33 +410,10 @@ llm_provider:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    runtime = load_runtime_config(config_path)
+    with pytest.raises(RuntimeError) as exc_info:
+        load_runtime_config(config_path)
 
-    assert runtime["llm_api_key"] == "anthropic-key"
-    assert runtime["embedding_api_key"] == ""
-
-
-def test_load_runtime_config_allows_anthropic_without_embedding_models(
-    tmp_path, monkeypatch
-):
-    config_path = tmp_path / "metis.yaml"
-    config_path.write_text(
-        """
-llm_provider:
-  name: anthropic
-  model: claude-opus-4-1-20250805
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["model"] == "claude-opus-4-1-20250805"
-    assert runtime["code_embedding_model"] == ""
-    assert runtime["docs_embedding_model"] == ""
-    assert runtime["embedding_api_key"] == ""
+    assert "required for Anthropic provider embeddings" in str(exc_info.value)
 
 
 def test_load_runtime_config_accepts_anthropic_query_model_alias(tmp_path, monkeypatch):
