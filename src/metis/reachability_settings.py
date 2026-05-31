@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared reachability configuration keys and defaults."""
-
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any
 
@@ -14,24 +10,18 @@ DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK = 3
 DEFAULT_REACHABILITY_MAX_PATH_LENGTH = 25
 DEFAULT_REACHABILITY_DOMAIN_PROFILES = ("gpu",)
 
-REACHABILITY_CONFIG_KEYS = (
-    "reachability_confirmation_model",
-    "reachability_workers",
-    "reachability_max_paths",
-    "reachability_max_paths_per_sink",
-    "reachability_max_path_length",
-    "reachability_reasoning_effort",
-    "reachability_source_functions",
-    "reachability_security_functions",
-    "reachability_domain_profiles",
-    "reachability_domain_hints",
+REACHABILITY_CONFIG_KEYS = tuple(
+    "reachability_confirmation_model reachability_workers reachability_max_paths "
+    "reachability_max_paths_per_sink reachability_max_path_length "
+    "reachability_reasoning_effort reachability_source_functions "
+    "reachability_security_functions reachability_domain_profiles "
+    "reachability_domain_hints".split()
 )
 
 
 def collect_reachability_config(
     config: Mapping[str, Any], engine_config: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Extract reachability config from legacy top-level keys or metis_engine."""
     engine_config = engine_config or {}
     reachability_config = {}
     for key in REACHABILITY_CONFIG_KEYS:
@@ -45,7 +35,6 @@ def collect_reachability_config(
 def coerce_reachability_settings(
     config: Mapping[str, Any] | None, *, default_workers: int
 ) -> dict[str, Any]:
-    """Map YAML-facing reachability config keys to service settings."""
     config = config or {}
     domain_profiles = config.get("reachability_domain_profiles")
     if domain_profiles is None:

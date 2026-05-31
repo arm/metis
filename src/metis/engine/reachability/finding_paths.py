@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source-path enrichment for findings that start at a primary function."""
-
-from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
@@ -19,13 +16,6 @@ from .graph_utils import (
 
 
 class FindingPathAnnotator:
-    """Attach deterministic source-to-defect paths to file-review findings.
-
-    Supplementary audit lenses often identify the defective function directly and
-    emit a single-node path. This helper keeps that finding but enriches it with
-    the best source-to-primary-function path from the full tree-sitter graph.
-    """
-
     def __init__(
         self,
         graph,
@@ -91,10 +81,10 @@ class FindingPathAnnotator:
 
         short_name = str(name).split("::")[-1]
         matches = [
-            self._graph.get_node(unique)
+            node
             for unique in self._graph.name_index.get(short_name, [])
+            if (node := self._graph.get_node(unique)) is not None
         ]
-        matches = [node for node in matches if node is not None]
         if wanted_file:
             same_file = [
                 node
@@ -102,8 +92,8 @@ class FindingPathAnnotator:
                 if _normalize_file_ref(node.file_path) == wanted_file
             ]
             if same_file:
-                return sorted(same_file, key=self._node_sort_key)[0]
-        return sorted(matches, key=self._node_sort_key)[0] if matches else None
+                matches = same_file
+        return min(matches, key=self._node_sort_key) if matches else None
 
     def _best_source_path_to(self, target_name: str) -> list[str]:
         target = self._graph.get_node(target_name)

@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import inspect
 import json
 import logging
@@ -12,10 +10,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from langchain_core.messages import SystemMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 import unidiff
 
 from metis.plugins.c_family import is_c_family_plugin
@@ -27,7 +22,8 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .reachability import FindingConsolidator, VulnerabilityFinding
-from .reachability.llm_runner import _chat_model_kwargs
+from .reachability.finding_normalization import _safe_int
+from .reachability.llm_runner import invoke_json_prompt_with_retry
 from .reachability.source_context import _read_line_context, _read_named_function_body
 from .repository import EngineRepository
 from .runtime import EngineConfig
@@ -45,61 +41,68 @@ _REACHABILITY_REASONING_METADATA_PREFIXES = (
 )
 _REVIEW_VALIDATION_BATCH_SIZE = 5
 _REVIEW_VALIDATION_DUPLICATE_RESCUE_FAMILIES = frozenset(
-    {
-        "authorization",
-        "command_injection",
-        "credential_storage",
-        "format_string",
-        "information_disclosure",
-        "integer_overflow",
-        "lifetime",
-        "memory_bounds",
-        "path_traversal",
-        "sql_injection",
-        "unsafe_deserialization",
-    }
+    "authorization command_injection credential_storage format_string information_disclosure "
+    "integer_overflow lifetime memory_bounds path_traversal race_condition resource_exhaustion "
+    "sql_injection unsafe_deserialization unchecked_error".split()
 )
-_REVIEW_VALIDATION_SEVERITY_RANK = {
-    "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 3,
-}
-_REVIEW_VALIDATION_CWE_FAMILIES = {
-    "CWE-22": "path_traversal",
-    "CWE-78": "command_injection",
-    "CWE-89": "sql_injection",
-    "CWE-120": "memory_bounds",
-    "CWE-125": "memory_bounds",
-    "CWE-134": "format_string",
-    "CWE-190": "integer_overflow",
-    "CWE-191": "integer_overflow",
-    "CWE-200": "information_disclosure",
-    "CWE-252": "unchecked_error",
-    "CWE-256": "credential_storage",
-    "CWE-285": "authorization",
-    "CWE-287": "authentication",
-    "CWE-404": "lifetime",
-    "CWE-415": "lifetime",
-    "CWE-416": "lifetime",
-    "CWE-787": "memory_bounds",
-    "CWE-798": "credential_storage",
-    "CWE-862": "authorization",
-    "CWE-863": "authorization",
-    "CWE-911": "lifetime",
-}
+_REVIEW_VALIDATION_SEVERITY_RANK = dict(
+    zip("critical high medium low".split(), range(4), strict=True)
+)
+_REVIEW_VALIDATION_FALSE_POSITIVE_MARKERS = tuple(
+    marker
+    for group in (
+        "false positive|already validated|already checked|already bounds-checked|"
+        "bounds checked before|validated before|guarded before|checked before|"
+        "unreachable|not reachable|cannot reach|no reachable path|"
+        "wrong function|wrong file|wrong line|different object|different allocation|"
+        "different resource|not dereferenced|not indexed|not freed|not released|"
+        "not user-controlled|attacker cannot control|input is trusted|"
+        "evidence contradicts|code contradicts|snippet contradicts|snippet shows no|code shows no",
+    )
+    for marker in group.split("|")
+)
+_REVIEW_VALIDATION_KEYWORD_FAMILIES = tuple(
+    item.rsplit(":", 1)
+    for group in (
+        "sql:sql_injection|command injection:command_injection|path traversal:path_traversal",
+        "deserialize:unsafe_deserialization|format string:format_string|use-after-release:lifetime|"
+        "use-after-free:lifetime|use after free:lifetime|dangling:lifetime|stale pointer:lifetime|"
+        "refcount:lifetime|callback:lifetime",
+        "out-of-bounds:memory_bounds|out of bounds:memory_bounds",
+        "bounds check:memory_bounds|array access:memory_bounds|array index:memory_bounds",
+        "index:memory_bounds|buffer overflow:memory_bounds|fixed buffer:memory_bounds",
+        "integer overflow:integer_overflow|unchecked arithmetic:integer_overflow",
+        "unchecked addition:integer_overflow|wraparound:integer_overflow|wrap:integer_overflow",
+        "race:race_condition|concurrent:race_condition|toctou:race_condition|"
+        "lock:race_condition|workqueue:race_condition",
+        "resource exhaustion:resource_exhaustion|denial of service:resource_exhaustion",
+        "descriptor:resource_exhaustion| fd :resource_exhaustion|leak:resource_exhaustion",
+        "not released:resource_exhaustion|not freed:resource_exhaustion",
+        "not dropped:resource_exhaustion|not unpinned:resource_exhaustion",
+        "pinned:resource_exhaustion|accounting:resource_exhaustion",
+        "cleanup:lifetime|unwind:lifetime|rollback:lifetime|unregister:lifetime|"
+        "cancel:lifetime|flush:lifetime|unchecked error:unchecked_error|"
+        "missing validation:memory_bounds|auth:authorization|permission:authorization|"
+        "credential:credential_storage|secret:credential_storage|information disclosure:information_disclosure",
+    )
+    for item in group.split("|")
+)
+_DROP_REVIEW_ITEM = object()
 _REVIEW_VALIDATION_SYSTEM_PROMPT = """You validate reachability security review findings before the final report.
 
-You receive candidate findings from an automated review. Be strict and reduce
-noise. Keep only findings that are plausible, independently useful security
-issues supported by the supplied evidence and code context.
+You receive candidate findings from an automated review. Be conservative when
+dropping findings: this pass should reduce obvious fakes, weak speculation, and
+duplicates while preserving plausible security bug candidates.
 
 For each candidate:
-- keep=true only when the finding describes a credible security bug, not just a
-  generic code-quality concern, theoretical style issue, or unsupported guess.
-- keep=false for false positives, weak/speculative reports, missing-prerequisite
-  reports, reliability-only bugs without security impact, and duplicates already
-  represented by a stronger candidate in the same batch.
+- keep=true when the finding describes a plausible security bug candidate
+  supported by the supplied evidence and code context.
+- Do not drop credible memory-safety, bounds, arithmetic, lifetime, race,
+  resource-exhaustion, cleanup, or accounting findings merely because practical
+  exploitability is not fully proven.
+- keep=false only for clear false positives, unsupported speculation, generic
+  style issues, missing-prerequisite reports, or duplicates already represented
+  by a stronger candidate in the same batch.
 - Calibrate confidence as a number from 0.0 to 1.0 based on evidence quality,
   source/sink specificity, exploitability prerequisites, and code support.
 - Do not add findings or rewrite the report. Only decide keep/drop and
@@ -128,13 +131,9 @@ class _ReviewValidationDecisionModel(BaseModel):
     )
     reason: str = Field("", description="Concise validation reason.")
 
-    model_config = ConfigDict(extra="ignore")
-
 
 class _ReviewValidationResponseModel(BaseModel):
     decisions: list[_ReviewValidationDecisionModel] = Field(default_factory=list)
-
-    model_config = ConfigDict(extra="ignore")
 
 
 class ReviewService:
@@ -197,7 +196,6 @@ class ReviewService:
         return result
 
     def aggregate_review_results(self, results):
-        """Run final reachability dedup and validation across review groups."""
         if self._reachability_service is None or not isinstance(results, dict):
             return results
 
@@ -244,35 +242,13 @@ class ReviewService:
             return results
 
         kept_ids = {finding.id for finding in deduped}
-        finding_id_by_ref = {ref: finding.id for ref, finding in zip(refs, findings)}
-        aggregated_groups = []
-        for group_index, group in enumerate(review_groups):
-            if not isinstance(group, dict):
-                aggregated_groups.append(group)
-                continue
-            items = group.get("reviews")
-            if not isinstance(items, list):
-                aggregated_groups.append(group)
-                continue
-
-            had_reachability_items = False
-            kept_items = []
-            for item_index, item in enumerate(items):
-                finding_id = finding_id_by_ref.get((group_index, item_index))
-                if finding_id is None:
-                    kept_items.append(item)
-                    continue
-                had_reachability_items = True
-                if finding_id in kept_ids:
-                    kept_items.append(item)
-
-            if kept_items or not had_reachability_items:
-                aggregated_group = dict(group)
-                aggregated_group["reviews"] = kept_items
-                aggregated_groups.append(aggregated_group)
-
+        item_replacements = {
+            ref: _DROP_REVIEW_ITEM
+            for ref, finding in zip(refs, findings)
+            if finding.id not in kept_ids
+        }
         aggregated = dict(results)
-        aggregated["reviews"] = aggregated_groups
+        aggregated["reviews"] = _rewrite_review_groups(review_groups, item_replacements)
         logger.info(
             "Final reachability aggregation removed %d duplicate findings from %d candidates",
             removed,
@@ -287,21 +263,12 @@ class ReviewService:
 
         candidates = []
         candidate_refs = []
-        for group_index, group in enumerate(review_groups):
-            if not isinstance(group, dict):
-                continue
-            items = group.get("reviews")
-            if not isinstance(items, list):
-                continue
-            for item_index, item in enumerate(items):
-                if not _needs_reachability_validation(item):
-                    continue
+        for group_index, item_index, item in _iter_review_items(review_groups):
+            if _needs_reachability_validation(item):
                 candidate_refs.append((group_index, item_index))
                 candidates.append(
                     _review_validation_payload(
-                        len(candidates),
-                        item,
-                        codebase_path=self._config.codebase_path,
+                        len(candidates), item, codebase_path=self._config.codebase_path
                     )
                 )
 
@@ -320,61 +287,47 @@ class ReviewService:
         if not decisions_by_index:
             return results
 
-        ref_to_candidate_index = {
-            ref: candidate_index
-            for candidate_index, ref in enumerate(candidate_refs)
-        }
-        validated_groups = []
         kept_count = 0
         filtered_count = 0
-        for group_index, group in enumerate(review_groups):
-            if not isinstance(group, dict):
-                validated_groups.append(group)
+        item_replacements = {}
+        filtered_by_group = {}
+        for candidate_index, ref in enumerate(candidate_refs):
+            decision = decisions_by_index.get(candidate_index)
+            if decision is None:
                 continue
-            items = group.get("reviews")
-            if not isinstance(items, list):
-                validated_groups.append(group)
-                continue
-
-            kept_items = []
-            filtered_items = list(group.get("review_validation_filtered_reviews") or [])
-            for item_index, item in enumerate(items):
-                candidate_index = ref_to_candidate_index.get((group_index, item_index))
-                if candidate_index is None:
-                    kept_items.append(item)
-                    continue
-                decision = decisions_by_index.get(candidate_index)
-                if decision is None:
-                    kept_items.append(item)
-                    continue
-                item_copy = dict(item)
-                confidence = _normalised_confidence(
-                    decision.get("confidence"),
-                    fallback=item_copy.get("confidence"),
+            group_index, item_index = ref
+            item = review_groups[group_index]["reviews"][item_index]
+            item_copy = dict(item)
+            item_copy["confidence"] = _normalised_confidence(
+                decision.get("confidence"),
+                fallback=item_copy.get("confidence"),
+            )
+            item_copy["review_validation_reason"] = str(
+                decision.get("reason") or ""
+            ).strip()
+            model_keep = bool(decision.get("keep", True))
+            keep = _review_validation_final_keep(candidates[candidate_index], decision)
+            item_copy["review_validation_keep"] = keep
+            if keep != model_keep:
+                item_copy["review_validation_model_keep"] = model_keep
+                item_copy["review_validation_override_reason"] = (
+                    "Kept by conservative review guardrails."
                 )
-                item_copy["confidence"] = confidence
-                item_copy["review_validation_reason"] = str(
-                    decision.get("reason") or ""
-                ).strip()
-                keep = bool(decision.get("keep", True))
-                item_copy["review_validation_keep"] = keep
-                if keep:
-                    kept_count += 1
-                    kept_items.append(item_copy)
-                else:
-                    filtered_count += 1
-                    item_copy["review_validation_filtered"] = True
-                    filtered_items.append(item_copy)
-
-            validated_group = dict(group)
-            validated_group["reviews"] = kept_items
-            if filtered_items:
-                validated_group["review_validation_filtered_reviews"] = filtered_items
-            if kept_items or filtered_items:
-                validated_groups.append(validated_group)
+            if keep:
+                kept_count += 1
+                item_replacements[ref] = item_copy
+            else:
+                filtered_count += 1
+                item_copy["review_validation_filtered"] = True
+                item_replacements[ref] = _DROP_REVIEW_ITEM
+                filtered_by_group.setdefault(group_index, []).append(item_copy)
 
         validated = dict(results)
-        validated["reviews"] = validated_groups
+        validated["reviews"] = _rewrite_review_groups(
+            review_groups,
+            item_replacements,
+            filtered_by_group,
+        )
         validated["review_validation_summary"] = {
             "total_candidates": len(candidates),
             "kept": kept_count,
@@ -409,88 +362,43 @@ class ReviewService:
         return _rescue_filtered_duplicate_cluster_representatives(candidates, decisions)
 
     def _invoke_review_validation_batch(self, batch, *, model, reasoning_effort=None):
-        last_failure = "unknown review validation failure"
-        for attempt in range(2):
-            try:
-                chat = self._config.llm_provider.get_chat_model(
-                    model=model,
-                    max_tokens=6000,
-                    temperature=0.0,
-                    **_chat_model_kwargs(
-                        self._config.usage_runtime,
-                        reasoning_effort=reasoning_effort,
-                    ),
-                )
-                prompt = ChatPromptTemplate.from_messages(
-                    [
-                        SystemMessage(content=_REVIEW_VALIDATION_SYSTEM_PROMPT),
-                        (
-                            "user",
-                            "Candidate findings JSON:\n{candidate_findings}\n\n"
-                            "Return exactly one JSON object with a top-level "
-                            '"decisions" array. Do not return markdown or prose.',
-                        ),
-                    ]
-                )
-                variables = {
-                    "candidate_findings": json.dumps(batch, separators=(",", ":"))
-                }
-                parsed = None
-                structured_output = getattr(chat, "with_structured_output", None)
-                if callable(structured_output):
-                    try:
-                        raw_structured = (
-                            prompt
-                            | structured_output(
-                                _ReviewValidationResponseModel,
-                                method="function_calling",
-                            )
-                        ).invoke(variables)
-                        parsed = _review_validation_structured_payload(raw_structured)
-                    except Exception as exc:
-                        last_failure = f"structured validation failed: {exc}"
-                if parsed is None:
-                    raw = (prompt | chat | StrOutputParser()).invoke(variables)
-                    parsed = _parse_review_validation_response(raw)
-                if parsed is not None:
-                    return parsed
-                last_failure = (
-                    "expected structured validation payload or JSON object with "
-                    "decisions list"
-                )
-            except Exception as exc:
-                last_failure = str(exc)
-            if attempt == 0:
-                logger.warning(
-                    "Review validation failed for %d candidates; retrying once: %s",
-                    len(batch),
-                    last_failure,
-                )
-        logger.warning(
-            "Review validation failed for %d candidates; keeping batch unchanged: %s",
-            len(batch),
-            last_failure,
+        return invoke_json_prompt_with_retry(
+            self._config.llm_provider,
+            self._config.usage_runtime,
+            model=model,
+            max_tokens=6000,
+            temperature=0.0,
+            system_prompt=_REVIEW_VALIDATION_SYSTEM_PROMPT,
+            user_prompt=(
+                "Candidate findings JSON:\n{candidate_findings}\n\n"
+                "Return exactly one JSON object with a top-level "
+                '"decisions" array. Do not return markdown or prose.'
+            ),
+            variables={"candidate_findings": json.dumps(batch, separators=(",", ":"))},
+            parse=_parse_review_validation_response,
+            logger=logger,
+            label="Review validation",
+            batch_size=len(batch),
+            invalid_message=(
+                "expected structured validation payload or JSON object with "
+                "decisions list"
+            ),
+            final_keep_message="keeping batch unchanged",
+            response_model=_ReviewValidationResponseModel,
+            reasoning_effort=reasoning_effort,
         )
-        return None
 
     def _reachability_findings_from_review_groups(self, review_groups):
         refs = []
         findings = []
-        for group_index, group in enumerate(review_groups):
-            if not isinstance(group, dict):
+        for group_index, item_index, item in _iter_review_items(review_groups):
+            if not _is_reachability_review_item(item):
                 continue
-            items = group.get("reviews")
-            if not isinstance(items, list):
-                continue
-            for item_index, item in enumerate(items):
-                if not _is_reachability_review_item(item):
-                    continue
-                finding = _review_item_to_reachability_finding(
-                    item,
-                    finding_id=f"review-aggregate-{len(findings)}",
-                )
-                refs.append((group_index, item_index))
-                findings.append(finding)
+            finding = _review_item_to_reachability_finding(
+                item, finding_id=f"review-aggregate-{len(findings)}"
+            )
+            refs.append((group_index, item_index))
+            findings.append(finding)
         return refs, findings
 
     def review_file(
@@ -827,25 +735,65 @@ def _is_reachability_review_item(item):
     return bool(item.get("analysis_type") or "Root cause:" in reasoning)
 
 
+def _iter_review_items(review_groups):
+    for group_index, group in enumerate(review_groups):
+        items = group.get("reviews") if isinstance(group, dict) else None
+        if isinstance(items, list):
+            for item_index, item in enumerate(items):
+                yield group_index, item_index, item
+
+
+def _rewrite_review_groups(review_groups, item_replacements, filtered_by_group=None):
+    filtered_by_group = filtered_by_group or {}
+    rewritten = []
+    for group_index, group in enumerate(review_groups):
+        if not isinstance(group, dict):
+            rewritten.append(group)
+            continue
+        items = group.get("reviews")
+        if not isinstance(items, list):
+            rewritten.append(group)
+            continue
+
+        touched = False
+        kept_items = []
+        for item_index, item in enumerate(items):
+            replacement = item_replacements.get((group_index, item_index), item)
+            if replacement is _DROP_REVIEW_ITEM:
+                touched = True
+                continue
+            touched = touched or replacement is not item
+            kept_items.append(replacement)
+
+        filtered_items = list(group.get("review_validation_filtered_reviews") or [])
+        filtered_items.extend(filtered_by_group.get(group_index, ()))
+        if kept_items or filtered_items or not touched:
+            rewritten_group = dict(group) if touched or filtered_items else group
+            if touched or filtered_items:
+                rewritten_group["reviews"] = kept_items
+            if filtered_items:
+                rewritten_group["review_validation_filtered_reviews"] = filtered_items
+            rewritten.append(rewritten_group)
+    return rewritten
+
+
 def _parse_review_validation_response(raw):
+    structured = _review_validation_structured_payload(raw)
+    if structured is not None:
+        return structured
     parsed = parse_json_output(raw)
-    for _ in range(2):
-        if isinstance(parsed, dict):
-            decisions = parsed.get("decisions")
-            return parsed if isinstance(decisions, list) else None
-        if isinstance(parsed, list):
-            return {"decisions": parsed}
+    for _ in range(3):
         if isinstance(parsed, str):
             try:
                 parsed = json.loads(parsed)
                 continue
             except (TypeError, ValueError):
                 return None
+        if isinstance(parsed, list):
+            return {"decisions": parsed}
+        if isinstance(parsed, dict) and isinstance(parsed.get("decisions"), list):
+            return parsed
         return None
-    if isinstance(parsed, dict) and isinstance(parsed.get("decisions"), list):
-        return parsed
-    if isinstance(parsed, list):
-        return {"decisions": parsed}
     return None
 
 
@@ -900,11 +848,7 @@ def _review_validation_code_context(codebase_path, item):
 
     parts = []
     line_context = _read_line_context(
-        codebase_path,
-        primary_file,
-        line_number,
-        context=4,
-        max_chars=1800,
+        codebase_path, primary_file, line_number, context=4, max_chars=1800
     )
     if line_context:
         parts.append(f"Nearby lines:\n{line_context}")
@@ -932,7 +876,7 @@ def _rescue_filtered_duplicate_cluster_representatives(candidates, decisions):
         return decisions
 
     clusters = {}
-    duplicate_signal = {}
+    duplicate_signal = set()
     for candidate in candidates:
         candidate_index = _safe_int(candidate.get("index"), -1)
         if candidate_index < 0:
@@ -943,32 +887,23 @@ def _rescue_filtered_duplicate_cluster_representatives(candidates, decisions):
         if not _is_strong_review_validation_candidate(candidate, family):
             continue
         key = (
-            _normalised_review_file(candidate.get("primary_file")),
+            str(candidate.get("primary_file") or "").replace("\\", "/").lstrip("./"),
             _short_function_name(candidate.get("primary_function")),
             _safe_int(candidate.get("line_number"), 0),
             family,
         )
         clusters.setdefault(key, []).append(candidate)
-        decision = decisions_by_index.get(candidate_index, {})
-        duplicate_signal[key] = duplicate_signal.get(
-            key, False
-        ) or _review_validation_duplicate_signal(decision)
+        if _review_validation_duplicate_signal(decisions_by_index.get(candidate_index)):
+            duplicate_signal.add(key)
 
     changed = False
     for key, cluster in clusters.items():
-        if len(cluster) < 2 or not duplicate_signal.get(key):
+        if len(cluster) < 2 or key not in duplicate_signal:
             continue
-        if any(
-            _review_validation_decision_keeps(
-                decisions_by_index.get(_safe_int(candidate.get("index"), -1))
-            )
-            for candidate in cluster
-        ):
+        indexes = [_safe_int(candidate.get("index"), -1) for candidate in cluster]
+        if any(index not in decisions_by_index for index in indexes):
             continue
-        if any(
-            _safe_int(candidate.get("index"), -1) not in decisions_by_index
-            for candidate in cluster
-        ):
+        if any(decisions_by_index[index].get("keep", True) for index in indexes):
             continue
 
         representative = max(cluster, key=_review_validation_strength_key)
@@ -999,38 +934,53 @@ def _rescue_filtered_duplicate_cluster_representatives(candidates, decisions):
     if not changed:
         return decisions
 
-    merged = []
-    emitted = set()
-    for decision in decisions:
-        if not isinstance(decision, dict):
-            merged.append(decision)
-            continue
-        decision_index = _safe_int(decision.get("index"), -1)
-        replacement = decisions_by_index.get(decision_index)
-        if replacement is None:
-            merged.append(decision)
-            continue
-        merged.append(replacement)
-        emitted.add(decision_index)
-
-    for decision_index, decision in sorted(decisions_by_index.items()):
-        if decision_index not in emitted:
-            merged.append(decision)
-    return merged
+    return [
+        (
+            decisions_by_index.get(_safe_int(decision.get("index"), -1), decision)
+            if isinstance(decision, dict)
+            else decision
+        )
+        for decision in decisions
+    ]
 
 
 def _review_validation_duplicate_signal(decision):
     reason = str((decision or {}).get("reason") or "").lower()
-    return (
-        "duplicate" in reason
-        or "same issue" in reason
-        or "same root cause" in reason
-        or "already represented" in reason
+    return any(
+        marker in reason
+        for marker in (
+            "duplicate",
+            "same issue",
+            "same root cause",
+            "already represented",
+        )
     )
 
 
-def _review_validation_decision_keeps(decision):
-    return bool(decision) and bool(decision.get("keep", True))
+def _review_validation_final_keep(candidate, decision):
+    if not isinstance(decision, dict):
+        return True
+    if bool(decision.get("keep", True)):
+        return True
+    if _review_validation_duplicate_signal(decision):
+        return False
+    if _review_validation_concrete_false_positive_signal(decision):
+        return False
+    return not _is_weak_review_validation_candidate(candidate)
+
+
+def _is_weak_review_validation_candidate(candidate):
+    severity = str(candidate.get("severity") or "").strip().lower()
+    confidence = _normalised_confidence(candidate.get("confidence"))
+    family = _review_validation_issue_family(candidate)
+    return confidence < 0.70 or severity == "low" or not family
+
+
+def _review_validation_concrete_false_positive_signal(decision):
+    reason = str((decision or {}).get("reason") or "").lower()
+    if not reason:
+        return False
+    return any(marker in reason for marker in _REVIEW_VALIDATION_FALSE_POSITIVE_MARKERS)
 
 
 def _is_strong_review_validation_candidate(candidate, family):
@@ -1052,10 +1002,6 @@ def _review_validation_strength_key(candidate):
 
 
 def _review_validation_issue_family(candidate):
-    cwe = str(candidate.get("cwe") or "").upper()
-    if cwe in _REVIEW_VALIDATION_CWE_FAMILIES:
-        return _REVIEW_VALIDATION_CWE_FAMILIES[cwe]
-
     text = " ".join(
         str(candidate.get(field) or "")
         for field in (
@@ -1066,34 +1012,10 @@ def _review_validation_issue_family(candidate):
             "mitigation",
         )
     ).lower()
-    keyword_families = (
-        ("sql", "sql_injection"),
-        ("command injection", "command_injection"),
-        ("path traversal", "path_traversal"),
-        ("deserialize", "unsafe_deserialization"),
-        ("format string", "format_string"),
-        ("use-after-free", "lifetime"),
-        ("use after free", "lifetime"),
-        ("refcount", "lifetime"),
-        ("out-of-bounds", "memory_bounds"),
-        ("out of bounds", "memory_bounds"),
-        ("buffer overflow", "memory_bounds"),
-        ("integer overflow", "integer_overflow"),
-        ("wraparound", "integer_overflow"),
-        ("auth", "authorization"),
-        ("permission", "authorization"),
-        ("credential", "credential_storage"),
-        ("secret", "credential_storage"),
-        ("information disclosure", "information_disclosure"),
-    )
-    for keyword, family in keyword_families:
+    for keyword, family in _REVIEW_VALIDATION_KEYWORD_FAMILIES:
         if keyword in text:
             return family
     return ""
-
-
-def _normalised_review_file(value):
-    return str(value or "").replace("\\", "/").lstrip("./")
 
 
 def _short_function_name(value):
@@ -1122,17 +1044,21 @@ def _review_item_to_reachability_finding(item, *, finding_id):
     primary_function = str(item.get("primary_function") or "")
     line_number = _safe_int(item.get("line_number"), 0)
     return VulnerabilityFinding(
-        id=finding_id,
-        vulnerability_type="other",
-        severity=str(item.get("severity") or "medium").lower(),
-        confidence=_safe_float(item.get("confidence"), 0.0),
-        source_function=primary_function,
-        source_file=primary_file,
-        source_line=line_number,
-        sink_function=primary_function,
-        sink_file=primary_file,
-        sink_line=line_number,
-        path=_safe_string_list(item.get("path")),
+        finding_id,
+        "other",
+        str(item.get("severity") or "medium").lower(),
+        _safe_float(item.get("confidence"), 0.0),
+        primary_function,
+        primary_file,
+        line_number,
+        primary_function,
+        primary_file,
+        line_number,
+        path=(
+            [str(path_item) for path_item in item.get("path") if path_item]
+            if isinstance(item.get("path"), list)
+            else []
+        ),
         description=str(item.get("issue") or ""),
         root_cause=root_cause,
         evidence=evidence,
@@ -1162,13 +1088,6 @@ def _split_reachability_reasoning(reasoning):
     return root_cause, "\n".join(evidence_lines)
 
 
-def _safe_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _safe_float(value, default=0.0):
     try:
         return float(value)
@@ -1180,20 +1099,10 @@ def _normalised_confidence(value, *, fallback=0.0):
     if isinstance(value, str):
         word = value.strip().lower()
         if word in {"critical", "certain"}:
-            return 0.98
-        if word == "high":
-            return 0.85
-        if word == "medium":
-            return 0.6
-        if word == "low":
-            return 0.35
+            word = "certain"
+        if word in {"certain", "high", "medium", "low"}:
+            return {"certain": 0.98, "high": 0.85, "medium": 0.6, "low": 0.35}[word]
     parsed = _safe_float(value, _safe_float(fallback, 0.0))
     if parsed > 1.0 and parsed <= 100.0:
         parsed = parsed / 100.0
     return max(0.0, min(1.0, parsed))
-
-
-def _safe_string_list(value):
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if item]

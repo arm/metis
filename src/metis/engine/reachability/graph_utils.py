@@ -1,19 +1,22 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small graph and sequence helpers for reachability analysis."""
-from __future__ import annotations
-
 from collections import defaultdict
+from dataclasses import replace
 import hashlib
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
 
-from .models import FunctionNode, ReachabilityGraph
+from .models import ReachabilityGraph
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
 _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
+
+
+def _emit_progress(callback, event, **payload):
+    if callback:
+        callback({"event": event, **payload})
 
 
 def _chunked(items, size):
@@ -44,7 +47,6 @@ def _build_reverse_edges(graph, sort_key):
 
 
 def graph_fingerprint(graph) -> str:
-    """Return a deterministic identity for graph content that affects analysis."""
     digest = hashlib.sha256()
 
     def update(*parts) -> None:
@@ -138,22 +140,7 @@ def _copy_graph_nodes(graph, node_names):
         node = graph.get_node(unique_name)
         if not node:
             continue
-        focus.add_node(
-            FunctionNode(
-                unique_name=node.unique_name,
-                file_path=node.file_path,
-                name=node.name,
-                line_number=node.line_number,
-                is_source=node.is_source,
-                is_sink=node.is_sink,
-                language=node.language,
-                calls=list(node.calls or []),
-                resolved_calls=[],
-                source_reason=node.source_reason,
-                sink_type=node.sink_type,
-                sink_reason=node.sink_reason,
-            )
-        )
+        focus.add_node(replace(node, calls=list(node.calls or []), resolved_calls=[]))
     needed_files = {node.file_path for node in focus.nodes.values()}
     for global_construct in graph.get_globals():
         if global_construct.file_path in needed_files:
@@ -165,7 +152,6 @@ def _copy_graph_nodes(graph, node_names):
 def select_confirmation_paths(
     paths, graph, *, max_paths=DEFAULT_REACHABILITY_MAX_PATHS
 ):
-    """Pick a bounded, representative set of source-rooted paths for LLM review."""
     paths = _dedupe_paths(paths)
     if max_paths and int(max_paths) > 0:
         return paths[: int(max_paths)]

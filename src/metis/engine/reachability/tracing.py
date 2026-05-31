@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Path tracing utilities over the shared reachability graph."""
 
-from __future__ import annotations
 from collections import defaultdict
 from functools import partial
 
@@ -14,8 +12,6 @@ from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort
 
 
 class SourceRootedPathTracer:
-    """Trace maximal source-rooted paths without relying on sink labels."""
-
     def __init__(
         self,
         graph,
@@ -61,10 +57,10 @@ class SourceRootedPathTracer:
         endpoint_name = path[-1]
         endpoint = self._g.get_node(endpoint_name)
         return ReachabilityPath(
-            source=source_name,
-            sink=endpoint_name,
-            path=list(path),
-            sink_type=(
+            source_name,
+            endpoint_name,
+            list(path),
+            (
                 endpoint.sink_type
                 if endpoint and endpoint.is_sink
                 else "reachable_endpoint"

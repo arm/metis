@@ -1,40 +1,18 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small graph and finding records shared by reachability implementations."""
-
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ALLOWED_VULNERABILITY_TYPES = (
-    "buffer_overflow",
-    "command_injection",
-    "counter_symmetry",
-    "double_free",
-    "format_string",
-    "information_leak",
-    "integer_overflow",
-    "lifecycle_asymmetry",
-    "lock_order",
-    "missing_auth",
-    "missing_validation",
-    "null_dereference",
-    "out_of_bounds",
-    "partial_cleanup",
-    "path_traversal",
-    "race_condition",
-    "refcount_mismatch",
-    "state_ordering",
-    "stale_metadata",
-    "toctou",
-    "type_confusion",
-    "use_after_free",
-    "use_after_release",
-    "other",
+ALLOWED_VULNERABILITY_TYPES = tuple(
+    "buffer_overflow command_injection counter_symmetry double_free format_string "
+    "information_leak integer_overflow lifecycle_asymmetry lock_order missing_auth "
+    "missing_validation null_dereference out_of_bounds partial_cleanup path_traversal "
+    "race_condition refcount_mismatch state_ordering stale_metadata toctou "
+    "type_confusion use_after_free use_after_release other".split()
 )
 
 VulnerabilityType: TypeAlias = Literal[*ALLOWED_VULNERABILITY_TYPES]
@@ -42,8 +20,6 @@ Severity: TypeAlias = Literal["critical", "high", "medium", "low"]
 
 
 class ReachabilityFindingEntryModel(BaseModel):
-    """Structured LLM finding entry shared by reachability analysis lenses."""
-
     analysis_type: str = Field("", description="Requested analysis type.")
     vulnerability_type: VulnerabilityType = Field(
         "other", description="Exact vulnerability category from the allowed enum."
@@ -97,8 +73,6 @@ class ReachabilityFindingEntryModel(BaseModel):
 
 
 class ReachabilityConfirmationFindingEntryModel(ReachabilityFindingEntryModel):
-    """Structured finding entry for candidate path confirmation."""
-
     path_index: int = Field(
         ge=0, description="Index of the candidate path that proves this finding."
     )
@@ -126,8 +100,6 @@ class ReachabilityConfirmationResponseModel(BaseModel):
 
 @dataclass
 class FunctionNode:
-    """Function-level call-graph node keyed as ``relative/path.c::symbol``."""
-
     unique_name: str
     file_path: str
     name: str
@@ -162,8 +134,6 @@ class ReachabilityPath:
 
 @dataclass
 class VulnerabilityFinding:
-    """Internal finding model before conversion to the review JSON shape."""
-
     id: str
     vulnerability_type: str
     severity: str
@@ -196,8 +166,6 @@ class VulnerabilityFinding:
 
 
 class ReachabilityGraph:
-    """Mutable call graph with best-effort name-based call resolution."""
-
     def __init__(self):
         self.nodes: dict[str, FunctionNode] = {}
         self.name_index: dict[str, list[str]] = {}
@@ -230,7 +198,6 @@ class ReachabilityGraph:
         ]
 
     def annotate_automatic_sources(self):
-        """Mark graph roots as sources after calls have been resolved."""
         incoming = {name: set() for name in self.nodes}
         for caller in self.nodes.values():
             for callee in caller.resolved_calls or []:
@@ -249,7 +216,6 @@ class ReachabilityGraph:
         return updated
 
     def annotate_external_call_sinks(self, classify_call):
-        """Mark functions that call known unresolved external APIs as sinks."""
         updated = 0
         for node in self.nodes.values():
             if node.is_sink:
@@ -284,5 +250,4 @@ class ReachabilityGraph:
         return sum(len(n.resolved_calls) for n in self.nodes.values())
 
     def get_file_nodes(self, file_path):
-        """Return all nodes in a given file."""
         return [n for n in self.nodes.values() if n.file_path == file_path]

@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finding path annotation, filtering, and final consolidation."""
-
-from __future__ import annotations
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
@@ -14,8 +11,6 @@ from .post_filters import _post_filter_findings, _strict_file_findings
 
 
 class FindingFinalizer:
-    """Prepare reachability findings for review output."""
-
     def __init__(self, codebase_path: str):
         self._codebase_path = codebase_path
 

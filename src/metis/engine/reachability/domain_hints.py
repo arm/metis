@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional project/domain hints for C/C++ reachability analysis."""
-
-from __future__ import annotations
-
 
 _GPU_KEYWORDS = tuple(
     """
@@ -39,7 +35,6 @@ _BUILTIN_PROFILES = {"gpu": _GPU_PROFILE}
 
 
 def normalize_domain_hints(raw_hints=None, raw_profiles=None):
-    """Return normalized domain hint data from built-in profiles and user config."""
     keywords: list[str] = []
     notes: list[str] = []
 

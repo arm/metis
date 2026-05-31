@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Graph-wide supplementary audits for C/C++ reachability review."""
 
-from __future__ import annotations
 import logging
 import os
 from collections import defaultdict
@@ -14,7 +12,7 @@ from metis.usage import submit_with_current_context
 
 from .llm_runner import invoke_reachability_prompt
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
-from .graph_utils import _build_reverse_edges, _chunked, _node_sort_key
+from .graph_utils import _build_reverse_edges, _chunked, _emit_progress, _node_sort_key
 from .lock_order import _extract_lock_conflicts
 from .models import ReachabilityFindingResponseModel
 from .supplementary_lenses import (
@@ -41,8 +39,6 @@ logger = logging.getLogger("metis")
 
 
 class SupplementaryAnalyzer:
-    """Run targeted semantic lenses over graph-selected function groups."""
-
     def __init__(
         self,
         llm_provider,
@@ -67,9 +63,11 @@ class SupplementaryAnalyzer:
         self._domain_prompt_hints = format_domain_hints_for_prompt(self._domain_hints)
 
     def _with_domain_hints(self, prompt):
-        if not self._domain_prompt_hints:
-            return prompt
-        return f"{prompt}\n\n{self._domain_prompt_hints}"
+        return (
+            f"{prompt}\n\n{self._domain_prompt_hints}"
+            if self._domain_prompt_hints
+            else prompt
+        )
 
     def analyze(
         self,
@@ -85,9 +83,9 @@ class SupplementaryAnalyzer:
             if profile == "review"
             else list(_FULL_LENS_SPECS)
         )
-        findings = []
         if not lens_specs:
-            return findings
+            return []
+        findings = []
         combined_specs = [
             spec for spec in lens_specs if spec.kind in _COMBINED_GRAPH_LENS_KINDS
         ]
@@ -101,9 +99,7 @@ class SupplementaryAnalyzer:
         lens_workers = max(1, worker_budget // lens_parallelism)
 
         def _job_name(job):
-            if isinstance(job, tuple):
-                return "combined_graph_lenses"
-            return job.name
+            return "combined_graph_lenses" if isinstance(job, tuple) else job.name
 
         def _run_lens(job):
             try:
@@ -117,13 +113,11 @@ class SupplementaryAnalyzer:
             except Exception as exc:
                 name = _job_name(job)
                 logger.warning("%s lens fail: %s", name, exc)
-                if progress_callback:
-                    progress_callback(
-                        {
-                            "event": f"{name}_error",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
+                _emit_progress(
+                    progress_callback,
+                    f"{name}_error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
                 return []
 
         if lens_parallelism == 1:
@@ -143,8 +137,11 @@ class SupplementaryAnalyzer:
             by_type = defaultdict(int)
             for f in findings:
                 by_type[f.analysis_type] += 1
-            progress_callback(
-                {"event": "supplementary_done", **dict(by_type), "total": len(findings)}
+            _emit_progress(
+                progress_callback,
+                "supplementary_done",
+                **dict(by_type),
+                total=len(findings),
             )
         return findings
 
@@ -162,20 +159,33 @@ class SupplementaryAnalyzer:
             "lens_instructions": lens_instructions,
         }
 
+    def _invoke_findings(
+        self, system_prompt, user_prompt, variables, *, max_tokens=None
+    ):
+        return invoke_reachability_prompt(
+            self._p,
+            self._u,
+            model=self._m,
+            max_tokens=max_tokens or self._st,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            variables=variables,
+            response_model=ReachabilityFindingResponseModel,
+            reasoning_effort=self._reasoning_effort,
+        )
+
     def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
         event_name = "combined_graph_lenses"
         analysis_types = [spec.analysis_type for spec in specs]
         fns = list(graph.nodes.values())
         if not fns:
             return []
-        if cb:
-            cb(
-                {
-                    "event": f"{event_name}_start",
-                    "functions": len(fns),
-                    "lenses": [spec.name for spec in specs],
-                }
-            )
+        _emit_progress(
+            cb,
+            f"{event_name}_start",
+            functions=len(fns),
+            lenses=[spec.name for spec in specs],
+        )
         chunks = [
             (fns, chunk)
             for chunk in _build_file_grouped_chunks(
@@ -191,37 +201,18 @@ class SupplementaryAnalyzer:
                 for nodes, chunk in chunks
             ]
 
-        results = []
-
         def _run_chunk(chunk_nodes, code_chunk):
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._m,
-                max_tokens=self._st,
-                system_prompt=_COMBINED_GRAPH_SYS,
-                user_prompt=_COMBINED_GRAPH_USR,
-                variables=self._combined_prompt_variables(analysis_types, code_chunk),
-                response_model=ReachabilityFindingResponseModel,
-                reasoning_effort=self._reasoning_effort,
+            raw = self._invoke_findings(
+                _COMBINED_GRAPH_SYS,
+                _COMBINED_GRAPH_USR,
+                self._combined_prompt_variables(analysis_types, code_chunk),
             )
             return _parse_combined(raw, chunk_nodes, frozenset(analysis_types))
 
-        if len(chunks) == 1:
-            results = _run_chunk(*chunks[0])
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as ex:
-                futs = {
-                    submit_with_current_context(ex, _run_chunk, nodes, chunk): i
-                    for i, (nodes, chunk) in enumerate(chunks)
-                }
-                for fut in as_completed(futs):
-                    try:
-                        results.extend(fut.result())
-                    except Exception as e:
-                        logger.warning("%s chunk fail: %s", event_name, e)
-        if cb:
-            cb({"event": f"{event_name}_done", "findings": len(results)})
+        results = self._run_chunked_lens(
+            chunks, _run_chunk, max_workers=max_workers, event_prefix=event_name
+        )
+        _emit_progress(cb, f"{event_name}_done", findings=len(results))
         return results
 
     def _run_lens_spec(self, spec, graph, max_workers, cb):
@@ -249,14 +240,9 @@ class SupplementaryAnalyzer:
         groups = defaultdict(list)
         for t in targets:
             groups[t.file_path].append(t)
-        if cb:
-            cb(
-                {
-                    "event": "intra_audit_start",
-                    "files": len(groups),
-                    "functions": len(targets),
-                }
-            )
+        _emit_progress(
+            cb, "intra_audit_start", files=len(groups), functions=len(targets)
+        )
         results = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {
@@ -271,15 +257,13 @@ class SupplementaryAnalyzer:
                     results.extend(fut.result())
                 except Exception as e:
                     logger.warning("Intra audit fail %s: %s", fp, e)
-                if cb:
-                    cb(
-                        {
-                            "event": "intra_audit_progress",
-                            "completed": done,
-                            "total": len(groups),
-                            "file": fp,
-                        }
-                    )
+                _emit_progress(
+                    cb,
+                    "intra_audit_progress",
+                    completed=done,
+                    total=len(groups),
+                    file=fp,
+                )
         return results
 
     @staticmethod
@@ -363,16 +347,11 @@ class SupplementaryAnalyzer:
                 bodies.append(f"--- {fn.unique_name} (line {fn.line_number}) ---\n{b}")
         if not bodies:
             return []
-        raw = invoke_reachability_prompt(
-            self._p,
-            self._u,
-            model=self._m,
+        raw = self._invoke_findings(
+            self._with_domain_hints(_INTRA_SYS),
+            _INTRA_USR,
+            {"file_path": file_path, "functions_code": "\n\n".join(bodies)},
             max_tokens=self._at,
-            system_prompt=self._with_domain_hints(_INTRA_SYS),
-            user_prompt=_INTRA_USR,
-            variables={"file_path": file_path, "functions_code": "\n\n".join(bodies)},
-            response_model=ReachabilityFindingResponseModel,
-            reasoning_effort=self._reasoning_effort,
         )
         return _parse_intra(raw, functions)
 
@@ -393,8 +372,7 @@ class SupplementaryAnalyzer:
         candidates = self._structural_candidate_nodes(graph, sinks_only=sinks_only)
         if not candidates:
             return []
-        if cb:
-            cb({"event": f"{event_prefix}_start", "functions": len(candidates)})
+        _emit_progress(cb, f"{event_prefix}_start", functions=len(candidates))
         chunks = _build_file_grouped_node_chunks(
             self._cb,
             candidates,
@@ -403,41 +381,24 @@ class SupplementaryAnalyzer:
         )
         if not chunks:
             return []
-        results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._m,
-                max_tokens=self._st,
-                system_prompt=self._with_domain_hints(sys_prompt),
-                user_prompt=_INTRA_USR,
-                variables={
+            raw = self._invoke_findings(
+                self._with_domain_hints(sys_prompt),
+                _INTRA_USR,
+                {
                     "file_path": "candidate functions",
                     "functions_code": code_chunk,
                 },
-                response_model=ReachabilityFindingResponseModel,
-                reasoning_effort=self._reasoning_effort,
             )
             if semantic:
                 return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
             return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(max_workers, len(chunks)))
-        ) as ex:
-            futs = {
-                submit_with_current_context(ex, _run_chunk, nodes, text): i
-                for i, (nodes, text) in enumerate(chunks)
-            }
-            for fut in as_completed(futs):
-                try:
-                    results.extend(fut.result())
-                except Exception as e:
-                    logger.warning("%s chunk fail: %s", event_prefix, e)
-        if cb:
-            cb({"event": f"{event_prefix}_done", "findings": len(results)})
+        results = self._run_chunked_lens(
+            chunks, _run_chunk, max_workers=max_workers, event_prefix=event_prefix
+        )
+        _emit_progress(cb, f"{event_prefix}_done", findings=len(results))
         return results
 
     def _lens_global_lifecycle(self, graph, max_workers, cb):
@@ -473,57 +434,56 @@ class SupplementaryAnalyzer:
         nodes = sorted(nodes, key=lambda n: (n.file_path, n.line_number, n.name))
         if not nodes:
             return []
-        if cb:
-            cb(
-                {
-                    "event": "global_lifecycle_start",
-                    "globals": len(globals_),
-                    "functions": len(nodes),
-                }
-            )
+        _emit_progress(
+            cb, "global_lifecycle_start", globals=len(globals_), functions=len(nodes)
+        )
         chunks = _build_file_grouped_node_chunks(
             self._cb, nodes, max_total_chars=50000, per_fn_chars=4000
         )
         globals_code = _build_globals_code(graph, max_chars=30000)
-        results = []
 
         def _run_chunk(chunk_nodes, code_chunk):
             code = f"== GLOBAL CONSTRUCTS ==\n{globals_code}\n\n{code_chunk}"
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._m,
-                max_tokens=self._st,
-                system_prompt=_COMBINED_GRAPH_SYS,
-                user_prompt=_COMBINED_GRAPH_USR,
-                variables=self._combined_prompt_variables(["global_lifecycle"], code),
-                response_model=ReachabilityFindingResponseModel,
-                reasoning_effort=self._reasoning_effort,
+            raw = self._invoke_findings(
+                _COMBINED_GRAPH_SYS,
+                _COMBINED_GRAPH_USR,
+                self._combined_prompt_variables(["global_lifecycle"], code),
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
 
+        results = self._run_chunked_lens(
+            chunks,
+            _run_chunk,
+            max_workers=max_workers,
+            event_prefix="Global lifecycle",
+        )
+        _emit_progress(cb, "global_lifecycle_done", findings=len(results))
+        return results
+
+    @staticmethod
+    def _run_chunked_lens(chunks, worker, *, max_workers, event_prefix):
+        if len(chunks) == 1:
+            return list(worker(*chunks[0]))
+        results = []
         with ThreadPoolExecutor(
             max_workers=max(1, min(max_workers, len(chunks)))
         ) as ex:
-            futs = {
-                submit_with_current_context(ex, _run_chunk, chunk_nodes, text): i
-                for i, (chunk_nodes, text) in enumerate(chunks)
-            }
+            futs = [
+                submit_with_current_context(ex, worker, nodes, text)
+                for nodes, text in chunks
+            ]
             for fut in as_completed(futs):
                 try:
                     results.extend(fut.result())
                 except Exception as e:
-                    logger.warning("Global lifecycle chunk fail: %s", e)
-        if cb:
-            cb({"event": "global_lifecycle_done", "findings": len(results)})
+                    logger.warning("%s chunk fail: %s", event_prefix, e)
         return results
 
     def _lens_lock_order(self, graph, _max_workers, cb):
         conflicts = _extract_lock_conflicts(graph, self._cb)
         if not conflicts:
             return []
-        if cb:
-            cb({"event": "lock_order_extraction_start", "conflicts": len(conflicts)})
+        _emit_progress(cb, "lock_order_extraction_start", conflicts=len(conflicts))
         results = []
         for batch in _chunked(conflicts, 8):
             nodes = []
@@ -546,22 +506,13 @@ class SupplementaryAnalyzer:
                 + "\n\n== RELEVANT FUNCTION BODIES ==\n"
                 + "\n\n".join(body_chunks)
             )
-            raw = invoke_reachability_prompt(
-                self._p,
-                self._u,
-                model=self._m,
-                max_tokens=self._st,
-                system_prompt=_COMBINED_GRAPH_SYS,
-                user_prompt=_COMBINED_GRAPH_USR,
-                variables=self._combined_prompt_variables(
-                    ["lock_order_extraction"], code
-                ),
-                response_model=ReachabilityFindingResponseModel,
-                reasoning_effort=self._reasoning_effort,
+            raw = self._invoke_findings(
+                _COMBINED_GRAPH_SYS,
+                _COMBINED_GRAPH_USR,
+                self._combined_prompt_variables(["lock_order_extraction"], code),
             )
             results.extend(
                 _parse_semantic(raw, nodes, analysis_type="lock_order_extraction")
             )
-        if cb:
-            cb({"event": "lock_order_extraction_done", "findings": len(results)})
+        _emit_progress(cb, "lock_order_extraction_done", findings=len(results))
         return results

@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finding normalization and review-field helpers."""
-from __future__ import annotations
-
 import os
 import re
 import uuid
@@ -111,7 +108,6 @@ def _canonical_fields(
 
 def _finding_from_llm_entry(
     entry,
-    *,
     source_function,
     source_file,
     source_line,
@@ -120,6 +116,7 @@ def _finding_from_llm_entry(
     sink_line,
     path,
     analysis_type,
+    *,
     default_file=None,
     default_function=None,
     default_line=None,
@@ -139,16 +136,16 @@ def _finding_from_llm_entry(
         vulnerability_type=vulnerability_type,
     )
     return VulnerabilityFinding(
-        id=uuid.uuid4().hex[:16],
-        vulnerability_type=vulnerability_type,
-        severity=str(entry.get("severity") or default_severity),
-        confidence=_confidence_score(entry.get("confidence")),
-        source_function=source_function,
-        source_file=source_file,
-        source_line=source_line,
-        sink_function=sink_function,
-        sink_file=sink_file,
-        sink_line=sink_line,
+        uuid.uuid4().hex[:16],
+        vulnerability_type,
+        str(entry.get("severity") or default_severity),
+        _confidence_score(entry.get("confidence")),
+        source_function,
+        source_file,
+        source_line,
+        sink_function,
+        sink_file,
+        sink_line,
         path=list(path),
         description=str(entry.get("description") or ""),
         root_cause=str(entry.get("root_cause") or ""),
@@ -160,19 +157,6 @@ def _finding_from_llm_entry(
         primary_function=primary_function,
         primary_line=primary_line,
         canonical_key=canonical_key,
-    )
-
-
-def _canonical_finding_key(finding):
-    root_token = _canonical_root_token(getattr(finding, "canonical_key", ""))
-    if root_token.startswith("line_"):
-        root_token = ""
-    return _canonical_key_from_parts(
-        _finding_file(finding),
-        _finding_function(finding),
-        _finding_line(finding),
-        getattr(finding, "vulnerability_type", ""),
-        root_token,
     )
 
 
@@ -249,34 +233,20 @@ def _mitigation_text(finding, vulnerability_type: str | None = None) -> str:
     )
 
 
-def _finding_text(f):
-    return " ".join(
-        str(part or "")
-        for part in (
-            getattr(f, "description", ""),
-            getattr(f, "root_cause", ""),
-            getattr(f, "evidence", ""),
-            getattr(f, "canonical_key", ""),
-        )
-    )
+def _first_attr(obj, *names):
+    for name in names:
+        value = getattr(obj, name, "")
+        if value:
+            return value
+    return ""
 
 
 def _finding_file(f):
-    return (
-        getattr(f, "primary_file", "")
-        or getattr(f, "sink_file", "")
-        or getattr(f, "source_file", "")
-        or ""
-    )
+    return _first_attr(f, "primary_file", "sink_file", "source_file")
 
 
 def _finding_function(f):
-    return (
-        getattr(f, "primary_function", "")
-        or getattr(f, "sink_function", "")
-        or getattr(f, "source_function", "")
-        or ""
-    )
+    return _first_attr(f, "primary_function", "sink_function", "source_function")
 
 
 def _finding_line(f):

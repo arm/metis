@@ -1,63 +1,29 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""C/C++ parser-control and external sink rules for reachability extraction."""
-
-from __future__ import annotations
 
 from .finding_normalization import _normalise_vuln_type
 from .models import ALLOWED_VULNERABILITY_TYPES
 
-CONTROL_CALLS = {
-    "if",
-    "for",
-    "while",
-    "switch",
-    "return",
-    "sizeof",
-    "alignof",
-    "_Generic",
-    "case",
-    "do",
-    "else",
-    "typedef",
-    "defined",
-}
+CONTROL_CALLS = set(
+    "if for while switch return sizeof alignof _Generic case do else typedef defined".split()
+)
 
 _C_FAMILY_SENSITIVE_EXTERNAL_APIS_BY_TYPE = {
-    "buffer_overflow": {"memcpy", "memmove", "strcpy", "strncpy", "strcat", "gets"},
-    "out_of_bounds": {"strlen", "strnlen"},
-    "format_string": {
-        "sprintf",
-        "vsprintf",
-        "snprintf",
-        "vsnprintf",
-        "printf",
-        "fprintf",
-        "vprintf",
-        "vfprintf",
-    },
-    "command_injection": {
-        "system",
-        "popen",
-        "execl",
-        "execle",
-        "execlp",
-        "execv",
-        "execve",
-        "execvp",
-    },
-    "path_traversal": {"fopen", "open", "stat", "lstat", "access", "unlink", "rename"},
-    "integer_overflow": {
-        "malloc",
-        "calloc",
-        "realloc",
-        "kmalloc",
-        "kcalloc",
-        "krealloc",
-    },
-    "use_after_free": {"free", "kfree", "vfree"},
-    "other": {"close", "ioctl", "scanf", "sscanf", "fscanf"},
+    sink_type: set(calls.split())
+    for sink_type, calls in (
+        ("buffer_overflow", "memcpy memmove strcpy strncpy strcat gets"),
+        ("out_of_bounds", "strlen strnlen"),
+        (
+            "format_string",
+            "sprintf vsprintf snprintf vsnprintf printf fprintf vprintf vfprintf",
+        ),
+        ("command_injection", "system popen execl execle execlp execv execve execvp"),
+        ("path_traversal", "fopen open stat lstat access unlink rename"),
+        ("integer_overflow", "malloc calloc realloc kmalloc kcalloc krealloc"),
+        ("use_after_free", "free kfree vfree"),
+        ("other", "close ioctl scanf sscanf fscanf"),
+    )
 }
 
 _C_FAMILY_SENSITIVE_EXTERNAL_API_TYPES = {
@@ -103,8 +69,8 @@ def _optional_string(entry: dict, field: str, *, setting_name: str, index: int) 
 
 
 def _normalise_security_function_specs(raw):
-    specs = {}
     setting_name = "reachability_security_functions"
+    specs = {}
     for index, entry, name in _function_entries(
         raw,
         setting_name=setting_name,

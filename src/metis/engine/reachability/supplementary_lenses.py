@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Supplementary reachability lens registry and prompt metadata."""
-
-from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -24,57 +21,38 @@ class _SupplementaryLensSpec:
     analysis_type: str = ""
 
 
-_FULL_LENS_SPECS = (
-    _SupplementaryLensSpec("intra_audit", "method", method_name="_lens_intra"),
-    _SupplementaryLensSpec("lifecycle_audit", "cross", analysis_type="lifecycle"),
-    _SupplementaryLensSpec("ownership_audit", "cross", analysis_type="ownership"),
-    _SupplementaryLensSpec("semantic_audit", "semantic", analysis_type="semantic"),
+_PROMPTS = {
+    "classic_c_sink": _CLASSIC_C_SINK_SYS,
+    "error_unwind": _ERROR_UNWIND_SYS,
+    "counter_symmetry": _COUNTER_SYMMETRY_SYS,
+    "targeted_path_access": _TARGET_PATH_ACCESS_SYS,
+}
+_FULL_LENS_SPECS = tuple(
     _SupplementaryLensSpec(
-        "state_audit", "semantic", analysis_type="state_concurrency"
-    ),
-    _SupplementaryLensSpec(
-        "targeted_state_order", "targeted", analysis_type="targeted_state_order"
-    ),
-    _SupplementaryLensSpec(
-        "targeted_callback_lifecycle",
-        "targeted",
-        analysis_type="targeted_callback_lifecycle",
-    ),
-    _SupplementaryLensSpec(
-        "targeted_refcount", "targeted", analysis_type="targeted_refcount"
-    ),
-    _SupplementaryLensSpec(
-        "targeted_permission", "targeted", analysis_type="targeted_permission"
-    ),
-    _SupplementaryLensSpec(
-        "targeted_toctou", "targeted", analysis_type="targeted_toctou"
-    ),
-    _SupplementaryLensSpec(
-        "classic_c_sink",
-        "candidate_intra",
-        sys_prompt=_CLASSIC_C_SINK_SYS,
-        analysis_type="classic_c_sink",
-    ),
-    _SupplementaryLensSpec(
-        "error_unwind",
-        "candidate_semantic",
-        sys_prompt=_ERROR_UNWIND_SYS,
-        analysis_type="error_unwind",
-    ),
-    _SupplementaryLensSpec(
-        "counter_symmetry",
-        "candidate_semantic",
-        sys_prompt=_COUNTER_SYMMETRY_SYS,
-        analysis_type="counter_symmetry",
-    ),
-    _SupplementaryLensSpec("global_lifecycle", "method", "_lens_global_lifecycle"),
-    _SupplementaryLensSpec("lock_order_extraction", "method", "_lens_lock_order"),
-    _SupplementaryLensSpec(
-        "targeted_path_access",
-        "candidate_semantic",
-        sys_prompt=_TARGET_PATH_ACCESS_SYS,
-        analysis_type="targeted_path_access",
-    ),
+        name,
+        kind,
+        method_name=method,
+        sys_prompt=_PROMPTS.get(analysis_type, ""),
+        analysis_type=analysis_type,
+    )
+    for name, kind, method, analysis_type in (
+        ("intra_audit", "method", "_lens_intra", ""),
+        ("lifecycle_audit", "cross", "", "lifecycle"),
+        ("ownership_audit", "cross", "", "ownership"),
+        ("semantic_audit", "semantic", "", "semantic"),
+        ("state_audit", "semantic", "", "state_concurrency"),
+        ("targeted_state_order", "targeted", "", "targeted_state_order"),
+        ("targeted_callback_lifecycle", "targeted", "", "targeted_callback_lifecycle"),
+        ("targeted_refcount", "targeted", "", "targeted_refcount"),
+        ("targeted_permission", "targeted", "", "targeted_permission"),
+        ("targeted_toctou", "targeted", "", "targeted_toctou"),
+        ("classic_c_sink", "candidate_intra", "", "classic_c_sink"),
+        ("error_unwind", "candidate_semantic", "", "error_unwind"),
+        ("counter_symmetry", "candidate_semantic", "", "counter_symmetry"),
+        ("global_lifecycle", "method", "_lens_global_lifecycle", ""),
+        ("lock_order_extraction", "method", "_lens_lock_order", ""),
+        ("targeted_path_access", "candidate_semantic", "", "targeted_path_access"),
+    )
 )
 
 _REVIEW_LENS_NAMES = set(

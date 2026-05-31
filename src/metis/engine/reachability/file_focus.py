@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reviewed-file focus selection for full-graph ``review_file`` runs."""
-
-from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -28,8 +25,6 @@ DEFAULT_MAX_OUTGOING_PATHS_PER_TARGET = 4
 
 @dataclass
 class FileFocus:
-    """Bounded graph slice centered on one target file."""
-
     target_file: str
     target_nodes: list[str] = field(default_factory=list)
     incoming_paths: list[ReachabilityPath] = field(default_factory=list)
@@ -38,12 +33,6 @@ class FileFocus:
 
 
 class FileFocusBuilder:
-    """Build reviewed-file-centered context from the deterministic call graph.
-
-    The primary paths are source -> reviewed-file-function paths. Sink reachability
-    is deliberately secondary and only contributes capped downstream context.
-    """
-
     def __init__(
         self,
         graph,
@@ -106,47 +95,12 @@ class FileFocusBuilder:
         return self._dedupe_and_rank_paths(selected, max_total=self._max_incoming_paths)
 
     def _incoming_paths_for_target(self, target_node) -> list[ReachabilityPath]:
-        paths: list[ReachabilityPath] = []
-        target_name = target_node.unique_name
-        if target_node.is_source:
-            paths.append(
-                ReachabilityPath(
-                    source=target_name,
-                    sink=target_name,
-                    path=[target_name],
-                    sink_type=target_node.sink_type or "target_file_function",
-                )
-            )
-
-        queue = deque([[target_name]])
-        while queue and len(paths) < self._max_incoming_paths_per_target:
-            reverse_path = queue.popleft()
-            upstream = reverse_path[-1]
-            if len(reverse_path) >= self._max_path_length:
-                continue
-            for caller_name in self._reverse_edges.get(upstream, []):
-                if caller_name in reverse_path:
-                    continue
-                caller = self._graph.get_node(caller_name)
-                if not caller:
-                    continue
-                next_reverse_path = reverse_path + [caller_name]
-                if caller.is_source:
-                    forward_path = list(reversed(next_reverse_path))
-                    paths.append(
-                        ReachabilityPath(
-                            source=caller_name,
-                            sink=target_name,
-                            path=forward_path,
-                            sink_type=target_node.sink_type or "target_file_function",
-                        )
-                    )
-                    if len(paths) >= self._max_incoming_paths_per_target:
-                        break
-                queue.append(next_reverse_path)
-
         return self._dedupe_and_rank_paths(
-            paths,
+            self._paths_for_target(
+                target_node,
+                reverse=True,
+                max_per_target=self._max_incoming_paths_per_target,
+            ),
             max_total=self._max_incoming_paths_per_target,
         )
 
@@ -163,51 +117,68 @@ class FileFocusBuilder:
         return self._dedupe_and_rank_paths(paths, max_total=self._max_outgoing_paths)
 
     def _outgoing_paths_for_target(self, target_node) -> list[ReachabilityPath]:
+        return self._dedupe_and_rank_paths(
+            self._paths_for_target(
+                target_node,
+                reverse=False,
+                max_per_target=self._max_outgoing_paths_per_target,
+            ),
+            max_total=self._max_outgoing_paths_per_target,
+        )
+
+    def _paths_for_target(
+        self, target_node, *, reverse: bool, max_per_target: int
+    ) -> list[ReachabilityPath]:
         paths: list[ReachabilityPath] = []
         target_name = target_node.unique_name
-        if target_node.is_sink:
+        if target_node.is_source if reverse else target_node.is_sink:
             paths.append(
                 ReachabilityPath(
-                    source=target_name,
-                    sink=target_name,
-                    path=[target_name],
-                    sink_type=target_node.sink_type,
+                    target_name,
+                    target_name,
+                    [target_name],
+                    target_node.sink_type
+                    or ("target_file_function" if reverse else ""),
                 )
             )
 
         queue = deque([[target_name]])
-        while queue and len(paths) < self._max_outgoing_paths_per_target:
+        while queue and len(paths) < max_per_target:
             path = queue.popleft()
             current_name = path[-1]
             current = self._graph.get_node(current_name)
             if not current or len(path) >= self._max_path_length:
                 continue
-            for callee_name in sorted(
-                current.resolved_calls or [], key=self._node_sort_key
-            ):
-                if callee_name in path:
+            next_names = (
+                self._reverse_edges.get(current_name, [])
+                if reverse
+                else sorted(current.resolved_calls or [], key=self._node_sort_key)
+            )
+            for next_name in next_names:
+                if next_name in path:
                     continue
-                callee = self._graph.get_node(callee_name)
-                if not callee:
+                next_node = self._graph.get_node(next_name)
+                if not next_node:
                     continue
-                next_path = path + [callee_name]
-                if callee.is_sink:
+                next_path = path + [next_name]
+                if next_node.is_source if reverse else next_node.is_sink:
+                    forward_path = list(reversed(next_path)) if reverse else next_path
                     paths.append(
                         ReachabilityPath(
-                            source=target_name,
-                            sink=callee_name,
-                            path=next_path,
-                            sink_type=callee.sink_type,
+                            next_name if reverse else target_name,
+                            target_name if reverse else next_name,
+                            forward_path,
+                            (
+                                target_node.sink_type or "target_file_function"
+                                if reverse
+                                else next_node.sink_type
+                            ),
                         )
                     )
-                    if len(paths) >= self._max_outgoing_paths_per_target:
+                    if len(paths) >= max_per_target:
                         break
                 queue.append(next_path)
-
-        return self._dedupe_and_rank_paths(
-            paths,
-            max_total=self._max_outgoing_paths_per_target,
-        )
+        return paths
 
     def _focus_node_names(
         self, target_nodes, incoming_paths, outgoing_paths
@@ -216,7 +187,6 @@ class FileFocusBuilder:
         for path in list(incoming_paths or []) + list(outgoing_paths or []):
             needed.update(path.path or [])
 
-        # Keep a direct local neighborhood even when source reachability is sparse.
         for node in target_nodes:
             needed.update(node.resolved_calls or [])
             for caller_name in self._reverse_edges.get(node.unique_name, []):

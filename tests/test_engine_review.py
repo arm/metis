@@ -3,8 +3,11 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from metis.engine.review_service import (
     _parse_review_validation_response,
+    _review_validation_final_keep,
     _rescue_filtered_duplicate_cluster_representatives,
 )
 
@@ -24,13 +27,19 @@ def test_review_code_runs(engine):
     assert all("reviews" in r for r in results)
 
 
-def test_review_code_uses_reachability_for_c_cpp(engine):
+def _reachability(engine, result=None):
     reachability = Mock()
-    reachability.review_codebase.return_value = [
-        {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
-    ]
+    reachability.review_codebase.return_value = result or []
     engine.review._reachability_service = reachability
     engine.review._reachability_cache = None
+    return reachability
+
+
+def test_review_code_uses_reachability_for_c_cpp(engine):
+    reachability = _reachability(
+        engine,
+        [{"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}],
+    )
     engine.review.review_file = Mock(
         return_value={"file": "test.c", "reviews": ["legacy"]}
     )
@@ -47,11 +56,9 @@ def test_review_code_uses_reachability_for_c_cpp(engine):
 
 
 def test_review_file_uses_focused_reachability_when_global_cache_empty(engine):
-    reachability = Mock()
     expected = {"file": "test.c", "reviews": [{"issue": "focused"}]}
+    reachability = _reachability(engine)
     reachability.review_file.return_value = expected
-    engine.review._reachability_service = reachability
-    engine.review._reachability_cache = None
     engine.review._review_file_standard = Mock(
         return_value={"file": "test.c", "reviews": ["legacy"]}
     )
@@ -65,12 +72,10 @@ def test_review_file_uses_focused_reachability_when_global_cache_empty(engine):
 
 
 def test_review_code_uses_legacy_for_non_c_cpp(engine):
-    reachability = Mock()
-    reachability.review_codebase.return_value = [
-        {"file": "ignored.c", "reviews": [{"issue": "Issue"}]}
-    ]
-    engine.review._reachability_service = reachability
-    engine.review._reachability_cache = None
+    reachability = _reachability(
+        engine,
+        [{"file": "ignored.c", "reviews": [{"issue": "Issue"}]}],
+    )
     engine.review.review_file = Mock(
         return_value={"file": "test.py", "reviews": ["legacy"]}
     )
@@ -83,51 +88,41 @@ def test_review_code_uses_legacy_for_non_c_cpp(engine):
 
 
 def test_review_code_validates_reachability_results_before_returning(engine):
-    reachability = Mock()
+    reachability = _reachability(
+        engine,
+        [
+            {
+                "file": "test.c",
+                "reviews": [
+                    {
+                        "issue": "real",
+                        "primary_file": "test.c",
+                        "primary_function": "target",
+                        "line_number": 10,
+                        "analysis_type": "reachability",
+                        "severity": "High",
+                        "confidence": 0.7,
+                        "reasoning": "Root cause: concrete bug",
+                    },
+                    {
+                        "issue": "fake",
+                        "primary_file": "test.c",
+                        "primary_function": "target",
+                        "line_number": 11,
+                        "analysis_type": "reachability",
+                        "severity": "Medium",
+                        "confidence": 0.8,
+                        "reasoning": "Root cause: speculative concern",
+                    },
+                ],
+            }
+        ],
+    )
     reachability._adjudicate_final_findings = None
-    reachability.review_codebase.return_value = [
-        {
-            "file": "test.c",
-            "reviews": [
-                {
-                    "issue": "real",
-                    "primary_file": "test.c",
-                    "primary_function": "target",
-                    "line_number": 10,
-                    "analysis_type": "reachability",
-                    "severity": "High",
-                    "confidence": 0.7,
-                    "reasoning": "Root cause: concrete bug",
-                },
-                {
-                    "issue": "fake",
-                    "primary_file": "test.c",
-                    "primary_function": "target",
-                    "line_number": 11,
-                    "analysis_type": "reachability",
-                    "severity": "Medium",
-                    "confidence": 0.8,
-                    "reasoning": "Root cause: speculative concern",
-                },
-            ],
-        }
-    ]
-    engine.review._reachability_service = reachability
-    engine.review._reachability_cache = None
     engine.review._validate_review_candidates = Mock(
         return_value=[
-            {
-                "index": 0,
-                "keep": True,
-                "confidence": 0.91,
-                "reason": "concrete",
-            },
-            {
-                "index": 1,
-                "keep": False,
-                "confidence": 0.21,
-                "reason": "speculative",
-            },
+            {"index": 0, "keep": True, "confidence": 0.91, "reason": "concrete"},
+            {"index": 1, "keep": False, "confidence": 0.21, "reason": "speculative"},
         ]
     )
 
@@ -180,15 +175,59 @@ def test_review_validation_rescues_duplicate_cluster_representative():
         },
     ]
 
-    rescued = _rescue_filtered_duplicate_cluster_representatives(
-        candidates, decisions
-    )
+    kept = [
+        decision
+        for decision in _rescue_filtered_duplicate_cluster_representatives(
+            candidates, decisions
+        )
+        if decision["keep"]
+    ]
 
-    kept = [decision for decision in rescued if decision["keep"]]
     assert len(kept) == 1
     assert kept[0]["index"] == 0
     assert kept[0]["confidence"] >= 0.9
     assert "strongest representative" in kept[0]["reason"]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "decision", "expected"),
+    [
+        (
+            {
+                "issue": "Unchecked addition can wrap the page count before indexing an array",
+                "severity": "High",
+                "confidence": 0.75,
+                "root_cause": "integer overflow in page range calculation",
+                "evidence": "nr_pages = offset + size",
+            },
+            {
+                "index": 0,
+                "keep": False,
+                "confidence": 0.42,
+                "reason": "Security impact is not fully established.",
+            },
+            True,
+        ),
+        (
+            {
+                "issue": "Unchecked addition can wrap before indexing an array",
+                "severity": "High",
+                "confidence": 0.95,
+                "root_cause": "integer overflow in page range calculation",
+                "evidence": "nr_pages = offset + size",
+            },
+            {
+                "index": 0,
+                "keep": False,
+                "confidence": 0.2,
+                "reason": "False positive: the value is already bounds-checked before use.",
+            },
+            False,
+        ),
+    ],
+)
+def test_review_validation_guardrails(candidate, decision, expected):
+    assert _review_validation_final_keep(candidate, decision) is expected
 
 
 def test_review_validation_parser_accepts_double_encoded_json():
@@ -196,39 +235,35 @@ def test_review_validation_parser_accepts_double_encoded_json():
         '"{\\"decisions\\":[{\\"index\\":0,\\"keep\\":true,'
         '\\"confidence\\":0.82,\\"reason\\":\\"ok\\"}]}"'
     )
-
     assert parsed == {
-        "decisions": [
-            {
-                "index": 0,
-                "keep": True,
-                "confidence": 0.82,
-                "reason": "ok",
-            }
-        ]
+        "decisions": [{"index": 0, "keep": True, "confidence": 0.82, "reason": "ok"}]
     }
 
 
+class _DummyReviewGraph:
+    def __init__(self, review):
+        self._review = review
+
+    def review(self, req):
+        if self._review is None:
+            assert req["use_retrieval_context"] is False
+            assert req["retriever_code"] is None
+            assert req["retriever_docs"] is None
+            return {"file": "test.py", "reviews": []}
+        return self._review
+
+
 def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
-    patch = """--- a/test.py
-+++ b/test.py
-@@ -0,0 +1,2 @@
-+print('Hello')
-+print('World')
-"""
-
-    # Write patch to a temporary file because review_patch expects a file path
     patch_file = tmp_path / "change.diff"
-    patch_file.write_text(patch)
+    patch_file.write_text(
+        "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1,2 @@\n+print('Hello')\n+print('World')\n"
+    )
+    monkeypatch.setattr(
+        engine,
+        "_get_review_graph",
+        lambda: _DummyReviewGraph({"file": "test.py", "reviews": [{"issue": "Issue"}]}),
+    )
 
-    # Stub the ReviewGraph used internally so we don't rely on LLMs
-    class _DummyReviewGraph:
-        def review(self, _req):
-            return {"file": "test.py", "reviews": [{"issue": "Issue"}]}
-
-    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
-
-    # Ensure summaries are simple strings, not Mocks
     import metis.engine.review_service as review_service_mod
 
     monkeypatch.setattr(
@@ -252,15 +287,8 @@ def test_review_file_no_index_skips_query_engine_init(engine, monkeypatch, tmp_p
     sample = tmp_path / "sample.c"
     sample.write_text("int main(){return 0;}", encoding="utf-8")
 
-    class _DummyReviewGraph:
-        def review(self, req):
-            assert req["use_retrieval_context"] is False
-            assert req["retriever_code"] is None
-            assert req["retriever_docs"] is None
-            return {"file": "sample.c", "reviews": []}
-
     engine.vector_backend.get_query_engines.reset_mock()
-    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
 
     result = engine.review.review_file(str(sample), use_retrieval_context=False)
 
@@ -269,23 +297,14 @@ def test_review_file_no_index_skips_query_engine_init(engine, monkeypatch, tmp_p
 
 
 def test_review_patch_no_index_skips_query_engine_init(engine, monkeypatch, tmp_path):
-    patch = """--- a/test.py
-+++ b/test.py
-@@ -0,0 +1 @@
-+print('Hello')
-"""
     patch_file = tmp_path / "change.diff"
-    patch_file.write_text(patch, encoding="utf-8")
-
-    class _DummyReviewGraph:
-        def review(self, req):
-            assert req["use_retrieval_context"] is False
-            assert req["retriever_code"] is None
-            assert req["retriever_docs"] is None
-            return {"file": "test.py", "reviews": []}
+    patch_file.write_text(
+        "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+print('Hello')\n",
+        encoding="utf-8",
+    )
 
     engine.vector_backend.get_query_engines.reset_mock()
-    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
 
     result = engine.review.review_patch(str(patch_file), use_retrieval_context=False)
 

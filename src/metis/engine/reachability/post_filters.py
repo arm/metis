@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""False-positive post-filters for reachability findings."""
-from __future__ import annotations
-
 
 import re
 
@@ -105,10 +102,6 @@ def _is_c_string_literal_arg(value):
 
 
 def _is_fixed_literal_format_call_false_positive(body_or_context) -> bool:
-    """
-    Return true only when visible printf-family calls all use fixed string literal
-    format arguments. If any visible call uses a variable format, keep the finding.
-    """
     text = str(body_or_context or "")
     if not text.strip():
         return False
@@ -165,9 +158,10 @@ def _post_filter_findings(findings, codebase_path):
 
 
 def _is_high_confidence(value):
-    if str(value or "").strip().lower() == "high":
-        return True
-    return _confidence_score(value, default=0.0) >= 0.9
+    return (
+        str(value or "").strip().lower() == "high"
+        or _confidence_score(value, default=0.0) >= 0.9
+    )
 
 
 def _strict_file_findings(findings):

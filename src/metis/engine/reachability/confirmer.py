@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM confirmation for deterministic reachability paths."""
 
-from __future__ import annotations
 import logging
 import os
 from collections import defaultdict
@@ -17,7 +15,7 @@ from .finding_normalization import (
     _safe_int,
     _same_file_ref,
 )
-from .graph_utils import _chunked, _dedupe_paths
+from .graph_utils import _chunked, _dedupe_paths, _emit_progress
 from .llm_runner import invoke_reachability_prompt, reachability_response_payload
 from .models import (
     ALLOWED_VULNERABILITY_TYPES,
@@ -26,11 +24,6 @@ from .models import (
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
-
-
-def _emit_progress(callback, event, **payload):
-    if callback:
-        callback({"event": event, **payload})
 
 
 def _output_constraints(no_finding_guidance):
@@ -103,8 +96,6 @@ For EACH path determine if it contains a real exploitable vulnerability:
 
 _CONFIRM_USR = "{paths_section}\n\n{code_section}"
 
-# --- Inbound: bugs rooted IN the target file ---
-
 _FILE_CONFIRM_SYS = _confirm_system_prompt(
     """\
 You are a security researcher specializing in C and C++ code analysis.
@@ -134,8 +125,6 @@ _FILE_CONFIRM_USR = """Target file: {target_file}
 
 
 class VulnerabilityConfirmer:
-    """Confirm whether selected source-rooted paths contain real C/C++ defects."""
-
     def __init__(
         self,
         llm_provider,
@@ -226,8 +215,6 @@ class VulnerabilityConfirmer:
                 )
         return results
 
-    # --- Bulk confirmation for full-codebase reachability review ---
-
     def confirm_paths(
         self,
         paths,
@@ -310,14 +297,14 @@ class VulnerabilityConfirmer:
             results.append(
                 _finding_from_llm_entry(
                     e,
-                    source_function=rp.source,
-                    source_file=source_file,
-                    source_line=source_line,
-                    sink_function=rp.sink,
-                    sink_file=sink_file,
-                    sink_line=sink_line,
-                    path=rp.path,
-                    analysis_type="reachability",
+                    rp.source,
+                    source_file,
+                    source_line,
+                    rp.sink,
+                    sink_file,
+                    sink_line,
+                    rp.path,
+                    "reachability",
                     default_file=sink_file or source_file,
                     default_function=rp.sink or rp.source,
                     default_line=sink_line or source_line,

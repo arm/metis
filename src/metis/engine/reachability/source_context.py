@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source-code context extraction for reachability analysis."""
-from __future__ import annotations
-
 
 import os
 import re
@@ -40,7 +37,6 @@ def _read_function_body(codebase_path, node, max_chars=3000):
 def _build_file_grouped_node_chunks(
     codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
 ):
-    """Like _build_file_grouped_chunks, but keep the node list for each chunk."""
     by_file = defaultdict(list)
     for fn in sorted(
         nodes, key=lambda n: (str(n.file_path), int(n.line_number or 0), str(n.name))
@@ -109,7 +105,6 @@ def _build_file_grouped_node_chunks(
 def _build_file_grouped_chunks(
     codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
 ):
-    """Build deterministic chunks, keeping functions from the same file together."""
     return [
         text
         for _nodes, text in _build_file_grouped_node_chunks(
@@ -152,10 +147,7 @@ def _read_line_context(codebase_path, rel_file, line_number, context=2, max_char
     lines = content.splitlines()
     if not lines:
         return ""
-    try:
-        line_number = max(1, int(line_number))
-    except (TypeError, ValueError):
-        line_number = 1
+    line_number = max(1, _safe_int(line_number, 1))
     start = max(0, line_number - 1 - context)
     end = min(len(lines), line_number + context)
     snippet = "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
@@ -193,11 +185,6 @@ def _read_named_function_body(
     if chosen is None:
         return ""
     node = FunctionNode(
-        unique_name=f"{rel_file}::{fn_name}",
-        file_path=rel_file,
-        name=fn_name,
-        line_number=chosen[0],
-        is_source=False,
-        is_sink=False,
+        f"{rel_file}::{fn_name}", rel_file, fn_name, chosen[0], False, False
     )
     return _read_function_body(codebase_path, node, max_chars=max_chars)

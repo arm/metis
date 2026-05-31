@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tree-sitter extraction of C/C++ functions, calls, and entrypoint tables."""
-
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
@@ -30,8 +27,6 @@ class ParsedFileGraph:
 
 
 class CFamilyTreeSitterExtractor(CFamilyAstMixin):
-    """Convert one C-family source file into graph nodes plus global callbacks."""
-
     def __init__(self, repository=None):
         self._repository = repository
         self._runtimes = {
@@ -93,12 +88,12 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             calls = self._collect_call_symbols(node, source)
             nodes.append(
                 FunctionNode(
-                    unique_name=unique,
-                    file_path=rel_path,
-                    name=name,
-                    line_number=_node_line(node),
-                    is_source=False,
-                    is_sink=False,
+                    unique,
+                    rel_path,
+                    name,
+                    _node_line(node),
+                    False,
+                    False,
                     language=language,
                     calls=calls,
                 )
@@ -141,10 +136,10 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 seen.add(unique)
                 globals_.append(
                     GlobalConstruct(
-                        unique_name=unique,
-                        file_path=rel_path,
-                        name=name,
-                        line_number=_node_line(node),
+                        unique,
+                        rel_path,
+                        name,
+                        _node_line(node),
                         initializer=_node_text(node, source)[:2000],
                         referenced_functions=refs,
                     )

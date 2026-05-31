@@ -1,16 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Final consolidation for reachability findings."""
-
-from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Callable
 
 from .finding_normalization import (
     _finding_file,
     _finding_function,
+    _safe_int,
 )
 
 FINAL_CONSOLIDATION_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
@@ -89,10 +86,6 @@ Return JSON only:
   ]
 }"""
 
-FINAL_DEDUP_SYSTEM_PROMPT = FINAL_CONSOLIDATION_SYSTEM_PROMPT
-
-FinalAdjudicator = Callable[[list[dict[str, Any]]], dict[str, Any] | None]
-
 _FINAL_DEDUP_BATCH_SIZE = 40
 _FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE = 120
 
@@ -106,13 +99,6 @@ class FindingConsolidator:
         final_adjudicator=None,
         representative_scope="file",
     ):
-        """
-        Drop duplicate findings identified by final_adjudicator.
-
-        This function does not classify, normalize, rewrite, cap, or merge fields.
-        If no valid LLM duplicate grouping is available, the input findings are kept
-        unchanged.
-        """
         if not findings:
             return [], 0, 0
 
@@ -310,13 +296,6 @@ def _valid_member_indexes(raw, limit):
 def _representative_index(raw, members):
     index = _safe_int(raw, -1)
     return index if index in members else None
-
-
-def _safe_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _finding_adjudication_payload(index, finding):

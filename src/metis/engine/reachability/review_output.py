@@ -1,13 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Review JSON shaping for tree-sitter reachability findings."""
-
-from __future__ import annotations
 
 import os
 
-from .finding_taxonomy import VULN_TO_CWE
 from .finding_normalization import (
     _mitigation_text,
     _normalise_vuln_type,
@@ -46,10 +42,7 @@ def group_findings_as_reviews(findings, graph, *, codebase_path):
 def reviews_for_findings(findings, graph, *, codebase_path, target_file):
     reviews = [
         finding_to_review(
-            finding,
-            graph=graph,
-            codebase_path=codebase_path,
-            target_file=target_file,
+            finding, graph=graph, codebase_path=codebase_path, target_file=target_file
         )
         for finding in findings
     ]
@@ -71,8 +64,8 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
     )
     vtype = _normalise_vuln_type(finding.vulnerability_type)
     primary_fn = finding.primary_function or finding.sink_function
-    issue = str(finding.description).strip() or (
-        f"{vtype.replace('_', ' ')} in {primary_fn}"
+    issue = (
+        str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
     )
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
     reasoning_parts = []
@@ -96,7 +89,6 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
         reasoning_parts.append(f"Analysis type: {finding.analysis_type}")
     if finding.canonical_key:
         reasoning_parts.append(f"Canonical key: {finding.canonical_key}")
-    target_file = primary_file
     return {
         "issue": issue,
         "line_number": line_number,
@@ -109,7 +101,7 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
             if primary_file
             else ""
         ),
-        "cwe": str(getattr(finding, "cwe", "") or VULN_TO_CWE.get(vtype, "") or ""),
+        "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": finding.confidence,
         "reasoning": "\n".join(reasoning_parts),

@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""JSON parsing for supplementary reachability lens output."""
-
-from __future__ import annotations
 
 from .finding_normalization import (
     _finding_from_llm_entry,
@@ -39,14 +36,14 @@ def _parse_intra(raw, functions, analysis_type="intra_function"):
         results.append(
             _finding_from_llm_entry(
                 entry,
-                source_function=fn.unique_name,
-                source_file=fn.file_path,
-                source_line=line,
-                sink_function=fn.unique_name,
-                sink_file=fn.file_path,
-                sink_line=line,
-                path=[fn.unique_name],
-                analysis_type=analysis_type,
+                fn.unique_name,
+                fn.file_path,
+                line,
+                fn.unique_name,
+                fn.file_path,
+                line,
+                [fn.unique_name],
+                analysis_type,
             )
         )
     return results
@@ -109,18 +106,18 @@ def _parse_combined(raw, all_fns, allowed_analysis_types):
         results.append(
             _finding_from_llm_entry(
                 entry,
-                source_function=source_fn.unique_name,
-                source_file=source_fn.file_path,
-                source_line=source_fn.line_number,
-                sink_function=sink_fn.unique_name,
-                sink_file=sink_fn.file_path,
-                sink_line=sink_fn.line_number,
-                path=(
+                source_fn.unique_name,
+                source_fn.file_path,
+                source_fn.line_number,
+                sink_fn.unique_name,
+                sink_fn.file_path,
+                sink_fn.line_number,
+                (
                     [source_fn.unique_name, sink_fn.unique_name]
                     if source_fn.unique_name != sink_fn.unique_name
                     else [sink_fn.unique_name]
                 ),
-                analysis_type=analysis_type,
+                analysis_type,
                 default_vulnerability_type=(
                     "use_after_free" if high_risk_cross else "other"
                 ),
@@ -146,14 +143,14 @@ def _parse_semantic(raw, all_fns, analysis_type="semantic"):
         results.append(
             _finding_from_llm_entry(
                 entry,
-                source_function=src_fn.unique_name,
-                source_file=src_fn.file_path,
-                source_line=src_fn.line_number,
-                sink_function=fn.unique_name,
-                sink_file=fn.file_path,
-                sink_line=fn.line_number,
-                path=([src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name]),
-                analysis_type=analysis_type,
+                src_fn.unique_name,
+                src_fn.file_path,
+                src_fn.line_number,
+                fn.unique_name,
+                fn.file_path,
+                fn.line_number,
+                [src_fn.unique_name, fn.unique_name] if rf else [fn.unique_name],
+                analysis_type,
             )
         )
     return results
