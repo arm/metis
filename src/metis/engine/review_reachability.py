@@ -24,7 +24,8 @@ class ReachabilityReviewBackend:
         self._service = reachability_service
         self._settings = dict(reachability_settings or {})
         self._cache = None
-        self._lock = threading.Lock()
+        self._cache_condition = threading.Condition()
+        self._cache_building = False
 
     @property
     def enabled(self):
@@ -64,16 +65,32 @@ class ReachabilityReviewBackend:
         return settings
 
     def codebase_reviews(self, *, progress_callback=None):
-        if self._cache is not None:
-            return list(self._cache)
+        with self._cache_condition:
+            if self._cache is not None:
+                return list(self._cache)
+            if self._cache_building:
+                while self._cache_building and self._cache is None:
+                    self._cache_condition.wait()
+                if self._cache is not None:
+                    return list(self._cache)
+            self._cache_building = True
 
-        with self._lock:
-            if self._cache is None:
-                settings = self.call_settings(
-                    progress_callback=progress_callback,
-                    codebase=True,
-                )
-                self._cache = self._service.review_codebase(**settings)
+        try:
+            settings = self.call_settings(
+                progress_callback=progress_callback,
+                codebase=True,
+            )
+            cache = self._service.review_codebase(**settings)
+        except Exception:
+            with self._cache_condition:
+                self._cache_building = False
+                self._cache_condition.notify_all()
+            raise
+
+        with self._cache_condition:
+            self._cache = list(cache)
+            self._cache_building = False
+            self._cache_condition.notify_all()
         return list(self._cache)
 
     def file_review(self, file_path, *, progress_callback=None):

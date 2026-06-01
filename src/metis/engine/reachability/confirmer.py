@@ -5,10 +5,8 @@
 import logging
 import os
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
-from metis.usage import submit_with_current_context
 
 from .finding_builder import _finding_from_llm_entry
 from .finding_identity import _same_file_ref
@@ -18,6 +16,7 @@ from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from .llm_runner import reachability_response_payload
 from .llm_schemas import ReachabilityConfirmationResponseModel
 from .source_context import _read_function_body
+from .workers import run_reachability_jobs
 
 logger = logging.getLogger("metis")
 
@@ -186,28 +185,23 @@ class VulnerabilityConfirmer:
         progress_callback=None,
     ):
         results = []
-        total = len(batches)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                submit_with_current_context(executor, worker, batch): key
-                for key, batch in batches
-            }
-            for completed, future in enumerate(as_completed(futures), start=1):
-                key = futures[future]
-                try:
-                    results.extend(future.result())
-                except Exception as exc:
-                    logger.warning(
-                        "Reachability confirmation failed for %s: %s", key, exc
-                    )
-                _emit_progress(
-                    progress_callback,
-                    "confirmation_progress",
-                    completed=completed,
-                    total=total,
-                    sink=key,
-                    endpoint=key,
-                )
+        batch_results = run_reachability_jobs(
+            batches,
+            lambda item: worker(item[1]),
+            max_workers=max_workers,
+            label="Reachability confirmation",
+            result_key=lambda item: item[0],
+            on_complete=lambda key, completed, total: _emit_progress(
+                progress_callback,
+                "confirmation_progress",
+                completed=completed,
+                total=total,
+                sink=key,
+                endpoint=key,
+            ),
+        )
+        for batch_result in batch_results:
+            results.extend(batch_result)
         return results
 
     def confirm_paths(
@@ -315,17 +309,33 @@ class VulnerabilityConfirmer:
             )
         return results
 
-    def confirm_paths_for_file(self, target_file, paths, graph, *, max_workers=4):
+    def confirm_paths_for_file(
+        self, target_file, paths, graph, *, max_workers=4, progress_callback=None
+    ):
         paths = _dedupe_paths(paths)
         if not paths:
             return []
         batches = [(target_file, batch) for batch in _chunked(paths, 8)]
 
-        return self._run_batches(
+        _emit_progress(
+            progress_callback,
+            "confirmation_start",
+            total=len(batches),
+            file=target_file,
+        )
+        findings = self._run_batches(
             batches,
             lambda batch: self._confirm_file_batch(target_file, batch, graph),
-            max_workers=max(1, min(max_workers, len(batches))),
+            max_workers=max_workers,
+            progress_callback=progress_callback,
         )
+        _emit_progress(
+            progress_callback,
+            "confirmation_done",
+            confirmed=len(findings),
+            file=target_file,
+        )
+        return findings
 
     def _confirm_file_batch(self, target_file, batch, graph):
         target_nodes, related_nodes = {}, {}

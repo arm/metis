@@ -20,7 +20,6 @@ metis_engine:
     hnsw_dist_method: "vector_cosine_ops"
   reachability_confirmation_model: "gpt-5.5"
   reachability_reasoning_effort: "high"
-  reachability_workers: 8
   reachability_max_paths: 0
   reachability_max_paths_per_sink: 3
   reachability_max_path_length: 25

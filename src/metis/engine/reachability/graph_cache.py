@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import threading
+
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .c_family import CFamilyTreeSitterExtractor
@@ -23,6 +25,7 @@ class ReachabilityGraphCache:
         self._base_graph = None
         self._graphs = {}
         self._paths = {}
+        self._lock = threading.RLock()
 
     def build_graph(self, files=None, *, progress_callback=None):
         selected = self._reachability_files(
@@ -37,23 +40,24 @@ class ReachabilityGraphCache:
     def ensure_graph(
         self, *, progress_callback=None, source_functions=None, security_functions=None
     ):
-        if self._base_graph is None:
-            self._base_graph = self.build_graph(progress_callback=progress_callback)
         key, source_specs, security_specs = self._annotation_specs(
             source_functions,
             security_functions,
         )
-        graph = self._graphs.get(key)
-        if graph is None:
-            graph = self._base_graph.copy()
-            self._annotate_configured_functions(
-                graph,
-                source_specs,
-                security_specs,
-                progress_callback,
-            )
-            self._graphs[key] = graph
-        return graph
+        with self._lock:
+            if self._base_graph is None:
+                self._base_graph = self.build_graph(progress_callback=progress_callback)
+            graph = self._graphs.get(key)
+            if graph is None:
+                graph = self._base_graph.copy()
+                self._annotate_configured_functions(
+                    graph,
+                    source_specs,
+                    security_specs,
+                    progress_callback,
+                )
+                self._graphs[key] = graph
+            return graph
 
     def get_codebase_graph_and_paths(
         self,
@@ -74,13 +78,14 @@ class ReachabilityGraphCache:
             security_functions,
         )
         path_key = (annotation_key, max_path_length)
-        if path_key in self._paths:
-            return graph, list(self._paths[path_key])
-        paths = SourceRootedPathTracer(
-            graph, max_path_length=max_path_length
-        ).find_all_paths()
-        self._paths[path_key] = list(paths)
-        return graph, list(paths)
+        with self._lock:
+            if path_key in self._paths:
+                return graph, list(self._paths[path_key])
+            paths = SourceRootedPathTracer(
+                graph, max_path_length=max_path_length
+            ).find_all_paths()
+            self._paths[path_key] = list(paths)
+            return graph, list(paths)
 
     def _annotation_specs(self, source_functions, security_functions):
         source_specs = _normalise_source_function_specs(source_functions)

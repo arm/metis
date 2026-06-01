@@ -5,10 +5,8 @@
 import logging
 import os
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
-from metis.usage import submit_with_current_context
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 
 from .llm_runner import reachability_response_payload
@@ -33,6 +31,7 @@ from .source_context import (
     _build_globals_code,
     _read_function_body,
 )
+from .workers import ReachabilityWorkerBudget, run_reachability_jobs
 
 logger = logging.getLogger("metis")
 
@@ -57,19 +56,16 @@ def _add_node_context(
 
 
 def _run_chunked_lens(chunks, worker, *, max_workers, event_prefix):
-    if len(chunks) == 1:
-        return list(worker(*chunks[0]))
     results = []
-    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(chunks)))) as ex:
-        futs = [
-            submit_with_current_context(ex, worker, nodes, text)
-            for nodes, text in chunks
-        ]
-        for fut in as_completed(futs):
-            try:
-                results.extend(fut.result())
-            except Exception as e:
-                logger.warning("%s chunk fail: %s", event_prefix, e)
+    chunk_results = run_reachability_jobs(
+        chunks,
+        lambda chunk: list(worker(*chunk)),
+        max_workers=max_workers,
+        label=f"{event_prefix} chunk",
+        result_key=lambda chunk: f"{len(chunk[0])} functions",
+    )
+    for chunk_result in chunk_results:
+        results.extend(chunk_result)
     return results
 
 
@@ -117,9 +113,8 @@ class SupplementaryAnalyzer:
         if not lenses:
             return []
         findings = []
-        worker_budget = max(1, int(max_workers or 1))
-        lens_parallelism = max(1, min(len(lenses), worker_budget, 8))
-        lens_workers = max(1, worker_budget // lens_parallelism)
+        worker_budget = ReachabilityWorkerBudget.from_value(max_workers)
+        lens_parallelism, lens_workers = worker_budget.split(len(lenses), phase_cap=8)
 
         def _run_lens(lens):
             try:
@@ -140,13 +135,15 @@ class SupplementaryAnalyzer:
             for lens in lenses:
                 findings.extend(_run_lens(lens))
         else:
-            with ThreadPoolExecutor(max_workers=lens_parallelism) as executor:
-                futures = {
-                    submit_with_current_context(executor, _run_lens, lens): lens.name
-                    for lens in lenses
-                }
-                for future in as_completed(futures):
-                    findings.extend(future.result())
+            lens_results = run_reachability_jobs(
+                lenses,
+                _run_lens,
+                max_workers=lens_parallelism,
+                label="Supplementary lens",
+                result_key=lambda lens: lens.name,
+            )
+            for lens_result in lens_results:
+                findings.extend(lens_result)
         if progress_callback:
             by_type = defaultdict(int)
             for f in findings:
@@ -247,26 +244,22 @@ class SupplementaryAnalyzer:
             cb, "intra_audit_start", files=len(groups), functions=len(targets)
         )
         results = []
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {
-                submit_with_current_context(ex, self._audit_file, fp, fns): fp
-                for fp, fns in groups.items()
-            }
-            done = 0
-            for fut in as_completed(futs):
-                fp = futs[fut]
-                done += 1
-                try:
-                    results.extend(fut.result())
-                except Exception as e:
-                    logger.warning("Intra audit fail %s: %s", fp, e)
-                _emit_progress(
-                    cb,
-                    "intra_audit_progress",
-                    completed=done,
-                    total=len(groups),
-                    file=fp,
-                )
+        audit_results = run_reachability_jobs(
+            list(groups.items()),
+            lambda item: self._audit_file(item[0], item[1]),
+            max_workers=max_workers,
+            label="Intra audit",
+            result_key=lambda item: item[0],
+            on_complete=lambda fp, done, total: _emit_progress(
+                cb,
+                "intra_audit_progress",
+                completed=done,
+                total=total,
+                file=fp,
+            ),
+        )
+        for audit_result in audit_results:
+            results.extend(audit_result)
         return results
 
     def _structural_candidate_nodes(self, graph, *, sinks_only=False):

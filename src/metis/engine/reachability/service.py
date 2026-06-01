@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+import threading
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import parse_json_output
@@ -30,6 +31,7 @@ from .domain import VulnerabilityFinding
 from .options import ReachabilityReviewOptions
 from .review_output import group_findings_as_reviews, reviews_for_findings
 from .supplementary import SupplementaryAnalyzer
+from .workers import serialized_progress_callback
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,8 @@ class TreeSitterReachabilityService:
         self._supplementary_cache: dict[
             tuple[str | int, ...], list[VulnerabilityFinding]
         ] = {}
+        self._supplementary_condition = threading.Condition()
+        self._supplementary_inflight: set[tuple[str | int, ...]] = set()
 
     def review_file(
         self,
@@ -76,7 +80,7 @@ class TreeSitterReachabilityService:
             max_paths=max_paths,
             max_paths_per_sink=max_paths_per_sink,
             max_path_length=max_path_length,
-            progress_callback=progress_callback,
+            progress_callback=serialized_progress_callback(progress_callback),
             reasoning_effort=reasoning_effort,
             source_functions=source_functions,
             security_functions=security_functions,
@@ -126,6 +130,7 @@ class TreeSitterReachabilityService:
                 source_to_file_paths,
                 graph,
                 max_workers=options.max_workers,
+                progress_callback=options.progress_callback,
             )
             if source_to_file_paths
             else []
@@ -186,7 +191,7 @@ class TreeSitterReachabilityService:
             max_paths=max_paths,
             max_paths_per_sink=max_paths_per_sink,
             max_path_length=max_path_length,
-            progress_callback=progress_callback,
+            progress_callback=serialized_progress_callback(progress_callback),
             reasoning_effort=reasoning_effort,
             source_functions=source_functions,
             security_functions=security_functions,
@@ -301,24 +306,43 @@ class TreeSitterReachabilityService:
             scope_id,
             graph_fingerprint(graph),
         )
-        cached = self._supplementary_cache.get(key)
-        if cached is not None:
-            return list(cached)
-        findings = SupplementaryAnalyzer(
-            self._llm_provider,
-            model,
-            self._usage_runtime,
-            self._config.codebase_path,
-            reasoning_effort=options.reasoning_effort,
-            domain_hints=options.domain_hints,
-            domain_profiles=options.domain_profiles,
-        ).analyze(
-            graph,
-            max_workers=options.max_workers,
-            progress_callback=options.progress_callback,
-            lens_profile=options.lens_profile,
-        )
-        self._supplementary_cache[key] = list(findings)
+        with self._supplementary_condition:
+            cached = self._supplementary_cache.get(key)
+            if cached is not None:
+                return list(cached)
+            if key in self._supplementary_inflight:
+                while key in self._supplementary_inflight:
+                    self._supplementary_condition.wait()
+                cached = self._supplementary_cache.get(key)
+                if cached is not None:
+                    return list(cached)
+            self._supplementary_inflight.add(key)
+
+        try:
+            findings = SupplementaryAnalyzer(
+                self._llm_provider,
+                model,
+                self._usage_runtime,
+                self._config.codebase_path,
+                reasoning_effort=options.reasoning_effort,
+                domain_hints=options.domain_hints,
+                domain_profiles=options.domain_profiles,
+            ).analyze(
+                graph,
+                max_workers=options.max_workers,
+                progress_callback=options.progress_callback,
+                lens_profile=options.lens_profile,
+            )
+        except Exception:
+            with self._supplementary_condition:
+                self._supplementary_inflight.discard(key)
+                self._supplementary_condition.notify_all()
+            raise
+
+        with self._supplementary_condition:
+            self._supplementary_cache[key] = list(findings)
+            self._supplementary_inflight.discard(key)
+            self._supplementary_condition.notify_all()
         return list(findings)
 
     def _finalize_findings(

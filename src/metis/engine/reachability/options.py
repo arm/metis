@@ -11,6 +11,8 @@ from metis.reachability_settings import (
     DEFAULT_REACHABILITY_WORKERS,
 )
 
+from .workers import coerce_worker_count
+
 
 @dataclass(frozen=True, slots=True)
 class ReachabilityReviewOptions:
@@ -27,6 +29,9 @@ class ReachabilityReviewOptions:
     domain_profiles: Any = None
     confirm_paths: bool = True
     lens_profile: str = "all"
+
+    def __post_init__(self):
+        object.__setattr__(self, "max_workers", coerce_worker_count(self.max_workers))
 
     def with_confirmation_model(self, model):
         return replace(self, confirmation_model=model)
