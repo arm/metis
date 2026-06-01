@@ -4,11 +4,8 @@
 
 from collections import defaultdict
 
-from .finding_normalization import (
-    _finding_file,
-    _finding_function,
-    _safe_int,
-)
+from .finding_accessors import _finding_file, _finding_function
+from .finding_values import _safe_int
 
 FINAL_CONSOLIDATION_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
 

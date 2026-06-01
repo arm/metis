@@ -15,7 +15,7 @@ from metis.engine.reachability import (
 )
 from metis.engine.reachability.c_family import CFamilyTreeSitterExtractor
 from metis.engine.reachability.file_focus import FileFocusBuilder
-from metis.engine.reachability.finding_normalization import _canonical_fields
+from metis.engine.reachability.finding_identity import _canonical_fields
 from metis.engine.reachability.finding_paths import FindingPathAnnotator
 from metis.engine.reachability.graph_cache import ReachabilityGraphCache
 from metis.engine.reachability.graph_utils import select_confirmation_paths

@@ -16,7 +16,7 @@ from metis.reachability_settings import (
 
 from .confirmer import VulnerabilityConfirmer
 from .dedup import FINAL_CONSOLIDATION_SYSTEM_PROMPT
-from .finding_finalizer import FindingFinalizer
+from .finding_finalizer import FindingFinalizer, participates_in_file
 from .graph_cache import ReachabilityGraphCache
 from .graph_utils import (
     _copy_graph_nodes,
@@ -131,7 +131,7 @@ class TreeSitterReachabilityService:
         all_findings = [
             finding
             for finding in list(supplementary) + list(path_findings)
-            if self._finalizer.participates_in_file(finding, relative_target, graph)
+            if participates_in_file(finding, relative_target, graph)
         ]
         deduped, _total, _removed = self._finalizer.finalize(
             all_findings,

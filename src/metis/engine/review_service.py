@@ -21,7 +21,7 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .reachability import FindingConsolidator, VulnerabilityFinding
-from .reachability.finding_normalization import _safe_int
+from .reachability.finding_values import _safe_int
 from .llm_runner import invoke_langchain_json_prompt_with_retry
 from .reachability.source_context import _read_line_context, _read_named_function_body
 from .repository import EngineRepository
@@ -101,6 +101,12 @@ class _ReviewValidationDecisionModel(BaseModel):
 
 class _ReviewValidationResponseModel(BaseModel):
     decisions: list[_ReviewValidationDecisionModel] = Field(default_factory=list)
+
+
+def _same_review_file(left, right):
+    return os.path.normcase(os.path.normpath(str(left or ""))) == os.path.normcase(
+        os.path.normpath(str(right or ""))
+    )
 
 
 class ReviewService:
@@ -422,15 +428,9 @@ class ReviewService:
         for review in self._get_reachability_reviews(
             progress_callback=progress_callback
         ):
-            if self._same_review_file(review.get("file"), relative_path):
+            if _same_review_file(review.get("file"), relative_path):
                 return review
         return {"file": relative_path, "file_path": abs_path, "reviews": []}
-
-    @staticmethod
-    def _same_review_file(left, right):
-        return os.path.normcase(os.path.normpath(str(left or ""))) == os.path.normcase(
-            os.path.normpath(str(right or ""))
-        )
 
     def _review_file_standard(
         self,

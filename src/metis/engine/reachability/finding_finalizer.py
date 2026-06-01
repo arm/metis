@@ -6,8 +6,39 @@ from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .dedup import FindingConsolidator
 from .finding_paths import FindingPathAnnotator
+from .finding_values import _normalise_vuln_type
 from .graph_utils import _same_file
-from .post_filters import _post_filter_findings
+
+
+def participates_in_file(finding, target_file, graph):
+    if any(
+        _same_file(file_name, target_file)
+        for file_name in (
+            finding.primary_file,
+            finding.source_file,
+            finding.sink_file,
+        )
+    ):
+        return True
+    for node_name in list(finding.path or []) + [
+        finding.primary_function,
+        finding.source_function,
+        finding.sink_function,
+    ]:
+        node = graph.get_node(node_name) if graph is not None else None
+        if node and _same_file(node.file_path, target_file):
+            return True
+        if str(node_name or "").startswith(f"{target_file}::"):
+            return True
+    return False
+
+
+def _normalise_finding_types(findings):
+    for finding in findings:
+        finding.vulnerability_type = _normalise_vuln_type(
+            getattr(finding, "vulnerability_type", "")
+        )
+    return findings
 
 
 class FindingFinalizer:
@@ -37,7 +68,7 @@ class FindingFinalizer:
                 max_path_length=max_path_length,
             )
 
-        findings = _post_filter_findings(findings, self._codebase_path)
+        findings = _normalise_finding_types(findings)
         if not findings:
             return [], 0, 0
         return FindingConsolidator.deduplicate(
@@ -72,26 +103,3 @@ class FindingFinalizer:
                 annotators[target_file] = annotator
             annotated.append(annotator.annotate_one(finding))
         return annotated
-
-    @staticmethod
-    def participates_in_file(finding, target_file, graph):
-        if any(
-            _same_file(file_name, target_file)
-            for file_name in (
-                finding.primary_file,
-                finding.source_file,
-                finding.sink_file,
-            )
-        ):
-            return True
-        for node_name in list(finding.path or []) + [
-            finding.primary_function,
-            finding.source_function,
-            finding.sink_function,
-        ]:
-            node = graph.get_node(node_name) if graph is not None else None
-            if node and _same_file(node.file_path, target_file):
-                return True
-            if str(node_name or "").startswith(f"{target_file}::"):
-                return True
-        return False

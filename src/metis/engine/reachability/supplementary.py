@@ -39,6 +39,42 @@ from .source_context import (
 logger = logging.getLogger("metis")
 
 
+def _add_node_context(
+    graph, reverse_edges, selected, unique_name, *, with_neighbors=False
+):
+    node = graph.get_node(unique_name)
+    if not node:
+        return
+    selected[node.unique_name] = node
+    if not with_neighbors:
+        return
+    for callee_name in node.resolved_calls or []:
+        callee = graph.get_node(callee_name)
+        if callee:
+            selected[callee.unique_name] = callee
+    for caller_name in reverse_edges.get(node.unique_name, []):
+        caller = graph.get_node(caller_name)
+        if caller:
+            selected[caller.unique_name] = caller
+
+
+def _run_chunked_lens(chunks, worker, *, max_workers, event_prefix):
+    if len(chunks) == 1:
+        return list(worker(*chunks[0]))
+    results = []
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(chunks)))) as ex:
+        futs = [
+            submit_with_current_context(ex, worker, nodes, text)
+            for nodes, text in chunks
+        ]
+        for fut in as_completed(futs):
+            try:
+                results.extend(fut.result())
+            except Exception as e:
+                logger.warning("%s chunk fail: %s", event_prefix, e)
+    return results
+
+
 class SupplementaryAnalyzer:
     def __init__(
         self,
@@ -217,7 +253,7 @@ class SupplementaryAnalyzer:
             )
             return _parse_combined(raw, chunk_nodes, frozenset(analysis_types))
 
-        results = self._run_chunked_lens(
+        results = _run_chunked_lens(
             chunks, _run_chunk, max_workers=max_workers, event_prefix=event_name
         )
         _emit_progress(cb, f"{event_name}_done", findings=len(results))
@@ -274,25 +310,6 @@ class SupplementaryAnalyzer:
                 )
         return results
 
-    @staticmethod
-    def _add_node_context(
-        graph, reverse_edges, selected, unique_name, *, with_neighbors=False
-    ):
-        node = graph.get_node(unique_name)
-        if not node:
-            return
-        selected[node.unique_name] = node
-        if not with_neighbors:
-            return
-        for callee_name in node.resolved_calls or []:
-            callee = graph.get_node(callee_name)
-            if callee:
-                selected[callee.unique_name] = callee
-        for caller_name in reverse_edges.get(node.unique_name, []):
-            caller = graph.get_node(caller_name)
-            if caller:
-                selected[caller.unique_name] = caller
-
     def _structural_candidate_nodes(self, graph, *, sinks_only=False):
         reverse_edges = _build_reverse_edges(
             graph, lambda item: _node_sort_key(graph, item)
@@ -301,7 +318,7 @@ class SupplementaryAnalyzer:
 
         for node in graph.nodes.values():
             if node.is_sink or (node.is_source and not sinks_only):
-                self._add_node_context(
+                _add_node_context(
                     graph,
                     reverse_edges,
                     selected,
@@ -313,7 +330,7 @@ class SupplementaryAnalyzer:
             for global_construct in graph.get_globals():
                 for ref in global_construct.referenced_functions:
                     for unique_name in graph.name_index.get(ref, []):
-                        self._add_node_context(
+                        _add_node_context(
                             graph,
                             reverse_edges,
                             selected,
@@ -326,15 +343,13 @@ class SupplementaryAnalyzer:
                     reverse_edges.get(node.unique_name, [])
                 )
                 if degree >= 2:
-                    self._add_node_context(
-                        graph, reverse_edges, selected, node.unique_name
-                    )
+                    _add_node_context(graph, reverse_edges, selected, node.unique_name)
 
             if self._domain_keywords:
                 for node in graph.nodes.values():
                     text = f"{node.name} {' '.join(node.calls or [])}".lower()
                     if any(keyword in text for keyword in self._domain_keywords):
-                        self._add_node_context(
+                        _add_node_context(
                             graph,
                             reverse_edges,
                             selected,
@@ -403,7 +418,7 @@ class SupplementaryAnalyzer:
                 return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
             return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
 
-        results = self._run_chunked_lens(
+        results = _run_chunked_lens(
             chunks, _run_chunk, max_workers=max_workers, event_prefix=event_prefix
         )
         _emit_progress(cb, f"{event_prefix}_done", findings=len(results))
@@ -421,7 +436,7 @@ class SupplementaryAnalyzer:
         for g in globals_:
             for ref in g.referenced_functions:
                 for unique_name in graph.name_index.get(ref, []):
-                    self._add_node_context(
+                    _add_node_context(
                         graph,
                         reverse_edges,
                         nodes_by_unique,
@@ -430,7 +445,7 @@ class SupplementaryAnalyzer:
                     )
             for node in graph.get_file_nodes(g.file_path):
                 if node.is_source or node.is_sink:
-                    self._add_node_context(
+                    _add_node_context(
                         graph,
                         reverse_edges,
                         nodes_by_unique,
@@ -459,32 +474,13 @@ class SupplementaryAnalyzer:
             )
             return _parse_semantic(raw, chunk_nodes, analysis_type="global_lifecycle")
 
-        results = self._run_chunked_lens(
+        results = _run_chunked_lens(
             chunks,
             _run_chunk,
             max_workers=max_workers,
             event_prefix="Global lifecycle",
         )
         _emit_progress(cb, "global_lifecycle_done", findings=len(results))
-        return results
-
-    @staticmethod
-    def _run_chunked_lens(chunks, worker, *, max_workers, event_prefix):
-        if len(chunks) == 1:
-            return list(worker(*chunks[0]))
-        results = []
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(max_workers, len(chunks)))
-        ) as ex:
-            futs = [
-                submit_with_current_context(ex, worker, nodes, text)
-                for nodes, text in chunks
-            ]
-            for fut in as_completed(futs):
-                try:
-                    results.extend(fut.result())
-                except Exception as e:
-                    logger.warning("%s chunk fail: %s", event_prefix, e)
         return results
 
     def _lens_lock_order(self, graph, _max_workers, cb):

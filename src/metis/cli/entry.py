@@ -92,7 +92,6 @@ def build_engine(args, runtime):
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
-    engine_runtime = dict(runtime)
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(
@@ -117,7 +116,7 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        **engine_runtime,
+        **runtime,
     )
     return engine, vector_backend
 

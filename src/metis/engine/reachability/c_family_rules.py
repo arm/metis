@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from .finding_normalization import _normalise_vuln_type
+from .finding_values import _normalise_vuln_type
 
 CONTROL_CALLS = set(
     "if for while switch return sizeof alignof _Generic case do else typedef defined".split()

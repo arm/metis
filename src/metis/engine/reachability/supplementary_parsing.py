@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from .finding_normalization import (
-    _finding_from_llm_entry,
-    _lookup_fn,
-)
+from .finding_builder import _finding_from_llm_entry, _lookup_fn
 from .llm_runner import reachability_response_payload
 
 

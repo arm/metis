@@ -10,11 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
 
-from .finding_normalization import (
-    _finding_from_llm_entry,
-    _safe_int,
-    _same_file_ref,
-)
+from .finding_builder import _finding_from_llm_entry
+from .finding_identity import _same_file_ref
+from .finding_values import _safe_int
 from .graph_utils import _chunked, _dedupe_paths, _emit_progress
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from .llm_runner import reachability_response_payload

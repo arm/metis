@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from metis.utils import read_file_content
 
-from .finding_normalization import _safe_int
+from .finding_values import _safe_int
 from .models import FunctionNode
 
 
@@ -30,7 +30,7 @@ def _read_function_body(codebase_path, node, max_chars=3000):
         if opened and depth <= 0:
             end = i + 1
             break
-    snippet = "\n".join(f"{start+1+j}: {fl[start+j]}" for j in range(end - start))
+    snippet = "\n".join(f"{start + 1 + j}: {fl[start + j]}" for j in range(end - start))
     return snippet[:max_chars] + "\n" if len(snippet) > max_chars else snippet
 
 
@@ -150,7 +150,7 @@ def _read_line_context(codebase_path, rel_file, line_number, context=2, max_char
     line_number = max(1, _safe_int(line_number, 1))
     start = max(0, line_number - 1 - context)
     end = min(len(lines), line_number + context)
-    snippet = "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
+    snippet = "\n".join(f"{i + 1}: {lines[i]}" for i in range(start, end))
     return snippet[:max_chars]
 
 

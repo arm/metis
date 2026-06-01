@@ -4,7 +4,7 @@
 
 import os
 
-from .finding_normalization import (
+from .finding_values import (
     _mitigation_text,
     _normalise_vuln_type,
     _severity_title,
