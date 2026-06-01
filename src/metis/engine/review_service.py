@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 import unidiff
 
-from metis.plugins.c_family import is_c_family_plugin
 from metis.usage import submit_with_current_context
 from metis.utils import parse_json_output, read_file_content
 
@@ -23,7 +22,7 @@ from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .reachability import FindingConsolidator, VulnerabilityFinding
 from .reachability.finding_normalization import _safe_int
-from .reachability.llm_runner import invoke_json_prompt_with_retry
+from .llm_runner import invoke_langchain_json_prompt_with_retry
 from .reachability.source_context import _read_line_context, _read_named_function_body
 from .repository import EngineRepository
 from .runtime import EngineConfig
@@ -362,7 +361,7 @@ class ReviewService:
         return _rescue_filtered_duplicate_cluster_representatives(candidates, decisions)
 
     def _invoke_review_validation_batch(self, batch, *, model, reasoning_effort=None):
-        return invoke_json_prompt_with_retry(
+        return invoke_langchain_json_prompt_with_retry(
             self._config.llm_provider,
             self._config.usage_runtime,
             model=model,
@@ -416,7 +415,7 @@ class ReviewService:
         if (
             self._reachability_service is not None
             and self._is_file_in_codebase(file_path)
-            and self._is_c_family_file(file_path)
+            and self._supports_reachability_file(file_path)
         ):
             try:
                 if self._reachability_cache is not None:
@@ -519,8 +518,10 @@ class ReviewService:
         except (OSError, ValueError):
             return False
 
-    def _is_c_family_file(self, file_path):
-        return is_c_family_plugin(self._repository.get_plugin_for_path(str(file_path)))
+    def _supports_reachability_file(self, file_path):
+        plugin = self._repository.get_plugin_for_path(str(file_path))
+        supports = getattr(plugin, "supports_reachability_review", None)
+        return bool(callable(supports) and supports())
 
     def _invoke_review_file(
         self,
@@ -578,7 +579,7 @@ class ReviewService:
         run_codebase_reachability = (
             self._reachability_service is not None
             and review_file_func is None
-            and any(self._is_c_family_file(path) for path in files)
+            and any(self._supports_reachability_file(path) for path in files)
         )
         reachability_failed = False
         if run_codebase_reachability:
@@ -598,7 +599,9 @@ class ReviewService:
                 )
                 for result in results:
                     yield result
-                files = [path for path in files if not self._is_c_family_file(path)]
+                files = [
+                    path for path in files if not self._supports_reachability_file(path)
+                ]
                 if not files:
                     return
 

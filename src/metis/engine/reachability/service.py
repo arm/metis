@@ -24,7 +24,7 @@ from .graph_utils import (
     graph_fingerprint,
     select_confirmation_paths,
 )
-from .llm_runner import invoke_json_prompt_with_retry
+from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from .models import VulnerabilityFinding
 from .supplementary import SupplementaryAnalyzer
 from .file_focus import FileFocusBuilder
@@ -251,7 +251,7 @@ class TreeSitterReachabilityService:
     def _adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
         if not candidates:
             return None
-        return invoke_json_prompt_with_retry(
+        return invoke_langchain_json_prompt_with_retry(
             self._llm_provider,
             self._usage_runtime,
             model=model,

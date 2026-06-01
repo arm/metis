@@ -9,8 +9,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
+from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 
-from .llm_runner import invoke_reachability_prompt
+from .llm_runner import reachability_response_payload
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _build_reverse_edges, _chunked, _emit_progress, _node_sort_key
 from .lock_order import _extract_lock_conflicts
@@ -162,14 +163,21 @@ class SupplementaryAnalyzer:
     def _invoke_findings(
         self, system_prompt, user_prompt, variables, *, max_tokens=None
     ):
-        return invoke_reachability_prompt(
+        return invoke_langchain_json_prompt_with_retry(
             self._p,
             self._u,
             model=self._m,
             max_tokens=max_tokens or self._st,
+            temperature=0.1,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             variables=variables,
+            parse=reachability_response_payload,
+            logger=logger,
+            label="Supplementary reachability analysis",
+            batch_size=1,
+            invalid_message="expected findings list",
+            final_keep_message="keeping this supplementary batch empty",
             response_model=ReachabilityFindingResponseModel,
             reasoning_effort=self._reasoning_effort,
         )

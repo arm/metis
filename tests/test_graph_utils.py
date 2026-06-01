@@ -176,13 +176,6 @@ def test_review_node_llm_keeps_partial_reviews():
         ]
     }
 
-    class _DummyNode:
-        def __init__(self, response):
-            self._response = response
-
-        def invoke(self, _payload):
-            return self._response
-
     state = {
         "file_path": "foo.py",
         "snippet": "print('hello')",
@@ -193,8 +186,7 @@ def test_review_node_llm_keeps_partial_reviews():
 
     result_state = review_node_llm(
         state,
-        structured_node=_DummyNode(payload),
-        fallback_node=None,
+        invoke_review=lambda _system, _body: sanitize_review_payload(payload),
     )
 
     parsed = result_state["parsed_reviews"]

@@ -16,7 +16,8 @@ from .finding_normalization import (
     _same_file_ref,
 )
 from .graph_utils import _chunked, _dedupe_paths, _emit_progress
-from .llm_runner import invoke_reachability_prompt, reachability_response_payload
+from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from .llm_runner import reachability_response_payload
 from .models import (
     ALLOWED_VULNERABILITY_TYPES,
     ReachabilityConfirmationResponseModel,
@@ -246,11 +247,12 @@ class VulnerabilityConfirmer:
 
     def _confirm_batch(self, paths, graph):
         batch = list(paths)
-        raw = invoke_reachability_prompt(
+        raw = invoke_langchain_json_prompt_with_retry(
             self._p,
             self._u,
             model=self._m,
             max_tokens=self._t,
+            temperature=0.1,
             system_prompt=_CONFIRM_SYS,
             user_prompt=_CONFIRM_USR,
             variables={
@@ -261,6 +263,12 @@ class VulnerabilityConfirmer:
                     "== SOURCE CODE ==", self._path_nodes(batch, graph)
                 ),
             },
+            parse=reachability_response_payload,
+            logger=logger,
+            label="Reachability confirmation",
+            batch_size=len(batch),
+            invalid_message="expected findings list",
+            final_keep_message="keeping this confirmation batch empty",
             response_model=ReachabilityConfirmationResponseModel,
             reasoning_effort=self._reasoning_effort,
         )
@@ -332,11 +340,12 @@ class VulnerabilityConfirmer:
                 target_nodes[u] = n
             else:
                 related_nodes[u] = n
-        raw = invoke_reachability_prompt(
+        raw = invoke_langchain_json_prompt_with_retry(
             self._p,
             self._u,
             model=self._m,
             max_tokens=self._t,
+            temperature=0.1,
             system_prompt=_FILE_CONFIRM_SYS,
             user_prompt=_FILE_CONFIRM_USR,
             variables={
@@ -355,6 +364,12 @@ class VulnerabilityConfirmer:
                     max_chars=2500,
                 ),
             },
+            parse=reachability_response_payload,
+            logger=logger,
+            label="File reachability confirmation",
+            batch_size=len(batch),
+            invalid_message="expected findings list",
+            final_keep_message="keeping this confirmation batch empty",
             response_model=ReachabilityConfirmationResponseModel,
             reasoning_effort=self._reasoning_effort,
         )

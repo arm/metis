@@ -69,14 +69,6 @@ def test_review_nodes_pipeline_parses():
     )
     assert "system_prompt" in s2
 
-    # Step 3: run LLM review (stub)
-    class _DummyNode:
-        def __init__(self, payload):
-            self._payload = payload
-
-        def invoke(self, _):
-            return self._payload
-
     review_payload = {
         "reviews": [
             {
@@ -93,8 +85,7 @@ def test_review_nodes_pipeline_parses():
 
     s3 = review_node_llm(
         s2,
-        structured_node=_DummyNode(review_payload),
-        fallback_node=None,
+        invoke_review=lambda _system, _body: review_payload["reviews"],
     )
     assert "parsed_reviews" in s3
     assert s3["parsed_reviews"]
@@ -126,11 +117,6 @@ def test_review_node_retrieve_no_index_skips_retrievers():
 def test_review_node_llm_omits_context_section_in_no_index_mode():
     captured = {}
 
-    class _DummyNode:
-        def invoke(self, payload):
-            captured.update(payload)
-            return {"reviews": []}
-
     state = {
         "file_path": "foo.py",
         "snippet": "print('hello')",
@@ -142,8 +128,8 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
 
     review_node_llm(
         state,
-        structured_node=_DummyNode(),
-        fallback_node=None,
+        invoke_review=lambda _system, body: captured.setdefault("body_text", body)
+        or [],
     )
 
     assert "CONTEXT:" not in captured["body_text"]

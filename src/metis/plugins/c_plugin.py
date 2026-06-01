@@ -8,6 +8,9 @@ class CPlugin(ConfigBackedLanguagePlugin):
     NAME = "c"
     DEFAULT_EXTENSIONS = [".c", ".h"]
 
+    def supports_reachability_review(self) -> bool:
+        return True
+
     def get_triage_analyzer_factory(self):
         from metis.engine.analysis.c_family_analyzer import (
             build_c_family_analyzer_factory,

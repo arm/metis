@@ -5,11 +5,10 @@ import logging
 from functools import partial
 from typing import Any
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
+from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
@@ -140,29 +139,11 @@ def review_node_build_prompt(
 
 def review_node_llm(
     state: ReviewState,
-    structured_node,
-    fallback_node=None,
+    invoke_review,
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    payload = {"system_prompt": system_prompt, "body_text": body_text}
-    raw = None
-    attempts = (
-        (structured_node, logger.warning, "Structured review invocation failed: %s"),
-        (fallback_node, logger.error, "Fallback review invocation failed: %s"),
-    )
-    for runnable, log_fn, message in attempts:
-        if runnable is None:
-            continue
-        if raw not in (None, ""):
-            break
-        try:
-            raw = runnable.invoke(payload)
-        except Exception as exc:
-            log_fn(message, exc)
-            raw = None
-
-    reviews = _normalize_reviews(raw)
+    reviews = invoke_review(system_prompt, body_text) or []
     new_state: ReviewState = dict(state)
     new_state["parsed_reviews"] = reviews
     return new_state
@@ -207,42 +188,29 @@ class ReviewGraph:
             "hardware_cwe_guidance", ""
         )
 
-        self._structured_review_node = None
-        self._fallback_review_node = None
-        self._structured_review_node = self._create_structured_review_runnable()
-        if self._structured_review_node is None and self._fallback_review_node is None:
+        get_chat_model = getattr(self.llm_provider, "get_chat_model", None)
+        if not callable(get_chat_model):
             raise RuntimeError(
-                "Unable to create review runnable; OpenAI-based provider required."
+                "Unable to create review runnable; LangChain chat provider required."
             )
         self._app_cache = {}
 
-    def _create_structured_review_runnable(self):
-        get_chat_model = getattr(self.llm_provider, "get_chat_model", None)
-        if not callable(get_chat_model):
-            return None
-        try:
-            chat_model = get_chat_model(
-                model=self.llama_query_model, **self.chat_model_kwargs
-            )
-        except Exception as exc:
-            logger.warning(
-                "Unable to instantiate chat model for structured output: %s", exc
-            )
-            return None
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", "{system_prompt}"), ("user", "{body_text}")]
+    def _invoke_review_model(self, system_prompt, body_text):
+        return invoke_langchain_json_prompt_with_retry(
+            self.llm_provider,
+            model=self.llama_query_model,
+            system_prompt=system_prompt,
+            user_prompt="{body_text}",
+            variables={"body_text": body_text},
+            parse=_normalize_reviews,
+            logger=logger,
+            label="Review graph",
+            batch_size=1,
+            invalid_message="expected review JSON object",
+            final_keep_message="returning no findings for this chunk",
+            response_model=ReviewResponseModel,
+            chat_model_kwargs=self.chat_model_kwargs,
         )
-        self._fallback_review_node = prompt | chat_model | StrOutputParser()
-        try:
-            structured_model = chat_model.with_structured_output(
-                ReviewResponseModel, method="function_calling"
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to bind structured output schema for review graph: %s", exc
-            )
-            return None
-        return prompt | structured_model
 
     def _build_app(self, language_prompts, default_prompt_key):
         cache_key = (id(language_prompts), default_prompt_key)
@@ -264,8 +232,7 @@ class ReviewGraph:
         )
         review = partial(
             review_node_llm,
-            structured_node=self._structured_review_node,
-            fallback_node=self._fallback_review_node,
+            invoke_review=self._invoke_review_model,
         )
         parse = review_node_parse
 
