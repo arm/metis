@@ -10,7 +10,7 @@ DEFAULT_REACHABILITY_MAX_PATH_LENGTH = 25
 DEFAULT_REACHABILITY_DOMAIN_PROFILES = ("gpu",)
 
 REACHABILITY_CONFIG_KEYS = tuple(
-    "reachability_confirmation_model reachability_workers reachability_max_paths "
+    "reachability_confirmation_model reachability_max_paths "
     "reachability_max_paths_per_sink reachability_max_path_length "
     "reachability_reasoning_effort reachability_source_functions "
     "reachability_security_functions reachability_domain_profiles "
@@ -41,7 +41,7 @@ def coerce_reachability_settings(
 
     return {
         "confirmation_model": config.get("reachability_confirmation_model"),
-        "max_workers": _int_config(config, "reachability_workers", default_workers),
+        "max_workers": default_workers,
         "max_paths": _int_config(
             config, "reachability_max_paths", DEFAULT_REACHABILITY_MAX_PATHS
         ),

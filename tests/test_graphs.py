@@ -128,8 +128,9 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
 
     review_node_llm(
         state,
-        invoke_review=lambda _system, body: captured.setdefault("body_text", body)
-        or [],
+        invoke_review=lambda _system, body: (
+            captured.setdefault("body_text", body) or []
+        ),
     )
 
     assert "CONTEXT:" not in captured["body_text"]
