@@ -175,6 +175,29 @@ def test_reachability_cache_extracts_reachability_graph(monkeypatch):
     assert graph.get_node("main.c::main").resolved_calls == ["main.c::foo"]
 
 
+def test_reachability_cache_keeps_configured_annotations_isolated():
+    cache = _reachability_cache(".")
+    cache._base_graph = _graph(
+        _fn("src/main.c::main", 1, calls=["entry"]),
+        _fn("src/api.c::entry", 10),
+    )
+
+    plain = cache.ensure_graph()
+    configured = cache.ensure_graph(
+        source_functions=[{"name": "entry", "reason": "test source"}]
+    )
+
+    assert plain.get_node("src/api.c::entry").is_source is False
+    assert configured.get_node("src/api.c::entry").is_source is True
+    assert cache.ensure_graph() is plain
+    assert (
+        cache.ensure_graph(
+            source_functions=[{"name": "entry", "reason": "test source"}]
+        )
+        is configured
+    )
+
+
 @pytest.mark.parametrize(
     ("nodes", "expected", "sink", "sink_type"),
     [
@@ -235,7 +258,7 @@ def test_c_family_extractor_handles_deep_trees_without_recursion(monkeypatch):
         1,
         child=_deep_chain(1500, _call("memcpy", 1502)),
     )
-    nodes = extractor._collect_functions(_deep_chain(1500, deep_fn), b"", "deep.c")
+    nodes = extractor._collect_function_nodes(_deep_chain(1500, deep_fn), b"", "deep.c")
 
     global_decl = _Node(
         "init_declarator",

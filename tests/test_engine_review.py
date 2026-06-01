@@ -10,6 +10,7 @@ from metis.engine.review_validation import (
     rescue_filtered_duplicate_cluster_representatives,
     review_validation_final_keep,
 )
+from metis.engine.review_reachability import ReachabilityReviewBackend
 
 
 def test_ask_question(engine):
@@ -31,8 +32,12 @@ def _reachability(engine, result=None):
     reachability = Mock()
     reachability.review_codebase.return_value = result or []
     reachability.adjudicate_final_findings = None
-    engine.review._reachability_service = reachability
-    engine.review._reachability_cache = None
+    engine.review._reachability_backend = ReachabilityReviewBackend(
+        engine.review._config,
+        engine.review._repository,
+        reachability,
+        {},
+    )
     return reachability
 
 

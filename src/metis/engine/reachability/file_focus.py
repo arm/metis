@@ -13,7 +13,7 @@ from .graph_utils import (
     _file_focus_path_sort_key,
     _node_sort_key,
 )
-from .models import ReachabilityPath
+from .domain import ReachabilityPath
 
 
 DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64

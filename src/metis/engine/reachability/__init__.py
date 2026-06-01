@@ -6,11 +6,11 @@ from .dedup import (
     Deduplicator as Deduplicator,
     FindingConsolidator as FindingConsolidator,
 )
-from .models import (
+from .domain import (
     FunctionNode as FunctionNode,
     GlobalConstruct as GlobalConstruct,
-    ReachabilityGraph as ReachabilityGraph,
     ReachabilityPath as ReachabilityPath,
     VulnerabilityFinding as VulnerabilityFinding,
 )
+from .graph import ReachabilityGraph as ReachabilityGraph
 from .tracing import SourceRootedPathTracer as SourceRootedPathTracer

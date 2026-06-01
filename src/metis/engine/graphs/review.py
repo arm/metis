@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
-from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
@@ -193,23 +193,25 @@ class ReviewGraph:
             raise RuntimeError(
                 "Unable to create review runnable; LangChain chat provider required."
             )
+        self._prompt_runner = JsonPromptRunner(self.llm_provider)
         self._app_cache = {}
 
     def _invoke_review_model(self, system_prompt, body_text):
-        return invoke_langchain_json_prompt_with_retry(
-            self.llm_provider,
-            model=self.llama_query_model,
-            system_prompt=system_prompt,
-            user_prompt="{body_text}",
-            variables={"body_text": body_text},
-            parse=_normalize_reviews,
-            logger=logger,
-            label="Review graph",
-            batch_size=1,
-            invalid_message="expected review JSON object",
-            final_keep_message="returning no findings for this chunk",
-            response_model=ReviewResponseModel,
-            chat_model_kwargs=self.chat_model_kwargs,
+        return self._prompt_runner.invoke(
+            JsonPromptRequest(
+                model=self.llama_query_model,
+                system_prompt=system_prompt,
+                user_prompt="{body_text}",
+                variables={"body_text": body_text},
+                parse=_normalize_reviews,
+                logger=logger,
+                label="Review graph",
+                batch_size=1,
+                invalid_message="expected review JSON object",
+                final_keep_message="returning no findings for this chunk",
+                response_model=ReviewResponseModel,
+                chat_model_kwargs=self.chat_model_kwargs,
+            )
         )
 
     def _build_app(self, language_prompts, default_prompt_key):

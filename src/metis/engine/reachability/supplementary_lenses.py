@@ -3,6 +3,7 @@
 
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from .supplementary_prompts import (
     _CLASSIC_C_SINK_SYS,
@@ -35,6 +36,52 @@ class _SupplementaryLensSpec:
 
     def parses_semantic_entries(self) -> bool:
         return self.parser == "semantic"
+
+
+class SupplementaryLens(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def run(self, analyzer, graph, max_workers, progress_callback): ...
+
+
+@dataclass(frozen=True)
+class _CombinedGraphLens:
+    specs: tuple[_SupplementaryLensSpec, ...]
+    name: str = "combined_graph_lenses"
+
+    def run(self, analyzer, graph, max_workers, progress_callback):
+        return analyzer.run_combined_graph_lenses(
+            self.specs,
+            graph,
+            max_workers,
+            progress_callback,
+        )
+
+
+@dataclass(frozen=True)
+class _SpecLens:
+    spec: _SupplementaryLensSpec
+
+    @property
+    def name(self):
+        return self.spec.name
+
+    def run(self, analyzer, graph, max_workers, progress_callback):
+        if self.spec.uses_method_runner():
+            return getattr(analyzer, self.spec.method_name)(
+                graph,
+                max_workers,
+                progress_callback,
+            )
+        if self.spec.uses_candidate_runner():
+            return analyzer.run_candidate_lens(
+                graph,
+                self.spec,
+                max_workers,
+                progress_callback,
+            )
+        raise ValueError(f"unknown supplementary lens kind: {self.spec.kind}")
 
 
 _PROMPTS = {
@@ -82,6 +129,26 @@ _FULL_LENS_SPECS = tuple(
         ("targeted_path_access", "candidate_semantic", "", "targeted_path_access"),
     )
 )
+
+
+def build_supplementary_lenses(profile: str = "all") -> list[SupplementaryLens]:
+    lens_specs = selected_lens_specs(profile)
+    combined_specs = tuple(spec for spec in lens_specs if spec.runs_as_combined_graph())
+    lenses: list[SupplementaryLens] = []
+    if combined_specs:
+        lenses.append(_CombinedGraphLens(combined_specs))
+    lenses.extend(
+        _SpecLens(spec) for spec in lens_specs if not spec.runs_as_combined_graph()
+    )
+    return lenses
+
+
+def selected_lens_specs(profile: str = "all") -> list[_SupplementaryLensSpec]:
+    profile = str(profile or "all").lower()
+    if profile == "review":
+        return [spec for spec in _FULL_LENS_SPECS if spec.name in _REVIEW_LENS_NAMES]
+    return list(_FULL_LENS_SPECS)
+
 
 _REVIEW_LENS_NAMES = set(
     "intra_audit lifecycle_audit ownership_audit semantic_audit "

@@ -4,8 +4,9 @@
 import logging
 import os
 
-from .reachability import FindingConsolidator, VulnerabilityFinding
+from .reachability import FindingConsolidator
 from .reachability.finding_values import _safe_int
+from .review_finding_adapter import review_item_to_finding
 from .review_validation import (
     ReviewFindingValidator,
     is_reachability_review_item,
@@ -14,8 +15,6 @@ from .review_validation import (
     review_validation_drop_reason,
     review_validation_final_keep,
     review_validation_payload,
-    safe_float,
-    split_reachability_reasoning,
 )
 
 logger = logging.getLogger("metis")
@@ -185,7 +184,7 @@ class ReviewResultAggregator:
         for group_index, item_index, item in _iter_review_items(review_groups):
             if not is_reachability_review_item(item):
                 continue
-            finding = _review_item_to_reachability_finding(
+            finding = review_item_to_finding(
                 item, finding_id=f"review-aggregate-{len(findings)}"
             )
             refs.append((group_index, item_index))
@@ -239,37 +238,3 @@ def _rewrite_review_groups(review_groups, item_replacements, filtered_by_group=N
                 rewritten_group["review_validation_filtered_reviews"] = filtered_items
             rewritten.append(rewritten_group)
     return rewritten
-
-
-def _review_item_to_reachability_finding(item, *, finding_id):
-    root_cause, evidence = split_reachability_reasoning(item.get("reasoning"))
-    primary_file = str(item.get("primary_file") or "")
-    primary_function = str(item.get("primary_function") or "")
-    line_number = _safe_int(item.get("line_number"), 0)
-    return VulnerabilityFinding(
-        finding_id,
-        "other",
-        str(item.get("severity") or "medium").lower(),
-        safe_float(item.get("confidence"), 0.0),
-        primary_function,
-        primary_file,
-        line_number,
-        primary_function,
-        primary_file,
-        line_number,
-        path=(
-            [str(path_item) for path_item in item.get("path") if path_item]
-            if isinstance(item.get("path"), list)
-            else []
-        ),
-        description=str(item.get("issue") or ""),
-        root_cause=root_cause,
-        evidence=evidence,
-        mitigation=str(item.get("mitigation") or ""),
-        cwe=str(item.get("cwe") or ""),
-        analysis_type=str(item.get("analysis_type") or "reachability"),
-        primary_file=primary_file,
-        primary_function=primary_function,
-        primary_line=line_number,
-        canonical_key=str(item.get("canonical_key") or ""),
-    )

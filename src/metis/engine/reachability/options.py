@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from metis.reachability_settings import (
@@ -12,7 +12,7 @@ from metis.reachability_settings import (
 )
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ReachabilityReviewOptions:
     confirmation_model: str | None = None
     max_workers: int = DEFAULT_REACHABILITY_WORKERS
@@ -27,6 +27,9 @@ class ReachabilityReviewOptions:
     domain_profiles: Any = None
     confirm_paths: bool = True
     lens_profile: str = "all"
+
+    def with_confirmation_model(self, model):
+        return replace(self, confirmation_model=model)
 
     def supplementary_cache_key(self, scope_id: object, graph_fingerprint: str):
         return (

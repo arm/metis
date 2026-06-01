@@ -11,7 +11,7 @@ from .c_family_rules import (
     external_sink_type,
 )
 from .graph_utils import _emit_progress
-from .models import ReachabilityGraph
+from .graph import ReachabilityGraph
 from .tracing import SourceRootedPathTracer
 
 
@@ -20,9 +20,9 @@ class ReachabilityGraphCache:
         self._config = config
         self._repository = repository
         self._extractor = CFamilyTreeSitterExtractor(repository)
-        self._graph = None
-        self._paths = None
-        self._paths_max_length = None
+        self._base_graph = None
+        self._graphs = {}
+        self._paths = {}
 
     def build_graph(self, files=None, *, progress_callback=None):
         selected = self._reachability_files(
@@ -37,12 +37,23 @@ class ReachabilityGraphCache:
     def ensure_graph(
         self, *, progress_callback=None, source_functions=None, security_functions=None
     ):
-        if self._graph is None:
-            self._graph = self.build_graph(progress_callback=progress_callback)
-        self._annotate_configured_functions(
-            self._graph, source_functions, security_functions, progress_callback
+        if self._base_graph is None:
+            self._base_graph = self.build_graph(progress_callback=progress_callback)
+        key, source_specs, security_specs = self._annotation_specs(
+            source_functions,
+            security_functions,
         )
-        return self._graph
+        graph = self._graphs.get(key)
+        if graph is None:
+            graph = self._base_graph.copy()
+            self._annotate_configured_functions(
+                graph,
+                source_specs,
+                security_specs,
+                progress_callback,
+            )
+            self._graphs[key] = graph
+        return graph
 
     def get_codebase_graph_and_paths(
         self,
@@ -53,37 +64,47 @@ class ReachabilityGraphCache:
         security_functions=None,
     ):
         max_path_length = int(max_path_length or DEFAULT_REACHABILITY_MAX_PATH_LENGTH)
-        if self._graph is not None:
-            self._annotate_configured_functions(
-                self._graph, source_functions, security_functions, progress_callback
-            )
-        if (
-            self._graph is not None
-            and self._paths is not None
-            and self._paths_max_length == max_path_length
-        ):
-            return self._graph, list(self._paths)
-
         graph = self.ensure_graph(
             progress_callback=progress_callback,
             source_functions=source_functions,
             security_functions=security_functions,
         )
+        annotation_key, _source_specs, _security_specs = self._annotation_specs(
+            source_functions,
+            security_functions,
+        )
+        path_key = (annotation_key, max_path_length)
+        if path_key in self._paths:
+            return graph, list(self._paths[path_key])
         paths = SourceRootedPathTracer(
             graph, max_path_length=max_path_length
         ).find_all_paths()
-        self._paths = list(paths)
-        self._paths_max_length = max_path_length
+        self._paths[path_key] = list(paths)
         return graph, list(paths)
 
+    def _annotation_specs(self, source_functions, security_functions):
+        source_specs = _normalise_source_function_specs(source_functions)
+        security_specs = _normalise_security_function_specs(security_functions)
+        key = (
+            self._spec_cache_key(source_specs),
+            self._spec_cache_key(security_specs),
+        )
+        return key, source_specs, security_specs
+
+    def _spec_cache_key(self, specs):
+        return tuple(
+            (name, tuple(sorted(values.items())))
+            for name, values in sorted(specs.items())
+        )
+
     def _annotate_configured_functions(
-        self, graph, source_functions, security_functions, progress_callback
+        self, graph, source_specs, security_specs, progress_callback
     ):
         self._annotate_configured_source_functions(
-            graph, source_functions, progress_callback=progress_callback
+            graph, source_specs, progress_callback=progress_callback
         )
         self._annotate_configured_security_functions(
-            graph, security_functions, progress_callback=progress_callback
+            graph, security_specs, progress_callback=progress_callback
         )
 
     def _reachability_files(self, files) -> list[str]:
@@ -95,9 +116,8 @@ class ReachabilityGraphCache:
         return bool(callable(supports) and supports())
 
     def _annotate_configured_source_functions(
-        self, graph, source_functions, *, progress_callback=None
+        self, graph, specs, *, progress_callback=None
     ):
-        specs = _normalise_source_function_specs(source_functions)
         if not specs:
             return 0
         updated = 0
@@ -111,16 +131,14 @@ class ReachabilityGraphCache:
             node.source_reason = f"configured source function: {spec['reason']}"
 
         if updated:
-            self._invalidate_paths()
             _emit_progress(
                 progress_callback, "configured_source_functions_done", sources=updated
             )
         return updated
 
     def _annotate_configured_security_functions(
-        self, graph, security_functions, *, progress_callback=None
+        self, graph, specs, *, progress_callback=None
     ):
-        specs = _normalise_security_function_specs(security_functions)
         if not specs:
             return 0
         updated = 0
@@ -144,15 +162,10 @@ class ReachabilityGraphCache:
             updated += 1
 
         if updated:
-            self._invalidate_paths()
             _emit_progress(
                 progress_callback, "configured_security_functions_done", sinks=updated
             )
         return updated
-
-    def _invalidate_paths(self):
-        self._paths = None
-        self._paths_max_length = None
 
     def _build_graph_from_files(
         self, files, codebase_path: str, *, progress_callback=None

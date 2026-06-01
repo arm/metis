@@ -7,7 +7,7 @@ from functools import partial
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
-from .models import ReachabilityPath
+from .domain import ReachabilityPath
 from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort_key
 
 

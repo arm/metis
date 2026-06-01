@@ -14,7 +14,7 @@ from typing import Any
 
 from .finding_builder import _finding_from_llm_entry, _lookup_fn
 from .llm_runner import reachability_response_payload
-from .models import FunctionNode, VulnerabilityFinding
+from .domain import FunctionNode, VulnerabilityFinding
 
 type FunctionIndexes = tuple[dict[str, FunctionNode], dict[str, FunctionNode]]
 

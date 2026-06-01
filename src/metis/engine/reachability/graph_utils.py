@@ -7,7 +7,7 @@ import hashlib
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
 
-from .models import ReachabilityGraph
+from .graph import ReachabilityGraph
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12

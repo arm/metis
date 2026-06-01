@@ -14,9 +14,9 @@ from .finding_builder import _finding_from_llm_entry
 from .finding_identity import _same_file_ref
 from .finding_values import _safe_int
 from .graph_utils import _chunked, _dedupe_paths, _emit_progress
-from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from .llm_runner import reachability_response_payload
-from .models import ReachabilityConfirmationResponseModel
+from .llm_schemas import ReachabilityConfirmationResponseModel
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
@@ -134,6 +134,7 @@ class VulnerabilityConfirmer:
         self._cb = os.path.abspath(codebase_path)
         self._t = max_tokens
         self._reasoning_effort = reasoning_effort
+        self._runner = JsonPromptRunner(llm_provider, usage_runtime)
 
     def _path_nodes(self, batch, graph):
         nodes = {}
@@ -240,30 +241,30 @@ class VulnerabilityConfirmer:
 
     def _confirm_batch(self, paths, graph):
         batch = list(paths)
-        raw = invoke_langchain_json_prompt_with_retry(
-            self._p,
-            self._u,
-            model=self._m,
-            max_tokens=self._t,
-            temperature=0.1,
-            system_prompt=_CONFIRM_SYS,
-            user_prompt=_CONFIRM_USR,
-            variables={
-                "paths_section": self._paths_section(
-                    batch, graph, "[reachable endpoint; inspect the whole path]"
-                ),
-                "code_section": self._code_section(
-                    "== SOURCE CODE ==", self._path_nodes(batch, graph)
-                ),
-            },
-            parse=reachability_response_payload,
-            logger=logger,
-            label="Reachability confirmation",
-            batch_size=len(batch),
-            invalid_message="expected findings list",
-            final_keep_message="keeping this confirmation batch empty",
-            response_model=ReachabilityConfirmationResponseModel,
-            reasoning_effort=self._reasoning_effort,
+        raw = self._runner.invoke(
+            JsonPromptRequest(
+                model=self._m,
+                max_tokens=self._t,
+                temperature=0.1,
+                system_prompt=_CONFIRM_SYS,
+                user_prompt=_CONFIRM_USR,
+                variables={
+                    "paths_section": self._paths_section(
+                        batch, graph, "[reachable endpoint; inspect the whole path]"
+                    ),
+                    "code_section": self._code_section(
+                        "== SOURCE CODE ==", self._path_nodes(batch, graph)
+                    ),
+                },
+                parse=reachability_response_payload,
+                logger=logger,
+                label="Reachability confirmation",
+                batch_size=len(batch),
+                invalid_message="expected findings list",
+                final_keep_message="keeping this confirmation batch empty",
+                response_model=ReachabilityConfirmationResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
         )
         return self._parse_confirm(raw, batch, graph)
 
@@ -333,37 +334,39 @@ class VulnerabilityConfirmer:
                 target_nodes[u] = n
             else:
                 related_nodes[u] = n
-        raw = invoke_langchain_json_prompt_with_retry(
-            self._p,
-            self._u,
-            model=self._m,
-            max_tokens=self._t,
-            temperature=0.1,
-            system_prompt=_FILE_CONFIRM_SYS,
-            user_prompt=_FILE_CONFIRM_USR,
-            variables={
-                "target_file": target_file,
-                "paths_section": self._paths_section(
-                    batch,
-                    graph,
-                    "[reachable endpoint; inspect the target-file path]",
-                ),
-                "target_file_code": self._code_section(
-                    "-- Functions from target file --", target_nodes, max_chars=5000
-                ),
-                "related_code_section": self._code_section(
-                    "-- Supporting code from other files --",
-                    related_nodes,
-                    max_chars=2500,
-                ),
-            },
-            parse=reachability_response_payload,
-            logger=logger,
-            label="File reachability confirmation",
-            batch_size=len(batch),
-            invalid_message="expected findings list",
-            final_keep_message="keeping this confirmation batch empty",
-            response_model=ReachabilityConfirmationResponseModel,
-            reasoning_effort=self._reasoning_effort,
+        raw = self._runner.invoke(
+            JsonPromptRequest(
+                model=self._m,
+                max_tokens=self._t,
+                temperature=0.1,
+                system_prompt=_FILE_CONFIRM_SYS,
+                user_prompt=_FILE_CONFIRM_USR,
+                variables={
+                    "target_file": target_file,
+                    "paths_section": self._paths_section(
+                        batch,
+                        graph,
+                        "[reachable endpoint; inspect the target-file path]",
+                    ),
+                    "target_file_code": self._code_section(
+                        "-- Functions from target file --",
+                        target_nodes,
+                        max_chars=5000,
+                    ),
+                    "related_code_section": self._code_section(
+                        "-- Supporting code from other files --",
+                        related_nodes,
+                        max_chars=2500,
+                    ),
+                },
+                parse=reachability_response_payload,
+                logger=logger,
+                label="File reachability confirmation",
+                batch_size=len(batch),
+                invalid_message="expected findings list",
+                final_keep_message="keeping this confirmation batch empty",
+                response_model=ReachabilityConfirmationResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
         )
         return self._parse_confirm(raw, batch, graph, target_file=target_file)

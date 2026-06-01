@@ -7,23 +7,18 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from metis.engine.review_finding_adapter import (
+    safe_float as _safe_float,
+    split_reachability_reasoning as _split_reachability_reasoning,
+)
 from metis.utils import parse_json_output
 
-from .llm_runner import invoke_langchain_json_prompt_with_retry
+from .llm_runner import JsonPromptRequest, JsonPromptRunner
 from .reachability.finding_values import _safe_int
 from .reachability.source_context import _read_line_context, _read_named_function_body
 
 logger = logging.getLogger("metis")
 
-_REACHABILITY_REASONING_METADATA_PREFIXES = (
-    "Primary location:",
-    "Reviewed file participates via:",
-    "Connected functions:",
-    "Reachability path:",
-    "Root cause:",
-    "Analysis type:",
-    "Canonical key:",
-)
 _REVIEW_VALIDATION_BATCH_SIZE = 5
 _REVIEW_VALIDATION_SEVERITY_RANK = dict(
     zip("critical high medium low".split(), range(4), strict=True)
@@ -92,6 +87,7 @@ class ReviewFindingValidator:
     def __init__(self, config, reachability_settings: dict[str, Any] | None = None):
         self._config = config
         self._reachability_settings = dict(reachability_settings or {})
+        self._runner = JsonPromptRunner(config.llm_provider, config.usage_runtime)
 
     def validate_candidates(self, candidates):
         model = (
@@ -115,30 +111,32 @@ class ReviewFindingValidator:
         return _rescue_filtered_duplicate_cluster_representatives(candidates, decisions)
 
     def invoke_batch(self, batch, *, model, reasoning_effort=None):
-        return invoke_langchain_json_prompt_with_retry(
-            self._config.llm_provider,
-            self._config.usage_runtime,
-            model=model,
-            max_tokens=6000,
-            temperature=0.0,
-            system_prompt=_REVIEW_VALIDATION_SYSTEM_PROMPT,
-            user_prompt=(
-                "Candidate findings JSON:\n{candidate_findings}\n\n"
-                "Return exactly one JSON object with a top-level "
-                '"decisions" array. Do not return markdown or prose.'
-            ),
-            variables={"candidate_findings": json.dumps(batch, separators=(",", ":"))},
-            parse=_parse_review_validation_response,
-            logger=logger,
-            label="Review validation",
-            batch_size=len(batch),
-            invalid_message=(
-                "expected structured validation payload or JSON object with "
-                "decisions list"
-            ),
-            final_keep_message="keeping batch unchanged",
-            response_model=_ReviewValidationResponseModel,
-            reasoning_effort=reasoning_effort,
+        return self._runner.invoke(
+            JsonPromptRequest(
+                model=model,
+                max_tokens=6000,
+                temperature=0.0,
+                system_prompt=_REVIEW_VALIDATION_SYSTEM_PROMPT,
+                user_prompt=(
+                    "Candidate findings JSON:\n{candidate_findings}\n\n"
+                    "Return exactly one JSON object with a top-level "
+                    '"decisions" array. Do not return markdown or prose.'
+                ),
+                variables={
+                    "candidate_findings": json.dumps(batch, separators=(",", ":"))
+                },
+                parse=_parse_review_validation_response,
+                logger=logger,
+                label="Review validation",
+                batch_size=len(batch),
+                invalid_message=(
+                    "expected structured validation payload or JSON object with "
+                    "decisions list"
+                ),
+                final_keep_message="keeping batch unchanged",
+                response_model=_ReviewValidationResponseModel,
+                reasoning_effort=reasoning_effort,
+            )
         )
 
 
@@ -314,22 +312,6 @@ def _review_validation_drop_reason(decision):
     return "" if drop_reason in {"", "none", "null", "n/a"} else drop_reason
 
 
-def _split_reachability_reasoning(reasoning):
-    root_cause = ""
-    evidence_lines = []
-    for raw_line in str(reasoning or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("Root cause:"):
-            root_cause = line.removeprefix("Root cause:").strip()
-            continue
-        if line.startswith(_REACHABILITY_REASONING_METADATA_PREFIXES):
-            continue
-        evidence_lines.append(line)
-    return root_cause, "\n".join(evidence_lines)
-
-
 def _normalised_confidence(value, *, fallback=0.0):
     if isinstance(value, str):
         word = value.strip().lower()
@@ -404,13 +386,6 @@ def _validation_batches(candidates, batch_size=_REVIEW_VALIDATION_BATCH_SIZE):
         sorted_candidates[index : index + batch_size]
         for index in range(0, len(sorted_candidates), batch_size)
     ]
-
-
-def _safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 parse_review_validation_response = _parse_review_validation_response

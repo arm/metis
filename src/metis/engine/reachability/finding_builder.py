@@ -5,7 +5,7 @@ import uuid
 
 from .finding_identity import _canonical_fields
 from .finding_values import _confidence_score, _normalise_vuln_type
-from .models import VulnerabilityFinding
+from .domain import VulnerabilityFinding
 
 
 def _lookup_fn(name, fn_by_name, fn_by_unique, all_fns):

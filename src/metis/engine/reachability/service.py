@@ -6,7 +6,7 @@ import json
 import logging
 import os
 
-from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import parse_json_output
 from metis.reachability_settings import (
     DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
@@ -26,7 +26,7 @@ from .graph_utils import (
     select_confirmation_paths,
 )
 from .file_focus import FileFocusBuilder
-from .models import VulnerabilityFinding
+from .domain import VulnerabilityFinding
 from .options import ReachabilityReviewOptions
 from .review_output import group_findings_as_reviews, reviews_for_findings
 from .supplementary import SupplementaryAnalyzer
@@ -46,6 +46,7 @@ class TreeSitterReachabilityService:
         self._config = config
         self._llm_provider = llm_provider
         self._usage_runtime = usage_runtime
+        self._runner = JsonPromptRunner(llm_provider, usage_runtime)
         self._graphs = ReachabilityGraphCache(config, repository)
         self._finalizer = FindingFinalizer(config.codebase_path)
         self._supplementary_cache: dict[
@@ -267,24 +268,24 @@ class TreeSitterReachabilityService:
     def _adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
         if not candidates:
             return None
-        return invoke_langchain_json_prompt_with_retry(
-            self._llm_provider,
-            self._usage_runtime,
-            model=model,
-            max_tokens=6000,
-            temperature=0.1,
-            system_prompt=FINAL_CONSOLIDATION_SYSTEM_PROMPT,
-            user_prompt="Candidate findings JSON:\n{candidate_findings}",
-            variables={
-                "candidate_findings": json.dumps(candidates, separators=(",", ":"))
-            },
-            parse=_parse_final_adjudication_response,
-            logger=logger,
-            label="Final reachability dedup adjudication",
-            batch_size=len(candidates),
-            invalid_message="expected JSON object with groups list",
-            final_keep_message="keeping this batch unchanged",
-            reasoning_effort=reasoning_effort,
+        return self._runner.invoke(
+            JsonPromptRequest(
+                model=model,
+                max_tokens=6000,
+                temperature=0.1,
+                system_prompt=FINAL_CONSOLIDATION_SYSTEM_PROMPT,
+                user_prompt="Candidate findings JSON:\n{candidate_findings}",
+                variables={
+                    "candidate_findings": json.dumps(candidates, separators=(",", ":"))
+                },
+                parse=_parse_final_adjudication_response,
+                logger=logger,
+                label="Final reachability dedup adjudication",
+                batch_size=len(candidates),
+                invalid_message="expected JSON object with groups list",
+                final_keep_message="keeping this batch unchanged",
+                reasoning_effort=reasoning_effort,
+            )
         )
 
     def _supplementary_for_graph(
@@ -295,8 +296,7 @@ class TreeSitterReachabilityService:
         model,
         options: ReachabilityReviewOptions,
     ):
-        cache_options = ReachabilityReviewOptions(**vars(options))
-        cache_options.confirmation_model = model
+        cache_options = options.with_confirmation_model(model)
         key = cache_options.supplementary_cache_key(
             scope_id,
             graph_fingerprint(graph),

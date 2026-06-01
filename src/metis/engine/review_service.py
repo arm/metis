@@ -4,12 +4,11 @@
 import inspect
 import logging
 import os
-import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import unidiff
+import unidiff  # type: ignore[import-untyped]
 
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
@@ -19,7 +18,7 @@ from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
 from .repository import EngineRepository
-from .review_aggregation import ReviewResultAggregator, same_review_file
+from .review_reachability import ReachabilityReviewBackend
 from .review_validation import ReviewFindingValidator
 from .runtime import EngineConfig
 
@@ -40,10 +39,16 @@ class ReviewService:
         self._repository = repository
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
-        self._reachability_service = reachability_service
-        self._reachability_settings = dict(reachability_settings or {})
-        self._reachability_cache = None
-        self._reachability_lock = threading.Lock()
+        self._reachability_backend = (
+            ReachabilityReviewBackend(
+                config,
+                repository,
+                reachability_service,
+                reachability_settings,
+            )
+            if reachability_service is not None
+            else None
+        )
 
     def get_code_files(self, options: ReviewOptions | None = None):
         options = coerce_review_options(options)
@@ -52,29 +57,19 @@ class ReviewService:
         )
 
     def _get_reachability_reviews(self, *, progress_callback=None):
-        if self._reachability_cache is not None:
-            return list(self._reachability_cache)
-
-        with self._reachability_lock:
-            if self._reachability_cache is None:
-                settings = self._reachability_call_settings(
-                    progress_callback=progress_callback,
-                    codebase=True,
-                )
-                self._reachability_cache = self._reachability_service.review_codebase(
-                    **settings
-                )
-        return list(self._reachability_cache)
+        if self._reachability_backend is None:
+            return []
+        return self._reachability_backend.codebase_reviews(
+            progress_callback=progress_callback
+        )
 
     def _reachability_call_settings(self, *, progress_callback=None, codebase=False):
-        settings = dict(self._reachability_settings)
-        if codebase:
-            settings.setdefault("lens_profile", "review")
-            if not settings.get("max_paths"):
-                settings.setdefault("confirm_paths", False)
-        if progress_callback is not None:
-            settings["progress_callback"] = progress_callback
-        return settings
+        if self._reachability_backend is None:
+            return {}
+        return self._reachability_backend.call_settings(
+            progress_callback=progress_callback,
+            codebase=codebase,
+        )
 
     def _finalize_single_review_result(self, result):
         if result is None:
@@ -86,27 +81,31 @@ class ReviewService:
         return result
 
     def aggregate_review_results(self, results):
-        if self._reachability_service is None:
+        if self._reachability_backend is None:
             return results
-        return ReviewResultAggregator(
-            self._config,
-            self._reachability_settings,
-            final_adjudicator=self._reachability_final_adjudicator(),
-        ).aggregate(
+        return self._reachability_backend.aggregate_results(
             results,
             validate_candidates=self._validate_review_candidates,
         )
 
     def _validate_review_candidates(self, candidates):
+        if self._reachability_backend is not None:
+            return self._reachability_backend.validate_candidates(candidates)
         return ReviewFindingValidator(
             self._config,
-            self._reachability_settings,
+            {},
         ).validate_candidates(candidates)
 
     def _invoke_review_validation_batch(self, batch, *, model, reasoning_effort=None):
+        if self._reachability_backend is not None:
+            return self._reachability_backend.invoke_validation_batch(
+                batch,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
         return ReviewFindingValidator(
             self._config,
-            self._reachability_settings,
+            {},
         ).invoke_batch(
             batch,
             model=model,
@@ -114,10 +113,9 @@ class ReviewService:
         )
 
     def _reachability_final_adjudicator(self):
-        adjudicator = getattr(
-            self._reachability_service, "adjudicate_final_findings", None
-        )
-        return adjudicator if callable(adjudicator) else None
+        if self._reachability_backend is None:
+            return None
+        return self._reachability_backend.final_adjudicator()
 
     def review_file(
         self,
@@ -132,20 +130,15 @@ class ReviewService:
             use_retrieval_context=use_retrieval_context,
         )
         if (
-            self._reachability_service is not None
-            and self._is_file_in_codebase(file_path)
-            and self._supports_reachability_file(file_path)
+            self._reachability_backend is not None
+            and self._reachability_backend.is_file_in_codebase(file_path)
+            and self._reachability_backend.supports_file(file_path)
         ):
             try:
-                if self._reachability_cache is not None:
-                    result = self._get_global_reachability_review_for_file(file_path)
-                else:
-                    settings = self._reachability_call_settings(
-                        progress_callback=progress_callback
-                    )
-                    result = self._reachability_service.review_file(
-                        file_path, **settings
-                    )
+                result = self._reachability_backend.file_review(
+                    file_path,
+                    progress_callback=progress_callback,
+                )
             except Exception:
                 logger.debug(
                     "Tree-sitter file review failed for %s; falling back to standard review",
@@ -165,14 +158,14 @@ class ReviewService:
         *,
         progress_callback=None,
     ):
-        abs_path = os.path.abspath(str(file_path))
-        relative_path = self._repository.normalize_match_path(abs_path)
-        for review in self._get_reachability_reviews(
-            progress_callback=progress_callback
-        ):
-            if same_review_file(review.get("file"), relative_path):
-                return review
-        return {"file": relative_path, "file_path": abs_path, "reviews": []}
+        if self._reachability_backend is None:
+            abs_path = os.path.abspath(str(file_path))
+            relative_path = self._repository.normalize_match_path(abs_path)
+            return {"file": relative_path, "file_path": abs_path, "reviews": []}
+        return self._reachability_backend.file_review(
+            file_path,
+            progress_callback=progress_callback,
+        )
 
     def _review_file_standard(
         self,
@@ -224,17 +217,16 @@ class ReviewService:
             return None
 
     def _is_file_in_codebase(self, file_path):
-        try:
-            base = os.path.abspath(self._config.codebase_path)
-            target = os.path.abspath(str(file_path))
-            return os.path.commonpath([base, target]) == base
-        except (OSError, ValueError):
-            return False
+        return bool(
+            self._reachability_backend
+            and self._reachability_backend.is_file_in_codebase(file_path)
+        )
 
     def _supports_reachability_file(self, file_path):
-        plugin = self._repository.get_plugin_for_path(str(file_path))
-        supports = getattr(plugin, "supports_reachability_review", None)
-        return bool(callable(supports) and supports())
+        return bool(
+            self._reachability_backend
+            and self._reachability_backend.supports_file(file_path)
+        )
 
     def _invoke_review_file(
         self,
@@ -289,13 +281,17 @@ class ReviewService:
         if not files:
             return
 
+        reachability_backend = self._reachability_backend
         run_codebase_reachability = (
-            self._reachability_service is not None
-            and review_file_func is None
-            and any(self._supports_reachability_file(path) for path in files)
+            reachability_backend is not None
+            and reachability_backend.should_review_codebase(
+                files,
+                review_file_func=review_file_func,
+            )
         )
         reachability_failed = False
         if run_codebase_reachability:
+            assert reachability_backend is not None
             try:
                 results = self._get_reachability_reviews(
                     progress_callback=progress_callback
@@ -312,9 +308,7 @@ class ReviewService:
                 )
                 for result in results:
                     yield result
-                files = [
-                    path for path in files if not self._supports_reachability_file(path)
-                ]
+                files = reachability_backend.remaining_standard_files(files)
                 if not files:
                     return
 

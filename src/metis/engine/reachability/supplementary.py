@@ -9,17 +9,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
-from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 
 from .llm_runner import reachability_response_payload
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _build_reverse_edges, _chunked, _emit_progress, _node_sort_key
 from .lock_order import _extract_lock_conflicts
-from .models import ReachabilityFindingResponseModel
+from .llm_schemas import ReachabilityFindingResponseModel
 from .supplementary_lenses import (
     _COMBINED_GRAPH_LENS_NOTES,
-    _FULL_LENS_SPECS,
-    _REVIEW_LENS_NAMES,
+    build_supplementary_lenses,
 )
 from .supplementary_parsing import _parse_combined, _parse_intra, _parse_semantic
 from .supplementary_prompts import (
@@ -94,6 +93,7 @@ class SupplementaryAnalyzer:
         self._at = audit_max_tokens
         self._st = strong_max_tokens
         self._reasoning_effort = reasoning_effort
+        self._runner = JsonPromptRunner(llm_provider, usage_runtime)
         self._domain_hints = normalize_domain_hints(domain_hints, domain_profiles)
         self._domain_keywords = self._domain_hints["keywords"]
         self._domain_prompt_hints = format_domain_hints_for_prompt(self._domain_hints)
@@ -113,37 +113,21 @@ class SupplementaryAnalyzer:
         progress_callback=None,
         lens_profile="all",
     ):
-        profile = str(lens_profile or "all").lower()
-        lens_specs = (
-            [spec for spec in _FULL_LENS_SPECS if spec.name in _REVIEW_LENS_NAMES]
-            if profile == "review"
-            else list(_FULL_LENS_SPECS)
-        )
-        if not lens_specs:
+        lenses = build_supplementary_lenses(str(lens_profile or "all"))
+        if not lenses:
             return []
         findings = []
-        combined_specs = [spec for spec in lens_specs if spec.runs_as_combined_graph()]
-        lens_jobs = [spec for spec in lens_specs if not spec.runs_as_combined_graph()]
-        if combined_specs:
-            lens_jobs.insert(0, tuple(combined_specs))
         worker_budget = max(1, int(max_workers or 1))
-        lens_parallelism = max(1, min(len(lens_jobs), worker_budget, 8))
+        lens_parallelism = max(1, min(len(lenses), worker_budget, 8))
         lens_workers = max(1, worker_budget // lens_parallelism)
 
-        def _job_name(job):
-            return "combined_graph_lenses" if isinstance(job, tuple) else job.name
-
-        def _run_lens(job):
+        def _run_lens(lens):
             try:
-                if isinstance(job, tuple):
-                    return self._run_combined_graph_lenses(
-                        job, graph, lens_workers, progress_callback
-                    )
-                return self._run_lens_spec(job, graph, lens_workers, progress_callback)
+                return lens.run(self, graph, lens_workers, progress_callback)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
-                name = _job_name(job)
+                name = lens.name
                 logger.warning("%s lens fail: %s", name, exc)
                 _emit_progress(
                     progress_callback,
@@ -153,15 +137,13 @@ class SupplementaryAnalyzer:
                 return []
 
         if lens_parallelism == 1:
-            for job in lens_jobs:
-                findings.extend(_run_lens(job))
+            for lens in lenses:
+                findings.extend(_run_lens(lens))
         else:
             with ThreadPoolExecutor(max_workers=lens_parallelism) as executor:
                 futures = {
-                    submit_with_current_context(executor, _run_lens, job): _job_name(
-                        job
-                    )
-                    for job in lens_jobs
+                    submit_with_current_context(executor, _run_lens, lens): lens.name
+                    for lens in lenses
                 }
                 for future in as_completed(futures):
                     findings.extend(future.result())
@@ -194,26 +176,26 @@ class SupplementaryAnalyzer:
     def _invoke_findings(
         self, system_prompt, user_prompt, variables, *, max_tokens=None
     ):
-        return invoke_langchain_json_prompt_with_retry(
-            self._p,
-            self._u,
-            model=self._m,
-            max_tokens=max_tokens or self._st,
-            temperature=0.1,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            variables=variables,
-            parse=reachability_response_payload,
-            logger=logger,
-            label="Supplementary reachability analysis",
-            batch_size=1,
-            invalid_message="expected findings list",
-            final_keep_message="keeping this supplementary batch empty",
-            response_model=ReachabilityFindingResponseModel,
-            reasoning_effort=self._reasoning_effort,
+        return self._runner.invoke(
+            JsonPromptRequest(
+                model=self._m,
+                max_tokens=max_tokens or self._st,
+                temperature=0.1,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                variables=variables,
+                parse=reachability_response_payload,
+                logger=logger,
+                label="Supplementary reachability analysis",
+                batch_size=1,
+                invalid_message="expected findings list",
+                final_keep_message="keeping this supplementary batch empty",
+                response_model=ReachabilityFindingResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
         )
 
-    def _run_combined_graph_lenses(self, specs, graph, max_workers, cb):
+    def run_combined_graph_lenses(self, specs, graph, max_workers, cb):
         event_name = "combined_graph_lenses"
         analysis_types = [spec.analysis_type for spec in specs]
         fns = list(graph.nodes.values())
@@ -253,18 +235,6 @@ class SupplementaryAnalyzer:
         )
         _emit_progress(cb, f"{event_name}_done", findings=len(results))
         return results
-
-    def _run_lens_spec(self, spec, graph, max_workers, cb):
-        if spec.uses_method_runner():
-            return getattr(self, spec.method_name)(graph, max_workers, cb)
-        if spec.uses_candidate_runner():
-            return self._run_candidate_lens(
-                graph,
-                spec,
-                max_workers,
-                cb,
-            )
-        raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
     def _lens_intra(self, graph, max_workers, cb):
         targets = self._structural_candidate_nodes(graph)
@@ -367,7 +337,7 @@ class SupplementaryAnalyzer:
         )
         return _parse_intra(raw, functions)
 
-    def _run_candidate_lens(
+    def run_candidate_lens(
         self,
         graph,
         spec,

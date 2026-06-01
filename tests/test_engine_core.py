@@ -193,15 +193,12 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
 
     captured = {}
 
-    import metis.engine.graphs.review as review_mod
-
-    def _fake_runner(*_args, **kwargs):
-        captured["chat_model_kwargs"] = kwargs.get("chat_model_kwargs")
+    def _fake_runner(_runner, request):
+        captured["chat_model_kwargs"] = request.chat_model_kwargs
         return []
 
     monkeypatch.setattr(
-        review_mod,
-        "invoke_langchain_json_prompt_with_retry",
+        "metis.engine.llm_runner.JsonPromptRunner.invoke",
         _fake_runner,
     )
     graph = engine._get_review_graph()

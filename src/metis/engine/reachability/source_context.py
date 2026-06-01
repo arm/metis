@@ -9,7 +9,7 @@ from collections import defaultdict
 from metis.utils import read_file_content
 
 from .finding_values import _safe_int
-from .models import FunctionNode
+from .domain import FunctionNode
 
 
 def _read_function_body(codebase_path, node, max_chars=3000):

@@ -15,7 +15,7 @@ from metis.engine.analysis.c_family_analyzer_common import (
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
-from .models import FunctionNode, GlobalConstruct
+from .domain import FunctionNode, GlobalConstruct
 from .c_family_rules import CONTROL_CALLS
 
 
@@ -55,7 +55,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
         source = bytes(parsed.text, "utf-8")
         root = parsed.tree.root_node()
-        nodes = self._collect_functions(root, source, rel_path, language)
+        nodes = self._collect_function_nodes(root, source, rel_path, language)
         global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
         )
@@ -67,7 +67,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 )
         return ParsedFileGraph(nodes=nodes, globals=global_constructs)
 
-    def _collect_functions(
+    def _collect_function_nodes(
         self,
         root,
         source: bytes,
