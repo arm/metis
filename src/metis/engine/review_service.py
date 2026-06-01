@@ -63,14 +63,6 @@ class ReviewService:
             progress_callback=progress_callback
         )
 
-    def _reachability_call_settings(self, *, progress_callback=None, codebase=False):
-        if self._reachability_backend is None:
-            return {}
-        return self._reachability_backend.call_settings(
-            progress_callback=progress_callback,
-            codebase=codebase,
-        )
-
     def _finalize_single_review_result(self, result):
         if result is None:
             return None

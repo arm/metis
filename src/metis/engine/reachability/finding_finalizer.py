@@ -50,11 +50,12 @@ class FindingFinalizer:
         findings,
         graph,
         *,
-        max_paths_per_sink,
-        max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
+        options,
         target_file="",
         final_adjudicator=None,
     ):
+        max_paths_per_sink = options.max_paths_per_sink
+        max_path_length = options.max_path_length
         if target_file:
             findings = FindingPathAnnotator(
                 graph,

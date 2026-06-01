@@ -42,7 +42,7 @@ class SupplementaryLens(Protocol):
     @property
     def name(self) -> str: ...
 
-    def run(self, analyzer, graph, max_workers, progress_callback): ...
+    def run(self, analyzer, graph, options): ...
 
 
 @dataclass(frozen=True)
@@ -50,13 +50,8 @@ class _CombinedGraphLens:
     specs: tuple[_SupplementaryLensSpec, ...]
     name: str = "combined_graph_lenses"
 
-    def run(self, analyzer, graph, max_workers, progress_callback):
-        return analyzer.run_combined_graph_lenses(
-            self.specs,
-            graph,
-            max_workers,
-            progress_callback,
-        )
+    def run(self, analyzer, graph, options):
+        return analyzer.run_combined_graph_lenses(self.specs, graph, options)
 
 
 @dataclass(frozen=True)
@@ -67,20 +62,11 @@ class _SpecLens:
     def name(self):
         return self.spec.name
 
-    def run(self, analyzer, graph, max_workers, progress_callback):
+    def run(self, analyzer, graph, options):
         if self.spec.uses_method_runner():
-            return getattr(analyzer, self.spec.method_name)(
-                graph,
-                max_workers,
-                progress_callback,
-            )
+            return getattr(analyzer, self.spec.method_name)(graph, options)
         if self.spec.uses_candidate_runner():
-            return analyzer.run_candidate_lens(
-                graph,
-                self.spec,
-                max_workers,
-                progress_callback,
-            )
+            return analyzer.run_candidate_lens(graph, self.spec, options)
         raise ValueError(f"unknown supplementary lens kind: {self.spec.kind}")
 
 

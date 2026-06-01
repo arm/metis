@@ -14,6 +14,7 @@ from .c_family_rules import (
 )
 from .graph_utils import _emit_progress
 from .graph import ReachabilityGraph
+from .progress import ReachabilityProgress as Progress
 from .tracing import SourceRootedPathTracer
 
 
@@ -38,8 +39,19 @@ class ReachabilityGraphCache:
         )
 
     def ensure_graph(
-        self, *, progress_callback=None, source_functions=None, security_functions=None
+        self,
+        *,
+        options=None,
+        progress_callback=None,
+        source_functions=None,
+        security_functions=None,
     ):
+        progress_callback, source_functions, security_functions = self._graph_options(
+            options,
+            progress_callback,
+            source_functions,
+            security_functions,
+        )
         key, source_specs, security_specs = self._annotation_specs(
             source_functions,
             security_functions,
@@ -62,13 +74,23 @@ class ReachabilityGraphCache:
     def get_codebase_graph_and_paths(
         self,
         *,
+        options=None,
         max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
         source_functions=None,
         security_functions=None,
     ):
+        progress_callback, source_functions, security_functions = self._graph_options(
+            options,
+            progress_callback,
+            source_functions,
+            security_functions,
+        )
+        if options is not None:
+            max_path_length = options.max_path_length
         max_path_length = int(max_path_length or DEFAULT_REACHABILITY_MAX_PATH_LENGTH)
         graph = self.ensure_graph(
+            options=options,
             progress_callback=progress_callback,
             source_functions=source_functions,
             security_functions=security_functions,
@@ -86,6 +108,21 @@ class ReachabilityGraphCache:
             ).find_all_paths()
             self._paths[path_key] = list(paths)
             return graph, list(paths)
+
+    def _graph_options(
+        self,
+        options,
+        progress_callback,
+        source_functions,
+        security_functions,
+    ):
+        if options is None:
+            return progress_callback, source_functions, security_functions
+        return (
+            options.progress_callback,
+            options.source_functions,
+            options.security_functions,
+        )
 
     def _annotation_specs(self, source_functions, security_functions):
         source_specs = _normalise_source_function_specs(source_functions)
@@ -137,7 +174,9 @@ class ReachabilityGraphCache:
 
         if updated:
             _emit_progress(
-                progress_callback, "configured_source_functions_done", sources=updated
+                progress_callback,
+                Progress.CONFIGURED_SOURCE_FUNCTIONS_DONE,
+                sources=updated,
             )
         return updated
 
@@ -168,7 +207,9 @@ class ReachabilityGraphCache:
 
         if updated:
             _emit_progress(
-                progress_callback, "configured_security_functions_done", sinks=updated
+                progress_callback,
+                Progress.CONFIGURED_SECURITY_FUNCTIONS_DONE,
+                sinks=updated,
             )
         return updated
 
@@ -179,7 +220,7 @@ class ReachabilityGraphCache:
         files = sorted(str(file) for file in files)
         total = len(files)
         errors: list[str] = []
-        _emit_progress(progress_callback, "treesitter_graph_start", total=total)
+        _emit_progress(progress_callback, Progress.TREESITTER_GRAPH_START, total=total)
 
         for completed, file_path in enumerate(files, start=1):
             parsed = self._extractor.parse_file(
@@ -193,7 +234,7 @@ class ReachabilityGraphCache:
                 graph.add_global(global_construct)
             _emit_progress(
                 progress_callback,
-                "treesitter_graph_progress",
+                Progress.TREESITTER_GRAPH_PROGRESS,
                 completed=completed,
                 total=total,
                 file=file_path,
@@ -208,7 +249,7 @@ class ReachabilityGraphCache:
         graph.annotate_external_call_sinks(external_sink_type)
         _emit_progress(
             progress_callback,
-            "treesitter_graph_done",
+            Progress.TREESITTER_GRAPH_DONE,
             nodes=graph.node_count(),
             edges=graph.edge_count(),
             sources=len(graph.get_sources()),

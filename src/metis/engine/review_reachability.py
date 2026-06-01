@@ -6,6 +6,7 @@ import threading
 from typing import Any
 
 from .repository import EngineRepository
+from .reachability.options import ReachabilityReviewOptions
 from .review_aggregation import ReviewResultAggregator, same_review_file
 from .review_validation import ReviewFindingValidator
 from .runtime import EngineConfig
@@ -54,7 +55,7 @@ class ReachabilityReviewBackend:
     def remaining_standard_files(self, files):
         return [path for path in files if not self.supports_file(path)]
 
-    def call_settings(self, *, progress_callback=None, codebase=False):
+    def review_options(self, *, progress_callback=None, codebase=False):
         settings = dict(self._settings)
         if codebase:
             settings.setdefault("lens_profile", "review")
@@ -62,7 +63,10 @@ class ReachabilityReviewBackend:
                 settings.setdefault("confirm_paths", False)
         if progress_callback is not None:
             settings["progress_callback"] = progress_callback
-        return settings
+        return ReachabilityReviewOptions.from_kwargs(
+            settings,
+            default_workers=self._config.max_workers,
+        )
 
     def codebase_reviews(self, *, progress_callback=None):
         with self._cache_condition:
@@ -76,11 +80,11 @@ class ReachabilityReviewBackend:
             self._cache_building = True
 
         try:
-            settings = self.call_settings(
+            options = self.review_options(
                 progress_callback=progress_callback,
                 codebase=True,
             )
-            cache = self._service.review_codebase(**settings)
+            cache = self._service.review_codebase(options=options)
         except Exception:
             with self._cache_condition:
                 self._cache_building = False
@@ -99,8 +103,8 @@ class ReachabilityReviewBackend:
                 file_path,
                 progress_callback=progress_callback,
             )
-        settings = self.call_settings(progress_callback=progress_callback)
-        return self._service.review_file(file_path, **settings)
+        options = self.review_options(progress_callback=progress_callback)
+        return self._service.review_file(file_path, options=options)
 
     def aggregate_results(self, results, *, validate_candidates=None):
         if not self.enabled:

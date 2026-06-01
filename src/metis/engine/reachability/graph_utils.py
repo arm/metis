@@ -8,6 +8,7 @@ import hashlib
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
 
 from .graph import ReachabilityGraph
+from .progress import emit_progress
 
 _AUTO_CONFIRMATION_MAX_PATHS = 48
 _AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
@@ -15,8 +16,7 @@ _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
 
 
 def _emit_progress(callback, event, **payload):
-    if callback:
-        callback({"event": event, **payload})
+    emit_progress(callback, event, **payload)
 
 
 def _chunked(items, size):

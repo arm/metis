@@ -56,8 +56,9 @@ def test_review_code_uses_reachability_for_c_cpp(engine):
         {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
     ]
     reachability.review_codebase.assert_called_once()
-    assert reachability.review_codebase.call_args.kwargs["lens_profile"] == "review"
-    assert reachability.review_codebase.call_args.kwargs["confirm_paths"] is False
+    options = reachability.review_codebase.call_args.kwargs["options"]
+    assert options.lens_profile == "review"
+    assert options.confirm_paths is False
     engine.review.review_file.assert_not_called()
 
 

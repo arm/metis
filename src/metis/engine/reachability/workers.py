@@ -10,7 +10,6 @@ import logging
 import threading
 from typing import Any, TypeVar
 
-from metis.reachability_settings import DEFAULT_REACHABILITY_WORKERS
 from metis.usage import submit_with_current_context
 
 logger = logging.getLogger("metis")
@@ -22,7 +21,7 @@ ResultT = TypeVar("ResultT")
 def coerce_worker_count(
     max_workers: int | str | None,
     *,
-    default: int = DEFAULT_REACHABILITY_WORKERS,
+    default: int = 1,
 ) -> int:
     value = default if max_workers is None or max_workers == "" else max_workers
     return max(1, int(value))
@@ -36,7 +35,7 @@ def bounded_worker_count(max_workers: int | str | None, item_count: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class ReachabilityWorkerBudget:
-    total: int = DEFAULT_REACHABILITY_WORKERS
+    total: int = 1
 
     def __post_init__(self):
         object.__setattr__(self, "total", coerce_worker_count(self.total))
