@@ -18,7 +18,6 @@ from metis.engine.analysis.c_family_macro import (
     collect_c_macro_definition_sections,
     collect_c_macro_like_calls_from_scope,
 )
-from metis.plugins.c_family import is_c_family_plugin
 
 from . import constants as C
 from .debug import _emit_debug
@@ -34,7 +33,10 @@ from .evidence_text import (
 
 
 def _has_c_family_triage_analyzer(state: TriageState, file_path: str) -> bool:
-    if not is_c_family_plugin(state.get("triage_plugin")):
+    supports_evidence = getattr(
+        state.get("triage_plugin"), "supports_c_family_triage_evidence", None
+    )
+    if not callable(supports_evidence) or not supports_evidence():
         return False
     analyzer = state.get("triage_analyzer")
     supports_file = getattr(analyzer, "supports_file", None)

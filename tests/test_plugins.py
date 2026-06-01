@@ -39,6 +39,20 @@ def test_python_plugin_exposes_generic_triage_analyzer_factory():
     assert callable(factory)
 
 
+def test_reachability_capabilities_are_plugin_declared():
+    c_plugin = CPlugin(plugin_config={"plugins": {}})
+    cpp_plugin = CppPlugin(plugin_config={"plugins": {}})
+    python_plugin = PythonPlugin(plugin_config={"plugins": {}})
+
+    assert c_plugin.supports_reachability_review()
+    assert cpp_plugin.supports_reachability_review()
+    assert not python_plugin.supports_reachability_review()
+
+    assert c_plugin.supports_c_family_triage_evidence()
+    assert cpp_plugin.supports_c_family_triage_evidence()
+    assert not python_plugin.supports_c_family_triage_evidence()
+
+
 def test_aarch64_assembly_splitter_parses_source_text():
     plugin = AArch64AssemblyPlugin(plugin_config={"plugins": {}})
     splitter = plugin.get_splitter()

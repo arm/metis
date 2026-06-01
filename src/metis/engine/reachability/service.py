@@ -6,6 +6,7 @@ import json
 import logging
 import os
 
+from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from metis.utils import parse_json_output
 from metis.reachability_settings import (
     DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
@@ -24,11 +25,11 @@ from .graph_utils import (
     graph_fingerprint,
     select_confirmation_paths,
 )
-from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
-from .models import VulnerabilityFinding
-from .supplementary import SupplementaryAnalyzer
 from .file_focus import FileFocusBuilder
+from .models import VulnerabilityFinding
+from .options import ReachabilityReviewOptions
 from .review_output import group_findings_as_reviews, reviews_for_findings
+from .supplementary import SupplementaryAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -68,24 +69,37 @@ class TreeSitterReachabilityService:
         domain_profiles=None,
         **_kwargs,
     ):
-        abs_target, relative_target = self._normalize_target_file(file_path)
-        graph = self._graphs.ensure_graph(
+        options = ReachabilityReviewOptions(
+            confirmation_model=confirmation_model,
+            max_workers=max_workers,
+            max_paths=max_paths,
+            max_paths_per_sink=max_paths_per_sink,
+            max_path_length=max_path_length,
             progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
             source_functions=source_functions,
             security_functions=security_functions,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
+        )
+        abs_target, relative_target = self._normalize_target_file(file_path)
+        graph = self._graphs.ensure_graph(
+            progress_callback=options.progress_callback,
+            source_functions=options.source_functions,
+            security_functions=options.security_functions,
         )
         if graph.node_count() == 0:
             return None
 
         focus = FileFocusBuilder(
             graph,
-            max_path_length=max_path_length,
-            max_incoming_paths=max_paths if max_paths > 0 else None,
+            max_path_length=options.max_path_length,
+            max_incoming_paths=options.max_paths if options.max_paths > 0 else None,
         ).build(relative_target)
         source_to_file_paths = focus.incoming_paths
         outgoing_context_paths = focus.outgoing_context_paths
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             "treesitter_file_paths_done",
             file=relative_target,
             paths=len(source_to_file_paths),
@@ -94,34 +108,30 @@ class TreeSitterReachabilityService:
             focus_nodes=len(focus.node_names),
         )
 
-        model = confirmation_model or self._config.llama_query_model
+        model = self._review_model(options)
         focus_graph = _copy_graph_nodes(graph, focus.node_names)
         if focus_graph.node_count() == 0:
             return None
-        supplementary = self._ensure_supplementary(
+        supplementary = self._supplementary_for_graph(
             focus_graph,
             scope_id=relative_target,
             model=model,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
+            options=options,
         )
 
         path_findings = (
-            self._confirmer(model, reasoning_effort).confirm_paths_for_file(
+            self._confirmer(model, options.reasoning_effort).confirm_paths_for_file(
                 relative_target,
                 source_to_file_paths,
                 graph,
-                max_workers=max_workers,
+                max_workers=options.max_workers,
             )
             if source_to_file_paths
             else []
         )
 
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             "treesitter_file_review_done",
             file=relative_target,
             supplementary_findings=len(supplementary),
@@ -133,17 +143,12 @@ class TreeSitterReachabilityService:
             for finding in list(supplementary) + list(path_findings)
             if participates_in_file(finding, relative_target, graph)
         ]
-        deduped, _total, _removed = self._finalizer.finalize(
+        deduped, _total, _removed = self._finalize_findings(
             all_findings,
             graph,
-            max_paths_per_sink=max_paths_per_sink,
-            max_path_length=max_path_length,
+            options,
+            model=model,
             target_file=relative_target,
-            final_adjudicator=lambda candidates: self._adjudicate_final_findings(
-                candidates,
-                model=model,
-                reasoning_effort=reasoning_effort,
-            ),
         )
         if not deduped:
             return {"file": relative_target, "file_path": abs_target, "reviews": []}
@@ -174,60 +179,65 @@ class TreeSitterReachabilityService:
         lens_profile="all",
         **_kwargs,
     ):
-        graph, paths = self._graphs.get_codebase_graph_and_paths(
+        options = ReachabilityReviewOptions(
+            confirmation_model=confirmation_model,
+            max_workers=max_workers,
+            max_paths=max_paths,
+            max_paths_per_sink=max_paths_per_sink,
             max_path_length=max_path_length,
             progress_callback=progress_callback,
+            reasoning_effort=reasoning_effort,
             source_functions=source_functions,
             security_functions=security_functions,
+            domain_hints=domain_hints,
+            domain_profiles=domain_profiles,
+            confirm_paths=confirm_paths,
+            lens_profile=lens_profile,
+        )
+        graph, paths = self._graphs.get_codebase_graph_and_paths(
+            max_path_length=options.max_path_length,
+            progress_callback=options.progress_callback,
+            source_functions=options.source_functions,
+            security_functions=options.security_functions,
         )
         if graph.node_count() == 0:
             return []
         selected_paths = []
-        if confirm_paths:
+        if options.confirm_paths:
             selected_paths = select_confirmation_paths(
-                paths, graph, max_paths=max_paths
+                paths, graph, max_paths=options.max_paths
             )
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             "treesitter_paths_done",
             paths=len(paths),
             selected=len(selected_paths),
-            confirmation_enabled=bool(confirm_paths),
+            confirmation_enabled=bool(options.confirm_paths),
         )
 
-        model = confirmation_model or self._config.llama_query_model
-        supplementary = self._ensure_supplementary(
+        model = self._review_model(options)
+        supplementary = self._supplementary_for_graph(
             graph,
             scope_id="whole_graph",
             model=model,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            reasoning_effort=reasoning_effort,
-            lens_profile=lens_profile,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
+            options=options,
         )
         path_findings = (
-            self._confirmer(model, reasoning_effort).confirm_paths(
+            self._confirmer(model, options.reasoning_effort).confirm_paths(
                 selected_paths,
                 graph,
-                max_workers=max_workers,
-                progress_callback=progress_callback,
+                max_workers=options.max_workers,
+                progress_callback=options.progress_callback,
             )
             if selected_paths
             else []
         )
 
-        deduped_findings, total_before, removed = self._finalizer.finalize(
+        deduped_findings, total_before, removed = self._finalize_findings(
             list(supplementary) + list(path_findings),
             graph,
-            max_path_length=max_path_length,
-            max_paths_per_sink=max_paths_per_sink,
-            final_adjudicator=lambda candidates: self._adjudicate_final_findings(
-                candidates,
-                model=model,
-                reasoning_effort=reasoning_effort,
-            ),
+            options,
+            model=model,
         )
 
         reviews = group_findings_as_reviews(
@@ -236,7 +246,7 @@ class TreeSitterReachabilityService:
             codebase_path=self._config.codebase_path,
         )
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             "treesitter_code_review_done",
             supplementary_findings=len(supplementary),
             path_findings=len(path_findings),
@@ -246,6 +256,13 @@ class TreeSitterReachabilityService:
             files=len(reviews),
         )
         return reviews
+
+    def adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
+        return self._adjudicate_final_findings(
+            candidates,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
 
     def _adjudicate_final_findings(self, candidates, *, model, reasoning_effort=None):
         if not candidates:
@@ -270,26 +287,18 @@ class TreeSitterReachabilityService:
             reasoning_effort=reasoning_effort,
         )
 
-    def _ensure_supplementary(
+    def _supplementary_for_graph(
         self,
         graph,
         *,
         scope_id="whole_graph",
         model,
-        max_workers,
-        progress_callback=None,
-        reasoning_effort=None,
-        lens_profile="all",
-        domain_hints=None,
-        domain_profiles=None,
+        options: ReachabilityReviewOptions,
     ):
-        key = (
-            str(scope_id or "whole_graph"),
-            str(model or ""),
-            str(reasoning_effort or ""),
-            str(lens_profile or "all"),
-            repr(domain_hints or ()),
-            repr(domain_profiles or ()),
+        cache_options = ReachabilityReviewOptions(**vars(options))
+        cache_options.confirmation_model = model
+        key = cache_options.supplementary_cache_key(
+            scope_id,
             graph_fingerprint(graph),
         )
         cached = self._supplementary_cache.get(key)
@@ -300,17 +309,42 @@ class TreeSitterReachabilityService:
             model,
             self._usage_runtime,
             self._config.codebase_path,
-            reasoning_effort=reasoning_effort,
-            domain_hints=domain_hints,
-            domain_profiles=domain_profiles,
+            reasoning_effort=options.reasoning_effort,
+            domain_hints=options.domain_hints,
+            domain_profiles=options.domain_profiles,
         ).analyze(
             graph,
-            max_workers=max_workers,
-            progress_callback=progress_callback,
-            lens_profile=lens_profile,
+            max_workers=options.max_workers,
+            progress_callback=options.progress_callback,
+            lens_profile=options.lens_profile,
         )
         self._supplementary_cache[key] = list(findings)
         return list(findings)
+
+    def _finalize_findings(
+        self,
+        findings,
+        graph,
+        options: ReachabilityReviewOptions,
+        *,
+        model,
+        target_file=None,
+    ):
+        return self._finalizer.finalize(
+            findings,
+            graph,
+            max_path_length=options.max_path_length,
+            max_paths_per_sink=options.max_paths_per_sink,
+            target_file=target_file,
+            final_adjudicator=lambda candidates: self.adjudicate_final_findings(
+                candidates,
+                model=model,
+                reasoning_effort=options.reasoning_effort,
+            ),
+        )
+
+    def _review_model(self, options: ReachabilityReviewOptions):
+        return options.confirmation_model or self._config.llama_query_model
 
     def _confirmer(self, model, reasoning_effort=None):
         return VulnerabilityConfirmer(

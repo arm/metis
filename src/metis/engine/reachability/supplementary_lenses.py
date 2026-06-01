@@ -12,13 +12,29 @@ from .supplementary_prompts import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class _SupplementaryLensSpec:
     name: str
     kind: str
     method_name: str = ""
     sys_prompt: str = ""
     analysis_type: str = ""
+    max_total_chars: int = 0
+    per_fn_chars: int = 0
+    sinks_only: bool = False
+    parser: str = "intra"
+
+    def runs_as_combined_graph(self) -> bool:
+        return self.kind in _COMBINED_GRAPH_LENS_KINDS
+
+    def uses_method_runner(self) -> bool:
+        return bool(self.method_name)
+
+    def uses_candidate_runner(self) -> bool:
+        return bool(self.sys_prompt)
+
+    def parses_semantic_entries(self) -> bool:
+        return self.parser == "semantic"
 
 
 _PROMPTS = {
@@ -27,14 +43,26 @@ _PROMPTS = {
     "counter_symmetry": _COUNTER_SYMMETRY_SYS,
     "targeted_path_access": _TARGET_PATH_ACCESS_SYS,
 }
-_FULL_LENS_SPECS = tuple(
-    _SupplementaryLensSpec(
+
+
+def _lens_spec(name: str, kind: str, method: str, analysis_type: str):
+    candidate_intra = kind == "candidate_intra"
+    candidate_semantic = kind == "candidate_semantic"
+    return _SupplementaryLensSpec(
         name,
         kind,
         method_name=method,
         sys_prompt=_PROMPTS.get(analysis_type, ""),
         analysis_type=analysis_type,
+        max_total_chars=50000 if candidate_intra or candidate_semantic else 0,
+        per_fn_chars=5000 if candidate_intra else 4000 if candidate_semantic else 0,
+        sinks_only=analysis_type == "classic_c_sink",
+        parser="semantic" if candidate_semantic else "intra",
     )
+
+
+_FULL_LENS_SPECS = tuple(
+    _lens_spec(name, kind, method, analysis_type)
     for name, kind, method, analysis_type in (
         ("intra_audit", "method", "_lens_intra", ""),
         ("lifecycle_audit", "cross", "", "lifecycle"),

@@ -17,7 +17,6 @@ from .graph_utils import _build_reverse_edges, _chunked, _emit_progress, _node_s
 from .lock_order import _extract_lock_conflicts
 from .models import ReachabilityFindingResponseModel
 from .supplementary_lenses import (
-    _COMBINED_GRAPH_LENS_KINDS,
     _COMBINED_GRAPH_LENS_NOTES,
     _FULL_LENS_SPECS,
     _REVIEW_LENS_NAMES,
@@ -123,12 +122,8 @@ class SupplementaryAnalyzer:
         if not lens_specs:
             return []
         findings = []
-        combined_specs = [
-            spec for spec in lens_specs if spec.kind in _COMBINED_GRAPH_LENS_KINDS
-        ]
-        lens_jobs = [
-            spec for spec in lens_specs if spec.kind not in _COMBINED_GRAPH_LENS_KINDS
-        ]
+        combined_specs = [spec for spec in lens_specs if spec.runs_as_combined_graph()]
+        lens_jobs = [spec for spec in lens_specs if not spec.runs_as_combined_graph()]
         if combined_specs:
             lens_jobs.insert(0, tuple(combined_specs))
         worker_budget = max(1, int(max_workers or 1))
@@ -260,20 +255,14 @@ class SupplementaryAnalyzer:
         return results
 
     def _run_lens_spec(self, spec, graph, max_workers, cb):
-        if spec.kind == "method":
+        if spec.uses_method_runner():
             return getattr(self, spec.method_name)(graph, max_workers, cb)
-        if spec.kind in {"candidate_intra", "candidate_semantic"}:
+        if spec.uses_candidate_runner():
             return self._run_candidate_lens(
                 graph,
-                spec.sys_prompt,
-                spec.analysis_type,
+                spec,
                 max_workers,
                 cb,
-                spec.name,
-                max_total_chars=50000,
-                per_fn_chars=5000 if spec.kind == "candidate_intra" else 4000,
-                sinks_only=spec.analysis_type == "classic_c_sink",
-                semantic=spec.kind == "candidate_semantic",
             )
         raise ValueError(f"unknown supplementary lens kind: {spec.kind}")
 
@@ -381,47 +370,47 @@ class SupplementaryAnalyzer:
     def _run_candidate_lens(
         self,
         graph,
-        sys_prompt,
-        analysis_type,
+        spec,
         max_workers,
         cb,
-        event_prefix,
-        *,
-        max_total_chars,
-        per_fn_chars,
-        sinks_only=False,
-        semantic=False,
     ):
-        candidates = self._structural_candidate_nodes(graph, sinks_only=sinks_only)
+        candidates = self._structural_candidate_nodes(
+            graph,
+            sinks_only=spec.sinks_only,
+        )
         if not candidates:
             return []
-        _emit_progress(cb, f"{event_prefix}_start", functions=len(candidates))
+        _emit_progress(cb, f"{spec.name}_start", functions=len(candidates))
         chunks = _build_file_grouped_node_chunks(
             self._cb,
             candidates,
-            max_total_chars=max_total_chars,
-            per_fn_chars=per_fn_chars,
+            max_total_chars=spec.max_total_chars,
+            per_fn_chars=spec.per_fn_chars,
         )
         if not chunks:
             return []
 
         def _run_chunk(chunk_nodes, code_chunk):
             raw = self._invoke_findings(
-                self._with_domain_hints(sys_prompt),
+                self._with_domain_hints(spec.sys_prompt),
                 _INTRA_USR,
                 {
                     "file_path": "candidate functions",
                     "functions_code": code_chunk,
                 },
             )
-            if semantic:
-                return _parse_semantic(raw, chunk_nodes, analysis_type=analysis_type)
-            return _parse_intra(raw, chunk_nodes, analysis_type=analysis_type)
+            if spec.parses_semantic_entries():
+                return _parse_semantic(
+                    raw,
+                    chunk_nodes,
+                    analysis_type=spec.analysis_type,
+                )
+            return _parse_intra(raw, chunk_nodes, analysis_type=spec.analysis_type)
 
         results = _run_chunked_lens(
-            chunks, _run_chunk, max_workers=max_workers, event_prefix=event_prefix
+            chunks, _run_chunk, max_workers=max_workers, event_prefix=spec.name
         )
-        _emit_progress(cb, f"{event_prefix}_done", findings=len(results))
+        _emit_progress(cb, f"{spec.name}_done", findings=len(results))
         return results
 
     def _lens_global_lifecycle(self, graph, max_workers, cb):
