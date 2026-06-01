@@ -38,8 +38,3 @@ jobs:
         run: |
           uv pip install pre-commit
           uv run pre-commit run --all-files --show-diff-on-failure
-
-      - name: Run Bandit
-        run: |
-          uv pip install bandit
-          uv run bandit -r . -x "./.venv/*","./tests" --severity-level medium

@@ -39,7 +39,7 @@ optional-dependencies.dev = [
   "metis[test]",
 ]
 optional-dependencies.lint = [
-  "black>=26.5.1",
+  "bandit>=1.9.4",
   "mypy>=2.1.0",
   "pre-commit>=4.6.0",
   "ruff>=0.15.15",
@@ -72,6 +72,9 @@ package-data."metis.cli" = [ "report_template.html" ]
 package-data."metis.plugins" = [ "plugins.yaml" ]
 package-data."metis.schemas" = [ "*.json" ]
 package-data.metis = [ "metis.yaml" ]
+
+[tool.ruff]
+lint.isort.force-single-line = true
 
 [tool.pyproject-fmt]
 keep_full_version = true

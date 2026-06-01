@@ -83,7 +83,6 @@ QueryModelKwargs = Mapping[str, object]
 
 
 class LLMProvider(ABC):
-
     def __init__(self, config: ProviderRuntimeConfig) -> None:
         pass
 

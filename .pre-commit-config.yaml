@@ -1,18 +1,24 @@
-repos:
-  - repo: https://github.com/psf/black
-    rev: 25.11.0
-    hooks:
-      - id: black
+default_language_version:
+  python: python3.12
 
+repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.5
+    rev: v0.15.15
     hooks:
-      - id: ruff
+      - id: ruff-check
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      - id: check-builtin-literals
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-toml
       - id: check-yaml
+      - id: debug-statements
+      - id: detect-private-key
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
@@ -20,6 +26,16 @@ repos:
     rev: v2.23.0
     hooks:
       - id: pyproject-fmt
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        additional_dependencies:
+          - "bandit[toml]"
+        args:
+          - "--configfile=pyproject.toml"
+          - "--severity-level=medium"
 
   - repo: local
     hooks:

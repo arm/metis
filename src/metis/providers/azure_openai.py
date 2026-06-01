@@ -60,7 +60,6 @@ class AzureOpenAIEmbeddingAdapter(BaseEmbedding):
 
 
 class AzureOpenAIProvider(LLMProvider):
-
     def __init__(self, config: AzureOpenAIProviderConfig) -> None:
         self.api_key = config["llm_api_key"]
         self.azure_endpoint = config["azure_endpoint"]

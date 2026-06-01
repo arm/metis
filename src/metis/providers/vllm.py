@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class VLLMProvider(OpenAICompatibleProvider):
-
     def __init__(self, config):
         super().__init__(config)
         if not self.base_url:
