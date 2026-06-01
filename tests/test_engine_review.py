@@ -122,7 +122,13 @@ def test_review_code_validates_reachability_results_before_returning(engine):
     engine.review._validate_review_candidates = Mock(
         return_value=[
             {"index": 0, "keep": True, "confidence": 0.91, "reason": "concrete"},
-            {"index": 1, "keep": False, "confidence": 0.21, "reason": "speculative"},
+            {
+                "index": 1,
+                "keep": False,
+                "confidence": 0.21,
+                "drop_reason": "unsupported_speculation",
+                "reason": "speculative",
+            },
         ]
     )
 
@@ -134,6 +140,7 @@ def test_review_code_validates_reachability_results_before_returning(engine):
     assert results[0]["reviews"][0]["review_validation_keep"] is True
     filtered = results[0]["review_validation_filtered_reviews"]
     assert [item["issue"] for item in filtered] == ["fake"]
+    assert filtered[0]["review_validation_drop_reason"] == "unsupported_speculation"
     assert filtered[0]["review_validation_reason"] == "speculative"
 
 
@@ -165,12 +172,14 @@ def test_review_validation_rescues_duplicate_cluster_representative():
             "index": 0,
             "keep": False,
             "confidence": 0.4,
+            "drop_reason": "duplicate",
             "reason": "duplicate of stronger candidate",
         },
         {
             "index": 1,
             "keep": False,
             "confidence": 0.5,
+            "drop_reason": "duplicate",
             "reason": "same root cause duplicate",
         },
     ]
@@ -220,7 +229,8 @@ def test_review_validation_rescues_duplicate_cluster_representative():
                 "index": 0,
                 "keep": False,
                 "confidence": 0.2,
-                "reason": "False positive: the value is already bounds-checked before use.",
+                "drop_reason": "false_positive",
+                "reason": "The value is already bounds-checked before use.",
             },
             False,
         ),
@@ -233,10 +243,18 @@ def test_review_validation_guardrails(candidate, decision, expected):
 def test_review_validation_parser_accepts_double_encoded_json():
     parsed = _parse_review_validation_response(
         '"{\\"decisions\\":[{\\"index\\":0,\\"keep\\":true,'
-        '\\"confidence\\":0.82,\\"reason\\":\\"ok\\"}]}"'
+        '\\"confidence\\":0.82,\\"drop_reason\\":\\"\\",\\"reason\\":\\"ok\\"}]}"'
     )
     assert parsed == {
-        "decisions": [{"index": 0, "keep": True, "confidence": 0.82, "reason": "ok"}]
+        "decisions": [
+            {
+                "index": 0,
+                "keep": True,
+                "confidence": 0.82,
+                "drop_reason": "",
+                "reason": "ok",
+            }
+        ]
     }
 
 

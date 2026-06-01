@@ -139,7 +139,6 @@ class TreeSitterReachabilityService:
             max_paths_per_sink=max_paths_per_sink,
             max_path_length=max_path_length,
             target_file=relative_target,
-            strict_file=True,
             final_adjudicator=lambda candidates: self._adjudicate_final_findings(
                 candidates,
                 model=model,

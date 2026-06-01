@@ -7,7 +7,7 @@ from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 from .dedup import FindingConsolidator
 from .finding_paths import FindingPathAnnotator
 from .graph_utils import _same_file
-from .post_filters import _post_filter_findings, _strict_file_findings
+from .post_filters import _post_filter_findings
 
 
 class FindingFinalizer:
@@ -22,7 +22,6 @@ class FindingFinalizer:
         max_paths_per_sink,
         max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         target_file="",
-        strict_file=False,
         final_adjudicator=None,
     ):
         if target_file:
@@ -31,8 +30,6 @@ class FindingFinalizer:
                 target_file,
                 max_path_length=max_path_length,
             ).annotate(findings)
-            if strict_file:
-                findings = _strict_file_findings(findings)
         else:
             findings = self.annotate_findings_with_source_paths(
                 findings,

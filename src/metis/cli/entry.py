@@ -5,7 +5,6 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
-import shlex
 from typing import cast
 
 from rich.markup import escape
@@ -94,8 +93,6 @@ def build_engine(args, runtime):
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
     engine_runtime = dict(runtime)
-    engine_runtime.update(dict(runtime.get("_reachability_config") or {}))
-    engine_runtime.pop("_reachability_config", None)
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(

@@ -39,52 +39,8 @@ _REACHABILITY_REASONING_METADATA_PREFIXES = (
     "Canonical key:",
 )
 _REVIEW_VALIDATION_BATCH_SIZE = 5
-_REVIEW_VALIDATION_DUPLICATE_RESCUE_FAMILIES = frozenset(
-    "authorization command_injection credential_storage format_string information_disclosure "
-    "integer_overflow lifetime memory_bounds path_traversal race_condition resource_exhaustion "
-    "sql_injection unsafe_deserialization unchecked_error".split()
-)
 _REVIEW_VALIDATION_SEVERITY_RANK = dict(
     zip("critical high medium low".split(), range(4), strict=True)
-)
-_REVIEW_VALIDATION_FALSE_POSITIVE_MARKERS = tuple(
-    marker
-    for group in (
-        "false positive|already validated|already checked|already bounds-checked|"
-        "bounds checked before|validated before|guarded before|checked before|"
-        "unreachable|not reachable|cannot reach|no reachable path|"
-        "wrong function|wrong file|wrong line|different object|different allocation|"
-        "different resource|not dereferenced|not indexed|not freed|not released|"
-        "not user-controlled|attacker cannot control|input is trusted|"
-        "evidence contradicts|code contradicts|snippet contradicts|snippet shows no|code shows no",
-    )
-    for marker in group.split("|")
-)
-_REVIEW_VALIDATION_KEYWORD_FAMILIES = tuple(
-    item.rsplit(":", 1)
-    for group in (
-        "sql:sql_injection|command injection:command_injection|path traversal:path_traversal",
-        "deserialize:unsafe_deserialization|format string:format_string|use-after-release:lifetime|"
-        "use-after-free:lifetime|use after free:lifetime|dangling:lifetime|stale pointer:lifetime|"
-        "refcount:lifetime|callback:lifetime",
-        "out-of-bounds:memory_bounds|out of bounds:memory_bounds",
-        "bounds check:memory_bounds|array access:memory_bounds|array index:memory_bounds",
-        "index:memory_bounds|buffer overflow:memory_bounds|fixed buffer:memory_bounds",
-        "integer overflow:integer_overflow|unchecked arithmetic:integer_overflow",
-        "unchecked addition:integer_overflow|wraparound:integer_overflow|wrap:integer_overflow",
-        "race:race_condition|concurrent:race_condition|toctou:race_condition|"
-        "lock:race_condition|workqueue:race_condition",
-        "resource exhaustion:resource_exhaustion|denial of service:resource_exhaustion",
-        "descriptor:resource_exhaustion| fd :resource_exhaustion|leak:resource_exhaustion",
-        "not released:resource_exhaustion|not freed:resource_exhaustion",
-        "not dropped:resource_exhaustion|not unpinned:resource_exhaustion",
-        "pinned:resource_exhaustion|accounting:resource_exhaustion",
-        "cleanup:lifetime|unwind:lifetime|rollback:lifetime|unregister:lifetime|"
-        "cancel:lifetime|flush:lifetime|unchecked error:unchecked_error|"
-        "missing validation:memory_bounds|auth:authorization|permission:authorization|"
-        "credential:credential_storage|secret:credential_storage|information disclosure:information_disclosure",
-    )
-    for item in group.split("|")
 )
 _DROP_REVIEW_ITEM = object()
 _REVIEW_VALIDATION_SYSTEM_PROMPT = """You validate reachability security review findings before the final report.
@@ -102,10 +58,14 @@ For each candidate:
 - keep=false only for clear false positives, unsupported speculation, generic
   style issues, missing-prerequisite reports, or duplicates already represented
   by a stronger candidate in the same batch.
+- When keep=false, set drop_reason to a concise snake_case reason. Use
+  drop_reason=duplicate for duplicate drops. Leave drop_reason empty when
+  keep=true or when the only concern is that practical exploitability is not
+  fully proven.
 - Calibrate confidence as a number from 0.0 to 1.0 based on evidence quality,
   source/sink specificity, exploitability prerequisites, and code support.
 - Do not add findings or rewrite the report. Only decide keep/drop and
-  confidence for the provided indexes.
+  confidence/drop_reason for the provided indexes.
 
 Return JSON only:
 {
@@ -114,6 +74,7 @@ Return JSON only:
       "index": 0,
       "keep": true,
       "confidence": 0.82,
+      "drop_reason": "",
       "reason": "Concise validation reason."
     }
   ]
@@ -127,6 +88,13 @@ class _ReviewValidationDecisionModel(BaseModel):
         ge=0.0,
         le=1.0,
         description="Calibrated confidence from 0.0 to 1.0.",
+    )
+    drop_reason: str = Field(
+        "",
+        description=(
+            "Concise snake_case reason when keep=false; empty when keep=true "
+            "or the drop is not based on a concrete validation category."
+        ),
     )
     reason: str = Field("", description="Concise validation reason.")
 
@@ -304,6 +272,9 @@ class ReviewService:
             item_copy["review_validation_reason"] = str(
                 decision.get("reason") or ""
             ).strip()
+            drop_reason = _review_validation_drop_reason(decision)
+            if drop_reason:
+                item_copy["review_validation_drop_reason"] = drop_reason
             model_keep = bool(decision.get("keep", True))
             keep = _review_validation_final_keep(candidates[candidate_index], decision)
             item_copy["review_validation_keep"] = keep
@@ -884,16 +855,12 @@ def _rescue_filtered_duplicate_cluster_representatives(candidates, decisions):
         candidate_index = _safe_int(candidate.get("index"), -1)
         if candidate_index < 0:
             continue
-        family = _review_validation_issue_family(candidate)
-        if family not in _REVIEW_VALIDATION_DUPLICATE_RESCUE_FAMILIES:
-            continue
-        if not _is_strong_review_validation_candidate(candidate, family):
+        if not _is_strong_review_validation_candidate(candidate):
             continue
         key = (
             str(candidate.get("primary_file") or "").replace("\\", "/").lstrip("./"),
             _short_function_name(candidate.get("primary_function")),
             _safe_int(candidate.get("line_number"), 0),
-            family,
         )
         clusters.setdefault(key, []).append(candidate)
         if _review_validation_duplicate_signal(decisions_by_index.get(candidate_index)):
@@ -948,16 +915,7 @@ def _rescue_filtered_duplicate_cluster_representatives(candidates, decisions):
 
 
 def _review_validation_duplicate_signal(decision):
-    reason = str((decision or {}).get("reason") or "").lower()
-    return any(
-        marker in reason
-        for marker in (
-            "duplicate",
-            "same issue",
-            "same root cause",
-            "already represented",
-        )
-    )
+    return _review_validation_drop_reason(decision) == "duplicate"
 
 
 def _review_validation_final_keep(candidate, decision):
@@ -965,9 +923,7 @@ def _review_validation_final_keep(candidate, decision):
         return True
     if bool(decision.get("keep", True)):
         return True
-    if _review_validation_duplicate_signal(decision):
-        return False
-    if _review_validation_concrete_false_positive_signal(decision):
+    if _review_validation_drop_reason(decision):
         return False
     return not _is_weak_review_validation_candidate(candidate)
 
@@ -975,23 +931,20 @@ def _review_validation_final_keep(candidate, decision):
 def _is_weak_review_validation_candidate(candidate):
     severity = str(candidate.get("severity") or "").strip().lower()
     confidence = _normalised_confidence(candidate.get("confidence"))
-    family = _review_validation_issue_family(candidate)
-    return confidence < 0.70 or severity == "low" or not family
+    return confidence < 0.70 or severity == "low"
 
 
-def _review_validation_concrete_false_positive_signal(decision):
-    reason = str((decision or {}).get("reason") or "").lower()
-    if not reason:
-        return False
-    return any(marker in reason for marker in _REVIEW_VALIDATION_FALSE_POSITIVE_MARKERS)
+def _review_validation_drop_reason(decision):
+    drop_reason = str((decision or {}).get("drop_reason") or "").strip().lower()
+    return "" if drop_reason in {"", "none", "null", "n/a"} else drop_reason
 
 
-def _is_strong_review_validation_candidate(candidate, family):
+def _is_strong_review_validation_candidate(candidate):
     severity = str(candidate.get("severity") or "").strip().lower()
     confidence = _normalised_confidence(candidate.get("confidence"))
     if severity in {"critical", "high"} and confidence >= 0.70:
         return True
-    return confidence >= 0.90 and bool(family)
+    return confidence >= 0.90
 
 
 def _review_validation_strength_key(candidate):
@@ -1002,23 +955,6 @@ def _review_validation_strength_key(candidate):
         -_safe_int(candidate.get("line_number"), 0),
         str(candidate.get("issue") or ""),
     )
-
-
-def _review_validation_issue_family(candidate):
-    text = " ".join(
-        str(candidate.get(field) or "")
-        for field in (
-            "issue",
-            "analysis_type",
-            "root_cause",
-            "evidence",
-            "mitigation",
-        )
-    ).lower()
-    for keyword, family in _REVIEW_VALIDATION_KEYWORD_FAMILIES:
-        if keyword in text:
-            return family
-    return ""
 
 
 def _short_function_name(value):
