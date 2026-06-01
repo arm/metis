@@ -2,18 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .confirmer import _CANONICAL_FINDING_INSTRUCTIONS
-from .models import ALLOWED_VULNERABILITY_TYPES
-
-_ALLOWED_VULNERABILITY_TYPES_TEXT = ", ".join(ALLOWED_VULNERABILITY_TYPES)
 
 
-_STRUCTURED_FINDING_INSTRUCTIONS = f"""\
+_STRUCTURED_FINDING_INSTRUCTIONS = """\
 Use the structured findings schema supplied by the caller.
 Populate only real values from the shown code. Do not invent files, functions, or lines.
-vulnerability_type must exactly be one of: {_ALLOWED_VULNERABILITY_TYPES_TEXT}.
-Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
-error-unwind/rollback/resource-leak variants, and use_after_free for dangling
-use-after-release lifetime variants unless a narrower allowed type fits better.
+vulnerability_type must be your best concise snake_case category for the issue;
+do not force it into a predefined taxonomy.
+cwe must be the best matching CWE ID you infer from the issue, such as CWE-120;
+leave it empty only when no CWE is known.
 confidence must be exactly one of: high, medium, low.
 Return an empty findings list when the evidence does not prove a vulnerability.
 """

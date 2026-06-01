@@ -18,25 +18,20 @@ from .finding_normalization import (
 from .graph_utils import _chunked, _dedupe_paths, _emit_progress
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from .llm_runner import reachability_response_payload
-from .models import (
-    ALLOWED_VULNERABILITY_TYPES,
-    ReachabilityConfirmationResponseModel,
-)
+from .models import ReachabilityConfirmationResponseModel
 from .source_context import _read_function_body
 
 logger = logging.getLogger("metis")
 
 
 def _output_constraints(no_finding_guidance):
-    allowed_vulnerability_types = ", ".join(ALLOWED_VULNERABILITY_TYPES)
     return f"""\
 Use the structured findings schema supplied by the caller.
 For path confirmation, each finding must include path_index and is_vulnerable.
-vulnerability_type must exactly be one of: {allowed_vulnerability_types}.
-Use out_of_bounds for all OOB read/write/index variants, partial_cleanup for
-error-unwind/rollback/resource-leak variants, and use_after_free for dangling
-use-after-release lifetime variants unless a narrower allowed type fits better.
-cwe must be the best matching CWE ID such as CWE-120 when known, otherwise an empty string.
+vulnerability_type must be your best concise snake_case category for the issue;
+do not force it into a predefined taxonomy.
+cwe must be the best matching CWE ID you infer from the issue, such as CWE-120;
+leave it empty only when no CWE is known.
 severity must be exactly one of: critical, high, medium, low.
 confidence must be exactly one of: high, medium, low.
 Be conservative. {no_finding_guidance}"""
