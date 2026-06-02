@@ -5,7 +5,6 @@
 import os
 
 from metis.engine.review_finding_adapter import (
-    connected_functions_for_finding as _connected_functions_for_finding,
     finding_to_review_item,
     review_sort_key as _review_sort_key,
 )
@@ -59,7 +58,3 @@ def finding_to_review(finding, *, graph=None, codebase_path, target_file=""):
         codebase_path=codebase_path,
         target_file=target_file,
     )
-
-
-def connected_functions_for_finding(finding, graph, target_file):
-    return _connected_functions_for_finding(finding, graph, target_file)

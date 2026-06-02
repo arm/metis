@@ -8,7 +8,6 @@ from .reachability.finding_values import (
     _safe_int,
     _severity_title,
 )
-from .reachability.graph_utils import _same_file
 from .reachability.source_context import _read_line_context
 
 REACHABILITY_REASONING_METADATA_PREFIXES = (
@@ -32,27 +31,6 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
     )
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
-    reasoning_parts = []
-    if primary_file:
-        reasoning_parts.append(
-            f"Primary location: {primary_file}:{line_number}"
-            + (f" ({primary_fn})" if primary_fn else "")
-        )
-    if target_file and not _same_file(primary_file, target_file):
-        reasoning_parts.append(f"Reviewed file participates via: {target_file}")
-    connected = connected_functions_for_finding(finding, graph, target_file)
-    if connected:
-        reasoning_parts.append(f"Connected functions: {', '.join(connected[:8])}")
-    if str(finding.evidence or "").strip():
-        reasoning_parts.append(str(finding.evidence).strip())
-    if finding.path:
-        reasoning_parts.append(f"Reachability path: {' -> '.join(finding.path)}")
-    if str(finding.root_cause or "").strip():
-        reasoning_parts.append(f"Root cause: {str(finding.root_cause).strip()}")
-    if finding.analysis_type:
-        reasoning_parts.append(f"Analysis type: {finding.analysis_type}")
-    if finding.canonical_key:
-        reasoning_parts.append(f"Canonical key: {finding.canonical_key}")
     return {
         "issue": issue,
         "line_number": line_number,
@@ -68,7 +46,7 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": finding.confidence,
-        "reasoning": "\n".join(reasoning_parts),
+        "reasoning": _review_reasoning(finding),
         "mitigation": _mitigation_text(finding, vtype),
     }
 
@@ -115,34 +93,15 @@ def review_sort_key(item):
     )
 
 
-def connected_functions_for_finding(finding, graph, target_file):
-    if graph is None:
-        return []
-    connected = []
-    seen = set()
-    candidates = list(finding.path or [])
-    candidates.extend(
-        [
-            finding.primary_function,
-            finding.source_function,
-            finding.sink_function,
-        ]
-    )
-    for node_name in candidates:
-        node = graph.get_node(node_name)
-        if not node:
-            continue
-        for resolved_name in node.resolved_calls or []:
-            resolved = graph.get_node(resolved_name)
-            if not resolved:
-                continue
-            if target_file and _same_file(resolved.file_path, target_file):
-                continue
-            if resolved.unique_name in seen:
-                continue
-            seen.add(resolved.unique_name)
-            connected.append(resolved.unique_name)
-    return connected
+def _review_reasoning(finding):
+    parts = []
+    evidence = str(finding.evidence or "").strip()
+    if evidence:
+        parts.append(evidence)
+    root_cause = str(finding.root_cause or "").strip()
+    if root_cause:
+        parts.append(f"Root cause: {root_cause}")
+    return "\n".join(parts)
 
 
 def split_reachability_reasoning(reasoning):
