@@ -181,9 +181,22 @@ class ReviewCodeProgressReporter:
         )
 
     def _findings_finalization_progress(self, event: Mapping[str, Any]):
+        total = _positive_int(event.get("total"))
+        completed = _non_negative_int(event.get("completed")) or 0
+        phase = str(event.get("phase") or "")
+        description = (
+            "[cyan]Adjudicating representative findings[/cyan]"
+            if phase == "representative"
+            else "[cyan]Adjudicating final findings[/cyan]"
+        )
+        if total is None:
+            self._progress.update(self._task, description=description)
+            return
         self._progress.update(
             self._task,
-            description="[cyan]Adjudicating final findings[/cyan]",
+            total=total,
+            completed=min(completed, total),
+            description=description,
         )
 
     def _findings_finalization_done(self, event: Mapping[str, Any]):
@@ -298,6 +311,14 @@ def _positive_int(value):
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _non_negative_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _progress_event_label(event_name):

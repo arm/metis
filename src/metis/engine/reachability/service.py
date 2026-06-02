@@ -309,13 +309,16 @@ class TreeSitterReachabilityService:
             **progress_counts,
         )
 
-        def _adjudicate_candidates(candidates):
+        def _adjudication_progress(payload):
             _emit_progress(
                 options.progress_callback,
                 Progress.FINDINGS_FINALIZATION_PROGRESS,
                 file=target_file,
+                **payload,
                 **progress_counts,
             )
+
+        def _adjudicate_candidates(candidates):
             return self.adjudicate_final_findings(
                 candidates,
                 model=model,
@@ -328,6 +331,7 @@ class TreeSitterReachabilityService:
             options=options,
             target_file=target_file,
             final_adjudicator=_adjudicate_candidates,
+            final_adjudication_progress=_adjudication_progress,
         )
         deduped, total_before, removed = finalized
         _emit_progress(

@@ -93,6 +93,7 @@ class FindingConsolidator:
         max_per_sink=3,
         final_adjudicator=None,
         representative_scope="file",
+        final_adjudication_progress=None,
     ):
         if not findings:
             return [], 0, 0
@@ -103,6 +104,7 @@ class FindingConsolidator:
             original,
             final_adjudicator,
             representative_scope=representative_scope,
+            progress_callback=final_adjudication_progress,
         )
         if adjudicated is not None:
             return adjudicated, total, total - len(adjudicated)
@@ -112,7 +114,13 @@ class FindingConsolidator:
 Deduplicator = FindingConsolidator
 
 
-def _apply_final_adjudication(findings, adjudicator, *, representative_scope="file"):
+def _apply_final_adjudication(
+    findings,
+    adjudicator,
+    *,
+    representative_scope="file",
+    progress_callback=None,
+):
     if not callable(adjudicator) or not findings:
         return None
     if len(findings) < 2:
@@ -127,15 +135,17 @@ def _apply_final_adjudication(findings, adjudicator, *, representative_scope="fi
     representative_preferences = []
     saw_valid_decision = False
 
-    for batch in _adjudication_batches(payloads):
-        decision = adjudicator(batch)
-        if _merge_decision_groups(
-            merged,
-            representative_preferences,
-            decision,
-            original_limit,
-        ):
-            saw_valid_decision = True
+    initial_batches = _adjudication_batches(payloads)
+    if _run_adjudication_batches(
+        initial_batches,
+        adjudicator,
+        merged,
+        representative_preferences,
+        original_limit,
+        progress_callback=progress_callback,
+        phase="candidate",
+    ):
+        saw_valid_decision = True
 
     representative_payloads = [
         payloads[index]
@@ -146,25 +156,58 @@ def _apply_final_adjudication(findings, adjudicator, *, representative_scope="fi
         and len(representative_payloads) > 1
         and len(payloads) > FINAL_DEDUP_BATCH_SIZE
     ):
-        for batch in _adjudication_batches(
+        representative_batches = _adjudication_batches(
             representative_payloads,
             batch_size=FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE,
             scope=representative_scope,
+        )
+        if _run_adjudication_batches(
+            representative_batches,
+            adjudicator,
+            merged,
+            representative_preferences,
+            original_limit,
+            progress_callback=progress_callback,
+            phase="representative",
         ):
-            decision = adjudicator(batch)
-            if _merge_decision_groups(
-                merged,
-                representative_preferences,
-                decision,
-                original_limit,
-            ):
-                saw_valid_decision = True
+            saw_valid_decision = True
 
     if not saw_valid_decision:
         return None
 
     keep_indexes = set(_representative_indexes(merged, representative_preferences))
     return [finding for index, finding in enumerate(findings) if index in keep_indexes]
+
+
+def _run_adjudication_batches(
+    batches,
+    adjudicator,
+    merged,
+    representative_preferences,
+    original_limit,
+    *,
+    progress_callback=None,
+    phase="candidate",
+):
+    if not batches:
+        return False
+
+    total = len(batches)
+    if progress_callback:
+        progress_callback({"phase": phase, "completed": 0, "total": total})
+    saw_valid_decision = False
+    for completed, batch in enumerate(batches, start=1):
+        decision = adjudicator(batch)
+        if _merge_decision_groups(
+            merged,
+            representative_preferences,
+            decision,
+            original_limit,
+        ):
+            saw_valid_decision = True
+        if progress_callback:
+            progress_callback({"phase": phase, "completed": completed, "total": total})
+    return saw_valid_decision
 
 
 def _adjudication_batches(
