@@ -40,6 +40,7 @@ class ReviewCodeProgressReporter:
         self._saw_reachability = False
         self._collecting_reachability_results = False
         self._reachability_result_total = 0
+        self._finalizing_review_results = False
 
     def __call__(self, event: Mapping[str, Any] | None):
         event = event or {}
@@ -62,7 +63,7 @@ class ReviewCodeProgressReporter:
         total = self._total_files or self._review_completed
         completed = min(self._review_completed, total)
         if completed >= total:
-            self._start_phase("[cyan]Finalizing review results...[/cyan]")
+            self._finalize_review_results()
             return
         self._progress.update(
             self._task,
@@ -247,7 +248,7 @@ class ReviewCodeProgressReporter:
         if self._reachability_result_total:
             completed = min(self._review_completed, self._reachability_result_total)
             if completed >= self._reachability_result_total:
-                self._start_phase("[cyan]Finalizing review results...[/cyan]")
+                self._finalize_review_results()
                 return
             self._progress.update(
                 self._task,
@@ -266,6 +267,14 @@ class ReviewCodeProgressReporter:
             self._start_phase(description)
             return
         self._progress.update(self._task, description=description)
+
+    def _finalize_review_results(self):
+        description = "[cyan]Finalizing review results...[/cyan]"
+        if self._finalizing_review_results:
+            self._progress.update(self._task, description=description)
+            return
+        self._finalizing_review_results = True
+        self._start_phase(description)
 
     def _print_phase(self, message: str):
         console = getattr(self._progress, "console", None)

@@ -106,7 +106,7 @@ class ReachabilityReviewBackend:
         options = self.review_options(progress_callback=progress_callback)
         return self._service.review_file(file_path, options=options)
 
-    def aggregate_results(self, results, *, validate_candidates=None):
+    def aggregate_results(self, results, *, validate_candidates=None, deduplicate=True):
         if not self.enabled:
             return results
         return ReviewResultAggregator(
@@ -116,6 +116,7 @@ class ReachabilityReviewBackend:
         ).aggregate(
             results,
             validate_candidates=validate_candidates,
+            deduplicate=deduplicate,
         )
 
     def validate_candidates(self, candidates):

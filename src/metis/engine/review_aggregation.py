@@ -29,7 +29,7 @@ class ReviewResultAggregator:
         self._final_adjudicator = final_adjudicator
         self._validator = ReviewFindingValidator(config, self._reachability_settings)
 
-    def aggregate(self, results, *, validate_candidates=None):
+    def aggregate(self, results, *, validate_candidates=None, deduplicate=True):
         if not isinstance(results, dict):
             return results
 
@@ -41,7 +41,11 @@ class ReviewResultAggregator:
         if not findings:
             return results
 
-        aggregated = self._deduplicate_review_groups(results, refs, findings)
+        aggregated = (
+            self._deduplicate_review_groups(results, refs, findings)
+            if deduplicate
+            else results
+        )
         return self._validate_review_groups(
             aggregated,
             validate_candidates=validate_candidates,
@@ -71,6 +75,7 @@ class ReviewResultAggregator:
                 reasoning_effort=reasoning_effort,
             ),
             representative_scope=None,
+            max_workers=self._config.max_workers,
         )
         if removed <= 0:
             return results

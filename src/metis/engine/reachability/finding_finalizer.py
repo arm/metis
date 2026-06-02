@@ -78,6 +78,7 @@ class FindingFinalizer:
             max_per_sink=max_paths_per_sink,
             final_adjudicator=final_adjudicator,
             final_adjudication_progress=final_adjudication_progress,
+            max_workers=options.max_workers,
         )
 
     def annotate_findings_with_source_paths(

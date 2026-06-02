@@ -7,6 +7,7 @@ from collections import defaultdict
 from .finding_accessors import _finding_file, _finding_function
 from .finding_values import _safe_int
 from .limits import FINAL_DEDUP_BATCH_SIZE, FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE
+from .workers import run_reachability_jobs
 
 FINAL_CONSOLIDATION_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
 
@@ -94,6 +95,7 @@ class FindingConsolidator:
         final_adjudicator=None,
         representative_scope="file",
         final_adjudication_progress=None,
+        max_workers=1,
     ):
         if not findings:
             return [], 0, 0
@@ -105,6 +107,7 @@ class FindingConsolidator:
             final_adjudicator,
             representative_scope=representative_scope,
             progress_callback=final_adjudication_progress,
+            max_workers=max_workers,
         )
         if adjudicated is not None:
             return adjudicated, total, total - len(adjudicated)
@@ -120,6 +123,7 @@ def _apply_final_adjudication(
     *,
     representative_scope="file",
     progress_callback=None,
+    max_workers=1,
 ):
     if not callable(adjudicator) or not findings:
         return None
@@ -144,6 +148,7 @@ def _apply_final_adjudication(
         original_limit,
         progress_callback=progress_callback,
         phase="candidate",
+        max_workers=max_workers,
     ):
         saw_valid_decision = True
 
@@ -169,6 +174,7 @@ def _apply_final_adjudication(
             original_limit,
             progress_callback=progress_callback,
             phase="representative",
+            max_workers=max_workers,
         ):
             saw_valid_decision = True
 
@@ -188,6 +194,7 @@ def _run_adjudication_batches(
     *,
     progress_callback=None,
     phase="candidate",
+    max_workers=1,
 ):
     if not batches:
         return False
@@ -195,9 +202,21 @@ def _run_adjudication_batches(
     total = len(batches)
     if progress_callback:
         progress_callback({"phase": phase, "completed": 0, "total": total})
+    batch_results = run_reachability_jobs(
+        list(enumerate(batches)),
+        lambda item: (item[0], adjudicator(item[1])),
+        max_workers=max_workers,
+        label="Final reachability adjudication",
+        result_key=lambda item: f"{phase}:{item[0]}",
+        on_complete=lambda _key, completed, total: (
+            progress_callback({"phase": phase, "completed": completed, "total": total})
+            if progress_callback
+            else None
+        ),
+        swallow_exceptions=False,
+    )
     saw_valid_decision = False
-    for completed, batch in enumerate(batches, start=1):
-        decision = adjudicator(batch)
+    for _index, decision in sorted(batch_results, key=lambda item: item[0]):
         if _merge_decision_groups(
             merged,
             representative_preferences,
@@ -205,8 +224,6 @@ def _run_adjudication_batches(
             original_limit,
         ):
             saw_valid_decision = True
-        if progress_callback:
-            progress_callback({"phase": phase, "completed": completed, "total": total})
     return saw_valid_decision
 
 

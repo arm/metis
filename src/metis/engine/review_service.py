@@ -75,12 +75,13 @@ class ReviewService:
             return groups[0]
         return result
 
-    def aggregate_review_results(self, results):
+    def aggregate_review_results(self, results, *, deduplicate=True):
         if self._reachability_backend is None:
             return results
         return self._reachability_backend.aggregate_results(
             results,
             validate_candidates=self._validate_review_candidates,
+            deduplicate=deduplicate,
         )
 
     def _validate_review_candidates(self, candidates):
@@ -304,9 +305,10 @@ class ReviewService:
                     Progress.REVIEW_OUTPUT_AGGREGATION_START,
                     files=len(results),
                 )
-                results = self.aggregate_review_results({"reviews": results}).get(
-                    "reviews", results
-                )
+                results = self.aggregate_review_results(
+                    {"reviews": results},
+                    deduplicate=False,
+                ).get("reviews", results)
                 emit_progress(
                     progress_callback,
                     Progress.REVIEW_OUTPUT_AGGREGATION_DONE,

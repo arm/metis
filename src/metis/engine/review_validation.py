@@ -16,10 +16,11 @@ from metis.utils import parse_json_output
 from .llm_runner import JsonPromptRequest, JsonPromptRunner
 from .reachability.finding_values import _safe_int
 from .reachability.source_context import _read_line_context, _read_named_function_body
+from .reachability.workers import run_reachability_jobs
 
 logger = logging.getLogger("metis")
 
-_REVIEW_VALIDATION_BATCH_SIZE = 5
+_REVIEW_VALIDATION_BATCH_SIZE = 10
 _REVIEW_VALIDATION_SEVERITY_RANK = dict(
     zip("critical high medium low".split(), range(4), strict=True)
 )
@@ -96,13 +97,26 @@ class ReviewFindingValidator:
             or self._config.llama_query_model
         )
         reasoning_effort = self._reachability_settings.get("reasoning_effort")
+        batches = list(enumerate(_validation_batches(candidates)))
+        batch_results = run_reachability_jobs(
+            batches,
+            lambda item: (
+                item[0],
+                self.invoke_batch(
+                    item[1],
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                ),
+            ),
+            max_workers=self._reachability_settings.get(
+                "max_workers", self._config.max_workers
+            ),
+            label="Review validation",
+            result_key=lambda item: item[0],
+            swallow_exceptions=False,
+        )
         decisions = []
-        for batch in _validation_batches(candidates):
-            parsed = self.invoke_batch(
-                batch,
-                model=model,
-                reasoning_effort=reasoning_effort,
-            )
+        for _index, parsed in sorted(batch_results, key=lambda item: item[0]):
             if not parsed:
                 continue
             batch_decisions = parsed.get("decisions")
