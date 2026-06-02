@@ -3,6 +3,7 @@
 
 
 import importlib
+import inspect
 from pathlib import Path
 from rich.markup import escape
 
@@ -18,6 +19,7 @@ from .utils import (
     with_timer,
     collect_reviews,
     iterate_with_progress,
+    build_standard_progress,
     count_index_items,
     pretty_print_reviews,
     save_output,
@@ -124,12 +126,20 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 def run_review_code(engine, args, runtime: CommandRuntime):
     _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-    if args.verbose:
+    if not args.quiet:
         print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
+        total = len(engine.review.get_code_files(options=options))
+        file_reviews = _collect_review_code_with_progress(
+            engine,
+            options,
+            total,
+        )
+        results = {"reviews": file_reviews}
+    elif args.verbose:
         total = len(engine.review.get_code_files(options=options))
         file_reviews = iterate_with_progress(
             total,
-            engine.review.review_code(options=options),
+            _review_code_iter(engine.review, options),
         )
         results = {"reviews": file_reviews}
     else:
@@ -141,6 +151,215 @@ def run_review_code(engine, args, runtime: CommandRuntime):
             quiet=args.quiet,
         )
     _finalize_review_output(engine, results, args, runtime)
+
+
+def _collect_review_code_with_progress(engine, options, total):
+    results = []
+    with build_standard_progress(transient=True) as progress:
+        task = progress.add_task("[cyan]Reviewing codebase...[/cyan]", total=total or 1)
+        callback = _make_review_code_progress_callback(progress, task, total)
+        for item in _review_code_iter(
+            engine.review,
+            options,
+            progress_callback=callback,
+        ):
+            if item is not None:
+                results.append(item)
+            callback.review_result()
+        callback.finish()
+    return results
+
+
+def _review_code_iter(review_domain, options, progress_callback=None):
+    review_code = review_domain.review_code
+    if progress_callback is None:
+        return review_code(options=options)
+    try:
+        signature = inspect.signature(review_code)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        params = signature.parameters
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+        if "progress_callback" in params or accepts_kwargs:
+            return review_code(options=options, progress_callback=progress_callback)
+    return review_code(options=options)
+
+
+def _make_review_code_progress_callback(progress, task, review_total):
+    class _ReviewProgress:
+        def __init__(self):
+            self.review_completed = 0
+
+        def __call__(self, event):
+            kind = str((event or {}).get("event") or "")
+            if kind == "treesitter_graph_start":
+                total = _positive_int(event.get("total"))
+                progress.update(
+                    task,
+                    total=total,
+                    completed=0,
+                    description="[cyan]Building reachability graph...[/cyan]",
+                )
+                return
+            if kind == "treesitter_graph_progress":
+                total = _positive_int(event.get("total"))
+                completed = _positive_int(event.get("completed")) or 0
+                file_name = escape(str(event.get("file") or ""))
+                progress.update(
+                    task,
+                    total=total,
+                    completed=completed,
+                    description=f"[cyan]Building reachability graph: {file_name}[/cyan]",
+                )
+                return
+            if kind == "treesitter_graph_done":
+                progress.update(
+                    task,
+                    total=None,
+                    description=(
+                        "[cyan]Reachability graph ready: "
+                        f"{event.get('nodes', 0)} functions, "
+                        f"{event.get('edges', 0)} calls[/cyan]"
+                    ),
+                )
+                return
+            if kind == "treesitter_paths_done":
+                progress.update(
+                    task,
+                    total=None,
+                    description=(
+                        "[cyan]Reachability paths ready: "
+                        f"{event.get('paths', 0)} paths, "
+                        f"{event.get('selected', 0)} selected[/cyan]"
+                    ),
+                )
+                return
+            if kind == "intra_audit_start":
+                total = _positive_int(event.get("files"))
+                progress.update(
+                    task,
+                    total=total,
+                    completed=0,
+                    description="[cyan]Running intra-file reachability audit...[/cyan]",
+                )
+                return
+            if kind == "intra_audit_progress":
+                total = _positive_int(event.get("total"))
+                completed = _positive_int(event.get("completed")) or 0
+                file_name = escape(str(event.get("file") or ""))
+                progress.update(
+                    task,
+                    total=total,
+                    completed=completed,
+                    description=f"[cyan]Auditing reachability: {file_name}[/cyan]",
+                )
+                return
+            if kind == "confirmation_start":
+                total = _positive_int(event.get("total"))
+                progress.update(
+                    task,
+                    total=total,
+                    completed=0,
+                    description="[cyan]Confirming reachable paths...[/cyan]",
+                )
+                return
+            if kind == "confirmation_progress":
+                total = _positive_int(event.get("total"))
+                completed = _positive_int(event.get("completed")) or 0
+                progress.update(
+                    task,
+                    total=total,
+                    completed=completed,
+                    description="[cyan]Confirming reachable paths...[/cyan]",
+                )
+                return
+            if kind == "confirmation_done":
+                progress.update(
+                    task,
+                    total=None,
+                    description=(
+                        "[cyan]Path confirmation done: "
+                        f"{event.get('confirmed', 0)} findings[/cyan]"
+                    ),
+                )
+                return
+            if kind == "supplementary_done":
+                progress.update(
+                    task,
+                    total=None,
+                    description=(
+                        "[cyan]Reachability lenses done: "
+                        f"{event.get('total', 0)} findings[/cyan]"
+                    ),
+                )
+                return
+            if kind == "treesitter_code_review_done":
+                progress.update(
+                    task,
+                    total=None,
+                    description=(
+                        "[cyan]Reachability review done: "
+                        f"{event.get('deduped_findings', 0)} findings across "
+                        f"{event.get('files', 0)} files[/cyan]"
+                    ),
+                )
+                return
+            if kind.endswith("_start"):
+                progress.update(
+                    task,
+                    total=None,
+                    description=f"[cyan]Running {_progress_event_label(kind)}...[/cyan]",
+                )
+                return
+            if kind.endswith("_done"):
+                progress.update(
+                    task,
+                    total=None,
+                    description=f"[cyan]Finished {_progress_event_label(kind)}[/cyan]",
+                )
+                return
+
+        def review_result(self):
+            self.review_completed += 1
+            total = review_total or self.review_completed
+            progress.update(
+                task,
+                total=total,
+                completed=min(self.review_completed, total),
+                description=(
+                    "[cyan]Collecting review results "
+                    f"{self.review_completed}/{total}[/cyan]"
+                ),
+            )
+
+        def finish(self):
+            progress.update(
+                task,
+                total=1,
+                completed=1,
+                description="[green]Review complete[/green]",
+            )
+
+    return _ReviewProgress()
+
+
+def _positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _progress_event_label(event_name):
+    text = str(event_name or "")
+    for suffix in ("_start", "_done"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+    return escape(text.replace("_", " "))
 
 
 def run_index(engine, verbose=False, quiet=False):
