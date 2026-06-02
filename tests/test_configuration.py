@@ -334,6 +334,70 @@ llm_provider:
     assert runtime["llm_api_key"] == ""
 
 
+def test_load_runtime_config_reports_missing_llamacpp_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  model: llama3.1:8b
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "llama.cpp provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.code_embedding_model" in message
+    assert "llm_provider.docs_embedding_model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_keeps_llamacpp_api_key_optional(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLAMACPP_API_KEY", raising=False)
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  model: llama3.1:8b
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == ""
+    assert runtime["openai_api_base"] == ""
+    assert runtime["model"] == "llama3.1:8b"
+
+
+def test_load_runtime_config_resolves_llamacpp_api_key_from_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  base_url: http://custom:8080/v1
+  model: llama3.1:8b
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLAMACPP_API_KEY", "my-secret-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == "my-secret-key"
+    assert runtime["openai_api_base"] == "http://custom:8080/v1"
+
+
 def test_load_runtime_config_accepts_complete_azure_provider_config(
     tmp_path, monkeypatch
 ):

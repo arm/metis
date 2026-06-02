@@ -16,12 +16,12 @@ from metis.providers.registry import register_provider
 
 class MyProvider(OpenAICompatibleProvider):
     def __init__(self, config):
-        super().__init__(config)
-        # Override defaults or raise ValueError for missing config
-        if not self.base_url:
-            self.base_url = "http://localhost:9000/v1"
-        if not self.query_model:
-            raise ValueError("MyProvider requires a default query model")
+        super().__init__(
+            config,
+            default_base_url="http://localhost:9000/v1",
+            default_api_key="sk-placeholder",
+            # force_openai_like=True,  # uncomment if the API diverges from OpenAI's
+        )
 
 register_provider("my_provider", MyProvider)
 ```

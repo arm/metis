@@ -1,0 +1,37 @@
+psql_database:
+  provider: "config"
+  credentials:
+    username: "metis_user"
+    password: "metis_password"
+    host: "localhost"
+    port: 5432
+    database_name: "metis_db"
+
+metis_engine:
+  max_token_length: 120000
+  max_workers: 8
+  embed_dim: 4096
+  doc_chunk_size: 320
+  doc_chunk_overlap: 64
+  metisignore_file: .metisignore # you can also use .gitignore
+  hnsw_kwargs:
+    hnsw_m: 16
+    hnsw_ef_construction: 64
+    hnsw_ef_search: 40
+    hnsw_dist_method: "vector_cosine_ops"
+
+llm_provider:
+  name: "llamacpp"
+  base_url: "http://localhost:8080/v1"
+  # Models recommendation depends on hardware capabilities
+  model: "Llama3.1-8B" # for 8GB system
+#  model: "Qwen3.5-9B" # for 16GB system
+#  model: "Qwen3.6-35B-A3B" # for 24GB system
+  code_embedding_model: "nomic-embed-text-v1.5"
+  docs_embedding_model: "nomic-embed-text-v1.5"
+
+query:
+  similarity_top_k: 5
+  response_mode: "compact"
+  max_tokens: 2048
+  temperature: 0.0
