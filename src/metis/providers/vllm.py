@@ -17,8 +17,6 @@ class VLLMProvider(OpenAICompatibleProvider):
             raise ValueError(
                 "vLLM provider requires 'openai_api_base' to be configured"
             )
-        if not self.query_model:
-            raise ValueError("vLLM provider requires a default query model")
 
         if not self.api_key:
             logger.debug("vLLM provider running without API key")

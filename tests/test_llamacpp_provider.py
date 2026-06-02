@@ -63,7 +63,7 @@ def test_raises_on_missing_query_model() -> None:
         LlamaCppProvider(config)
         assert False, "Expected ValueError"
     except ValueError as exc:
-        assert "default query model" in str(exc)
+        assert "query model" in str(exc)
 
 
 def test_raises_on_missing_embedding_models() -> None:
@@ -75,7 +75,7 @@ def test_raises_on_missing_embedding_models() -> None:
         LlamaCppProvider(config)
         assert False, "Expected ValueError"
     except ValueError as exc:
-        assert "embedding models" in str(exc)
+        assert "embedding model" in str(exc)
 
 
 def test_chat_model_uses_configured_base_url() -> None:
@@ -181,3 +181,12 @@ def test_lazy_loader_is_registered() -> None:
     cls = get_provider("llamacpp")
     assert cls.__name__ == "LlamaCppProvider"
     assert cls.__module__ == "metis.providers.llamacpp"
+
+
+def test_ollama_lazy_loader_is_registered() -> None:
+    from metis.providers.registry import _LOADERS, get_provider
+
+    assert _LOADERS.get("ollama") == "metis.providers.ollama:OllamaProvider"
+    cls = get_provider("ollama")
+    assert cls.__name__ == "OllamaProvider"
+    assert cls.__module__ == "metis.providers.ollama"

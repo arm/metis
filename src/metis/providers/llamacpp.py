@@ -38,33 +38,21 @@ class LlamaCppProvider(OpenAICompatibleProvider):
     DEFAULT_API_KEY = "sk-no-key-required"
 
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__(
+            config,
+            default_base_url=self.DEFAULT_BASE_URL,
+            default_api_key=self.DEFAULT_API_KEY,
+        )
 
-        # Default base URL if not configured
-        if not self.base_url:
-            self.base_url = self.DEFAULT_BASE_URL
+        if (
+            not config.get("openai_api_base")
+            and not config.get("api_base")
+            and not config.get("base_url")
+        ):
             logger.info(
                 "llama.cpp base URL not configured, defaulting to %s",
                 self.DEFAULT_BASE_URL,
             )
-
-        # Require a query model
-        if not self.query_model:
-            raise ValueError(
-                "llama.cpp provider requires a default query model "
-                "(set 'model' or 'llama_query_model' in llm_provider config)"
-            )
-
-        # Require embedding models
-        if not self.code_embedding_model or not self.docs_embedding_model:
-            raise ValueError(
-                "llama.cpp provider requires embedding models to be configured "
-                "(set 'code_embedding_model' and 'docs_embedding_model')"
-            )
-
-        # The llama.cpp server accepts any API key string; use a placeholder
-        if not self.api_key:
-            self.api_key = self.DEFAULT_API_KEY
 
 
 register_provider("llamacpp", LlamaCppProvider)
