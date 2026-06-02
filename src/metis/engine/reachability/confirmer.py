@@ -13,6 +13,7 @@ from .graph_utils import _chunked, _dedupe_paths, _emit_progress
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from .llm_runner import reachability_response_payload
 from .llm_schemas import ReachabilityConfirmationResponseModel
+from .limits import CONFIRMATION_MAX_TOKENS, CONFIRMATION_PATH_BATCH_SIZE
 from .progress import ReachabilityProgress as Progress
 from .source_context import _read_function_body
 from .workers import run_reachability_jobs
@@ -123,16 +124,11 @@ class VulnerabilityConfirmer:
         model,
         usage_runtime,
         codebase_path,
-        *,
-        max_tokens=4096,
-        options=None,
+        options,
     ):
-        self._p = llm_provider
         self._m = model
-        self._u = usage_runtime
         self._cb = os.path.abspath(codebase_path)
-        self._t = max_tokens
-        self._reasoning_effort = options.reasoning_effort if options else None
+        self._reasoning_effort = options.reasoning_effort
         self._runner = JsonPromptRunner(llm_provider, usage_runtime)
 
     def _path_nodes(self, batch, graph):
@@ -176,34 +172,32 @@ class VulnerabilityConfirmer:
                 section.append(f"\n--- {u} (line {n.line_number}) ---\n{body}")
         return "\n".join(section)
 
-    def _confirmation_request(
+    def _invoke_confirmation(
         self,
-        *,
         system_prompt,
         user_prompt,
         variables,
         label,
         batch_size,
     ):
-        return JsonPromptRequest(
-            model=self._m,
-            max_tokens=self._t,
-            temperature=0.1,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            variables=variables,
-            parse=reachability_response_payload,
-            logger=logger,
-            label=label,
-            batch_size=batch_size,
-            invalid_message="expected findings list",
-            final_keep_message="keeping this confirmation batch empty",
-            response_model=ReachabilityConfirmationResponseModel,
-            reasoning_effort=self._reasoning_effort,
+        return self._runner.invoke(
+            JsonPromptRequest(
+                model=self._m,
+                max_tokens=CONFIRMATION_MAX_TOKENS,
+                temperature=0.1,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                variables=variables,
+                parse=reachability_response_payload,
+                logger=logger,
+                label=label,
+                batch_size=batch_size,
+                invalid_message="expected findings list",
+                final_keep_message="keeping this confirmation batch empty",
+                response_model=ReachabilityConfirmationResponseModel,
+                reasoning_effort=self._reasoning_effort,
+            )
         )
-
-    def _invoke_confirmation(self, **request_kwargs):
-        return self._runner.invoke(self._confirmation_request(**request_kwargs))
 
     def _path_confirmation_variables(self, batch, graph):
         return {
@@ -241,23 +235,16 @@ class VulnerabilityConfirmer:
             ),
         }
 
-    def _run_batches(
-        self,
-        batches,
-        worker,
-        *,
-        max_workers,
-        progress_callback=None,
-    ):
+    def _run_batches(self, batches, worker, options):
         results = []
         batch_results = run_reachability_jobs(
             batches,
             lambda item: worker(item[1]),
-            max_workers=max_workers,
+            max_workers=options.max_workers,
             label="Reachability confirmation",
             result_key=lambda item: item[0],
             on_complete=lambda key, completed, total: _emit_progress(
-                progress_callback,
+                options.progress_callback,
                 Progress.CONFIRMATION_PROGRESS,
                 completed=completed,
                 total=total,
@@ -273,36 +260,29 @@ class VulnerabilityConfirmer:
         self,
         paths,
         graph,
-        *,
-        options=None,
-        max_workers=1,
-        progress_callback=None,
+        options,
     ):
         if not paths:
             return []
-        max_workers, progress_callback = self._execution_options(
-            options,
-            max_workers,
-            progress_callback,
-        )
         groups = defaultdict(list)
         for p in paths:
             groups[p.sink].append(p)
         batches = [
             (sink_name, batch)
             for sink_name, group_paths in groups.items()
-            for batch in _chunked(group_paths, 8)
+            for batch in _chunked(group_paths, CONFIRMATION_PATH_BATCH_SIZE)
         ]
         total = len(batches)
-        _emit_progress(progress_callback, Progress.CONFIRMATION_START, total=total)
+        _emit_progress(
+            options.progress_callback, Progress.CONFIRMATION_START, total=total
+        )
         findings = self._run_batches(
             batches,
             lambda batch: self._confirm_batch(batch, graph),
-            max_workers=max_workers,
-            progress_callback=progress_callback,
+            options,
         )
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             Progress.CONFIRMATION_DONE,
             confirmed=len(findings),
         )
@@ -319,7 +299,7 @@ class VulnerabilityConfirmer:
         )
         return self._parse_confirm(raw, batch, graph)
 
-    def _parse_confirm(self, raw, batch, graph, *, target_file=None):
+    def _parse_confirm(self, raw, batch, graph, target_file=None):
         parsed = reachability_response_payload(raw)
         if not isinstance(parsed, dict):
             return []
@@ -371,23 +351,18 @@ class VulnerabilityConfirmer:
         target_file,
         paths,
         graph,
-        *,
-        options=None,
-        max_workers=1,
-        progress_callback=None,
+        options,
     ):
         paths = _dedupe_paths(paths)
         if not paths:
             return []
-        max_workers, progress_callback = self._execution_options(
-            options,
-            max_workers,
-            progress_callback,
-        )
-        batches = [(target_file, batch) for batch in _chunked(paths, 8)]
+        batches = [
+            (target_file, batch)
+            for batch in _chunked(paths, CONFIRMATION_PATH_BATCH_SIZE)
+        ]
 
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             Progress.CONFIRMATION_START,
             total=len(batches),
             file=target_file,
@@ -395,21 +370,15 @@ class VulnerabilityConfirmer:
         findings = self._run_batches(
             batches,
             lambda batch: self._confirm_file_batch(target_file, batch, graph),
-            max_workers=max_workers,
-            progress_callback=progress_callback,
+            options,
         )
         _emit_progress(
-            progress_callback,
+            options.progress_callback,
             Progress.CONFIRMATION_DONE,
             confirmed=len(findings),
             file=target_file,
         )
         return findings
-
-    def _execution_options(self, options, max_workers, progress_callback):
-        if options is None:
-            return max_workers, progress_callback
-        return options.max_workers, options.progress_callback
 
     def _confirm_file_batch(self, target_file, batch, graph):
         raw = self._invoke_confirmation(
@@ -419,4 +388,4 @@ class VulnerabilityConfirmer:
             label="File reachability confirmation",
             batch_size=len(batch),
         )
-        return self._parse_confirm(raw, batch, graph, target_file=target_file)
+        return self._parse_confirm(raw, batch, graph, target_file)

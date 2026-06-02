@@ -5,6 +5,11 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from .limits import (
+    SUPPLEMENTARY_CANDIDATE_INTRA_PER_FUNCTION_CHARS,
+    SUPPLEMENTARY_CANDIDATE_MAX_TOTAL_CHARS,
+    SUPPLEMENTARY_CANDIDATE_SEMANTIC_PER_FUNCTION_CHARS,
+)
 from .supplementary_prompts import (
     _CLASSIC_C_SINK_SYS,
     _COUNTER_SYMMETRY_SYS,
@@ -87,8 +92,18 @@ def _lens_spec(name: str, kind: str, method: str, analysis_type: str):
         method_name=method,
         sys_prompt=_PROMPTS.get(analysis_type, ""),
         analysis_type=analysis_type,
-        max_total_chars=50000 if candidate_intra or candidate_semantic else 0,
-        per_fn_chars=5000 if candidate_intra else 4000 if candidate_semantic else 0,
+        max_total_chars=(
+            SUPPLEMENTARY_CANDIDATE_MAX_TOTAL_CHARS
+            if candidate_intra or candidate_semantic
+            else 0
+        ),
+        per_fn_chars=(
+            SUPPLEMENTARY_CANDIDATE_INTRA_PER_FUNCTION_CHARS
+            if candidate_intra
+            else SUPPLEMENTARY_CANDIDATE_SEMANTIC_PER_FUNCTION_CHARS
+            if candidate_semantic
+            else 0
+        ),
         sinks_only=analysis_type == "classic_c_sink",
         parser="semantic" if candidate_semantic else "intra",
     )

@@ -41,6 +41,7 @@ class ReachabilityGraphCache:
     def ensure_graph(
         self,
         *,
+        files=None,
         options=None,
         progress_callback=None,
         source_functions=None,
@@ -58,7 +59,10 @@ class ReachabilityGraphCache:
         )
         with self._lock:
             if self._base_graph is None:
-                self._base_graph = self.build_graph(progress_callback=progress_callback)
+                self._base_graph = self.build_graph(
+                    files=files,
+                    progress_callback=progress_callback,
+                )
             graph = self._graphs.get(key)
             if graph is None:
                 graph = self._base_graph.copy()
@@ -74,6 +78,7 @@ class ReachabilityGraphCache:
     def get_codebase_graph_and_paths(
         self,
         *,
+        files=None,
         options=None,
         max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         progress_callback=None,
@@ -90,6 +95,7 @@ class ReachabilityGraphCache:
             max_path_length = options.max_path_length
         max_path_length = int(max_path_length or DEFAULT_REACHABILITY_MAX_PATH_LENGTH)
         graph = self.ensure_graph(
+            files=files,
             options=options,
             progress_callback=progress_callback,
             source_functions=source_functions,

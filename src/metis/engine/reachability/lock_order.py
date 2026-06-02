@@ -15,6 +15,8 @@ from metis.engine.analysis.c_family_analyzer_common import (
 from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
 
+from .limits import LOCK_ORDER_MAX_CONFLICTS
+
 _LOCK_CALLS = frozenset(
     "pthread_mutex_lock mutex_lock spin_lock spin_lock_irqsave spin_lock_irq".split()
 )
@@ -122,7 +124,7 @@ def _extract_lock_conflicts(graph, codebase_path):
                     continue
                 seen.add(key)
                 conflicts.append((a, b, node_a, line_a, node_b, line_b))
-                if len(conflicts) >= 40:
+                if len(conflicts) >= LOCK_ORDER_MAX_CONFLICTS:
                     return conflicts
     return conflicts
 

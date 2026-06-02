@@ -68,7 +68,7 @@ class ReachabilityReviewBackend:
             default_workers=self._config.max_workers,
         )
 
-    def codebase_reviews(self, *, progress_callback=None):
+    def codebase_reviews(self, *, files=None, progress_callback=None):
         with self._cache_condition:
             if self._cache is not None:
                 return list(self._cache)
@@ -84,7 +84,7 @@ class ReachabilityReviewBackend:
                 progress_callback=progress_callback,
                 codebase=True,
             )
-            cache = self._service.review_codebase(options=options)
+            cache = self._service.review_codebase(options=options, files=files)
         except Exception:
             with self._cache_condition:
                 self._cache_building = False

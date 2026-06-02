@@ -13,14 +13,14 @@ from .graph_utils import (
     _file_focus_path_sort_key,
     _node_sort_key,
 )
+from .limits import (
+    FILE_FOCUS_MAX_OUTGOING_CONTEXT_PATHS,
+    FILE_FOCUS_MAX_OUTGOING_PATHS_PER_TARGET,
+    FILE_FOCUS_MAX_SOURCE_PATH_VARIANTS,
+    FILE_FOCUS_MAX_SOURCE_PATHS_PER_TARGET,
+    FILE_FOCUS_MAX_SOURCE_TO_FILE_PATHS,
+)
 from .domain import ReachabilityPath
-
-
-DEFAULT_MAX_SOURCE_TO_FILE_PATHS = 64
-DEFAULT_MAX_SOURCE_PATHS_PER_TARGET = 10
-DEFAULT_MAX_SOURCE_PATH_VARIANTS = 2
-DEFAULT_MAX_OUTGOING_CONTEXT_PATHS = 24
-DEFAULT_MAX_OUTGOING_PATHS_PER_TARGET = 4
 
 
 @dataclass
@@ -38,16 +38,16 @@ class FileFocusBuilder:
         graph,
         *,
         max_path_length: int = DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
-        max_incoming_paths: int | None = DEFAULT_MAX_SOURCE_TO_FILE_PATHS,
-        max_incoming_paths_per_target: int = DEFAULT_MAX_SOURCE_PATHS_PER_TARGET,
-        max_path_variants_per_source_target: int = DEFAULT_MAX_SOURCE_PATH_VARIANTS,
-        max_outgoing_context_paths: int = DEFAULT_MAX_OUTGOING_CONTEXT_PATHS,
-        max_outgoing_paths_per_target: int = DEFAULT_MAX_OUTGOING_PATHS_PER_TARGET,
+        max_incoming_paths: int | None = FILE_FOCUS_MAX_SOURCE_TO_FILE_PATHS,
+        max_incoming_paths_per_target: int = FILE_FOCUS_MAX_SOURCE_PATHS_PER_TARGET,
+        max_path_variants_per_source_target: int = FILE_FOCUS_MAX_SOURCE_PATH_VARIANTS,
+        max_outgoing_context_paths: int = FILE_FOCUS_MAX_OUTGOING_CONTEXT_PATHS,
+        max_outgoing_paths_per_target: int = FILE_FOCUS_MAX_OUTGOING_PATHS_PER_TARGET,
     ):
         self._graph = graph
         self._max_path_length = max(1, int(max_path_length or 1))
         if max_incoming_paths is None:
-            max_incoming_paths = DEFAULT_MAX_SOURCE_TO_FILE_PATHS
+            max_incoming_paths = FILE_FOCUS_MAX_SOURCE_TO_FILE_PATHS
         self._max_incoming_paths = max(0, int(max_incoming_paths or 0))
         self._max_incoming_paths_per_target = max(
             1, int(max_incoming_paths_per_target or 1)

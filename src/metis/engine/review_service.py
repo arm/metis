@@ -17,6 +17,8 @@ from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
 from .options import ReviewOptions, coerce_review_options
+from .reachability.progress import ReachabilityProgress as Progress
+from .reachability.progress import emit_progress
 from .repository import EngineRepository
 from .review_reachability import ReachabilityReviewBackend
 from .review_validation import ReviewFindingValidator
@@ -56,11 +58,12 @@ class ReviewService:
             include_suffixed_sources=not options.use_retrieval_context
         )
 
-    def _get_reachability_reviews(self, *, progress_callback=None):
+    def _get_reachability_reviews(self, *, files=None, progress_callback=None):
         if self._reachability_backend is None:
             return []
         return self._reachability_backend.codebase_reviews(
-            progress_callback=progress_callback
+            files=files,
+            progress_callback=progress_callback,
         )
 
     def _finalize_single_review_result(self, result):
@@ -286,7 +289,8 @@ class ReviewService:
             assert reachability_backend is not None
             try:
                 results = self._get_reachability_reviews(
-                    progress_callback=progress_callback
+                    files=files,
+                    progress_callback=progress_callback,
                 )
             except Exception:
                 logger.debug(
@@ -295,8 +299,18 @@ class ReviewService:
                 )
                 reachability_failed = True
             else:
+                emit_progress(
+                    progress_callback,
+                    Progress.REVIEW_OUTPUT_AGGREGATION_START,
+                    files=len(results),
+                )
                 results = self.aggregate_review_results({"reviews": results}).get(
                     "reviews", results
+                )
+                emit_progress(
+                    progress_callback,
+                    Progress.REVIEW_OUTPUT_AGGREGATION_DONE,
+                    files=len(results),
                 )
                 for result in results:
                     yield result

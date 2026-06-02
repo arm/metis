@@ -8,11 +8,12 @@ import hashlib
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATHS
 
 from .graph import ReachabilityGraph
+from .limits import (
+    AUTO_CONFIRMATION_MAX_ENDPOINTS,
+    AUTO_CONFIRMATION_MAX_PATHS,
+    AUTO_CONFIRMATION_PATHS_PER_ENDPOINT,
+)
 from .progress import emit_progress
-
-_AUTO_CONFIRMATION_MAX_PATHS = 48
-_AUTO_CONFIRMATION_MAX_ENDPOINTS = 12
-_AUTO_CONFIRMATION_PATHS_PER_ENDPOINT = 4
 
 
 def _emit_progress(callback, event, **payload):
@@ -155,7 +156,7 @@ def select_confirmation_paths(
     paths = _dedupe_paths(paths)
     if max_paths and int(max_paths) > 0:
         return paths[: int(max_paths)]
-    if len(paths) <= _AUTO_CONFIRMATION_MAX_PATHS:
+    if len(paths) <= AUTO_CONFIRMATION_MAX_PATHS:
         return paths
 
     indexed = list(enumerate(paths))
@@ -165,16 +166,16 @@ def select_confirmation_paths(
     for original_index, path in indexed:
         endpoint = path.sink
         endpoint_count = endpoint_counts.get(endpoint, 0)
-        if endpoint_count >= _AUTO_CONFIRMATION_PATHS_PER_ENDPOINT:
+        if endpoint_count >= AUTO_CONFIRMATION_PATHS_PER_ENDPOINT:
             continue
         if (
-            len(endpoint_counts) >= _AUTO_CONFIRMATION_MAX_ENDPOINTS
+            len(endpoint_counts) >= AUTO_CONFIRMATION_MAX_ENDPOINTS
             and endpoint not in endpoint_counts
         ):
             continue
         endpoint_counts[endpoint] = endpoint_count + 1
         selected.append((original_index, path))
-        if len(selected) >= _AUTO_CONFIRMATION_MAX_PATHS:
+        if len(selected) >= AUTO_CONFIRMATION_MAX_PATHS:
             break
 
     selected.sort(key=lambda item: item[0])

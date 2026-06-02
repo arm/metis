@@ -10,17 +10,24 @@ from metis.utils import read_file_content
 
 from .finding_values import _safe_int
 from .domain import FunctionNode
+from .limits import (
+    FUNCTION_BODY_DEFAULT_CHARS,
+    FUNCTION_BODY_FALLBACK_LINES,
+    FUNCTION_BODY_SCAN_LINES,
+    SOURCE_CONTEXT_MAX_TOTAL_CHARS,
+    SOURCE_CONTEXT_PER_FUNCTION_CHARS,
+)
 
 
-def _read_function_body(codebase_path, node, max_chars=3000):
+def _read_function_body(codebase_path, node, max_chars=FUNCTION_BODY_DEFAULT_CHARS):
     content = read_file_content(os.path.join(codebase_path, node.file_path))
     if not content:
         return ""
     fl = content.splitlines()
     start = max(0, node.line_number - 1)
-    end = min(len(fl), start + 80)
+    end = min(len(fl), start + FUNCTION_BODY_FALLBACK_LINES)
     depth, opened = 0, False
-    for i in range(start, min(len(fl), start + 300)):
+    for i in range(start, min(len(fl), start + FUNCTION_BODY_SCAN_LINES)):
         for ch in fl[i]:
             if ch == "{":
                 depth += 1
@@ -35,7 +42,10 @@ def _read_function_body(codebase_path, node, max_chars=3000):
 
 
 def _build_file_grouped_node_chunks(
-    codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
+    codebase_path,
+    nodes,
+    max_total_chars=SOURCE_CONTEXT_MAX_TOTAL_CHARS,
+    per_fn_chars=SOURCE_CONTEXT_PER_FUNCTION_CHARS,
 ):
     by_file = defaultdict(list)
     for fn in sorted(
@@ -103,7 +113,10 @@ def _build_file_grouped_node_chunks(
 
 
 def _build_file_grouped_chunks(
-    codebase_path, nodes, max_total_chars=60000, per_fn_chars=3000
+    codebase_path,
+    nodes,
+    max_total_chars=SOURCE_CONTEXT_MAX_TOTAL_CHARS,
+    per_fn_chars=SOURCE_CONTEXT_PER_FUNCTION_CHARS,
 ):
     return [
         text

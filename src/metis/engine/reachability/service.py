@@ -19,6 +19,7 @@ from .graph_utils import (
     graph_fingerprint,
     select_confirmation_paths,
 )
+from .limits import FINAL_ADJUDICATION_MAX_TOKENS
 from .file_focus import FileFocusBuilder
 from .domain import VulnerabilityFinding
 from .options import ReachabilityReviewOptions
@@ -96,7 +97,7 @@ class TreeSitterReachabilityService:
                 relative_target,
                 source_to_file_paths,
                 graph,
-                options=options,
+                options,
             )
             if source_to_file_paths
             else []
@@ -137,9 +138,13 @@ class TreeSitterReachabilityService:
         self,
         *,
         options: ReachabilityReviewOptions,
+        files=None,
     ):
         options = self._review_options(options)
-        graph, paths = self._graphs.get_codebase_graph_and_paths(options=options)
+        graph, paths = self._graphs.get_codebase_graph_and_paths(
+            files=files,
+            options=options,
+        )
         if graph.node_count() == 0:
             return []
         selected_paths = []
@@ -166,7 +171,7 @@ class TreeSitterReachabilityService:
             self._confirmer(model, options).confirm_paths(
                 selected_paths,
                 graph,
-                options=options,
+                options,
             )
             if selected_paths
             else []
@@ -177,6 +182,10 @@ class TreeSitterReachabilityService:
             graph,
             options,
             model=model,
+            progress_counts={
+                "supplementary_findings": len(supplementary),
+                "path_findings": len(path_findings),
+            },
         )
 
         reviews = group_findings_as_reviews(
@@ -216,7 +225,7 @@ class TreeSitterReachabilityService:
         return self._runner.invoke(
             JsonPromptRequest(
                 model=model,
-                max_tokens=6000,
+                max_tokens=FINAL_ADJUDICATION_MAX_TOKENS,
                 temperature=0.1,
                 system_prompt=FINAL_CONSOLIDATION_SYSTEM_PROMPT,
                 user_prompt="Candidate findings JSON:\n{candidate_findings}",
@@ -289,18 +298,49 @@ class TreeSitterReachabilityService:
         *,
         model,
         target_file=None,
+        progress_counts=None,
     ):
-        return self._finalizer.finalize(
+        progress_counts = dict(progress_counts or {})
+        _emit_progress(
+            options.progress_callback,
+            Progress.FINDINGS_FINALIZATION_START,
+            candidates=len(findings),
+            file=target_file,
+            **progress_counts,
+        )
+
+        def _adjudicate_candidates(candidates):
+            _emit_progress(
+                options.progress_callback,
+                Progress.FINDINGS_FINALIZATION_PROGRESS,
+                file=target_file,
+                **progress_counts,
+            )
+            return self.adjudicate_final_findings(
+                candidates,
+                model=model,
+                reasoning_effort=options.reasoning_effort,
+            )
+
+        finalized = self._finalizer.finalize(
             findings,
             graph,
             options=options,
             target_file=target_file,
-            final_adjudicator=lambda candidates: self.adjudicate_final_findings(
-                candidates,
-                model=model,
-                reasoning_effort=options.reasoning_effort,
-            ),
+            final_adjudicator=_adjudicate_candidates,
         )
+        deduped, total_before, removed = finalized
+        _emit_progress(
+            options.progress_callback,
+            Progress.FINDINGS_FINALIZATION_DONE,
+            candidates=len(findings),
+            raw_findings=total_before,
+            deduped_findings=len(deduped),
+            removed_findings=removed,
+            file=target_file,
+            **progress_counts,
+        )
+        return finalized
 
     def _review_model(self, options: ReachabilityReviewOptions):
         return options.confirmation_model or self._config.llama_query_model
@@ -311,7 +351,7 @@ class TreeSitterReachabilityService:
             model,
             self._usage_runtime,
             self._config.codebase_path,
-            options=options,
+            options,
         )
 
     def _normalize_target_file(self, file_path):

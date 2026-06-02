@@ -256,6 +256,7 @@ def iterate_with_progress(total, iterable):
 def build_standard_progress(*, transient: bool):
     return Progress(
         SpinnerColumn(style="cyan"),
+        TextColumn("{task.description}"),
         BarColumn(bar_width=None, complete_style="green", finished_style="green"),
         TaskProgressColumn(),
         TextColumn("[bright_black]elapsed"),

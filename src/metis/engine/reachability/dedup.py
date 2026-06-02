@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from .finding_accessors import _finding_file, _finding_function
 from .finding_values import _safe_int
+from .limits import FINAL_DEDUP_BATCH_SIZE, FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE
 
 FINAL_CONSOLIDATION_SYSTEM_PROMPT = """You deduplicate reachability security findings before the final report.
 
@@ -83,9 +84,6 @@ Return JSON only:
   ]
 }"""
 
-_FINAL_DEDUP_BATCH_SIZE = 40
-_FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE = 120
-
 
 class FindingConsolidator:
     @staticmethod
@@ -146,11 +144,11 @@ def _apply_final_adjudication(findings, adjudicator, *, representative_scope="fi
     if (
         representative_scope
         and len(representative_payloads) > 1
-        and len(payloads) > _FINAL_DEDUP_BATCH_SIZE
+        and len(payloads) > FINAL_DEDUP_BATCH_SIZE
     ):
         for batch in _adjudication_batches(
             representative_payloads,
-            batch_size=_FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE,
+            batch_size=FINAL_DEDUP_REPRESENTATIVE_BATCH_SIZE,
             scope=representative_scope,
         ):
             decision = adjudicator(batch)
@@ -172,9 +170,11 @@ def _apply_final_adjudication(findings, adjudicator, *, representative_scope="fi
 def _adjudication_batches(
     payloads,
     *,
-    batch_size=_FINAL_DEDUP_BATCH_SIZE,
+    batch_size=FINAL_DEDUP_BATCH_SIZE,
     scope="function",
 ):
+    if len(payloads) < 2:
+        return []
     if len(payloads) <= batch_size:
         return [payloads]
     batches = []
@@ -182,12 +182,15 @@ def _adjudication_batches(
     for payload in sorted(payloads, key=_payload_sort_key):
         by_scope[_payload_scope_key(payload, scope)].append(payload)
     for scope_payloads in by_scope.values():
+        if len(scope_payloads) < 2:
+            continue
         batches.extend(_chunk_payloads(scope_payloads, batch_size))
     return batches
 
 
 def _chunk_payloads(payloads, size):
-    return [payloads[index : index + size] for index in range(0, len(payloads), size)]
+    chunks = [payloads[index : index + size] for index in range(0, len(payloads), size)]
+    return [chunk for chunk in chunks if len(chunk) > 1]
 
 
 def _payload_scope_key(payload, scope):

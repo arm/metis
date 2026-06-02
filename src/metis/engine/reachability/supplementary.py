@@ -11,6 +11,7 @@ from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from .llm_runner import reachability_response_payload
 from .domain_hints import format_domain_hints_for_prompt, normalize_domain_hints
 from .graph_utils import _emit_progress
+from .limits import SUPPLEMENTARY_AUDIT_MAX_TOKENS, SUPPLEMENTARY_STRONG_MAX_TOKENS
 from .llm_schemas import ReachabilityFindingResponseModel
 from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
@@ -32,8 +33,8 @@ class SupplementaryAnalyzer:
         usage_runtime,
         codebase_path,
         *,
-        audit_max_tokens=8192,
-        strong_max_tokens=16384,
+        audit_max_tokens=SUPPLEMENTARY_AUDIT_MAX_TOKENS,
+        strong_max_tokens=SUPPLEMENTARY_STRONG_MAX_TOKENS,
         options=None,
     ):
         self._p = llm_provider
