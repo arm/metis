@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, confloat, constr, field_validator, ConfigDict
 
 
-_CWE_PATTERN = r"^(CWE-[1-9]\d*|CWE-Unknown)$"
+_CWE_PATTERN = r"^(CWE-[1-9][0-9]*|CWE-Unknown)$"
 _PROMPT_INDENT = "    "
 
 

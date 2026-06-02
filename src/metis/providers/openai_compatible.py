@@ -25,13 +25,21 @@ _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelT
 
 
 class OpenAICompatibleProvider(LLMProvider):
-    def __init__(self, config: OpenAICompatibleProviderConfig) -> None:
+    def __init__(
+        self,
+        config: OpenAICompatibleProviderConfig,
+        *,
+        default_base_url: str | None = None,
+        default_api_key: str | None = None,
+        force_openai_like: bool | None = None,
+    ) -> None:
         self.config = config
         self.api_key = config.get("llm_api_key")
         self.base_url = (
             config.get("openai_api_base")
             or config.get("api_base")
             or config.get("base_url")
+            or default_base_url
         )
         self.default_headers = dict(
             config.get("openai_default_headers") or config.get("default_headers") or {}
@@ -51,6 +59,24 @@ class OpenAICompatibleProvider(LLMProvider):
         self.docs_embedding_extra_kwargs = dict(
             config.get("docs_embedding_extra_kwargs", {})
         )
+        # Apply default API key when none provided
+        if not self.api_key and default_api_key:
+            self.api_key = default_api_key
+        # Record force_openai_like preference so _uses_custom_openai_base can see it
+        if force_openai_like is not None:
+            self.config["force_openai_like"] = True
+
+        # Validate required configuration
+        if not self.query_model:
+            raise ValueError(
+                "Missing query model configuration "
+                "(set 'model' or 'llama_query_model' in llm_provider config)"
+            )
+        if not self.code_embedding_model or not self.docs_embedding_model:
+            raise ValueError(
+                "Missing embedding model configuration "
+                "(set 'code_embedding_model' and 'docs_embedding_model')"
+            )
 
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
