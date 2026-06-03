@@ -248,13 +248,7 @@ class ReviewService:
             if kwargs:
                 return review_fn(path, **kwargs)
 
-        if options.use_retrieval_context:
-            return review_fn(path)
-
-        raise TypeError(
-            "review_file_func must accept 'options' or 'use_retrieval_context' "
-            "when retrieval context is disabled"
-        )
+        return review_fn(path)
 
     def review_code(
         self,

@@ -4,6 +4,7 @@
 import logging
 from functools import partial
 from typing import Any
+from typing import cast
 
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
@@ -55,7 +56,7 @@ def _build_body_text(state: ReviewState) -> str:
     snippet = state.get("snippet", "") or ""
     context = state.get("context", "") or ""
     mode = state.get("mode", "file")
-    include_context = bool(state.get("use_retrieval_context", True))
+    include_context = bool(state.get("use_retrieval_context", False))
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -98,15 +99,15 @@ def _post_process_reviews(
 
 
 def review_node_retrieve(state: ReviewState) -> ReviewState:
-    if not state.get("use_retrieval_context", True):
-        new_state: ReviewState = dict(state)
+    if not state.get("use_retrieval_context", False):
+        new_state: ReviewState = state.copy()
         new_state["context"] = ""
         return new_state
     cp = state.get("context_prompt", "")
     code = retrieve_text(state.get("retriever_code"), cp)
     docs = retrieve_text(state.get("retriever_docs"), cp)
     context = synthesize_context(code, docs)
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["context"] = context
     return new_state
 
@@ -121,7 +122,7 @@ def review_node_build_prompt(
     schema_prompt_section: str,
     hardware_cwe_guidance: str = "",
 ) -> ReviewState:
-    include_relevant_context = bool(state.get("use_retrieval_context", True))
+    include_relevant_context = bool(state.get("use_retrieval_context", False))
     system = build_review_system_prompt(
         language_prompts,
         default_prompt_key,
@@ -132,7 +133,7 @@ def review_node_build_prompt(
         hardware_cwe_guidance,
         include_relevant_context=include_relevant_context,
     )
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["system_prompt"] = system
     return new_state
 
@@ -144,7 +145,7 @@ def review_node_llm(
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
     reviews = invoke_review(system_prompt, body_text) or []
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
     return new_state
 
@@ -156,7 +157,7 @@ def review_node_parse(state: ReviewState) -> ReviewState:
         state.get("file_path", "") or "",
     )
 
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = normalized
     return new_state
 
@@ -220,7 +221,7 @@ class ReviewGraph:
         if cached is not None:
             return cached
 
-        graph = StateGraph(ReviewState)
+        graph = StateGraph(cast(Any, ReviewState))
         retrieve = review_node_retrieve
         build_prompt = partial(
             review_node_build_prompt,
@@ -264,7 +265,7 @@ class ReviewGraph:
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
-        use_retrieval_context = bool(request.get("use_retrieval_context", True))
+        use_retrieval_context = bool(request.get("use_retrieval_context", False))
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
