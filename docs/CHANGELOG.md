@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-06-03)
+
+
+### Features
+
+* **cli:** add --ignore-index support ([#182](https://github.com/arm/metis/issues/182)) ([879b344](https://github.com/arm/metis/commit/879b344fc4967baf3c694b506feb2800bf0385ca))
+* **plugins:** add AArch64 assembly support ([#204](https://github.com/arm/metis/issues/204)) ([b455b72](https://github.com/arm/metis/commit/b455b720dd4fccd11be439484724e5b4d5293359))
+* **plugins:** Support plugin-owned wildcard source suffixes ([#195](https://github.com/arm/metis/issues/195)) ([be0a882](https://github.com/arm/metis/commit/be0a8828fe6be7f094f78449f04afda8aa3d3677))
+* **refactor:** decouple engine workflows and centralize tool policies ([#180](https://github.com/arm/metis/issues/180)) ([3c7a3bf](https://github.com/arm/metis/commit/3c7a3bf9c0c1c69ade73716c22f26de519f0233f))
+* **usage:** Add token usage tracking ([#179](https://github.com/arm/metis/issues/179)) ([11eea95](https://github.com/arm/metis/commit/11eea95d1db96d76d19dc8b391cfdeac65954a1d))
+* **verilog:** Add Verilog support ([#168](https://github.com/arm/metis/issues/168)) ([a457783](https://github.com/arm/metis/commit/a45778318a6b8870b87ee5efb229116a5549a53d))
+
+
+### Bug Fixes
+
+* **chroma:** serialize local store and query engine initialization ([#171](https://github.com/arm/metis/issues/171)) ([a74d5cf](https://github.com/arm/metis/commit/a74d5cf68ffb8dba48a60ee9e394cf41e0e25e2e))
+* **config:** Fix CLI version handling and validate provider configuration ([#200](https://github.com/arm/metis/issues/200)) ([15d09f0](https://github.com/arm/metis/commit/15d09f05d14b9d99ef9643e7f6159f3b15293eb0))
+* **config:** Support metis.yml config fallback ([#183](https://github.com/arm/metis/issues/183)) ([9af12b3](https://github.com/arm/metis/commit/9af12b32981153e13c7fe3e06bf3ba0ddb70eb43))
+* **config:** support OpenAI custom base URL ([#210](https://github.com/arm/metis/issues/210)) ([2f3d5f0](https://github.com/arm/metis/commit/2f3d5f0983ec6d1ef19f421cfc7906c8db6bb3f9))
+* **index:** Exclude broken symlinks while indexing ([#196](https://github.com/arm/metis/issues/196)) ([c2a0934](https://github.com/arm/metis/commit/c2a0934f947a1e040994e88b7f1696b5a9a97974))
+* **metisignore:** support allowlist patterns consistently ([#181](https://github.com/arm/metis/issues/181)) ([cc42aba](https://github.com/arm/metis/commit/cc42abaf995f9a4eb5aef5a9d3e237310e73764e))
+* **providers:** use Responses API for OpenAI model paths ([#206](https://github.com/arm/metis/issues/206)) ([8726024](https://github.com/arm/metis/commit/872602497fb81cf10a826c3186f0e06e6918820b))
+* **review:** skip patch summaries when review_patch finds no issues ([#187](https://github.com/arm/metis/issues/187)) ([a771dc6](https://github.com/arm/metis/commit/a771dc62c746e98187c6411e9f5da5e956841d0e))
+* **tree-sitter:** Fix parser compatibility in triage and indexing ([#201](https://github.com/arm/metis/issues/201)) ([3747cc2](https://github.com/arm/metis/commit/3747cc2d5d5c3bb284c1d121f3215e63d8910c9a))
+* **triage:** avoid cross-thread drops of tree-sitter native nodes ([#208](https://github.com/arm/metis/issues/208)) ([d12208a](https://github.com/arm/metis/commit/d12208ae1556c24f3a7a89581b1255ff716109be))
+* **triage:** Prevent triage grep drift across environments ([#186](https://github.com/arm/metis/issues/186)) ([7ec8023](https://github.com/arm/metis/commit/7ec80230b879423e6a6b36a67a043c9185da1a6a))
+
+
+### Documentation
+
+* improve adding-new-provider.md ([#216](https://github.com/arm/metis/issues/216)) ([ffb00ba](https://github.com/arm/metis/commit/ffb00ba8bf81aa9b5f978b34f02c619dabea6411))
+* ollama: recommend llama3.1:8b chat model ([#212](https://github.com/arm/metis/issues/212)) ([613c898](https://github.com/arm/metis/commit/613c898859cb6795a0d43514d10ccab5e2841994))
+* ollama: recommend nomic-embed-text:v1.5 embedding model ([#211](https://github.com/arm/metis/issues/211)) ([759b61d](https://github.com/arm/metis/commit/759b61d77ebb486a79c203deffb00bffde3a5c7f))
+
 ## [1.3.0](https://github.com/arm/metis/compare/metis-v1.2.0...metis-v1.3.0) (2026-03-09)
 
 
