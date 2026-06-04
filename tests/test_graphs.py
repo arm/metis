@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from metis.engine.graphs.types import AskRequest
+from metis.engine.graphs.types import ReviewState
+from metis.engine.graphs.types import TriageState
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
     review_node_retrieve,
@@ -26,12 +29,12 @@ class DummyRetriever:
 
 def test_ask_graph_returns_code_and_docs():
     g = AskGraph(llm_provider=object(), llama_query_model="test-model")
-    req = {
+    req: AskRequest = {
         "question": "What is here?",
         "retriever_code": DummyRetriever("code"),
         "retriever_docs": DummyRetriever("docs"),
     }
-    out = g.ask(req)  # type: ignore[arg-type]
+    out = g.ask(req)
     assert isinstance(out, dict)
     assert "code" in out and "docs" in out
     assert "code context" in out["code"] or "code" in out["code"].lower()
@@ -40,12 +43,13 @@ def test_ask_graph_returns_code_and_docs():
 
 def test_review_nodes_pipeline_parses():
     # Initial minimal state
-    state = {
+    state: ReviewState = {
         "file_path": "a/file.c",
         "snippet": "int main(){}",
         "retriever_code": DummyRetriever("code"),
         "retriever_docs": DummyRetriever("docs"),
         "context_prompt": "Use file: {file_path}",
+        "use_retrieval_context": True,
     }
 
     # Step 1: retrieve context
@@ -100,7 +104,7 @@ def test_review_node_retrieve_no_index_skips_retrievers():
         def get_relevant_documents(self, _query):
             raise AssertionError("retriever should not be called")
 
-    state = {
+    state: ReviewState = {
         "file_path": "a/file.c",
         "snippet": "int main(){}",
         "retriever_code": _BoomRetriever(),
@@ -117,7 +121,7 @@ def test_review_node_retrieve_no_index_skips_retrievers():
 def test_review_node_llm_omits_context_section_in_no_index_mode():
     captured = {}
 
-    state = {
+    state: ReviewState = {
         "file_path": "foo.py",
         "snippet": "print('hello')",
         "context": "should not appear",
@@ -138,15 +142,15 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
 
 def test_triage_user_prompt_omits_rag_context_in_no_index_mode():
     prompt = _build_user_prompt(
-        {
-            "finding_rule_id": "R1",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_message": "msg",
-            "finding_snippet": "code",
-            "context": "should not appear",
-            "use_retrieval_context": False,
-        }
+        TriageState(
+            finding_rule_id="R1",
+            finding_file_path="a.c",
+            finding_line=1,
+            finding_message="msg",
+            finding_snippet="code",
+            context="should not appear",
+            use_retrieval_context=False,
+        )
     )
 
     assert "RAG Context:" not in prompt
@@ -169,21 +173,21 @@ def test_triage_node_llm_omits_context_wording_in_no_index_mode():
             return _Decision()
 
     triage_node_llm(
-        {
-            "finding_rule_id": "R1",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_message": "msg",
-            "finding_snippet": "code",
-            "context": "should not appear",
-            "use_retrieval_context": False,
-            "triage_system_prompt": "system",
-            "triage_decision_prompt": (
+        TriageState(
+            finding_rule_id="R1",
+            finding_file_path="a.c",
+            finding_line=1,
+            finding_message="msg",
+            finding_snippet="code",
+            context="should not appear",
+            use_retrieval_context=False,
+            triage_system_prompt="system",
+            triage_decision_prompt=(
                 "Given the finding details, RAG context, and tool outputs, return a final triage decision.\n\n"
                 "{triage_input}\n\nTool Outputs:\n{tool_outputs}\n"
             ),
-            "evidence_pack": "tools",
-        },
+            evidence_pack="tools",
+        ),
         decision_model=_DecisionModel(),
     )
 

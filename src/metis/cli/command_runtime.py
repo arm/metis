@@ -11,4 +11,3 @@ class CommandRuntime:
     command: str
     command_args: list[str]
     use_retrieval_context: bool
-    no_index_warning_emitted: bool = False

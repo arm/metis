@@ -9,7 +9,7 @@ from ..types import TriageState
 
 def _build_decision_prompt_template(state: TriageState) -> str:
     template = state.get("triage_decision_prompt", "") or ""
-    if state.get("use_retrieval_context", True):
+    if state.get("use_retrieval_context", False):
         return template
     return template.replace(
         "Given the finding details, RAG context, and tool outputs",
@@ -32,7 +32,7 @@ def _build_user_prompt(state: TriageState) -> str:
         f"Snippet:\n{state.get('finding_snippet', '')}\n\n",
         f"Finding Explanation:\n{explanation}\n\n",
     ]
-    if state.get("use_retrieval_context", True):
+    if state.get("use_retrieval_context", False):
         sections.append(f"RAG Context:\n{state.get('context', '')}\n")
     return "".join(sections)
 
@@ -65,7 +65,7 @@ def triage_node_llm(state: TriageState, *, decision_model) -> TriageState:
             decision_status="inconclusive",
             decision_reason=reason,
         )
-        new_state: TriageState = dict(state)
+        new_state: TriageState = state.copy()
         new_state["tool_transcript"] = state.get("evidence_pack", "") or ""
         new_state["decision_status"] = "inconclusive"
         new_state["decision_reason"] = reason
@@ -101,7 +101,7 @@ def triage_node_llm(state: TriageState, *, decision_model) -> TriageState:
         decision_reason=decision.reason,
     )
 
-    new_state: TriageState = dict(state)
+    new_state: TriageState = state.copy()
     new_state["tool_transcript"] = transcript
     new_state["decision_status"] = decision.status
     new_state["decision_reason"] = decision.reason

@@ -8,12 +8,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ReviewOptions:
-    use_retrieval_context: bool = True
+    use_retrieval_context: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class TriageOptions:
-    use_retrieval_context: bool = True
+    use_retrieval_context: bool = False
     include_triaged: bool = False
 
 
@@ -25,7 +25,7 @@ def coerce_review_options(
     if options is None:
         return ReviewOptions(
             use_retrieval_context=(
-                True if use_retrieval_context is None else use_retrieval_context
+                False if use_retrieval_context is None else use_retrieval_context
             )
         )
     if use_retrieval_context is None:
@@ -42,7 +42,7 @@ def coerce_triage_options(
     if options is None:
         return TriageOptions(
             use_retrieval_context=(
-                True if use_retrieval_context is None else use_retrieval_context
+                False if use_retrieval_context is None else use_retrieval_context
             ),
             include_triaged=(False if include_triaged is None else include_triaged),
         )
