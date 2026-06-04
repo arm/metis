@@ -262,8 +262,10 @@ def test_engine_exposes_focused_services_without_compat_aliases():
     results = list(engine.review.review_code())
 
     assert engine.repository is not None
+    assert engine.index_context is not None
     assert engine.review is not None
     assert engine.indexing is not None
+    assert engine.indexing is engine.index_context.indexing
     assert not hasattr(engine, "review_service")
     assert not hasattr(engine, "indexing_service")
     assert results == [{"file": "a.py"}]
