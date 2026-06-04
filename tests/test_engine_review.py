@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from metis.engine import MetisEngine
 from metis.engine.review_validation import (
     parse_review_validation_response,
     rescue_filtered_duplicate_cluster_representatives,
@@ -318,6 +319,32 @@ def test_review_file_default_skips_query_engine_init(engine, monkeypatch, tmp_pa
 
     assert result["reviews"] == []
     engine.vector_backend.get_query_engines.assert_not_called()
+
+
+def test_review_file_disables_retrieval_when_index_tool_disabled(
+    dummy_backend, dummy_llm, monkeypatch, tmp_path
+):
+    sample = tmp_path / "sample.py"
+    sample.write_text("print('hello')\n", encoding="utf-8")
+
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=dummy_backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+        enabled_tools=frozenset(),
+    )
+    dummy_backend.get_query_engines.reset_mock()
+    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
+
+    result = engine.review.review_file(str(sample))
+
+    assert result["reviews"] == []
+    dummy_backend.get_query_engines.assert_not_called()
 
 
 def test_review_patch_default_skips_query_engine_init(engine, monkeypatch, tmp_path):

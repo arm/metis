@@ -34,6 +34,7 @@ class ReviewService:
         repository: EngineRepository,
         get_query_engines: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
+        retrieval_available: Callable[[], bool] | None = None,
         reachability_service=None,
         reachability_settings: dict[str, Any] | None = None,
     ):
@@ -41,6 +42,7 @@ class ReviewService:
         self._repository = repository
         self._get_query_engines = get_query_engines
         self._review_graph_factory = review_graph_factory
+        self._retrieval_available = retrieval_available or (lambda: True)
         self._reachability_backend = (
             ReachabilityReviewBackend(
                 config,
@@ -52,8 +54,22 @@ class ReviewService:
             else None
         )
 
+    def _effective_options(
+        self,
+        options: ReviewOptions | None = None,
+        *,
+        use_retrieval_context: bool | None = None,
+    ) -> ReviewOptions:
+        options = coerce_review_options(
+            options,
+            use_retrieval_context=use_retrieval_context,
+        )
+        if options.use_retrieval_context and not self._retrieval_available():
+            return ReviewOptions(use_retrieval_context=False)
+        return options
+
     def get_code_files(self, options: ReviewOptions | None = None):
-        options = coerce_review_options(options)
+        options = self._effective_options(options)
         return self._repository.get_code_files(
             include_suffixed_sources=not options.use_retrieval_context
         )
@@ -121,7 +137,7 @@ class ReviewService:
         use_retrieval_context: bool | None = None,
         progress_callback=None,
     ):
-        options = coerce_review_options(
+        options = self._effective_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
@@ -170,7 +186,7 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
     ):
-        options = coerce_review_options(
+        options = self._effective_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
@@ -259,7 +275,7 @@ class ReviewService:
         use_retrieval_context: bool | None = None,
         progress_callback=None,
     ) -> Iterator[dict | None]:
-        options = coerce_review_options(
+        options = self._effective_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
@@ -350,7 +366,7 @@ class ReviewService:
         *,
         use_retrieval_context: bool | None = None,
     ):
-        options = coerce_review_options(
+        options = self._effective_options(
             options,
             use_retrieval_context=use_retrieval_context,
         )
