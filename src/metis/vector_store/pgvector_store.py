@@ -8,7 +8,8 @@ from metis.exceptions import (
     QueryEngineInitError,
     VectorSchemaError,
 )
-from metis.vector_store.base import BaseVectorStore, QueryEngineRetriever
+from metis.vector_store.base import BaseVectorStore
+from metis.vector_store.retrievers import LlamaIndexNodeRetriever, QueryAnswerRetriever
 from llama_index.vector_stores.postgres import PGVectorStore
 from sqlalchemy.engine.url import make_url
 
@@ -102,28 +103,22 @@ class PGVectorStoreImpl(BaseVectorStore):
                 callback_manager=callback_manager,
             )
 
-            llm_code = self._build_llm(
+            chat_model_kwargs = {"callbacks": callbacks} if callbacks else {}
+            retriever_code = QueryAnswerRetriever(
+                LlamaIndexNodeRetriever(
+                    index_code.as_retriever(similarity_top_k=similarity_top_k)
+                ),
                 llm_provider,
-                callback_manager=callback_manager,
-                callbacks=callbacks,
+                chat_model_kwargs=chat_model_kwargs,
             )
-            llm_docs = self._build_llm(
+            retriever_docs = QueryAnswerRetriever(
+                LlamaIndexNodeRetriever(
+                    index_docs.as_retriever(similarity_top_k=similarity_top_k)
+                ),
                 llm_provider,
-                callback_manager=callback_manager,
-                callbacks=callbacks,
+                chat_model_kwargs=chat_model_kwargs,
             )
-
-            qe_code = index_code.as_query_engine(
-                llm=llm_code,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-            )
-            qe_docs = index_docs.as_query_engine(
-                llm=llm_docs,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-            )
-            return (QueryEngineRetriever(qe_code), QueryEngineRetriever(qe_docs))
+            return (retriever_code, retriever_docs)
         except Exception as e:
             logger.error(f"Error creating PG query engines: {e}")
             raise QueryEngineInitError()

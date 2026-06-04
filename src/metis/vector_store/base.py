@@ -3,6 +3,8 @@
 
 from abc import ABC, abstractmethod
 
+from langchain_core.documents import Document
+
 
 class BaseVectorStore(ABC):
     @abstractmethod
@@ -45,11 +47,6 @@ class BaseVectorStore(ABC):
         return llm_class(**filtered_kwargs)
 
 
-class _Doc:
-    def __init__(self, text: str):
-        self.page_content = text
-
-
 class QueryEngineRetriever:
     """
     Adapter that wraps a LlamaIndex QueryEngine and exposes a
@@ -64,4 +61,4 @@ class QueryEngineRetriever:
         return str(getattr(res, "response", res))
 
     def get_relevant_documents(self, query: str):
-        return [_Doc(self._query_text(query))]
+        return [Document(page_content=self._query_text(query))]
