@@ -6,7 +6,11 @@ import tempfile
 import threading
 from unittest.mock import Mock
 from metis.engine import MetisEngine
-from metis.exceptions import PluginNotFoundError, QueryEngineInitError
+from metis.exceptions import (
+    PluginNotFoundError,
+    QueryEngineInitError,
+    ToolDisabledError,
+)
 from metis.usage import UsageRuntime
 
 
@@ -40,6 +44,7 @@ def test_init_and_get_query_engines_raises_on_missing_backend():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
     with pytest.raises(QueryEngineInitError):
         engine._init_and_get_query_engines()
@@ -98,6 +103,7 @@ def test_init_and_get_query_engines_is_thread_safe():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     results = []
@@ -132,6 +138,7 @@ def test_engine_passes_usage_callback_manager_to_embed_models():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     assert llm_provider.get_embed_model_code.call_args.kwargs == {
@@ -158,6 +165,7 @@ def test_create_query_engines_passes_usage_callback_manager():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     engine._create_query_engines(5)
@@ -189,6 +197,7 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     captured = {}
@@ -254,6 +263,7 @@ def test_engine_exposes_focused_services_without_compat_aliases():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     engine.review.review_code = Mock(return_value=iter([{"file": "a.py"}]))
@@ -263,6 +273,7 @@ def test_engine_exposes_focused_services_without_compat_aliases():
 
     assert engine.repository is not None
     assert engine.index_context is not None
+    assert engine.tools.index is engine.index_context
     assert engine.review is not None
     assert engine.indexing is not None
     assert engine.indexing is engine.index_context.indexing
@@ -290,6 +301,7 @@ def test_close_clears_query_cache_and_closes_backend():
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
@@ -303,3 +315,36 @@ def test_close_clears_query_cache_and_closes_backend():
 
     assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
     assert backend.get_query_engines.call_count == 2
+
+
+def test_disabled_index_tool_blocks_required_index_access():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.close = Mock()
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+        enabled_tools=set(),
+    )
+
+    assert engine.tools.index.enabled is False
+    with pytest.raises(ToolDisabledError):
+        engine._init_and_get_query_engines()
+    with pytest.raises(ToolDisabledError):
+        engine.indexing.count_index_items()
+
+    engine.close()
+
+    backend.init.assert_not_called()
+    backend.get_query_engines.assert_not_called()
+    backend.close.assert_not_called()

@@ -69,6 +69,7 @@ def engine(dummy_backend, dummy_llm):
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
 

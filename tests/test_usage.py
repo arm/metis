@@ -183,6 +183,7 @@ def test_index_codebase_records_embedding_usage(tmp_path):
         llama_query_model="gpt-test",
         similarity_top_k=3,
         response_mode="compact",
+        enabled_tools={"index"},
     )
 
     with engine.usage_command("index") as command:

@@ -29,6 +29,7 @@ def test_chroma_backend_indexing(tmp_path):
         "response_mode": "compact",
         "code_embedding_model": "test-code-embed",
         "docs_embedding_model": "test-docs-embed",
+        "enabled_tools": {"index"},
     }
 
     embed = MockEmbedding(embed_dim=8)
