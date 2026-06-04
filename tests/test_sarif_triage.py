@@ -236,7 +236,7 @@ def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
     )
     engine._triage_service.max_workers = 1
 
-    out = engine.triage_sarif_payload(payload, use_retrieval_context=False)
+    out = engine.triage_sarif_payload(payload)
 
     result = out["runs"][0]["results"][0]
     assert result["properties"]["metisTriaged"] is True
@@ -255,7 +255,7 @@ def test_triage_payload_raises_when_query_engine_init_fails(engine, monkeypatch)
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        engine.triage_sarif_payload(payload)
+        engine.triage_sarif_payload(payload, use_retrieval_context=True)
 
 
 def test_triage_request_propagates_source_metadata(engine, monkeypatch):

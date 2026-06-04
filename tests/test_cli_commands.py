@@ -115,7 +115,7 @@ def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):
     assert calls == ["count", "prepare", "finalize"]
 
 
-def test_run_triage_propagates_no_index_mode_and_warning(tmp_path, monkeypatch):
+def test_run_triage_propagates_no_index_mode_without_warning(tmp_path, monkeypatch):
     sarif_path = tmp_path / "input.sarif"
     sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
     captured = []
@@ -145,7 +145,7 @@ def test_run_triage_propagates_no_index_mode_and_warning(tmp_path, monkeypatch):
 
     commands.run_triage(_DummyEngine(), str(sarif_path), args, runtime)
 
-    assert any("Running without index" in message for message in captured)
+    assert not any("Running without index" in message for message in captured)
 
 
 def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
@@ -190,7 +190,7 @@ def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
 
     commands.run_review(engine, str(patch_file), args, runtime)
 
-    assert any("Running without index" in message for message in captured)
+    assert not any("Running without index" in message for message in captured)
 
 
 def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):

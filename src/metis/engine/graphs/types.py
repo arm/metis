@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional, TypedDict, Required, NotRequired
+from typing import Any
+from typing_extensions import NotRequired
+from typing_extensions import Required
+from typing_extensions import TypedDict
 
 
 class ReviewRequest(TypedDict):
@@ -9,17 +12,17 @@ class ReviewRequest(TypedDict):
     file_path: Required[str]
     snippet: Required[str]
     context_prompt: Required[str]
-    language_prompts: Required[Dict[str, str]]
+    language_prompts: Required[dict[str, str]]
 
     # Optional fields
     retriever_code: NotRequired[Any | None]
     retriever_docs: NotRequired[Any | None]
     default_prompt_key: NotRequired[str]
-    relative_file: NotRequired[Optional[str]]
+    relative_file: NotRequired[str | None]
     # Explicit mode: 'file' or 'patch'
     mode: NotRequired[str]
     # Optional original file contents for patch mode
-    original_file: NotRequired[Optional[str]]
+    original_file: NotRequired[str | None]
     use_retrieval_context: NotRequired[bool]
     debug_callback: NotRequired[Any]
 
@@ -38,9 +41,9 @@ class ReviewState(TypedDict, total=False):
     retriever_code: Any
     retriever_docs: Any
     context_prompt: str
-    relative_file: Optional[str]
+    relative_file: str | None
     mode: str
-    original_file: Optional[str]
+    original_file: str | None
     use_retrieval_context: bool
     debug_callback: Any
     # Derived
