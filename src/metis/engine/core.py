@@ -19,6 +19,7 @@ from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
+from .tools.selection import parse_engine_tools
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
 
@@ -74,6 +75,7 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
+        self.enabled_tools = parse_engine_tools(kwargs.get("enabled_tools"))
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -118,6 +120,7 @@ class MetisEngine:
             metisignore_file=self.metisignore_file,
             review_code_include_paths=list(self.review_code_include_paths),
             review_code_exclude_paths=list(self.review_code_exclude_paths),
+            enabled_tools=self.enabled_tools,
             code_exts=self.code_exts,
             ext_plugin_map=self.ext_plugin_map,
             ext_pattern_plugin_map=self.ext_pattern_plugin_map,
