@@ -18,15 +18,30 @@ class _Point:
 
 
 class _Node:
-    def __init__(self, node_type, *, text="", line=1, children=None, fields=None):
+    def __init__(
+        self,
+        node_type,
+        *,
+        text="",
+        line=1,
+        children=None,
+        fields=None,
+        start_byte=0,
+        end_byte=0,
+    ):
         self._type = node_type
         self.text = text
         self._start_position = _Point(line - 1, 0)
         self._end_position = _Point(line - 1, 0)
-        self._start_byte = 0
-        self._end_byte = 0
+        self._start_byte = start_byte
+        self._end_byte = end_byte
         self._children = children or []
         self._fields = fields or {}
+        self._parent = None
+        for child in self._children:
+            child._parent = self
+        for child in self._fields.values():
+            child._parent = self
 
     def kind(self):
         return self._type
@@ -51,6 +66,9 @@ class _Node:
 
     def child_by_field_name(self, name):
         return self._fields.get(name)
+
+    def parent(self):
+        return self._parent
 
 
 class _Tree:

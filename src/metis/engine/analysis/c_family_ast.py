@@ -47,18 +47,18 @@ class CFamilyAstMixin:
                 return symbols
         return []
 
-    def _index_tree(self, root) -> tuple[list[Any], dict[int, Any | None]]:
-        nodes: list[Any] = []
-        parent_map: dict[int, Any | None] = {}
+    def _index_tree(self, root) -> list[Any]:
+        return list(self._iter_nodes(root))
 
-        def walk(node, parent):
-            nodes.append(node)
-            parent_map[id(node)] = parent
-            for child in _node_children(node):
-                walk(child, node)
-
-        walk(root, None)
-        return nodes, parent_map
+    def _iter_nodes(self, root):
+        if root is None:
+            return
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            yield node
+            for child in reversed(_node_children(node)):
+                stack.append(child)
 
     def _find_anchor_node(self, nodes: list[Any], line: int):
         best = None
@@ -79,26 +79,49 @@ class CFamilyAstMixin:
                 best_span = span
         return best
 
-    def _nearest_enclosing(
-        self, node, parent_map: dict[int, Any | None], types: set[str]
-    ):
+    def _nearest_enclosing(self, node, types: set[str]):
         cur = node
         while cur is not None:
             if _node_kind(cur) in types:
                 return cur
-            cur = parent_map.get(id(cur))
+            parent = getattr(cur, "parent", None)
+            cur = parent() if callable(parent) else None
         return None
 
-    def _collect_guard_hops(
-        self, scope_node, source: bytes, line: int
-    ) -> list[_FlowHop]:
-        guards: list[_FlowHop] = []
-        if scope_node is None:
-            return guards
+    def _iter_function_definitions(self, root, *, include_methods: bool = False):
+        for node in self._iter_nodes(root):
+            node_kind = _node_kind(node)
+            if node_kind == "function_definition" or (
+                include_methods and node_kind == "method_definition"
+            ):
+                yield node
 
-        def walk(node):
+    def _function_name_from_definition(self, node, source: bytes) -> str:
+        declarator = _node_child_by_field_name(node, "declarator")
+        return _identifier_from_node(declarator or node, source)
+
+    def _collect_scope_calls_and_checks(
+        self,
+        scope_node,
+        source: bytes,
+        *,
+        check_line: int | None = None,
+        exclude_symbols=None,
+    ) -> tuple[list[_Reference], list[_FlowHop]]:
+        calls: list[_Reference] = []
+        checks: list[_FlowHop] = []
+        if scope_node is None:
+            return calls, checks
+        exclude_symbols = frozenset(exclude_symbols or ())
+
+        for node in self._iter_nodes(scope_node):
             node_type = _node_kind(node)
-            if node_type in {
+            if node_type == "call_expression":
+                function_node = _node_child_by_field_name(node, "function")
+                symbol = _identifier_from_node(function_node or node, source)
+                if symbol and symbol not in exclude_symbols:
+                    calls.append(_Reference(symbol=symbol, line=_node_line(node)))
+            elif check_line is not None and node_type in {
                 "if_statement",
                 "while_statement",
                 "for_statement",
@@ -106,58 +129,48 @@ class CFamilyAstMixin:
             }:
                 cond = _node_child_by_field_name(node, "condition")
                 detail = _identifier_from_node(cond or node, source) or node_type
-                guards.append(
+                checks.append(
                     _FlowHop(
                         role="check", line=_node_line(node), detail=f"guard '{detail}'"
                     )
                 )
-            for child in _node_children(node):
-                walk(child)
 
-        walk(scope_node)
-        guards.sort(key=lambda h: (abs(h.line - line), h.line))
-        return guards[:4]
+        if check_line is not None:
+            checks.sort(key=lambda h: (abs(h.line - check_line), h.line))
+            checks = checks[:4]
+        return calls, checks
 
-    def _collect_calls_in_scope(self, scope_node, source: bytes) -> list[_Reference]:
-        out: list[_Reference] = []
-        if scope_node is None:
-            return out
-
-        def walk(node):
-            if _node_kind(node) == "call_expression":
-                function_node = _node_child_by_field_name(node, "function")
-                symbol = _identifier_from_node(function_node or node, source)
-                if symbol:
-                    out.append(_Reference(symbol=symbol, line=_node_line(node)))
-            for child in _node_children(node):
-                walk(child)
-
-        walk(scope_node)
+    def _collect_calls_in_scope(
+        self, scope_node, source: bytes, *, exclude_symbols=None
+    ) -> list[_Reference]:
+        out, _checks = self._collect_scope_calls_and_checks(
+            scope_node, source, exclude_symbols=exclude_symbols
+        )
         out.sort(key=lambda item: (item.line, item.symbol.lower()))
         return out
 
     def _collect_functions(self, root, source: bytes) -> dict[str, list[_FunctionInfo]]:
         out: dict[str, list[_FunctionInfo]] = {}
 
-        def walk(node):
-            node_type = _node_kind(node)
-            if node_type == "function_definition":
-                declarator = _node_child_by_field_name(node, "declarator")
-                name = _identifier_from_node(declarator or node, source)
-                if name:
-                    info = _FunctionInfo(
-                        name=name,
-                        line_start=_node_line(node),
-                        line_end=_node_end_line(node),
-                        signature=self._read_signature(node, source),
-                        calls=self._collect_calls_in_scope(node, source),
-                        checks=self._collect_guard_hops(node, source, _node_line(node)),
-                    )
-                    out.setdefault(name, []).append(info)
-            for child in _node_children(node):
-                walk(child)
+        for node in self._iter_function_definitions(root):
+            name = self._function_name_from_definition(node, source)
+            if name:
+                line_start = _node_line(node)
+                calls, checks = self._collect_scope_calls_and_checks(
+                    node, source, check_line=line_start
+                )
+                info = _FunctionInfo(
+                    name=name,
+                    line_start=line_start,
+                    line_end=_node_end_line(node),
+                    signature=self._read_signature(node, source),
+                    calls=sorted(
+                        calls, key=lambda item: (item.line, item.symbol.lower())
+                    ),
+                    checks=checks,
+                )
+                out.setdefault(name, []).append(info)
 
-        walk(root)
         for name in list(out.keys()):
             out[name] = sorted(out[name], key=lambda f: (f.line_start, f.line_end))
         return out
@@ -167,12 +180,10 @@ class CFamilyAstMixin:
         *,
         request_line: int,
         anchor_node,
-        parent_map: dict[int, Any | None],
         functions: dict[str, list[_FunctionInfo]],
     ) -> _FunctionInfo | None:
         fn_node = self._nearest_enclosing(
             anchor_node,
-            parent_map,
             {"function_definition", "method_definition"},
         )
         if fn_node is not None:
@@ -238,13 +249,12 @@ class CFamilyAstMixin:
                 return
             out.setdefault(symbol, []).append(_Definition(symbol=symbol, line=line))
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             node_type = _node_kind(node)
             line = _node_line(node)
 
             if node_type == "function_definition":
-                declarator = _node_child_by_field_name(node, "declarator")
-                symbol = _identifier_from_node(declarator or node, source)
+                symbol = self._function_name_from_definition(node, source)
                 add(symbol, line)
 
             if node_type == "declaration":
@@ -258,10 +268,6 @@ class CFamilyAstMixin:
                         symbol = _identifier_from_node(child, source)
                         add(symbol, line)
 
-            for child in _node_children(node):
-                walk(child)
-
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out
@@ -269,7 +275,7 @@ class CFamilyAstMixin:
     def _collect_references(self, root, source: bytes) -> dict[str, list[_Reference]]:
         out: dict[str, list[_Reference]] = {}
 
-        def walk(node):
+        for node in self._iter_nodes(root):
             if _node_kind(node) in {"identifier", "field_identifier"}:
                 symbol = _node_text(node, source).strip()
                 if symbol:
@@ -277,10 +283,7 @@ class CFamilyAstMixin:
                     out.setdefault(symbol, []).append(
                         _Reference(symbol=symbol, line=line)
                     )
-            for child in _node_children(node):
-                walk(child)
 
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out
@@ -288,19 +291,10 @@ class CFamilyAstMixin:
     def _collect_calls(self, root, source: bytes) -> dict[str, list[_Reference]]:
         out: dict[str, list[_Reference]] = {}
 
-        def walk(node):
-            if _node_kind(node) == "call_expression":
-                function_node = _node_child_by_field_name(node, "function")
-                symbol = _identifier_from_node(function_node or node, source)
-                if symbol:
-                    line = _node_line(node)
-                    out.setdefault(symbol, []).append(
-                        _Reference(symbol=symbol, line=line)
-                    )
-            for child in _node_children(node):
-                walk(child)
+        calls, _checks = self._collect_scope_calls_and_checks(root, source)
+        for call in calls:
+            out.setdefault(call.symbol, []).append(call)
 
-        walk(root)
         for symbol in list(out.keys()):
             out[symbol] = sorted(out[symbol], key=lambda item: item.line)
         return out

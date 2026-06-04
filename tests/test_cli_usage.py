@@ -64,7 +64,7 @@ class _DummyEngine:
         assert isinstance(options, ReviewOptions)
         return ["src/example.py"]
 
-    def review_code(self, options=None):
+    def review_code(self, options=None, progress_callback=None):
         assert isinstance(options, ReviewOptions)
         self.usage_runtime.collector.record(
             scope_id=current_scope(),

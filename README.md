@@ -154,6 +154,7 @@ Metis configuration can be over-ridden using a YAML configuration file (`metis.y
 - **Engine behavior:** max workers, max token length, similarity top-k
 - **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
 - **Vector indexing:** HNSW parameters for `pgvector`
+- **Reachability:** tree-sitter reachability tuning, including review-file mode and path-confirmation limits
 
 This file is **required** to run Metis and should be customized per deployment.
 
@@ -206,11 +207,11 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 Indexes your codebase into a vector database. Must be run before any analysis.
 
 ### `review_code`
-Performs a full security review of the indexed codebase.
+Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.
 Use `--ignore-index` to run without retrieval when no index is available.
 
 ### `review_file <path>`
-Performs a targeted security review of a single file.
+Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
 Use `--ignore-index` to run without retrieval when no index is available.
 
 ### `review_patch <patch.diff>`

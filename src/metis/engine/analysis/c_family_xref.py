@@ -174,16 +174,9 @@ class CFamilyXrefMixin:
     ) -> list[str]:
         root = Path(codebase_path).resolve()
         allowed_ext = {
-            ".c",
-            ".h",
-            ".cc",
-            ".cpp",
-            ".hpp",
-            ".hh",
-            ".hxx",
-            ".cxx",
-            ".S",
-            ".s",
+            str(ext).lower()
+            for ext in getattr(self, "supported_extensions", ())
+            if ext and "*" not in str(ext)
         }
         base_top = file_path.split("/", 1)[0] if "/" in file_path else ""
         prefer_set = {base_top} if base_top else set()
@@ -195,7 +188,7 @@ class CFamilyXrefMixin:
         rest: list[str] = []
         for dirpath, _, filenames in os.walk(root):
             for name in filenames:
-                ext = os.path.splitext(name)[1]
+                ext = os.path.splitext(name)[1].lower()
                 if ext not in allowed_ext:
                     continue
                 full = Path(dirpath) / name

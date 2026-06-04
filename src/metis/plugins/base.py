@@ -47,6 +47,12 @@ class BaseLanguagePlugin(ABC):
         """Return a list of file extensions supported by this language."""
         pass
 
+    def supports_reachability_review(self) -> bool:
+        return False
+
+    def supports_c_family_triage_evidence(self) -> bool:
+        return False
+
     def get_triage_analyzer_factory(self):
         """Return optional factory(codebase_path) -> analyzer used by triage."""
         language = str(self.get_name() or "").strip().lower()

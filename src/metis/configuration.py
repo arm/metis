@@ -9,6 +9,8 @@ from importlib.resources import files, as_file
 from pathlib import Path
 from typing import TypedDict
 
+from metis.reachability_settings import collect_reachability_config
+
 logger = logging.getLogger("metis")
 
 
@@ -279,6 +281,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
+    runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     # Query config
     query_cfg = cfg.get("query", {})

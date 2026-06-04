@@ -125,7 +125,7 @@ general_prompts:
 
 plugins:
   c:
-    supported_extensions: [".c", ".h", ".cc"]
+    supported_extensions: [".c", ".h"]
     splitting: &c_cpp_splitting
       chunk_lines: 40
       chunk_lines_overlap: 15
@@ -509,7 +509,7 @@ plugins:
         Please update the patch so it fixes these issues.
         Output ONLY the patch diff, with minimal changes.
   cpp:
-    supported_extensions: [".cpp", ".hpp"]
+    supported_extensions: [".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"]
     splitting: *c_cpp_splitting
     prompts: *c_cpp_prompts
   tablegen:

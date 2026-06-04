@@ -170,6 +170,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "presence_penalty",
             "seed",
             "logit_bias",
+            "reasoning_effort",
+            "verbosity",
         ):
             if optional_key in kwargs:
                 params[optional_key] = kwargs[optional_key]
