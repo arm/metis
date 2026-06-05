@@ -36,17 +36,21 @@ class AnthropicProvider(LLMProvider):
             raise ValueError(
                 "ANTHROPIC_API_KEY environment variable is required for Anthropic provider but not set."
             )
+
+    def _require_embedding_api_key(self) -> str:
         if not self.embedding_api_key:
             raise ValueError(
-                "OPENAI_API_KEY environment variable is required for Anthropic provider embeddings but not set."
+                "Anthropic provider embeddings require llm_provider.embedding_api_key, "
+                "llm_provider.embedding_api_key_env, or OPENAI_API_KEY."
             )
+        return self.embedding_api_key
 
     def get_embed_model_code(self, *, callback_manager=None):
         return build_openai_compatible_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
             "code_embedding_model",
-            api_key=self.embedding_api_key,
+            api_key=self._require_embedding_api_key(),
             api_base=self.embedding_api_base,
             default_headers=self.embedding_default_headers,
             callback_manager=callback_manager,
@@ -57,7 +61,7 @@ class AnthropicProvider(LLMProvider):
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
             "docs_embedding_model",
-            api_key=self.embedding_api_key,
+            api_key=self._require_embedding_api_key(),
             api_base=self.embedding_api_base,
             default_headers=self.embedding_default_headers,
             callback_manager=callback_manager,

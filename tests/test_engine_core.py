@@ -116,13 +116,15 @@ def test_init_and_get_query_engines_is_thread_safe():
     backend.get_query_engines.assert_called_once()
 
 
-def test_engine_passes_usage_callback_manager_to_embed_models():
+def test_engine_builds_embed_models_lazily_with_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
     backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
     llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
+    code_embed_model = Mock()
+    docs_embed_model = Mock()
+    llm_provider.get_embed_model_code.return_value = code_embed_model
+    llm_provider.get_embed_model_docs.return_value = docs_embed_model
 
     engine = MetisEngine(
         vector_backend=backend,
@@ -134,12 +136,19 @@ def test_engine_passes_usage_callback_manager_to_embed_models():
         response_mode="compact",
     )
 
+    llm_provider.get_embed_model_code.assert_not_called()
+    llm_provider.get_embed_model_docs.assert_not_called()
+
+    assert engine.get_embed_model_code() is code_embed_model
+    assert engine.get_embed_model_docs() is docs_embed_model
     assert llm_provider.get_embed_model_code.call_args.kwargs == {
         "callback_manager": engine.usage_runtime.hooks.callback_manager
     }
     assert llm_provider.get_embed_model_docs.call_args.kwargs == {
         "callback_manager": engine.usage_runtime.hooks.callback_manager
     }
+    assert backend.embed_model_code is code_embed_model
+    assert backend.embed_model_docs is docs_embed_model
 
 
 def test_create_query_engines_passes_usage_callback_manager():

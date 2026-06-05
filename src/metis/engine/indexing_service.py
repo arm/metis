@@ -72,6 +72,7 @@ class IndexingService:
         return code_count + doc_count
 
     def index_prepare_nodes_iter(self):
+        self._ensure_embed_models()
         docs_supported_exts = self._config.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
@@ -150,6 +151,7 @@ class IndexingService:
         self._state.pending_nodes = None
 
     def update_index(self, patch_text):
+        self._ensure_embed_models()
         try:
             patch_set = unidiff.PatchSet.from_string(patch_text)
             logger.info("Parsed the provided patch string successfully.")
@@ -225,3 +227,7 @@ class IndexingService:
                     target_index.refresh_ref_docs([doc])
                 target_index.docstore.set_document_hash(doc.id_, doc.hash)
         logger.info("Index update complete based on the provided patch diff.")
+
+    def _ensure_embed_models(self):
+        self._config.embed_model_code = self._config.engine_get_embed_model_code()
+        self._config.embed_model_docs = self._config.engine_get_embed_model_docs()

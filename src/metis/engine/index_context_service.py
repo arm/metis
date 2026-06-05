@@ -28,6 +28,7 @@ class IndexContextService:
         self.indexing = IndexingService(config, state, repository)
 
     def create_query_engines(self, top_k: int):
+        self._ensure_embed_models()
         self._config.vector_backend.init()
         qe_code, qe_docs = self._config.vector_backend.get_query_engines(
             self._config.llm_provider,
@@ -60,3 +61,7 @@ class IndexContextService:
         close_fn = getattr(self._config.vector_backend, "close", None)
         if callable(close_fn):
             close_fn()
+
+    def _ensure_embed_models(self) -> None:
+        self._config.embed_model_code = self._config.engine_get_embed_model_code()
+        self._config.embed_model_docs = self._config.engine_get_embed_model_docs()

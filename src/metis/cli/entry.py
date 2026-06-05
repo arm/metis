@@ -94,21 +94,11 @@ def build_engine(args, runtime):
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
 
     usage_runtime = UsageRuntime(args.codebase_path)
-    embed_model_code = llm_provider.get_embed_model_code(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
-    embed_model_docs = llm_provider.get_embed_model_docs(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
 
     if args.backend == "postgres":
-        vector_backend = build_pg_backend(
-            args, runtime, embed_model_code, embed_model_docs
-        )
+        vector_backend = build_pg_backend(args, runtime, None, None)
     else:
-        vector_backend = build_chroma_backend(
-            args, runtime, embed_model_code, embed_model_docs
-        )
+        vector_backend = build_chroma_backend(args, runtime, None, None)
 
     engine = MetisEngine(
         codebase_path=args.codebase_path,

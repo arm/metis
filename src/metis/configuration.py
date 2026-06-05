@@ -215,11 +215,7 @@ def _resolve_anthropic_embedding_api_key(provider_config: dict) -> str:
     if value:
         return value
 
-    raise RuntimeError(
-        "llm_provider.embedding_api_key or environment variable named by "
-        "llm_provider.embedding_api_key_env or OPENAI_API_KEY environment variable "
-        "is required for Anthropic provider embeddings but not set."
-    )
+    return ""
 
 
 def load_runtime_config(config_path=None, enable_psql=False):

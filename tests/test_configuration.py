@@ -418,7 +418,7 @@ llm_provider:
     assert "Anthropic provider" in message
 
 
-def test_load_runtime_config_reports_missing_anthropic_embedding_api_key(
+def test_load_runtime_config_allows_anthropic_without_embedding_api_key(
     tmp_path, monkeypatch
 ):
     config_path = tmp_path / "metis.yaml"
@@ -435,10 +435,10 @@ llm_provider:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        load_runtime_config(config_path)
+    runtime = load_runtime_config(config_path)
 
-    assert "required for Anthropic provider embeddings" in str(exc_info.value)
+    assert runtime["llm_api_key"] == "anthropic-key"
+    assert runtime["embedding_api_key"] == ""
 
 
 def test_load_runtime_config_accepts_anthropic_query_model_alias(tmp_path, monkeypatch):

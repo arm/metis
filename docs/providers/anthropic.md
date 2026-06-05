@@ -36,6 +36,9 @@ query:
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
 - The embedding API key is resolved from `llm_provider.embedding_api_key`, then
   `llm_provider.embedding_api_key_env`, then `OPENAI_API_KEY`.
+- The embedding API key is only required when Metis needs embeddings, such as
+  `index`, `update`, `ask`, or review/triage commands that use index-backed
+  retrieval. It can be omitted for `--ignore-index` scans.
 - `metis_engine.embed_dim` must match the configured embedding model output
   dimension.
 
