@@ -6,14 +6,16 @@ from __future__ import annotations
 import logging
 
 from metis.configuration import load_plugin_config
-from metis.exceptions import PluginNotFoundError, QueryEngineInitError
+from metis.exceptions import PluginNotFoundError
 from metis.plugin_loader import discover_supported_language_names, load_plugins
+from metis.reachability_settings import coerce_reachability_settings
 from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
 from .graphs import AskGraph, ReviewGraph
-from .indexing_service import IndexingService
+from .index_context_service import IndexContextService
 from .options import TriageOptions, coerce_triage_options
+from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
@@ -72,6 +74,9 @@ class MetisEngine:
         self.metisignore_file = kwargs.get("metisignore_file") or ".metisignore"
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
+        self.reachability_settings = coerce_reachability_settings(
+            kwargs, default_workers=self.max_workers
+        )
 
         self.plugin_config = load_plugin_config()
         self.custom_guidance_precedence = self.plugin_config.get(
@@ -119,16 +124,26 @@ class MetisEngine:
         )
         self._state = EngineState()
         self.repository = EngineRepository(self._config, self._state)
-        self.indexing = IndexingService(
+        self.index_context = IndexContextService(
             self._config,
             self._state,
             self.repository,
+            normalize_top_k=self._normalize_top_k,
+        )
+        self.indexing = self.index_context.indexing
+        self.reachability = TreeSitterReachabilityService(
+            config=self._config,
+            repository=self.repository,
+            llm_provider=self.llm_provider,
+            usage_runtime=self.usage_runtime,
         )
         self.review = ReviewService(
             self._config,
             self.repository,
-            get_query_engines=lambda: self._init_and_get_query_engines(),
+            get_query_engines=lambda: self.index_context.get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
+            reachability_service=self.reachability,
+            reachability_settings=self.reachability_settings,
         )
         self._triage_service = self._build_triage_service()
 
@@ -213,7 +228,7 @@ class MetisEngine:
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
             normalize_top_k=self._normalize_top_k,
-            create_query_engines=self._create_query_engines,
+            create_query_engines=self.index_context.create_query_engines,
             get_plugin_for_extension=self._get_plugin_for_extension,
             usage_hooks=self.usage_runtime.hooks,
         )
@@ -259,20 +274,8 @@ class MetisEngine:
     def _get_plugin_for_extension(self, extension):
         return self.repository.get_plugin_for_extension(extension)
 
-    def _get_all_supported_code_extensions(self):
-        return self.repository.get_all_supported_code_extensions()
-
-    def _get_splitter_cached(self, plugin):
-        return self.repository.get_splitter_cached(plugin)
-
-    def _get_doc_splitter(self):
-        return self.repository.get_doc_splitter()
-
-    def _rel_to_base(self, path):
-        return self.repository.rel_to_base(path)
-
     def ask_question(self, question):
-        qe_code, qe_docs = self._init_and_get_query_engines()
+        qe_code, qe_docs = self.index_context.get_query_engines()
         logger.info("Querying codebase for your question...")
         req = {
             "question": question,
@@ -291,28 +294,10 @@ class MetisEngine:
         return parsed
 
     def _create_query_engines(self, top_k: int):
-        self.vector_backend.init()
-        qe_code, qe_docs = self.vector_backend.get_query_engines(
-            self.llm_provider,
-            top_k,
-            self.response_mode,
-            **self.usage_runtime.hooks.query_engine_kwargs(),
-        )
-        if not qe_code or not qe_docs:
-            raise QueryEngineInitError()
-        return qe_code, qe_docs
+        return self.index_context.create_query_engines(top_k)
 
     def _init_and_get_query_engines(self):
-        if self._state.qe_code is not None and self._state.qe_docs is not None:
-            return self._state.qe_code, self._state.qe_docs
-        with self._state.query_engine_lock:
-            if self._state.qe_code is not None and self._state.qe_docs is not None:
-                return self._state.qe_code, self._state.qe_docs
-            top_k = self._normalize_top_k(self.similarity_top_k, 5)
-            qe_code, qe_docs = self._create_query_engines(top_k)
-            self._state.qe_code = qe_code
-            self._state.qe_docs = qe_docs
-            return qe_code, qe_docs
+        return self.index_context.get_query_engines()
 
     def triage_sarif_payload(
         self,
@@ -363,9 +348,6 @@ class MetisEngine:
         )
 
     def close(self):
-        self._state.qe_code = None
-        self._state.qe_docs = None
+        self.index_context.clear_query_cache()
         self._triage_service.close()
-        close_fn = getattr(self.vector_backend, "close", None)
-        if callable(close_fn):
-            close_fn()
+        self.index_context.close()

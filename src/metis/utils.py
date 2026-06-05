@@ -150,7 +150,6 @@ def find_snippet_line(snippet, file_lines, threshold=0.80):
     norm_snippet = normalize_lines(snippet_lines)
 
     for i in range(len(file_lines) - snippet_len + 1):
-
         window = file_lines[i : i + snippet_len]
         norm_window = normalize_lines(window)
 

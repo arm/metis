@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import partial
+from typing import Any
+from typing import cast
 
 from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END, StateGraph
@@ -63,7 +65,7 @@ class TriageGraph:
         if self._app is not None:
             return self._app
         self._ensure_models()
-        graph = StateGraph(TriageState)
+        graph = StateGraph(cast(Any, TriageState))
         graph.add_node("retrieve", triage_node_retrieve)
         graph.add_node(
             "collect_evidence",
@@ -97,10 +99,11 @@ class TriageGraph:
                 "retriever_code": request["retriever_code"],
                 "retriever_docs": request["retriever_docs"],
                 "triage_analyzer": request.get("triage_analyzer"),
+                "triage_plugin": request.get("triage_plugin"),
                 "triage_codebase_path": request.get("triage_codebase_path", "."),
                 "debug_callback": request.get("debug_callback"),
                 "use_retrieval_context": bool(
-                    request.get("use_retrieval_context", True)
+                    request.get("use_retrieval_context", False)
                 ),
                 "triage_system_prompt": self.triage_system_prompt,
                 "triage_decision_prompt": self.triage_decision_prompt,

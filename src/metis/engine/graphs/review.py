@@ -4,12 +4,12 @@
 import logging
 from functools import partial
 from typing import Any
+from typing import cast
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
+from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
@@ -56,7 +56,7 @@ def _build_body_text(state: ReviewState) -> str:
     snippet = state.get("snippet", "") or ""
     context = state.get("context", "") or ""
     mode = state.get("mode", "file")
-    include_context = bool(state.get("use_retrieval_context", True))
+    include_context = bool(state.get("use_retrieval_context", False))
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -99,15 +99,15 @@ def _post_process_reviews(
 
 
 def review_node_retrieve(state: ReviewState) -> ReviewState:
-    if not state.get("use_retrieval_context", True):
-        new_state: ReviewState = dict(state)
+    if not state.get("use_retrieval_context", False):
+        new_state: ReviewState = state.copy()
         new_state["context"] = ""
         return new_state
     cp = state.get("context_prompt", "")
     code = retrieve_text(state.get("retriever_code"), cp)
     docs = retrieve_text(state.get("retriever_docs"), cp)
     context = synthesize_context(code, docs)
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["context"] = context
     return new_state
 
@@ -122,7 +122,7 @@ def review_node_build_prompt(
     schema_prompt_section: str,
     hardware_cwe_guidance: str = "",
 ) -> ReviewState:
-    include_relevant_context = bool(state.get("use_retrieval_context", True))
+    include_relevant_context = bool(state.get("use_retrieval_context", False))
     system = build_review_system_prompt(
         language_prompts,
         default_prompt_key,
@@ -133,37 +133,19 @@ def review_node_build_prompt(
         hardware_cwe_guidance,
         include_relevant_context=include_relevant_context,
     )
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["system_prompt"] = system
     return new_state
 
 
 def review_node_llm(
     state: ReviewState,
-    structured_node,
-    fallback_node=None,
+    invoke_review,
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    payload = {"system_prompt": system_prompt, "body_text": body_text}
-    raw = None
-    attempts = (
-        (structured_node, logger.warning, "Structured review invocation failed: %s"),
-        (fallback_node, logger.error, "Fallback review invocation failed: %s"),
-    )
-    for runnable, log_fn, message in attempts:
-        if runnable is None:
-            continue
-        if raw not in (None, ""):
-            break
-        try:
-            raw = runnable.invoke(payload)
-        except Exception as exc:
-            log_fn(message, exc)
-            raw = None
-
-    reviews = _normalize_reviews(raw)
-    new_state: ReviewState = dict(state)
+    reviews = invoke_review(system_prompt, body_text) or []
+    new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
     return new_state
 
@@ -175,7 +157,7 @@ def review_node_parse(state: ReviewState) -> ReviewState:
         state.get("file_path", "") or "",
     )
 
-    new_state: ReviewState = dict(state)
+    new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = normalized
     return new_state
 
@@ -207,42 +189,31 @@ class ReviewGraph:
             "hardware_cwe_guidance", ""
         )
 
-        self._structured_review_node = None
-        self._fallback_review_node = None
-        self._structured_review_node = self._create_structured_review_runnable()
-        if self._structured_review_node is None and self._fallback_review_node is None:
-            raise RuntimeError(
-                "Unable to create review runnable; OpenAI-based provider required."
-            )
-        self._app_cache = {}
-
-    def _create_structured_review_runnable(self):
         get_chat_model = getattr(self.llm_provider, "get_chat_model", None)
         if not callable(get_chat_model):
-            return None
-        try:
-            chat_model = get_chat_model(
-                model=self.llama_query_model, **self.chat_model_kwargs
+            raise RuntimeError(
+                "Unable to create review runnable; LangChain chat provider required."
             )
-        except Exception as exc:
-            logger.warning(
-                "Unable to instantiate chat model for structured output: %s", exc
+        self._prompt_runner = JsonPromptRunner(self.llm_provider)
+        self._app_cache = {}
+
+    def _invoke_review_model(self, system_prompt, body_text):
+        return self._prompt_runner.invoke(
+            JsonPromptRequest(
+                model=self.llama_query_model,
+                system_prompt=system_prompt,
+                user_prompt="{body_text}",
+                variables={"body_text": body_text},
+                parse=_normalize_reviews,
+                logger=logger,
+                label="Review graph",
+                batch_size=1,
+                invalid_message="expected review JSON object",
+                final_keep_message="returning no findings for this chunk",
+                response_model=ReviewResponseModel,
+                chat_model_kwargs=self.chat_model_kwargs,
             )
-            return None
-        prompt = ChatPromptTemplate.from_messages(
-            [("system", "{system_prompt}"), ("user", "{body_text}")]
         )
-        self._fallback_review_node = prompt | chat_model | StrOutputParser()
-        try:
-            structured_model = chat_model.with_structured_output(
-                ReviewResponseModel, method="function_calling"
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to bind structured output schema for review graph: %s", exc
-            )
-            return None
-        return prompt | structured_model
 
     def _build_app(self, language_prompts, default_prompt_key):
         cache_key = (id(language_prompts), default_prompt_key)
@@ -250,7 +221,7 @@ class ReviewGraph:
         if cached is not None:
             return cached
 
-        graph = StateGraph(ReviewState)
+        graph = StateGraph(cast(Any, ReviewState))
         retrieve = review_node_retrieve
         build_prompt = partial(
             review_node_build_prompt,
@@ -264,8 +235,7 @@ class ReviewGraph:
         )
         review = partial(
             review_node_llm,
-            structured_node=self._structured_review_node,
-            fallback_node=self._fallback_review_node,
+            invoke_review=self._invoke_review_model,
         )
         parse = review_node_parse
 
@@ -295,7 +265,7 @@ class ReviewGraph:
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
-        use_retrieval_context = bool(request.get("use_retrieval_context", True))
+        use_retrieval_context = bool(request.get("use_retrieval_context", False))
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []

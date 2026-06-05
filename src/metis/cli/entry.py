@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+from typing import cast
 
 from rich.markup import escape
 from prompt_toolkit import prompt
@@ -15,6 +16,7 @@ from metis.engine import MetisEngine
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_provider
+from metis.providers.base import ProviderRuntimeConfig
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -89,7 +91,7 @@ def resolve_custom_prompt(args):
 def build_engine(args, runtime):
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
-    llm_provider = provider_cls(runtime)
+    llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
 
     usage_runtime = UsageRuntime(args.codebase_path)
     embed_model_code = llm_provider.get_embed_model_code(
@@ -159,50 +161,47 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
-def _command_requests_ignore_index(args, cmd_args):
-    filtered_args = []
-    ignore_index = bool(getattr(args, "ignore_index", False))
+def _command_index_flags(args, cmd_args: list[str]) -> tuple[list[str], bool]:
+    filtered_args: list[str] = []
+    use_index = bool(getattr(args, "use_index", False))
     for arg in cmd_args:
         if arg == "--ignore-index":
-            ignore_index = True
+            continue
+        if arg == "--use-index":
+            use_index = True
             continue
         filtered_args.append(arg)
-    return filtered_args, ignore_index
+    return filtered_args, use_index
 
 
 def _prepare_command_runtime(cmd, cmd_args, args):
     spec = COMMANDS[cmd]
-    filtered_args, ignore_index = _command_requests_ignore_index(args, cmd_args)
-    if not spec.validate_options(cmd, args, ignore_index_requested=ignore_index):
+    filtered_args, use_index = _command_index_flags(args, cmd_args)
+    if not spec.validate_options(cmd, args):
         return None
 
-    if spec.index_policy == "none":
-        return CommandRuntime(
-            command=cmd,
-            command_args=filtered_args,
-            use_retrieval_context=False,
-        )
-
-    if ignore_index and spec.index_policy == "optional":
-        return CommandRuntime(
-            command=cmd,
-            command_args=filtered_args,
-            use_retrieval_context=False,
-        )
+    if spec.index_policy == "optional":
+        use_retrieval_context = use_index
+    else:
+        use_retrieval_context = spec.index_policy == "required"
 
     return CommandRuntime(
         command=cmd,
         command_args=filtered_args,
-        use_retrieval_context=True,
+        use_retrieval_context=use_retrieval_context,
     )
 
 
-def _interactive_command_ignores_index(cmd, cmd_args, args):
+def _interactive_command_uses_index(cmd, cmd_args, args) -> bool:
     spec = COMMANDS.get(cmd)
-    if spec is None or spec.index_policy != "optional":
+    if spec is None:
         return False
-    _filtered_args, ignore_index = _command_requests_ignore_index(args, cmd_args)
-    return ignore_index
+    if spec.index_policy == "required":
+        return True
+    if spec.index_policy == "optional":
+        _filtered_args, use_index = _command_index_flags(args, cmd_args)
+        return use_index
+    return False
 
 
 def execute_command(engine, cmd, cmd_args, args):
@@ -289,7 +288,7 @@ def run_interactive_loop(engine, args, vector_backend):
                     continue
                 if (
                     cmd in {"ask", "review_code", "review_file"}
-                    and not _interactive_command_ignores_index(cmd, cmd_args, args)
+                    and _interactive_command_uses_index(cmd, cmd_args, args)
                     and not vector_backend.check_project_schema_exists()
                 ):
                     print_console(
@@ -364,7 +363,12 @@ def main():
     parser.add_argument(
         "--ignore-index",
         action="store_true",
-        help="Allow selected analysis commands to run without an index-backed context.",
+        help="Compatibility no-op retained for existing scripts.",
+    )
+    parser.add_argument(
+        "--use-index",
+        action="store_true",
+        help="Experimental opt-in to legacy index-backed retrieval for review and triage.",
     )
 
     args = parser.parse_args()

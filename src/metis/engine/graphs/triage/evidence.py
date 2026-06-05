@@ -3,17 +3,9 @@
 
 from __future__ import annotations
 
-import os
 import re
 
-from metis.engine.analysis.c_family_macro import (
-    is_c_family_file_path,
-    is_c_macro_like_symbol,
-)
-from metis.engine.analysis.c_family_helpers import (
-    extract_c_family_seed_symbols,
-    is_low_value_c_family_probe_term,
-)
+from metis.engine.analysis.c_family_macro import is_c_macro_like_symbol
 
 from . import constants as C
 from ..types import TriageState
@@ -28,6 +20,7 @@ from .evidence_tools import (
     _collect_macro_definition_sections,
     _collect_treesitter_scope_symbols,
     _gather_symbol_definition_hits,
+    _has_c_family_triage_analyzer,
 )
 from .evidence_analyzer import (
     _collect_analyzer_sections,
@@ -54,7 +47,6 @@ def _enforce_section_limit(
 def _derive_line_symbols(
     state: TriageState,
     *,
-    file_path: str,
     exact_line_context: str,
     treesitter_scope_symbols: list[str],
     is_metis_source: bool,
@@ -90,7 +82,7 @@ def _derive_line_symbols(
             continue
         if len(term) > 64:
             continue
-        if not _is_probe_term(term, file_path=file_path):
+        if not _is_probe_term(term):
             continue
         seen.add(term)
         out.append(term)
@@ -99,11 +91,9 @@ def _derive_line_symbols(
     return out
 
 
-def _is_probe_term(term: str, *, file_path: str) -> bool:
+def _is_probe_term(term: str) -> bool:
     text = str(term or "").strip()
     if not text:
-        return False
-    if is_c_family_file_path(file_path) and is_low_value_c_family_probe_term(text):
         return False
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,127}$", text))
 
@@ -151,6 +141,7 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     file_path = state.get("finding_file_path", "") or ""
     line = int(state.get("finding_line", 1) or 1)
     is_metis_source = bool(state.get("finding_is_metis", False))
+    has_c_family_analyzer = _has_c_family_triage_analyzer(state, file_path)
     scope_mode = "line_local"
 
     window_radius = (
@@ -163,15 +154,10 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     sections: list[str] = []
     max_sections = C.MAX_SECTIONS
 
-    analyzer_symbols: list[str] = []
-    ext = os.path.splitext(file_path or "")[1].lower()
-    if ext in {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}:
-        analyzer_symbols = extract_c_family_seed_symbols(
-            state.get("finding_snippet", "") or "",
-            state.get("finding_rule_id", "") or "",
-            file_path or "",
-            limit=C.ANALYZER_SEED_SYMBOL_LIMIT,
-        )
+    analyzer_symbols = _extract_symbol_candidates(
+        state.get("finding_snippet", "") or "",
+        limit=C.ANALYZER_SEED_SYMBOL_LIMIT,
+    )
 
     (
         analyzer_supported,
@@ -210,16 +196,13 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
 
     symbols = _derive_line_symbols(
         state,
-        file_path=file_path,
         exact_line_context=exact_line_context,
         treesitter_scope_symbols=treesitter_scope_symbols,
         is_metis_source=is_metis_source,
         max_symbol_terms=max_symbol_terms,
     )
-    macro_candidates = (
-        list(treesitter_macros) if is_c_family_file_path(file_path) else []
-    )
-    if is_c_family_file_path(file_path) and not macro_candidates:
+    macro_candidates = list(treesitter_macros) if has_c_family_analyzer else []
+    if has_c_family_analyzer and not macro_candidates:
         for symbol in symbols:
             text = str(symbol or "").strip()
             if not text:

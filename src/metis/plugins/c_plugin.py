@@ -6,7 +6,13 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CPlugin(ConfigBackedLanguagePlugin):
     NAME = "c"
-    DEFAULT_EXTENSIONS = [".c", ".h", ".cc"]
+    DEFAULT_EXTENSIONS = [".c", ".h"]
+
+    def supports_reachability_review(self) -> bool:
+        return True
+
+    def supports_c_family_triage_evidence(self) -> bool:
+        return True
 
     def get_triage_analyzer_factory(self):
         from metis.engine.analysis.c_family_analyzer import (

@@ -139,6 +139,13 @@ def _load_builtin_plugins(plugin_config):
     except Exception as e:
         logger.warning(f"Failed to load built-in Verilog plugin: {e}")
 
+    try:
+        from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
+
+        plugins.append(AArch64AssemblyPlugin(plugin_config))
+    except Exception as e:
+        logger.warning(f"Failed to load built-in AArch64 assembly plugin: {e}")
+
     return plugins
 
 

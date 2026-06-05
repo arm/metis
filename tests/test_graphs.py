@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from metis.engine.graphs.types import AskRequest
+from metis.engine.graphs.types import ReviewState
+from metis.engine.graphs.types import TriageState
 from metis.engine.graphs.ask import AskGraph
 from metis.engine.graphs.review import (
     review_node_retrieve,
@@ -26,12 +29,12 @@ class DummyRetriever:
 
 def test_ask_graph_returns_code_and_docs():
     g = AskGraph(llm_provider=object(), llama_query_model="test-model")
-    req = {
+    req: AskRequest = {
         "question": "What is here?",
         "retriever_code": DummyRetriever("code"),
         "retriever_docs": DummyRetriever("docs"),
     }
-    out = g.ask(req)  # type: ignore[arg-type]
+    out = g.ask(req)
     assert isinstance(out, dict)
     assert "code" in out and "docs" in out
     assert "code context" in out["code"] or "code" in out["code"].lower()
@@ -40,12 +43,13 @@ def test_ask_graph_returns_code_and_docs():
 
 def test_review_nodes_pipeline_parses():
     # Initial minimal state
-    state = {
+    state: ReviewState = {
         "file_path": "a/file.c",
         "snippet": "int main(){}",
         "retriever_code": DummyRetriever("code"),
         "retriever_docs": DummyRetriever("docs"),
         "context_prompt": "Use file: {file_path}",
+        "use_retrieval_context": True,
     }
 
     # Step 1: retrieve context
@@ -69,14 +73,6 @@ def test_review_nodes_pipeline_parses():
     )
     assert "system_prompt" in s2
 
-    # Step 3: run LLM review (stub)
-    class _DummyNode:
-        def __init__(self, payload):
-            self._payload = payload
-
-        def invoke(self, _):
-            return self._payload
-
     review_payload = {
         "reviews": [
             {
@@ -93,8 +89,7 @@ def test_review_nodes_pipeline_parses():
 
     s3 = review_node_llm(
         s2,
-        structured_node=_DummyNode(review_payload),
-        fallback_node=None,
+        invoke_review=lambda _system, _body: review_payload["reviews"],
     )
     assert "parsed_reviews" in s3
     assert s3["parsed_reviews"]
@@ -109,7 +104,7 @@ def test_review_node_retrieve_no_index_skips_retrievers():
         def get_relevant_documents(self, _query):
             raise AssertionError("retriever should not be called")
 
-    state = {
+    state: ReviewState = {
         "file_path": "a/file.c",
         "snippet": "int main(){}",
         "retriever_code": _BoomRetriever(),
@@ -126,12 +121,7 @@ def test_review_node_retrieve_no_index_skips_retrievers():
 def test_review_node_llm_omits_context_section_in_no_index_mode():
     captured = {}
 
-    class _DummyNode:
-        def invoke(self, payload):
-            captured.update(payload)
-            return {"reviews": []}
-
-    state = {
+    state: ReviewState = {
         "file_path": "foo.py",
         "snippet": "print('hello')",
         "context": "should not appear",
@@ -142,8 +132,9 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
 
     review_node_llm(
         state,
-        structured_node=_DummyNode(),
-        fallback_node=None,
+        invoke_review=lambda _system, body: (
+            captured.setdefault("body_text", body) or []
+        ),
     )
 
     assert "CONTEXT:" not in captured["body_text"]
@@ -151,15 +142,15 @@ def test_review_node_llm_omits_context_section_in_no_index_mode():
 
 def test_triage_user_prompt_omits_rag_context_in_no_index_mode():
     prompt = _build_user_prompt(
-        {
-            "finding_rule_id": "R1",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_message": "msg",
-            "finding_snippet": "code",
-            "context": "should not appear",
-            "use_retrieval_context": False,
-        }
+        TriageState(
+            finding_rule_id="R1",
+            finding_file_path="a.c",
+            finding_line=1,
+            finding_message="msg",
+            finding_snippet="code",
+            context="should not appear",
+            use_retrieval_context=False,
+        )
     )
 
     assert "RAG Context:" not in prompt
@@ -182,21 +173,21 @@ def test_triage_node_llm_omits_context_wording_in_no_index_mode():
             return _Decision()
 
     triage_node_llm(
-        {
-            "finding_rule_id": "R1",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_message": "msg",
-            "finding_snippet": "code",
-            "context": "should not appear",
-            "use_retrieval_context": False,
-            "triage_system_prompt": "system",
-            "triage_decision_prompt": (
+        TriageState(
+            finding_rule_id="R1",
+            finding_file_path="a.c",
+            finding_line=1,
+            finding_message="msg",
+            finding_snippet="code",
+            context="should not appear",
+            use_retrieval_context=False,
+            triage_system_prompt="system",
+            triage_decision_prompt=(
                 "Given the finding details, RAG context, and tool outputs, return a final triage decision.\n\n"
                 "{triage_input}\n\nTool Outputs:\n{tool_outputs}\n"
             ),
-            "evidence_pack": "tools",
-        },
+            evidence_pack="tools",
+        ),
         decision_model=_DecisionModel(),
     )
 

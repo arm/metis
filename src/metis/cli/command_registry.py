@@ -57,7 +57,7 @@ class CommandSpec:
             return False
         return True
 
-    def validate_options(self, cmd: str, args, *, ignore_index_requested: bool) -> bool:
+    def validate_options(self, cmd: str, args) -> bool:
         triage_requested = bool(getattr(args, "triage", False))
         strict_triage_validation = bool(getattr(args, "non_interactive", False))
         if (
@@ -68,12 +68,6 @@ class CommandSpec:
         ):
             print_console(
                 "[red]Error:[/red] --triage can only be used with review_code, review_file, or review_patch.",
-                args.quiet,
-            )
-            return False
-        if ignore_index_requested and self.index_policy != "optional":
-            print_console(
-                "[red]Error:[/red] --ignore-index can only be used with review_code, review_file, review_patch, or triage.",
                 args.quiet,
             )
             return False

@@ -4,20 +4,19 @@ Metis triage is deterministic orchestration, not an agent loop.
 
 ## End-to-end flow
 1. Read SARIF findings.
-2. Retrieve repository context from the vector index.
-3. Collect deterministic evidence around the reported location:
+2. Collect deterministic evidence around the reported location:
    - Tree-sitter scope/symbol extraction (when supported for the file).
    - Line-local file windows and symbol probes with local tools (`sed`, `grep`).
    - C/C++ macro/include-aware expansion and definition lookup.
-4. Build a bounded evidence pack.
-5. Derive evidence obligations and coverage from collected sections/unresolved hops.
-6. Ask the model for a structured decision:
+3. Build a bounded evidence pack.
+4. Derive evidence obligations and coverage from collected sections/unresolved hops.
+5. Ask the model for a structured decision:
    - `status`: `valid` | `invalid` | `inconclusive`
    - `reason`
    - `evidence` (`file:line`)
    - `resolution_chain`
    - `unresolved_hops`
-7. Apply deterministic gating and adjudication, then annotate SARIF:
+6. Apply deterministic gating and adjudication, then annotate SARIF:
    - `metisTriaged`
    - `metisTriageStatus`
    - `metisTriageReason`
@@ -25,9 +24,6 @@ Metis triage is deterministic orchestration, not an agent loop.
 
 ```text
 SARIF finding
-    |
-    v
-Retrieve context (RAG)
     |
     v
 Source-aware evidence collection
@@ -80,7 +76,7 @@ This keeps triage generic while allowing richer reuse of Metis-native hints when
 For C/C++ files, triage adds macro-aware evidence:
 - detects macro-like calls from Tree-sitter scope near the finding.
 - resolves `#define` sites with bounded `grep`/`sed`.
-- resolves include names through indexed name lookup when headers are not directly local.
+- resolves include names through local evidence collection when headers are available.
 - records semantic macro resolution in the evidence pack (for example mapping to `alloca`/assertion/assumption behavior).
 
 Resolved macro semantics can neutralize corresponding unresolved-hop noise during adjudication.

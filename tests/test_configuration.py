@@ -47,6 +47,7 @@ query:
     runtime = load_runtime_config(config_path)
 
     assert runtime["llama_query_reasoning_effort"] == "high"
+    assert runtime["llama_query_max_tokens"] == 3072
 
 
 def test_load_runtime_config_accepts_query_reasoning_level_alias(tmp_path, monkeypatch):
@@ -68,6 +69,30 @@ query:
     runtime = load_runtime_config(config_path)
 
     assert runtime["llama_query_reasoning_effort"] == "low"
+
+
+def test_load_runtime_config_reads_openai_base_url_and_headers(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    base_url = "https://example.test/openai/v1"
+    config_path.write_text(
+        f"""
+llm_provider:
+  name: openai
+  base_url: {base_url}
+  default_headers:
+    X-Test-Header: test
+  model: gpt-test
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["openai_api_base"] == base_url
+    assert runtime["openai_default_headers"] == {"X-Test-Header": "test"}
 
 
 def test_load_runtime_config_reads_provider_reasoning_effort(tmp_path, monkeypatch):
@@ -275,7 +300,7 @@ def test_load_runtime_config_reports_missing_ollama_provider_keys(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3
+  model: llama3.1:8b
   code_embedding_model: ""
 """,
         encoding="utf-8",
@@ -297,9 +322,9 @@ def test_load_runtime_config_keeps_ollama_api_key_optional(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3
-  code_embedding_model: all-minilm
-  docs_embedding_model: all-minilm
+  model: llama3.1:8b
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
 """,
         encoding="utf-8",
     )
@@ -491,6 +516,70 @@ llm_provider:
         load_runtime_config(config_path)
 
     assert "supported short alias" in str(exc_info.value)
+
+
+def test_load_runtime_config_reports_missing_llamacpp_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  model: llama3.1:8b
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "llama.cpp provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.code_embedding_model" in message
+    assert "llm_provider.docs_embedding_model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_keeps_llamacpp_api_key_optional(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLAMACPP_API_KEY", raising=False)
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  model: llama3.1:8b
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == ""
+    assert runtime["openai_api_base"] == ""
+    assert runtime["model"] == "llama3.1:8b"
+
+
+def test_load_runtime_config_resolves_llamacpp_api_key_from_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: llamacpp
+  base_url: http://custom:8080/v1
+  model: llama3.1:8b
+  code_embedding_model: nomic-embed-text:v1.5
+  docs_embedding_model: nomic-embed-text:v1.5
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLAMACPP_API_KEY", "my-secret-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == "my-secret-key"
+    assert runtime["openai_api_base"] == "http://custom:8080/v1"
 
 
 def test_load_runtime_config_accepts_complete_azure_provider_config(

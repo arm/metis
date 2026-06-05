@@ -172,7 +172,7 @@ def test_create_query_engines_passes_usage_callback_manager():
     )
 
 
-def test_review_graph_uses_usage_callbacks():
+def test_review_graph_uses_usage_callbacks(monkeypatch):
     backend = Mock()
     backend.init = Mock()
     backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
@@ -191,10 +191,21 @@ def test_review_graph_uses_usage_callbacks():
         response_mode="compact",
     )
 
-    engine._get_review_graph()
+    captured = {}
+
+    def _fake_runner(_runner, request):
+        captured["chat_model_kwargs"] = request.chat_model_kwargs
+        return []
+
+    monkeypatch.setattr(
+        "metis.engine.llm_runner.JsonPromptRunner.invoke",
+        _fake_runner,
+    )
+    graph = engine._get_review_graph()
+    graph._invoke_review_model("system", "body")
 
     assert (
-        llm_provider.get_chat_model.call_args.kwargs["callbacks"]
+        captured["chat_model_kwargs"]["callbacks"]
         == engine.usage_runtime.hooks.callbacks
     )
 
@@ -251,8 +262,10 @@ def test_engine_exposes_focused_services_without_compat_aliases():
     results = list(engine.review.review_code())
 
     assert engine.repository is not None
+    assert engine.index_context is not None
     assert engine.review is not None
     assert engine.indexing is not None
+    assert engine.indexing is engine.index_context.indexing
     assert not hasattr(engine, "review_service")
     assert not hasattr(engine, "indexing_service")
     assert results == [{"file": "a.py"}]

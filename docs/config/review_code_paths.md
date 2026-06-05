@@ -19,10 +19,10 @@ It is important to distinguish between these configuration options and the globa
 
 | Feature | Scope | Impact on Context |
 | :--- | :--- | :--- |
-| **`.metisignore`** | **Global** | Files are completely invisible. They are not indexed and cannot be used by the model at all (e.g., `.venv`, `dist`, `node_modules`). |
-| **Review Paths** | **Command-Specific** | Files are skipped by the `review_code` logic, but **remain available** as "Relevant Context" (via embeddings or tools) to help the AI understand the code it *is* reviewing. |
+| **`.metisignore`** | **Global** | Files are excluded from Metis visibility, including review traversal and index construction (for example, `.venv`, `dist`, `node_modules`). |
+| **Review Paths** | **Command-Specific** | Files are skipped only by `review_code`; they remain available to targeted commands and local evidence tools. |
 
-**The Logic:** You generally don't want Metis to waste time looking for bugs in a `.d.ts` or `interface.ts` file. However, if Metis is reviewing a service that imports those types, it still needs to be able to "see" those files to understand the data structures.
+**The Logic:** You generally don't want Metis to spend review time on generated types, declarations, or interface-only files. Review paths let you narrow what `review_code` audits without making those files globally invisible.
 
 ---
 

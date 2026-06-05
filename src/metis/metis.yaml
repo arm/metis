@@ -18,10 +18,19 @@ metis_engine:
     hnsw_ef_construction: 64
     hnsw_ef_search: 40
     hnsw_dist_method: "vector_cosine_ops"
+  reachability_confirmation_model: "gpt-5.5"
+  reachability_reasoning_effort: "low"
+  reachability_max_paths: 0
+  reachability_max_paths_per_sink: 3
+  reachability_max_path_length: 25
+  reachability_source_functions: []
+  reachability_security_functions: []
+  reachability_domain_profiles: []
+  reachability_domain_hints: []
 
 llm_provider:
   name: "openai"
-  model: "gpt-5.4"
+  model: "gpt-5.5"
   # Optional for reasoning-capable OpenAI models: none, minimal, low, medium,
   # high, or xhigh depending on model support. Can be overridden under query.
   # reasoning_effort: "medium"

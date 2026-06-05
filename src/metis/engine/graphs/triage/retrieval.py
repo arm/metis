@@ -18,10 +18,13 @@ def _normalize_doc(doc):
         meta.get("file_path") or meta.get("source") or meta.get("doc_id") or ""
     )
     raw_line = meta.get("line") or meta.get("start_line") or meta.get("line_number")
-    try:
-        line = int(raw_line)
-    except Exception:
+    if raw_line is None:
         line = 0
+    else:
+        try:
+            line = int(raw_line)
+        except Exception:
+            line = 0
     digest = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
     return source, line, content, digest
 
@@ -110,8 +113,8 @@ def _build_retrieval_query(state: TriageState) -> str:
 
 
 def triage_node_retrieve(state: TriageState) -> TriageState:
-    if not state.get("use_retrieval_context", True):
-        new_state: TriageState = dict(state)
+    if not state.get("use_retrieval_context", False):
+        new_state: TriageState = state.copy()
         new_state["context"] = ""
         return new_state
     query = _build_retrieval_query(state)
@@ -126,6 +129,6 @@ def triage_node_retrieve(state: TriageState) -> TriageState:
         docs_context=docs,
         context=context,
     )
-    new_state: TriageState = dict(state)
+    new_state: TriageState = state.copy()
     new_state["context"] = context
     return new_state

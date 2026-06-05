@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import sys
+
 from metis.engine.analysis.base import AnalyzerRequest
 from metis.engine.analysis.c_family_analyzer import CFamilyTriageAnalyzer
 
@@ -14,15 +18,30 @@ class _Point:
 
 
 class _Node:
-    def __init__(self, node_type, *, text="", line=1, children=None, fields=None):
+    def __init__(
+        self,
+        node_type,
+        *,
+        text="",
+        line=1,
+        children=None,
+        fields=None,
+        start_byte=0,
+        end_byte=0,
+    ):
         self._type = node_type
         self.text = text
         self._start_position = _Point(line - 1, 0)
         self._end_position = _Point(line - 1, 0)
-        self._start_byte = 0
-        self._end_byte = 0
+        self._start_byte = start_byte
+        self._end_byte = end_byte
         self._children = children or []
         self._fields = fields or {}
+        self._parent = None
+        for child in self._children:
+            child._parent = self
+        for child in self._fields.values():
+            child._parent = self
 
     def kind(self):
         return self._type
@@ -48,6 +67,9 @@ class _Node:
     def child_by_field_name(self, name):
         return self._fields.get(name)
 
+    def parent(self):
+        return self._parent
+
 
 class _Tree:
     def __init__(self, root):
@@ -71,6 +93,22 @@ class _Runtime:
 
     def parse_file(self, _codebase_path, _rel_path):
         return _Parsed(self._root)
+
+
+def _collect_unraisable_errors(fn):
+    errors = []
+    original_hook = sys.unraisablehook
+
+    def hook(args):
+        errors.append(args)
+
+    sys.unraisablehook = hook
+    try:
+        fn()
+        gc.collect()
+    finally:
+        sys.unraisablehook = original_hook
+    return errors
 
 
 def test_c_family_analyzer_collects_definition_and_call(monkeypatch):
@@ -125,6 +163,39 @@ def test_c_family_analyzer_collects_definition_and_call(monkeypatch):
     assert any(
         "sink at " in step or "unknown at " in step for step in out.flow_chain
     ) or any(hop.startswith("FLOW_SINK_NOT_FOUND") for hop in out.unresolved_hops)
+
+
+def test_c_family_analyzer_releases_native_nodes_in_worker_thread(tmp_path):
+    (tmp_path / "x.h").write_text("struct S { int foo; };\n", encoding="utf-8")
+
+    def run_analyzer():
+        analyzer = CFamilyTriageAnalyzer(
+            codebase_path=str(tmp_path),
+            language_name="c",
+            supported_extensions=[".h"],
+        )
+        return analyzer.collect_evidence(
+            AnalyzerRequest(
+                codebase_path=str(tmp_path),
+                file_path="x.h",
+                line=1,
+                finding_message="unused member foo",
+                finding_snippet="",
+                finding_rule_id="unused",
+                candidate_symbols=["foo"],
+                max_citations=4,
+            )
+        ).summary
+
+    def run_in_worker():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(run_analyzer).result()
+
+    errors = _collect_unraisable_errors(run_in_worker)
+
+    assert not [
+        err for err in errors if "unsendable" in str(getattr(err, "exc_value", ""))
+    ]
 
 
 def test_c_family_analyzer_reports_unavailable_runtime():

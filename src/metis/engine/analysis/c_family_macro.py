@@ -192,14 +192,6 @@ class CFamilyMacroMixin:
         return "unknown"
 
 
-_C_FAMILY_EXTENSIONS = {".c", ".h", ".cc", ".cpp", ".hpp", ".hh", ".hxx", ".cxx"}
-
-
-def is_c_family_file_path(file_path: str) -> bool:
-    ext = Path(file_path or "").suffix.lower()
-    return ext in _C_FAMILY_EXTENSIONS
-
-
 def is_c_macro_like_symbol(text: str) -> bool:
     value = str(text or "").strip()
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,127}$", value):
@@ -217,9 +209,9 @@ def collect_c_macro_like_calls_from_scope(
     macros: list[str] = []
     seen: set[str] = set()
 
-    def _walk(cur) -> None:
-        if len(macros) >= max_macros:
-            return
+    stack = [node]
+    while stack and len(macros) < max_macros:
+        cur = stack.pop()
         if _node_kind(cur) == "call_expression":
             fn_node = _node_child_by_field_name(cur, "function")
             if fn_node is not None:
@@ -229,10 +221,8 @@ def collect_c_macro_like_calls_from_scope(
                     if is_c_macro_like_symbol(candidate) and candidate not in seen:
                         seen.add(candidate)
                         macros.append(candidate)
-        for child in _node_children(cur):
-            _walk(child)
-
-    _walk(node)
+        for child in reversed(_node_children(cur)):
+            stack.append(child)
     return macros
 
 

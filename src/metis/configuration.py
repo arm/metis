@@ -9,6 +9,8 @@ from importlib.resources import files, as_file
 from pathlib import Path
 from typing import TypedDict
 
+from metis.reachability_settings import collect_reachability_config
+
 logger = logging.getLogger("metis")
 
 
@@ -25,6 +27,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "vllm": "vLLM",
     "ollama": "Ollama",
     "anthropic": "Anthropic",
+    "llamacpp": "llama.cpp",
 }
 
 _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
@@ -50,6 +53,11 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "docs_embedding_model",
     ),
     "ollama": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "llamacpp": (
         "model",
         "code_embedding_model",
         "docs_embedding_model",
@@ -91,6 +99,12 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": ("ANTHROPIC_API_KEY",),
+    },
+    "llamacpp": {
+        "required": False,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": ("LLAMACPP_API_KEY",),
     },
 }
 
@@ -252,6 +266,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
     llm_api_key = _resolve_llm_api_key(llm_provider_name, llm_cfg)
     if llm_provider_name == "openai":
         runtime["llm_api_key"] = llm_api_key
+        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
     elif llm_provider_name == "azure_openai":
         runtime["llm_api_key"] = llm_api_key
@@ -296,6 +312,11 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["embedding_default_headers"] = llm_cfg.get(
             "embedding_default_headers", {}
         )
+    elif llm_provider_name == "llamacpp":
+        runtime["llm_api_key"] = llm_api_key
+        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
+        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
+        runtime["model"] = llm_cfg.get("model", "")
     else:
         raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
 
@@ -326,6 +347,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
+    runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     # Query config
     query_cfg = cfg.get("query", {})
@@ -334,7 +356,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
         llama_query_model = _resolve_anthropic_model_name(llama_query_model)
     runtime["llama_query_model"] = llama_query_model
     runtime["llama_query_temperature"] = query_cfg.get("temperature", 0.0)
-    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 500)
+    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 3072)
     runtime["llama_query_reasoning_effort"] = (
         query_cfg.get("reasoning_effort")
         or query_cfg.get("reasoning_level")

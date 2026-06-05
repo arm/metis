@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import importlib
+from importlib.metadata import version as package_version
+import inspect
 from pathlib import Path
 from rich.markup import escape
 
 from metis.engine.options import ReviewOptions, TriageOptions
 from .command_runtime import CommandRuntime
+from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
 from metis.usage import usage_operation
@@ -18,23 +20,12 @@ from .utils import (
     with_timer,
     collect_reviews,
     iterate_with_progress,
+    build_standard_progress,
     count_index_items,
     pretty_print_reviews,
     save_output,
     print_console,
 )
-
-
-def _print_no_index_warning(args, runtime: CommandRuntime):
-    if runtime.use_retrieval_context:
-        return
-    if runtime.no_index_warning_emitted:
-        return
-    print_console(
-        "[yellow]Warning:[/yellow] Running without index; relevant-context retrieval was skipped.",
-        args.quiet,
-    )
-    runtime.no_index_warning_emitted = True
 
 
 def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
@@ -71,7 +62,8 @@ Options:
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
-    --ignore-index             Allow review_file, review_code, review_patch, and triage to run without index-backed context.
+    --use-index                Experimental opt-in to legacy index-backed retrieval for review and triage.
+    --ignore-index             Compatibility no-op retained for existing scripts.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -81,14 +73,13 @@ Options:
 
 
 def show_version(args=None):
-    version = importlib.metadata.version("metis")
+    version = package_version("metis")
     print_console("Metis [green]" + version + "[/green]")
 
 
 def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
-    _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
     results = with_spinner(
         "Reviewing patch...",
@@ -103,7 +94,6 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
-    _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
@@ -122,14 +112,20 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 
 
 def run_review_code(engine, args, runtime: CommandRuntime):
-    _print_no_index_warning(args, runtime)
     options = _review_options_for_runtime(runtime)
-    if args.verbose:
-        print_console("[cyan]Reviewing codebase...[/cyan]", args.quiet)
-        total = len(engine.review.get_code_files(options=options))
+    if not args.quiet:
+        code_files = list(engine.review.get_code_files(options=options))
+        file_reviews = _collect_review_code_with_progress(
+            engine,
+            options,
+            code_files,
+        )
+        results = {"reviews": file_reviews}
+    elif args.verbose:
+        code_files = list(engine.review.get_code_files(options=options))
         file_reviews = iterate_with_progress(
-            total,
-            engine.review.review_code(options=options),
+            len(code_files),
+            _review_code_iter(engine.review, options, code_files=code_files),
         )
         results = {"reviews": file_reviews}
     else:
@@ -141,6 +137,52 @@ def run_review_code(engine, args, runtime: CommandRuntime):
             quiet=args.quiet,
         )
     _finalize_review_output(engine, results, args, runtime)
+
+
+def _collect_review_code_with_progress(engine, options, code_files):
+    results = []
+    total = len(code_files)
+    with build_standard_progress(transient=True) as progress:
+        progress_reporter = ReviewCodeProgressReporter(
+            progress,
+            total_files=total,
+        )
+        for item in _review_code_iter(
+            engine.review,
+            options,
+            progress_callback=progress_reporter,
+            code_files=code_files,
+        ):
+            if item is not None:
+                results.append(item)
+            progress_reporter.review_result()
+        progress_reporter.finish()
+    return results
+
+
+def _review_code_iter(review_domain, options, progress_callback=None, code_files=None):
+    review_code = review_domain.review_code
+    kwargs = {"options": options}
+    try:
+        signature = inspect.signature(review_code)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        params = signature.parameters
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+        if progress_callback is not None and (
+            "progress_callback" in params or accepts_kwargs
+        ):
+            kwargs["progress_callback"] = progress_callback
+        if code_files is not None and (
+            "get_code_files_func" in params or accepts_kwargs
+        ):
+            kwargs["get_code_files_func"] = lambda: code_files
+    elif progress_callback is not None:
+        kwargs["progress_callback"] = progress_callback
+    return review_code(**kwargs)
 
 
 def run_index(engine, verbose=False, quiet=False):
@@ -199,7 +241,6 @@ def run_triage(engine, sarif_path, args, runtime: CommandRuntime):
     if Path(sarif_path).suffix.lower() != ".sarif":
         print_console("[red]Only .sarif input files are supported.[/red]", args.quiet)
         return
-    _print_no_index_warning(args, runtime)
     print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
     options = _triage_options_for_runtime(args, runtime)
 
@@ -235,7 +276,6 @@ def _build_triaged_sarif_payload(engine, results, args, runtime: CommandRuntime)
         return None
     try:
         sarif_payload = generate_sarif(results)
-        _print_no_index_warning(args, runtime)
         options = _triage_options_for_runtime(args, runtime)
 
         def _invoke(kwargs):

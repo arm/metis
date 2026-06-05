@@ -17,7 +17,6 @@ from metis.engine.analysis.c_family_analyzer_common import (
 from metis.engine.analysis.c_family_macro import (
     collect_c_macro_definition_sections,
     collect_c_macro_like_calls_from_scope,
-    is_c_family_file_path,
 )
 
 from . import constants as C
@@ -31,6 +30,22 @@ from .evidence_text import (
     _parse_grep_hits,
     _token_pattern,
 )
+
+
+def _has_c_family_triage_analyzer(state: TriageState, file_path: str) -> bool:
+    supports_evidence = getattr(
+        state.get("triage_plugin"), "supports_c_family_triage_evidence", None
+    )
+    if not callable(supports_evidence) or not supports_evidence():
+        return False
+    analyzer = state.get("triage_analyzer")
+    supports_file = getattr(analyzer, "supports_file", None)
+    if not callable(supports_file):
+        return True
+    try:
+        return bool(supports_file(file_path))
+    except Exception:
+        return False
 
 
 def _safe_tool_capture(
@@ -174,6 +189,7 @@ def _collect_treesitter_scope_symbols(
                 return [], []
         except Exception:
             return [], []
+
     try:
         parsed = runtime.parse_file(
             state.get("triage_codebase_path", ".") or ".", file_path
@@ -182,63 +198,77 @@ def _collect_treesitter_scope_symbols(
         sections.append(f"[TREE_SITTER_SCOPE]\nparse_failed: {exc}")
         return [], []
 
-    source = bytes(parsed.text, "utf-8")
-    root = parsed.tree.root_node()
     nodes: list[Any] = []
     parent_map: dict[int, Any | None] = {}
+    tree = None
+    root = None
+    anchor = None
+    scope = None
+    try:
+        source = bytes(parsed.text, "utf-8")
+        tree = parsed.tree
+        root = tree.root_node()
 
-    def _walk(node: Any, parent: Any | None) -> None:
-        nodes.append(node)
-        parent_map[id(node)] = parent
-        for child in _node_children(node):
-            _walk(child, node)
+        def _walk(node: Any, parent: Any | None) -> None:
+            nodes.append(node)
+            parent_map[id(node)] = parent
+            for child in _node_children(node):
+                _walk(child, node)
 
-    _walk(root, None)
-    anchor = _find_anchor_node(nodes, line=line)
-    if anchor is None:
-        sections.append("[TREE_SITTER_SCOPE]\nanchor_not_found")
-        return [], []
-    scope = _nearest_enclosing_scope(anchor, parent_map)
-    if scope is None:
-        scope = anchor
+        _walk(root, None)
+        anchor = _find_anchor_node(nodes, line=line)
+        if anchor is None:
+            sections.append("[TREE_SITTER_SCOPE]\nanchor_not_found")
+            return [], []
+        scope = _nearest_enclosing_scope(anchor, parent_map)
+        if scope is None:
+            scope = anchor
 
-    scope_start = _node_line(scope)
-    scope_end = _node_end_line(scope)
-    sections.append(
-        f"[TREE_SITTER_SCOPE {file_path}:{scope_start}-{scope_end}]\ntype={_node_kind(scope)}"
-    )
+        scope_start = _node_line(scope)
+        scope_end = _node_end_line(scope)
+        sections.append(
+            f"[TREE_SITTER_SCOPE {file_path}:{scope_start}-{scope_end}]\ntype={_node_kind(scope)}"
+        )
 
-    line_symbols = _collect_identifier_symbols(
-        anchor, source, max_symbols=max_symbols * 2
-    )
-    upward_symbols = _collect_identifier_symbols_until_line(
-        scope,
-        source,
-        line=line,
-        max_symbols=max_symbols * 4,
-    )
-    merged: list[str] = []
-    seen: set[str] = set()
-    for symbol in line_symbols + upward_symbols:
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
-        merged.append(symbol)
-        if len(merged) >= max_symbols:
-            break
-    macros: list[str] = []
-    if is_c_family_file_path(file_path):
-        macros = collect_c_macro_like_calls_from_scope(
+        line_symbols = _collect_identifier_symbols(
+            anchor, source, max_symbols=max_symbols * 2
+        )
+        upward_symbols = _collect_identifier_symbols_until_line(
             scope,
             source,
-            max_macros=max_symbols,
-            collect_identifier_symbols=_collect_identifier_symbols,
+            line=line,
+            max_symbols=max_symbols * 4,
         )
-    if merged:
-        sections.append("[TREE_SITTER_SCOPE_SYMBOLS]\n" + ", ".join(merged))
-    if macros:
-        sections.append("[TREE_SITTER_MACROS]\n" + ", ".join(macros))
-    return merged, macros
+        merged: list[str] = []
+        seen: set[str] = set()
+        for symbol in line_symbols + upward_symbols:
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            merged.append(symbol)
+            if len(merged) >= max_symbols:
+                break
+        macros: list[str] = []
+        if _has_c_family_triage_analyzer(state, file_path):
+            macros = collect_c_macro_like_calls_from_scope(
+                scope,
+                source,
+                max_macros=max_symbols,
+                collect_identifier_symbols=_collect_identifier_symbols,
+            )
+        if merged:
+            sections.append("[TREE_SITTER_SCOPE_SYMBOLS]\n" + ", ".join(merged))
+        if macros:
+            sections.append("[TREE_SITTER_MACROS]\n" + ", ".join(macros))
+        return merged, macros
+    finally:
+        nodes.clear()
+        parent_map.clear()
+        parsed = None
+        tree = None
+        root = None
+        anchor = None
+        scope = None
 
 
 def _find_anchor_node(nodes: list[Any], *, line: int) -> Any | None:
@@ -352,7 +382,7 @@ def _collect_macro_definition_sections(
     macro_names: list[str],
     max_sections: int,
 ) -> tuple[list[str], dict[str, str]]:
-    if not is_c_family_file_path(file_path) or not macro_names:
+    if not _has_c_family_triage_analyzer(state, file_path) or not macro_names:
         return [], {}
 
     def _dispatch_invoke(invoke):

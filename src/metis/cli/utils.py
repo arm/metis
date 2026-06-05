@@ -256,6 +256,7 @@ def iterate_with_progress(total, iterable):
 def build_standard_progress(*, transient: bool):
     return Progress(
         SpinnerColumn(style="cyan"),
+        TextColumn("{task.description}"),
         BarColumn(bar_width=None, complete_style="green", finished_style="green"),
         TaskProgressColumn(),
         TextColumn("[bright_black]elapsed"),
@@ -563,7 +564,7 @@ def pretty_print_reviews(results, quiet=False):
             print_console(f"\n[bold blue]File: {escape(file)}[/bold blue]", quiet)
             for idx, r in enumerate(reviews, 1):
                 print_console(
-                    f" [yellow]Identified issue {idx}:[/yellow] [bold]{escape(r.get('issue','-'))}[/bold]",
+                    f" [yellow]Identified issue {idx}:[/yellow] [bold]{escape(r.get('issue', '-'))}[/bold]",
                     quiet,
                 )
                 if r.get("code_snippet"):
@@ -649,5 +650,5 @@ def build_chroma_backend(args, runtime, embed_model_code, embed_model_docs):
         persist_dir=args.chroma_dir,
         embed_model_code=embed_model_code,
         embed_model_docs=embed_model_docs,
-        query_config=runtime.get("query", {}),
+        query_config=runtime,
     )
