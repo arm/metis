@@ -11,14 +11,12 @@ from llama_index.embeddings.openai import (
     OpenAIEmbedding,
     OpenAIEmbeddingModelType,
 )
-from llama_index.llms.openai import OpenAIResponses
 from llama_index.core.callbacks import CallbackManager
 
 from metis.providers.base import (
     ChatModelOptions,
     LLMProvider,
     OpenAICompatibleProviderConfig,
-    QueryModelKwargs,
 )
 
 _ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
@@ -31,7 +29,6 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         default_base_url: str | None = None,
         default_api_key: str | None = None,
-        force_openai_like: bool | None = None,
     ) -> None:
         self.config = config
         self.api_key = config.get("llm_api_key")
@@ -48,9 +45,6 @@ class OpenAICompatibleProvider(LLMProvider):
         self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.reasoning_effort = config.get("llama_query_reasoning_effort")
-        self.context_window = config.get("llama_query_context_window") or config.get(
-            "max_token_length"
-        )
         self.code_embedding_model = config.get("code_embedding_model")
         self.docs_embedding_model = config.get("docs_embedding_model")
         self.code_embedding_extra_kwargs = dict(
@@ -62,9 +56,6 @@ class OpenAICompatibleProvider(LLMProvider):
         # Apply default API key when none provided
         if not self.api_key and default_api_key:
             self.api_key = default_api_key
-        # Record force_openai_like preference so _uses_custom_openai_base can see it
-        if force_openai_like is not None:
-            self.config["force_openai_like"] = True
 
         # Validate required configuration
         if not self.query_model:
@@ -177,65 +168,3 @@ class OpenAICompatibleProvider(LLMProvider):
                 params[optional_key] = kwargs[optional_key]
 
         return ChatOpenAI(**cast(dict[str, Any], params))
-
-    def get_query_engine_class(self) -> type[OpenAIResponses]:
-        return OpenAIResponses
-
-    def get_query_model_kwargs(
-        self,
-        *,
-        callback_manager: CallbackManager | None = None,
-        callbacks: Callbacks = None,
-    ) -> QueryModelKwargs:
-        if not self.query_model:
-            raise ValueError("Missing chat model configuration for query engine")
-
-        params: dict[str, object] = {
-            "model": self.query_model,
-            "temperature": self.temperature,
-            "max_output_tokens": self.max_tokens,
-        }
-        if self.api_key:
-            params["api_key"] = self.api_key
-        if self.base_url:
-            params["api_base"] = self.base_url
-        if self.default_headers:
-            params["default_headers"] = self.default_headers
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
-        if self.reasoning_effort:
-            reasoning = {"effort": self.reasoning_effort}
-            params["reasoning_options"] = reasoning
-            params["additional_kwargs"] = {"reasoning": reasoning}
-        if self._uses_custom_openai_base():
-            params["context_window"] = self._resolve_context_window()
-
-        return params
-
-    def _uses_custom_openai_base(self) -> bool:
-        forced = bool(self.config.get("force_openai_like"))
-        if forced:
-            return True
-        if not self.base_url:
-            return False
-        normalized = str(self.base_url).strip().lower()
-        # Official OpenAI endpoints can use model metadata; custom endpoints
-        # need an explicit context window.
-        return "api.openai.com" not in normalized
-
-    def _resolve_context_window(self) -> int:
-        candidates = [
-            self.context_window,
-            self.config.get("max_token_length"),
-            8192,
-        ]
-        for value in candidates:
-            if value is None:
-                continue
-            try:
-                ivalue = int(value)
-                if ivalue > 0:
-                    return ivalue
-            except (TypeError, ValueError):
-                continue
-        return 8192

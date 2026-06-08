@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from metis.engine.options import TriageOptions
+from metis.exceptions import ToolDisabledError
 from metis.sarif.triage import extract_findings
 
 
@@ -145,7 +147,7 @@ def test_triage_payload_skips_failed_finding(engine, monkeypatch):
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (SimpleNamespace(), SimpleNamespace()),
     )
     engine.max_workers = 1
@@ -195,7 +197,7 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (SimpleNamespace(), SimpleNamespace()),
     )
     monkeypatch.setattr(
@@ -211,7 +213,7 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
     assert writes == [2, 4, 5]
 
 
-def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
+def test_triage_payload_no_index_skips_retriever_init(engine, monkeypatch):
     payload = {
         "version": "2.1.0",
         "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
@@ -226,9 +228,9 @@ def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (_ for _ in ()).throw(
-            AssertionError("should not initialize query engines")
+            AssertionError("should not initialize retrievers")
         ),
     )
     monkeypatch.setattr(
@@ -242,8 +244,8 @@ def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
     assert result["properties"]["metisTriaged"] is True
 
 
-def test_triage_payload_disables_retrieval_when_index_tool_disabled(
-    dummy_backend, dummy_llm, monkeypatch
+def test_triage_payload_requires_index_tool_when_retrieval_requested(
+    dummy_backend, dummy_llm
 ):
     from metis.engine import MetisEngine
 
@@ -259,30 +261,21 @@ def test_triage_payload_disables_retrieval_when_index_tool_disabled(
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools=frozenset(),
     )
 
-    class _DummyGraph:
-        def triage(self, request):
-            assert request["use_retrieval_context"] is False
-            assert request["retriever_code"] is None
-            assert request["retriever_docs"] is None
-            return {"status": "valid", "reason": "confirmed"}
-
-    monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
-    )
     engine._triage_service.max_workers = 1
 
-    out = engine.triage_sarif_payload(payload)
+    with pytest.raises(ToolDisabledError):
+        engine.triage_sarif_payload(
+            payload,
+            options=TriageOptions(use_retrieval_context=True),
+        )
 
-    result = out["runs"][0]["results"][0]
-    assert result["properties"]["metisTriaged"] is True
-    dummy_backend.get_query_engines.assert_not_called()
+    dummy_backend.get_retrievers.assert_not_called()
 
 
-def test_triage_payload_raises_when_query_engine_init_fails(engine, monkeypatch):
+def test_triage_payload_raises_when_retriever_init_fails(engine, monkeypatch):
     payload = {
         "version": "2.1.0",
         "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
@@ -290,12 +283,15 @@ def test_triage_payload_raises_when_query_engine_init_fails(engine, monkeypatch)
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        engine.triage_sarif_payload(payload, use_retrieval_context=True)
+        engine.triage_sarif_payload(
+            payload,
+            options=TriageOptions(use_retrieval_context=True),
+        )
 
 
 def test_triage_request_propagates_source_metadata(engine, monkeypatch):
@@ -331,7 +327,7 @@ def test_triage_request_propagates_source_metadata(engine, monkeypatch):
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (SimpleNamespace(), SimpleNamespace()),
     )
     monkeypatch.setattr(
@@ -385,7 +381,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
 
     monkeypatch.setattr(
         engine._triage_service,
-        "_init_and_get_triage_query_engines",
+        "_init_and_get_triage_retrievers",
         lambda: (SimpleNamespace(), SimpleNamespace()),
     )
     monkeypatch.setattr(

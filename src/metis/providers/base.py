@@ -38,13 +38,10 @@ class OpenAICompatibleProviderConfig(TypedDict, total=False):
     llama_query_temperature: float
     llama_query_max_tokens: int
     llama_query_reasoning_effort: str
-    llama_query_context_window: int
-    max_token_length: int
     code_embedding_model: str
     docs_embedding_model: str
     code_embedding_extra_kwargs: Mapping[str, object]
     docs_embedding_extra_kwargs: Mapping[str, object]
-    force_openai_like: bool
 
 
 class AzureOpenAIProviderConfig(TypedDict, total=False):
@@ -75,11 +72,8 @@ class ProviderChatModelKwargs(TypedDict, total=False):
     callbacks: Callbacks
 
 
-class QueryEngineKwargs(ProviderChatModelKwargs, total=False):
+class RetrieverKwargs(ProviderChatModelKwargs, total=False):
     callback_manager: CallbackManager
-
-
-QueryModelKwargs = Mapping[str, object]
 
 
 class LLMProvider(ABC):
@@ -108,19 +102,4 @@ class LLMProvider(ABC):
         **kwargs: Unpack[ChatModelOptions],
     ) -> BaseChatModel:
         """Return a LangChain chat model instance."""
-        pass
-
-    @abstractmethod
-    def get_query_engine_class(self) -> type[object]:
-        """Return the LlamaIndex LLM class used for query engines."""
-        pass
-
-    @abstractmethod
-    def get_query_model_kwargs(
-        self,
-        *,
-        callback_manager: CallbackManager | None = None,
-        callbacks: Callbacks = None,
-    ) -> QueryModelKwargs:
-        """Return kwargs for constructing the query engine LLM."""
         pass

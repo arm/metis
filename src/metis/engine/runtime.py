@@ -25,7 +25,6 @@ class EngineConfig:
     max_token_length: int
     llama_query_model: str
     similarity_top_k: int
-    response_mode: str
     doc_chunk_size: int
     doc_chunk_overlap: int
     metisignore_file: str | None
@@ -43,7 +42,7 @@ class EngineState:
     doc_splitter: Any | None = None
     review_graph: Any | None = None
     ask_graph: Any | None = None
-    qe_code: Any | None = None
-    qe_docs: Any | None = None
+    retriever_code: Any | None = None
+    retriever_docs: Any | None = None
     pending_nodes: tuple[Any, Any] | None = None
-    query_engine_lock: Lock = field(default_factory=Lock)
+    retriever_lock: Lock = field(default_factory=Lock)

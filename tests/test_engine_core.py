@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from metis.engine import MetisEngine
 from metis.exceptions import (
     PluginNotFoundError,
-    QueryEngineInitError,
+    RetrieverInitError,
     ToolDisabledError,
 )
 from metis.usage import UsageRuntime
@@ -32,10 +32,10 @@ def test_get_missing_plugin_raises(engine):
         engine.get_plugin_from_name("nonexistent")
 
 
-def test_init_and_get_query_engines_raises_on_missing_backend():
+def test_init_and_get_retrievers_raises_on_missing_backend():
     bad_backend = Mock()
     bad_backend.init = Mock()
-    bad_backend.get_query_engines = Mock(return_value=(None, None))
+    bad_backend.get_retrievers = Mock(return_value=(None, None))
     engine = MetisEngine(
         vector_backend=bad_backend,
         llm_provider=Mock(),
@@ -43,17 +43,16 @@ def test_init_and_get_query_engines_raises_on_missing_backend():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
-    with pytest.raises(QueryEngineInitError):
-        engine._init_and_get_query_engines()
+    with pytest.raises(RetrieverInitError):
+        engine._init_and_get_retrievers()
 
 
 def test_init_and_get_default_unavailable_metisignore():
     bad_backend = Mock()
     bad_backend.init = Mock()
-    bad_backend.get_query_engines = Mock(return_value=(None, None))
+    bad_backend.get_retrievers = Mock(return_value=(None, None))
     engine = MetisEngine(
         vector_backend=bad_backend,
         llm_provider=Mock(),
@@ -61,7 +60,6 @@ def test_init_and_get_default_unavailable_metisignore():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         metisignore_file=".metisignore_file",
     )
     assert engine.metisignore_file == ".metisignore_file"
@@ -71,7 +69,7 @@ def test_init_and_get_default_unavailable_metisignore():
 def test_init_and_get_default_available_metisignore():
     bad_backend = Mock()
     bad_backend.init = Mock()
-    bad_backend.get_query_engines = Mock(return_value=(None, None))
+    bad_backend.get_retrievers = Mock(return_value=(None, None))
     engine = None
     with tempfile.NamedTemporaryFile(
         mode="w+t", encoding="utf-8", suffix=".yaml"
@@ -83,7 +81,6 @@ def test_init_and_get_default_available_metisignore():
             max_token_length=2048,
             llama_query_model="gpt-test",
             similarity_top_k=3,
-            response_mode="compact",
             metisignore_file=temp_file.name,
         )
         assert engine.repository.load_metisignore() is not None
@@ -91,10 +88,10 @@ def test_init_and_get_default_available_metisignore():
     assert engine is not None
 
 
-def test_init_and_get_query_engines_is_thread_safe():
+def test_init_and_get_retrievers_is_thread_safe():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     engine = MetisEngine(
         vector_backend=backend,
         llm_provider=Mock(),
@@ -102,14 +99,13 @@ def test_init_and_get_query_engines_is_thread_safe():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
     results = []
 
     def _worker():
-        results.append(engine._init_and_get_query_engines())
+        results.append(engine._init_and_get_retrievers())
 
     threads = [threading.Thread(target=_worker) for _ in range(8)]
     for thread in threads:
@@ -117,15 +113,15 @@ def test_init_and_get_query_engines_is_thread_safe():
     for thread in threads:
         thread.join()
 
-    assert results == [("code-qe", "docs-qe")] * 8
+    assert results == [("code-retriever", "docs-retriever")] * 8
     backend.init.assert_called_once()
-    backend.get_query_engines.assert_called_once()
+    backend.get_retrievers.assert_called_once()
 
 
 def test_engine_passes_usage_callback_manager_to_embed_models():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -137,7 +133,6 @@ def test_engine_passes_usage_callback_manager_to_embed_models():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
@@ -149,10 +144,10 @@ def test_engine_passes_usage_callback_manager_to_embed_models():
     }
 
 
-def test_create_query_engines_passes_usage_callback_manager():
+def test_create_retrievers_passes_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -164,18 +159,17 @@ def test_create_query_engines_passes_usage_callback_manager():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
-    engine._create_query_engines(5)
+    engine._create_retrievers(5)
 
     assert (
-        backend.get_query_engines.call_args.kwargs["callback_manager"]
+        backend.get_retrievers.call_args.kwargs["callback_manager"]
         is engine.usage_runtime.hooks.callback_manager
     )
     assert (
-        backend.get_query_engines.call_args.kwargs["callbacks"]
+        backend.get_retrievers.call_args.kwargs["callbacks"]
         == engine.usage_runtime.hooks.callbacks
     )
 
@@ -183,7 +177,7 @@ def test_create_query_engines_passes_usage_callback_manager():
 def test_review_graph_uses_usage_callbacks(monkeypatch):
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -196,7 +190,6 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
@@ -222,7 +215,7 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
 def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.embed_model_code = object()
     backend.embed_model_docs = object()
     llm_provider = Mock()
@@ -236,7 +229,6 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         usage_runtime=runtime,
     )
 
@@ -250,7 +242,7 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
 def test_engine_exposes_focused_services_without_compat_aliases():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -262,7 +254,6 @@ def test_engine_exposes_focused_services_without_compat_aliases():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
@@ -284,10 +275,43 @@ def test_engine_exposes_focused_services_without_compat_aliases():
     engine.indexing.update_index.assert_called_once_with("diff --git")
 
 
+def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
+    backend = Mock()
+    backend.init = Mock()
+    backend.reset_index = Mock()
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools={"index"},
+    )
+
+    class _Reader:
+        def __init__(self, **_kwargs):
+            pass
+
+        def load_data(self):
+            return []
+
+    monkeypatch.setattr("metis.engine.indexing_service.SimpleDirectoryReader", _Reader)
+    engine.indexing.index_prepare_nodes()
+
+    backend.init.assert_called_once()
+    backend.reset_index.assert_called_once()
+
+
 def test_close_clears_query_cache_and_closes_backend():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.close = Mock()
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
@@ -300,27 +324,26 @@ def test_close_clears_query_cache_and_closes_backend():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools={"index"},
     )
 
-    assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
-    assert backend.get_query_engines.call_count == 1
+    assert engine._init_and_get_retrievers() == ("code-retriever", "docs-retriever")
+    assert backend.get_retrievers.call_count == 1
 
     engine.close()
 
-    assert engine._state.qe_code is None
-    assert engine._state.qe_docs is None
+    assert engine._state.retriever_code is None
+    assert engine._state.retriever_docs is None
     backend.close.assert_called_once()
 
-    assert engine._init_and_get_query_engines() == ("code-qe", "docs-qe")
-    assert backend.get_query_engines.call_count == 2
+    assert engine._init_and_get_retrievers() == ("code-retriever", "docs-retriever")
+    assert backend.get_retrievers.call_count == 2
 
 
 def test_disabled_index_tool_blocks_required_index_access():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.close = Mock()
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
@@ -333,18 +356,17 @@ def test_disabled_index_tool_blocks_required_index_access():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools=set(),
     )
 
     assert engine.tools.index.enabled is False
     with pytest.raises(ToolDisabledError):
-        engine._init_and_get_query_engines()
+        engine._init_and_get_retrievers()
     with pytest.raises(ToolDisabledError):
         engine.indexing.count_index_items()
 
     engine.close()
 
     backend.init.assert_not_called()
-    backend.get_query_engines.assert_not_called()
+    backend.get_retrievers.assert_not_called()
     backend.close.assert_not_called()

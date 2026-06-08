@@ -99,6 +99,26 @@ def test_review_nodes_pipeline_parses():
     assert s4.get("parsed_reviews") and isinstance(s4["parsed_reviews"], list)
 
 
+def test_retrieve_text_does_not_stringify_backend_objects():
+    from metis.engine.graphs.utils import retrieve_text
+
+    class _BackendNode:
+        text = "safe graph text"
+        embedding = [0.1, 0.2]
+
+        def __str__(self):
+            return "BackendNode(text='safe graph text', embedding=[0.1, 0.2])"
+
+    class _Retriever:
+        def get_relevant_documents(self, _query):
+            return [_BackendNode()]
+
+    context = retrieve_text(_Retriever(), "lookup")
+
+    assert context == "safe graph text"
+    assert "embedding" not in context
+
+
 def test_review_node_retrieve_no_index_skips_retrievers():
     class _BoomRetriever:
         def get_relevant_documents(self, _query):

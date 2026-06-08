@@ -13,7 +13,7 @@ from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
 from .graphs import AskGraph, ReviewGraph
-from .options import TriageOptions, coerce_triage_options
+from .options import TriageOptions
 from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
@@ -33,7 +33,6 @@ class MetisEngine:
     max_token_length: int
     llama_query_model: str
     similarity_top_k: int
-    response_mode: str
 
     def __init__(
         self,
@@ -50,7 +49,6 @@ class MetisEngine:
             "max_token_length",
             "llama_query_model",
             "similarity_top_k",
-            "response_mode",
         ]
         missing = [k for k in required_keys if k not in kwargs or kwargs[k] is None]
         if missing:
@@ -114,7 +112,6 @@ class MetisEngine:
             max_token_length=self.max_token_length,
             llama_query_model=self.llama_query_model,
             similarity_top_k=self.similarity_top_k,
-            response_mode=self.response_mode,
             doc_chunk_size=self.doc_chunk_size,
             doc_chunk_overlap=self.doc_chunk_overlap,
             metisignore_file=self.metisignore_file,
@@ -143,9 +140,8 @@ class MetisEngine:
         self.review = ReviewService(
             self._config,
             self.repository,
-            get_query_engines=lambda: self.tools.index.get_query_engines(),
+            get_retrievers=lambda: self.tools.index.get_retrievers(),
             review_graph_factory=lambda: self._get_review_graph(),
-            retrieval_available=lambda: self.tools.index.enabled,
             reachability_service=self.reachability,
             reachability_settings=self.reachability_settings,
         )
@@ -232,8 +228,7 @@ class MetisEngine:
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
             normalize_top_k=self._normalize_top_k,
-            create_query_engines=self.tools.index.create_query_engines,
-            retrieval_available=lambda: self.tools.index.enabled,
+            create_retrievers=self.tools.index.create_retrievers,
             get_plugin_for_extension=self._get_plugin_for_extension,
             usage_hooks=self.usage_runtime.hooks,
         )
@@ -284,12 +279,12 @@ class MetisEngine:
         return self.repository.get_plugin_for_extension(extension)
 
     def ask_question(self, question):
-        qe_code, qe_docs = self.tools.index.get_query_engines()
+        retriever_code, retriever_docs = self.tools.index.get_retrievers()
         logger.info("Querying codebase for your question...")
         req = {
             "question": question,
-            "retriever_code": qe_code,
-            "retriever_docs": qe_docs,
+            "retriever_code": retriever_code,
+            "retriever_docs": retriever_docs,
         }
         return self._get_ask_graph().ask(req)
 
@@ -302,11 +297,11 @@ class MetisEngine:
             return default
         return parsed
 
-    def _create_query_engines(self, top_k: int):
-        return self.tools.index.create_query_engines(top_k)
+    def _create_retrievers(self, top_k: int):
+        return self.tools.index.create_retrievers(top_k)
 
-    def _init_and_get_query_engines(self):
-        return self.tools.index.get_query_engines()
+    def _init_and_get_retrievers(self):
+        return self.tools.index.get_retrievers()
 
     def triage_sarif_payload(
         self,
@@ -315,14 +310,7 @@ class MetisEngine:
         debug_callback=None,
         checkpoint_callback=None,
         options: TriageOptions | None = None,
-        include_triaged: bool | None = None,
-        use_retrieval_context: bool | None = None,
     ) -> dict:
-        options = coerce_triage_options(
-            options,
-            include_triaged=include_triaged,
-            use_retrieval_context=use_retrieval_context,
-        )
         return self._triage_service.triage_sarif_payload(
             payload,
             progress_callback=progress_callback,
@@ -339,14 +327,7 @@ class MetisEngine:
         debug_callback=None,
         checkpoint_every: int | None = None,
         options: TriageOptions | None = None,
-        include_triaged: bool | None = None,
-        use_retrieval_context: bool | None = None,
     ) -> str:
-        options = coerce_triage_options(
-            options,
-            include_triaged=include_triaged,
-            use_retrieval_context=use_retrieval_context,
-        )
         return self._triage_service.triage_sarif_file(
             input_path=input_path,
             output_path=output_path,
@@ -357,6 +338,6 @@ class MetisEngine:
         )
 
     def close(self):
-        self.tools.index.clear_query_cache()
+        self.tools.index.clear_retriever_cache()
         self._triage_service.close()
         self.tools.close()

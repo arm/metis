@@ -18,7 +18,7 @@ from .llamaindex import UsageLlamaIndexHandler
 from metis.providers.base import (
     EmbedModelKwargs,
     ProviderChatModelKwargs,
-    QueryEngineKwargs,
+    RetrieverKwargs,
 )
 
 
@@ -50,7 +50,7 @@ class UsageHooks:
     def chat_model_kwargs(self) -> ProviderChatModelKwargs:
         return {"callbacks": self.callbacks}
 
-    def query_engine_kwargs(self) -> QueryEngineKwargs:
+    def retriever_kwargs(self) -> RetrieverKwargs:
         return {
             "callback_manager": self.callback_manager,
             "callbacks": self.callbacks,

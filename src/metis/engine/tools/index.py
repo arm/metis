@@ -27,15 +27,15 @@ class IndexTool:
     def indexing(self):
         return self._handle.require().indexing
 
-    def create_query_engines(self, top_k: int):
-        return self._handle.require().create_query_engines(top_k)
+    def create_retrievers(self, top_k: int):
+        return self._handle.require().create_retrievers(top_k)
 
-    def get_query_engines(self):
-        return self._handle.require().get_query_engines()
+    def get_retrievers(self):
+        return self._handle.require().get_retrievers()
 
-    def clear_query_cache(self) -> None:
+    def clear_retriever_cache(self) -> None:
         if self.enabled:
-            self._handle.require().clear_query_cache()
+            self._handle.require().clear_retriever_cache()
 
     def close(self) -> None:
         self._handle.close()

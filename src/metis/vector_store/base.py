@@ -3,8 +3,6 @@
 
 from abc import ABC, abstractmethod
 
-from langchain_core.documents import Document
-
 
 class BaseVectorStore(ABC):
     @abstractmethod
@@ -13,11 +11,10 @@ class BaseVectorStore(ABC):
         pass
 
     @abstractmethod
-    def get_query_engines(
+    def get_retrievers(
         self,
         llm_provider,
         similarity_top_k,
-        response_mode,
         callback_manager=None,
         callbacks=None,
     ):
@@ -32,33 +29,3 @@ class BaseVectorStore(ABC):
     def close(self):
         """Best-effort resource cleanup hook for vector backends."""
         return None
-
-    def _build_llm(self, llm_provider, callback_manager=None, callbacks=None):
-        """Construct a provider-specific LlamaIndex LLM instance."""
-        llm_class = llm_provider.get_query_engine_class()
-        llm_kwargs = (
-            llm_provider.get_query_model_kwargs(
-                callback_manager=callback_manager,
-                callbacks=callbacks,
-            )
-            or {}
-        )
-        filtered_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
-        return llm_class(**filtered_kwargs)
-
-
-class QueryEngineRetriever:
-    """
-    Adapter that wraps a LlamaIndex QueryEngine and exposes a
-    LangChain-style retriever interface: `get_relevant_documents`.
-    """
-
-    def __init__(self, query_engine):
-        self._qe = query_engine
-
-    def _query_text(self, query: str) -> str:
-        res = self._qe.query(query)
-        return str(getattr(res, "response", res))
-
-    def get_relevant_documents(self, query: str):
-        return [Document(page_content=self._query_text(query))]
