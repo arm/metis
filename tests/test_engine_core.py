@@ -280,6 +280,7 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
     backend.init = Mock()
     backend.reset_index = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -308,7 +309,39 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
     backend.reset_index.assert_called_once()
 
 
-def test_close_clears_query_cache_and_closes_backend():
+def test_index_finalize_embeddings_delegates_node_writes_to_backend():
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+    backend.index_nodes = Mock()
+    llm_provider = Mock()
+    llm_provider.get_embed_model_code.return_value = Mock()
+    llm_provider.get_embed_model_docs.return_value = Mock()
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools={"index"},
+    )
+    engine._state.pending_nodes = (["code-node"], ["docs-node"])
+
+    engine.indexing.index_finalize_embeddings()
+
+    backend.index_nodes.assert_called_once_with(
+        ["code-node"],
+        ["docs-node"],
+        embed_model_code=engine.get_embed_model_code(),
+        embed_model_docs=engine.get_embed_model_docs(),
+        callback_manager=engine.usage_runtime.hooks.callback_manager,
+    )
+    assert engine._state.pending_nodes is None
+
+
+def test_close_clears_retriever_cache_and_closes_backend():
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))

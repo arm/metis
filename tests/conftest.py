@@ -40,6 +40,8 @@ def dummy_backend():
     backend.get_storage_contexts = Mock(
         return_value=(mock_storage_context, mock_storage_context)
     )
+    backend.index_nodes = Mock()
+    backend.get_index_handles = Mock(return_value=(Mock(), Mock()))
     backend.vector_store_code = mock_vector_store
     backend.vector_store_docs = mock_vector_store
 
