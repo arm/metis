@@ -111,6 +111,46 @@ class SourceMap:
             f"{i:>{width}}: {self.lines[i - 1]}" for i in range(start, end + 1)
         )
 
+    def context_slice(
+        self, line: int, *, radius: int = 2, max_chars: int | None = None
+    ) -> str:
+        line = max(1, line)
+        out = self.numbered_slice(line - radius, line + radius)
+        return out[:max_chars] if max_chars else out
+
+    def function_slice(
+        self,
+        start_line: int,
+        end_line: int = 0,
+        *,
+        max_chars: int = 6000,
+        fallback_lines: int = 80,
+    ) -> str:
+        if not end_line:
+            span = self.find_function_span(near_line=start_line)
+            end_line = (
+                span[1] if span else min(self.line_count, start_line + fallback_lines)
+            )
+        max_lines = max(1, max_chars // 80)
+        return self.numbered_slice(start_line, end_line, max_lines=max_lines)
+
+    def find_function_span(
+        self, *, name: str | None = None, near_line: int = 1
+    ) -> tuple[int, int] | None:
+        spans = self._function_spans()
+        if name is not None:
+            spans = [(s, e, n) for s, e, n in spans if n == name]
+        if not spans:
+            return None
+        s, e, _ = min(
+            spans,
+            key=lambda t: (
+                0 if t[0] <= near_line <= t[1] else 1,
+                abs(t[0] - near_line),
+            ),
+        )
+        return s, e
+
     @staticmethod
     def number_text(text: str, start_line: int) -> str:
         lines = text.splitlines()
@@ -205,6 +245,35 @@ class SourceMap:
                 start_line, end_line, confidence=CONFIDENCE_EXACT
             )
         return None
+
+    def resolve_issue(
+        self,
+        *,
+        snippet: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        hint: range | None = None,
+        context_text: str = "",
+    ) -> CodeAnchor:
+        """
+        Resolve a model-reported issue location.
+
+        Trusts ``start_line``/``end_line`` only when ``snippet`` actually
+        appears there; otherwise locates ``snippet`` deterministically,
+        biased by ``hint`` and ``context_text``. Always returns an anchor
+        (``confidence == "unresolved"`` when nothing matches).
+        """
+        if isinstance(start_line, int) and isinstance(end_line, int):
+            verified = self.verify_lines(start_line, end_line, snippet or "")
+            if verified is not None:
+                return verified
+        if snippet:
+            located = self.resolve_snippet(
+                snippet, hint=hint, context_text=context_text
+            )
+            if located is not None:
+                return located
+        return CodeAnchor.unresolved(self.rel_path)
 
     def resolve_snippet(
         self,

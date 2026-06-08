@@ -6,8 +6,6 @@ from collections import defaultdict
 
 from metis.engine.source import SourceMap
 
-from .finding_values import _safe_int
-from .domain import FunctionNode
 from .limits import (
     FUNCTION_BODY_DEFAULT_CHARS,
     FUNCTION_BODY_FALLBACK_LINES,
@@ -15,25 +13,24 @@ from .limits import (
     SOURCE_CONTEXT_PER_FUNCTION_CHARS,
 )
 
-_AVG_LINE_CHARS = 80
-
 
 def _read_function_body(codebase_path, node, max_chars=FUNCTION_BODY_DEFAULT_CHARS):
     smap = SourceMap.for_file(codebase_path, node.file_path)
     if smap is None:
         return ""
-    end = node.end_line or 0
-    if not end:
-        sym = smap.enclosing_symbol(node.line_number)
-        for s, e, name in smap._function_spans():
-            if sym == f"{smap.rel_path}::{name}" and s <= node.line_number <= e:
-                end = e
-                break
-        end = end or min(
-            smap.line_count, node.line_number + FUNCTION_BODY_FALLBACK_LINES
-        )
-    max_lines = max(1, max_chars // _AVG_LINE_CHARS)
-    return smap.numbered_slice(node.line_number, end, max_lines=max_lines)
+    return smap.function_slice(
+        node.line_number,
+        node.end_line,
+        max_chars=max_chars,
+        fallback_lines=FUNCTION_BODY_FALLBACK_LINES,
+    )
+
+
+def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):
+    smap = SourceMap.for_file(codebase_path, rel_file)
+    if smap is None:
+        return ""
+    return smap.context_slice(int(line_number or 1), radius=context, max_chars=max_chars)
 
 
 def _build_file_grouped_node_chunks(
@@ -146,34 +143,3 @@ def _build_globals_code(graph, max_chars=20000):
         parts.append(entry)
         total += len(entry)
     return "\n\n".join(parts)
-
-
-def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):
-    smap = SourceMap.for_file(codebase_path, rel_file)
-    if smap is None:
-        return ""
-    line_number = max(1, _safe_int(line_number, 1))
-    out = smap.numbered_slice(line_number - context, line_number + context)
-    return out[:max_chars]
-
-
-def _read_named_function_body(
-    codebase_path, rel_file, fn_name, near_line=1, max_chars=6000
-):
-    if not rel_file or not fn_name:
-        return ""
-    smap = SourceMap.for_file(codebase_path, rel_file)
-    if smap is None:
-        return ""
-    near_line = max(1, _safe_int(near_line, 1))
-    candidates = [(s, e) for s, e, name in smap._function_spans() if name == fn_name]
-    if not candidates:
-        return ""
-    candidates.sort(
-        key=lambda se: (0 if se[0] <= near_line <= se[1] else 1, abs(se[0] - near_line))
-    )
-    s, e = candidates[0]
-    node = FunctionNode(
-        f"{rel_file}::{fn_name}", rel_file, fn_name, s, False, False, end_line=e
-    )
-    return _read_function_body(codebase_path, node, max_chars=max_chars)

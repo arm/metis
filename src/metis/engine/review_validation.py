@@ -15,7 +15,7 @@ from metis.utils import parse_json_output
 
 from .llm_runner import JsonPromptRequest, JsonPromptRunner
 from .reachability.finding_values import _safe_int
-from .reachability.source_context import _read_line_context, _read_named_function_body
+from .source import SourceMap
 from .reachability.workers import run_reachability_jobs
 
 logger = logging.getLogger("metis")
@@ -216,23 +216,20 @@ def _review_validation_code_context(codebase_path, item):
     line_number = _safe_int(item.get("line_number"), 1)
     if not codebase_path or not primary_file:
         return ""
+    smap = SourceMap.for_file(codebase_path, primary_file)
+    if smap is None:
+        return ""
 
     parts = []
-    line_context = _read_line_context(
-        codebase_path, primary_file, line_number, context=4, max_chars=1800
-    )
+    line_context = smap.context_slice(line_number, radius=4, max_chars=1800)
     if line_context:
         parts.append(f"Nearby lines:\n{line_context}")
 
-    function_body = _read_named_function_body(
-        codebase_path,
-        primary_file,
-        primary_function,
-        near_line=line_number,
-        max_chars=3000,
-    )
-    if function_body and function_body not in line_context:
-        parts.append(f"Primary function body:\n{function_body}")
+    span = smap.find_function_span(name=primary_function, near_line=line_number)
+    if span:
+        function_body = smap.function_slice(span[0], span[1], max_chars=3000)
+        if function_body and function_body not in line_context:
+            parts.append(f"Primary function body:\n{function_body}")
 
     return "\n\n".join(parts)[:3600]
 
