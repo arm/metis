@@ -145,6 +145,7 @@ class MetisEngine:
             self.repository,
             get_query_engines=lambda: self.tools.index.get_query_engines(),
             review_graph_factory=lambda: self._get_review_graph(),
+            retrieval_available=lambda: self.tools.index.enabled,
             reachability_service=self.reachability,
             reachability_settings=self.reachability_settings,
         )
@@ -232,6 +233,7 @@ class MetisEngine:
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
             normalize_top_k=self._normalize_top_k,
             create_query_engines=self.tools.index.create_query_engines,
+            retrieval_available=lambda: self.tools.index.enabled,
             get_plugin_for_extension=self._get_plugin_for_extension,
             usage_hooks=self.usage_runtime.hooks,
         )

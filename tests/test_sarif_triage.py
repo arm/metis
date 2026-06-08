@@ -242,6 +242,46 @@ def test_triage_payload_no_index_skips_query_engine_init(engine, monkeypatch):
     assert result["properties"]["metisTriaged"] is True
 
 
+def test_triage_payload_disables_retrieval_when_index_tool_disabled(
+    dummy_backend, dummy_llm, monkeypatch
+):
+    from metis.engine import MetisEngine
+
+    payload = {
+        "version": "2.1.0",
+        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
+    }
+    engine = MetisEngine(
+        codebase_path="./tests/data",
+        vector_backend=dummy_backend,
+        llm_provider=dummy_llm,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        response_mode="compact",
+        enabled_tools=frozenset(),
+    )
+
+    class _DummyGraph:
+        def triage(self, request):
+            assert request["use_retrieval_context"] is False
+            assert request["retriever_code"] is None
+            assert request["retriever_docs"] is None
+            return {"status": "valid", "reason": "confirmed"}
+
+    monkeypatch.setattr(
+        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+    )
+    engine._triage_service.max_workers = 1
+
+    out = engine.triage_sarif_payload(payload)
+
+    result = out["runs"][0]["results"][0]
+    assert result["properties"]["metisTriaged"] is True
+    dummy_backend.get_query_engines.assert_not_called()
+
+
 def test_triage_payload_raises_when_query_engine_init_fails(engine, monkeypatch):
     payload = {
         "version": "2.1.0",

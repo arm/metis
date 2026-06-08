@@ -20,6 +20,26 @@ logger = logging.getLogger("metis")
 
 
 class TriageServiceExecutionMixin:
+    def _effective_triage_options(
+        self,
+        options: TriageOptions | None = None,
+        *,
+        include_triaged: bool | None = None,
+        use_retrieval_context: bool | None = None,
+    ) -> TriageOptions:
+        options = coerce_triage_options(
+            options,
+            include_triaged=include_triaged,
+            use_retrieval_context=use_retrieval_context,
+        )
+        retrieval_available = getattr(self, "_retrieval_available", lambda: True)
+        if options.use_retrieval_context and not retrieval_available():
+            return TriageOptions(
+                include_triaged=options.include_triaged,
+                use_retrieval_context=False,
+            )
+        return options
+
     def _invoke_callback(self, callback, *args, **kwargs) -> None:
         if not callable(callback):
             return
@@ -210,7 +230,7 @@ class TriageServiceExecutionMixin:
         include_triaged: bool | None = None,
         use_retrieval_context: bool | None = None,
     ) -> dict:
-        options = coerce_triage_options(
+        options = self._effective_triage_options(
             options,
             include_triaged=include_triaged,
             use_retrieval_context=use_retrieval_context,
@@ -251,7 +271,7 @@ class TriageServiceExecutionMixin:
         include_triaged: bool | None = None,
         use_retrieval_context: bool | None = None,
     ) -> str:
-        options = coerce_triage_options(
+        options = self._effective_triage_options(
             options,
             include_triaged=include_triaged,
             use_retrieval_context=use_retrieval_context,
