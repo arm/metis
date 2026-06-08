@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from typing import Sequence
 
+from metis.engine.source import SourceMap
 
 _PYTHON_REGEX_REWRITES = (
     ("[[:space:]]", r"\s"),
@@ -30,8 +31,6 @@ class StaticToolRunner:
         self.max_chars = max_chars
         self._has_grep = shutil.which("grep") is not None
         self._has_find = shutil.which("find") is not None
-        self._has_cat = shutil.which("cat") is not None
-        self._has_sed = shutil.which("sed") is not None
 
     def describe_tool(self, name: str) -> dict[str, str]:
         if name == "grep":
@@ -41,11 +40,9 @@ class StaticToolRunner:
             backend = "shell_find" if self._has_find else "python_walk"
             return {"backend": backend}
         if name == "cat":
-            backend = "shell_cat" if self._has_cat else "python_read"
-            return {"backend": backend}
+            return {"backend": "numbered_read"}
         if name == "sed":
-            backend = "shell_sed" if self._has_sed else "python_slice"
-            return {"backend": backend}
+            return {"backend": "numbered_slice"}
         return {}
 
     def _resolve_path(self, raw_path: str) -> Path:
@@ -155,21 +152,19 @@ class StaticToolRunner:
 
     def cat(self, path: str) -> str:
         target = self._resolve_path(path)
-        if self._has_cat:
-            return self._run(["cat", str(target)])
         if not target.is_file():
             raise FileNotFoundError(str(target))
-        return self._clip(target.read_text(encoding="utf-8", errors="ignore"))
+        text = target.read_text(encoding="utf-8", errors="ignore")
+        return self._clip(SourceMap.number_text(text, 1))
 
     def sed(self, path: str, start_line: int, end_line: int) -> str:
         if end_line < start_line:
             raise ValueError("end_line must be >= start_line")
         target = self._resolve_path(path)
-        if self._has_sed:
-            return self._run(["sed", "-n", f"{start_line},{end_line}p", str(target)])
         if not target.is_file():
             raise FileNotFoundError(str(target))
         lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
         start_idx = max(0, start_line - 1)
         end_idx = min(len(lines), end_line)
-        return self._clip("\n".join(lines[start_idx:end_idx]))
+        body = "\n".join(lines[start_idx:end_idx])
+        return self._clip(SourceMap.number_text(body, start_idx + 1))

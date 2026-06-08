@@ -4,8 +4,6 @@
 import codecs
 import json
 import os
-import difflib
-import re
 import sys
 
 import tiktoken
@@ -23,25 +21,29 @@ def count_tokens(text, model="gpt-4"):
 
 
 def split_snippet(snippet, max_tokens, model="gpt-4"):
+    """Split text into token-bounded chunks, returning (chunk, start_line) pairs."""
     lines = snippet.splitlines(keepends=True)
-    chunks = []
+    chunks: list[tuple[str, int]] = []
     current_chunk = ""
+    current_start = 1
+    next_start = 1
     current_token_count = 0
 
     for line in lines:
         line_token_count = count_tokens(line, model)
-        # If adding this line would exceed the limit, flush the current chunk.
         if current_token_count + line_token_count > max_tokens:
             if current_chunk:
-                chunks.append(current_chunk)
+                chunks.append((current_chunk, current_start))
             current_chunk = line
+            current_start = next_start
             current_token_count = line_token_count
         else:
             current_chunk += line
             current_token_count += line_token_count
+        next_start += 1
 
     if current_chunk:
-        chunks.append(current_chunk)
+        chunks.append((current_chunk, current_start))
     return chunks
 
 
@@ -130,36 +132,6 @@ def read_file_content(file_path):
         return ""
 
 
-def normalize_lines(lines):
-    """Remove all whitespace characters from the joined lines."""
-    joined = "".join(lines)
-    return re.sub(r"\s+", "", joined)
-
-
-def find_snippet_line(snippet, file_lines, threshold=0.80):
-    """
-    Finds the first line number where the snippet matches a window in the file
-    above the given similarity threshold. Returns 1 if not found.
-    Expects caller to provide file_lines to avoid redundant I/O.
-    """
-    if not file_lines:
-        return 1
-
-    snippet_lines = snippet.strip().splitlines()
-    snippet_len = len(snippet_lines)
-    norm_snippet = normalize_lines(snippet_lines)
-
-    for i in range(len(file_lines) - snippet_len + 1):
-        window = file_lines[i : i + snippet_len]
-        norm_window = normalize_lines(window)
-
-        score = difflib.SequenceMatcher(None, norm_window, norm_snippet).ratio()
-        if score >= threshold:
-            return i + 1
-
-    return 1
-
-
 def retry_on_recursion_error(fn, *args, bump=5000, retries=10, **kwargs):
     """
     Calls `fn(*args, **kwargs)`, catching RecursionError up to `retries` times.
@@ -218,40 +190,61 @@ def normalize_issue_fields(issue):
     return issue
 
 
-def enrich_issues(file_path, issues):
+def _coerce_snippet(raw):
+    if isinstance(raw, list):
+        return "".join(str(x) for x in raw).strip()
+    if isinstance(raw, str):
+        return raw.strip()
+    return str(raw or "").strip()
+
+
+def enrich_issues(file_path, issues, *, codebase_path=None, hint=None):
     """
-    Enrich issues with derived fields (line_number, normalized CWE/severity).
-    Reads the file once and reuses its lines for matching.
+    Enrich issues with a resolved location.
+
+    Each issue gains:
+      - ``anchor``: a serialized CodeAnchor (or ``None`` if unresolved)
+      - ``line_number``: legacy scalar, derived from ``anchor.end_line``
+    plus normalized CWE/severity.
     """
     if not issues:
         return issues
 
-    try:
-        # Load file content once; matching relies on these lines
-        with open(file_path, "r", encoding="utf-8") as _f:
-            file_lines = _f.readlines()
-    except Exception:
-        # If reading fails, line lookup will default to 1
-        file_lines = None
+    from metis.engine.source import CodeAnchor, SourceMap
+
+    if codebase_path:
+        smap = SourceMap.for_file(codebase_path, file_path)
+    else:
+        parent = os.path.dirname(file_path) or "."
+        smap = SourceMap.for_file(parent, os.path.basename(file_path))
 
     for issue in issues:
-        # Only enrich dict-shaped issues; skip plain strings or other types
         if not isinstance(issue, dict):
             continue
 
-        raw_snippet = issue.get("code_snippet", "")
-        if isinstance(raw_snippet, list):
-            snippet_text = "".join(str(x) for x in raw_snippet)
-        elif isinstance(raw_snippet, str):
-            snippet_text = raw_snippet
-        else:
-            snippet_text = str(raw_snippet)
-        snippet_text = snippet_text.strip()
+        snippet_text = _coerce_snippet(issue.get("code_snippet", ""))
+        anchor = None
 
-        line_number = find_snippet_line(snippet_text, file_lines)
-        issue["line_number"] = line_number
+        if smap is not None:
+            sl = issue.get("start_line")
+            el = issue.get("end_line")
+            if isinstance(sl, int) and isinstance(el, int):
+                anchor = smap.verify_lines(sl, el, snippet_text)
+            if anchor is None and snippet_text:
+                anchor = smap.resolve_snippet(
+                    snippet_text,
+                    hint=hint,
+                    context_text=" ".join(
+                        str(issue.get(k) or "") for k in ("issue", "reasoning")
+                    ),
+                )
 
-        # Normalize and fill other standard fields
+        if anchor is None and smap is not None:
+            anchor = CodeAnchor.unresolved(smap.rel_path)
+
+        issue["anchor"] = anchor.to_dict() if anchor else None
+        issue["line_number"] = anchor.end_line if anchor and anchor.end_line else 0
+
         normalize_issue_fields(issue)
 
     return issues

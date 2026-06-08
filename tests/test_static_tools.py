@@ -11,27 +11,39 @@ def _build_runner(tmp_path):
     runner = StaticToolRunner(codebase_path=str(tmp_path))
     runner._has_grep = False
     runner._has_find = False
-    runner._has_cat = False
-    runner._has_sed = False
     return runner
 
 
-def test_cat_fallback_reads_file(tmp_path):
+def test_cat_emits_numbered_lines(tmp_path):
     source = tmp_path / "a.txt"
     source.write_text("line1\nline2\n", encoding="utf-8")
 
     runner = _build_runner(tmp_path)
     out = runner.cat("a.txt")
-    assert out == "line1\nline2\n"
+    assert out == "1: line1\n2: line2"
 
 
-def test_sed_fallback_slices_lines(tmp_path):
+def test_sed_emits_numbered_slice(tmp_path):
     source = tmp_path / "a.txt"
-    source.write_text("1\n2\n3\n4\n5\n", encoding="utf-8")
+    source.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
 
     runner = _build_runner(tmp_path)
     out = runner.sed("a.txt", 2, 4)
-    assert out == "2\n3\n4"
+    assert out == "2: b\n3: c\n4: d"
+
+
+def test_sed_clamps_past_eof(tmp_path):
+    source = tmp_path / "a.txt"
+    source.write_text("a\nb\n", encoding="utf-8")
+
+    runner = _build_runner(tmp_path)
+    assert runner.sed("a.txt", 1, 100) == "1: a\n2: b"
+
+
+def test_cat_missing_file_raises(tmp_path):
+    runner = _build_runner(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        runner.cat("nope.txt")
 
 
 def test_find_name_fallback_finds_matching_files(tmp_path):

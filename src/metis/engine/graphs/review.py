@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
+from metis.engine.source import SourceMap
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
@@ -56,10 +57,11 @@ def _build_body_text(state: ReviewState) -> str:
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
+        chunk_start = state.get("chunk_start") or 1
         sections = [
             f"FILE: {file_path}",
             "SNIPPET:",
-            snippet,
+            SourceMap.number_text(snippet, chunk_start),
             "",
         ]
     else:
@@ -79,11 +81,13 @@ def _build_body_text(state: ReviewState) -> str:
 def _post_process_reviews(
     reviews: list[dict],
     file_path: str,
+    *,
+    hint: range | None = None,
 ) -> list[dict]:
     """Enrich parsed reviews with derived metadata."""
     normalized_reviews = reviews or []
     try:
-        enrich_issues(file_path, normalized_reviews)
+        enrich_issues(file_path, normalized_reviews, hint=hint)
     except Exception:
         pass
 
@@ -126,9 +130,17 @@ def review_node_llm(
 
 def review_node_parse(state: ReviewState) -> ReviewState:
     reviews = state.get("parsed_reviews") or []
+    chunk_start = state.get("chunk_start")
+    chunk_end = state.get("chunk_end")
+    hint = (
+        range(chunk_start, chunk_end + 1)
+        if isinstance(chunk_start, int) and isinstance(chunk_end, int)
+        else None
+    )
     normalized = _post_process_reviews(
         reviews,
         state.get("file_path", "") or "",
+        hint=hint,
     )
 
     new_state: ReviewState = state.copy()
@@ -239,10 +251,13 @@ class ReviewGraph:
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
         app = self._build_app(language_prompts, default_prompt_key)
-        for chunk in chunks:
+        for chunk, chunk_start in chunks:
+            chunk_end = chunk_start + chunk.count("\n")
             state = {
                 "file_path": file_path,
                 "snippet": chunk,
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
                 "relative_file": relative_file,
                 "mode": mode,
                 "original_file": original_file,

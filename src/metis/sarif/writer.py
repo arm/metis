@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from metis.version import __version__ as TOOL_VERSION
-from metis.sarif.utils import read_file_lines, create_fingerprint
-
+from metis.sarif.utils import anchor_fingerprint, create_fingerprint, read_file_lines
 
 DEFAULT_CONTEXT_LINES = 3
 SARIF_VERSION = "2.1.0"
@@ -117,7 +116,18 @@ def generate_sarif(
 
         for issue in review.get("reviews", []):
             text = issue.get("issue", "unspecified")
-            reported_line_num = _normalise_line_number(issue.get("line_number", 1))
+            anchor = (
+                issue.get("anchor") if isinstance(issue.get("anchor"), dict) else None
+            )
+            anchor_start = (
+                int(anchor["start_line"]) if anchor and anchor.get("start_line") else 0
+            )
+            anchor_end = (
+                int(anchor["end_line"]) if anchor and anchor.get("end_line") else 0
+            )
+            reported_line_num = _normalise_line_number(
+                anchor_start or issue.get("line_number", 1)
+            )
             snippet_override = issue.get("code_snippet")
 
             # Keep location inside the file if source is available, but remember what was reported
@@ -129,6 +139,7 @@ def generate_sarif(
             fingerprint = create_fingerprint(
                 file_path or artifact_uri, line_num, RULES[0]["id"]
             )
+            anchor_fp = anchor_fingerprint(anchor) if anchor else None
 
             # Prefer model-provided snippet; fall back to file content if available
             if snippet_override:
@@ -184,6 +195,19 @@ def generate_sarif(
             if reported_line_num != line_num:
                 properties["reportedLineNumber"] = reported_line_num
 
+            if anchor:
+                properties["anchor"] = anchor
+
+            region_end_line = (
+                min(anchor_end, total_lines)
+                if (anchor_end and total_lines)
+                else anchor_end
+            ) or (line_num + snippet_line_count - 1)
+
+            partial_fingerprints = {"primaryLocationLineHash": fingerprint}
+            if anchor_fp:
+                partial_fingerprints["metisAnchor/v1"] = anchor_fp
+
             result_entry = {
                 "ruleId": RULES[0]["id"],
                 "level": _severity_to_level(severity),
@@ -198,7 +222,7 @@ def generate_sarif(
                             "artifactLocation": {"uri": artifact_uri},
                             "region": {
                                 "startLine": line_num,
-                                "endLine": line_num + snippet_line_count - 1,
+                                "endLine": max(line_num, region_end_line),
                                 "snippet": {"text": snippet_text},
                             },
                             "contextRegion": {
@@ -209,7 +233,7 @@ def generate_sarif(
                         }
                     }
                 ],
-                "partialFingerprints": {"primaryLocationLineHash": fingerprint},
+                "partialFingerprints": partial_fingerprints,
             }
 
             if properties:

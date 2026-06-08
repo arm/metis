@@ -51,6 +51,10 @@ def _node_line(node: Any) -> int:
     return int(node.start_position().row) + 1
 
 
+def _node_end_line(node: Any) -> int:
+    return int(node.end_position().row) + 1
+
+
 @dataclass(frozen=True)
 class _Reference:
     symbol: str

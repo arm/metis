@@ -8,6 +8,7 @@ import os
 from .c_family_nodes import (
     _identifier_from_node,
     _node_child_by_field_name,
+    _node_end_line,
     _node_kind,
     _node_line,
     _node_text,
@@ -96,6 +97,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     False,
                     language=language,
                     calls=calls,
+                    end_line=_node_end_line(node),
+                    start_byte=int(node.start_byte()),
+                    end_byte=int(node.end_byte()),
                 )
             )
         return sorted(
