@@ -38,6 +38,8 @@ class ReviewState(TypedDict, total=False):
     # Input
     file_path: str
     snippet: str
+    chunk_start: int
+    chunk_end: int
     retriever_code: Any
     retriever_docs: Any
     context_prompt: str

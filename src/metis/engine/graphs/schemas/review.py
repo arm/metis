@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, confloat, constr, field_validator, ConfigDict
 
-
 _CWE_PATTERN = r"^(CWE-[1-9][0-9]*|CWE-Unknown)$"
 _PROMPT_INDENT = "    "
 
@@ -17,6 +16,14 @@ class ReviewIssueModel(BaseModel):
     code_snippet: constr(strip_whitespace=True, min_length=1) = Field(
         description="""The exact lines of code that exhibit this vulnerability. This field should
                        only contain code found in the file."""
+    )
+    start_line: int | None = Field(
+        default=None,
+        description="Absolute line number (the 'N:' prefix in the SNIPPET) where the vulnerable code begins.",
+    )
+    end_line: int | None = Field(
+        default=None,
+        description="Absolute line number where the vulnerable code ends.",
     )
     reasoning: constr(strip_whitespace=True, min_length=1) = Field(
         description="A detailed explanation of why you identified this as a vulnerability."
