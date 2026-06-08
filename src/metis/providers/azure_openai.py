@@ -9,7 +9,6 @@ import logging
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_core.callbacks import Callbacks
 from pydantic import SecretStr
-from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
 from llama_index.core.callbacks import CallbackManager
 
 from metis.providers.base import (
@@ -17,44 +16,10 @@ from metis.providers.base import (
     ChatModelOptions,
     LLMProvider,
 )
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.registry import register_provider
 
 logger = logging.getLogger(__name__)
-
-
-class AzureOpenAIEmbeddingAdapter(BaseEmbedding):
-    """Use LangChain's Azure embeddings client behind LlamaIndex's interface."""
-
-    _client: AzureOpenAIEmbeddings
-
-    def __init__(
-        self,
-        client: AzureOpenAIEmbeddings,
-        callback_manager: CallbackManager | None = None,
-    ) -> None:
-        if callback_manager is None:
-            super().__init__(model_name=client.model)
-        else:
-            super().__init__(model_name=client.model, callback_manager=callback_manager)
-        self._client = client
-
-    def _get_query_embedding(self, query: str) -> Embedding:
-        return self._client.embed_query(query)
-
-    async def _aget_query_embedding(self, query: str) -> Embedding:
-        return await self._client.aembed_query(query)
-
-    def _get_text_embedding(self, text: str) -> Embedding:
-        return self._client.embed_query(text)
-
-    async def _aget_text_embedding(self, text: str) -> Embedding:
-        return await self._client.aembed_query(text)
-
-    def _get_text_embeddings(self, texts: list[str]) -> list[Embedding]:
-        return self._client.embed_documents(texts)
-
-    async def _aget_text_embeddings(self, texts: list[str]) -> list[Embedding]:
-        return await self._client.aembed_documents(texts)
 
 
 class AzureOpenAIProvider(LLMProvider):
@@ -94,23 +59,25 @@ class AzureOpenAIProvider(LLMProvider):
 
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
-    ) -> AzureOpenAIEmbeddingAdapter:
-        return AzureOpenAIEmbeddingAdapter(
+    ) -> LangChainEmbeddingAdapter:
+        return LangChainEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.code_embedding_model,
                 deployment=self.code_embedding_deployment,
             ),
+            model_name=self.code_embedding_model,
             callback_manager=callback_manager,
         )
 
     def get_embed_model_docs(
         self, *, callback_manager: CallbackManager | None = None
-    ) -> AzureOpenAIEmbeddingAdapter:
-        return AzureOpenAIEmbeddingAdapter(
+    ) -> LangChainEmbeddingAdapter:
+        return LangChainEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.docs_embedding_model,
                 deployment=self.docs_embedding_deployment,
             ),
+            model_name=self.docs_embedding_model,
             callback_manager=callback_manager,
         )
 

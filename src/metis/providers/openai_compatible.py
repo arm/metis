@@ -5,21 +5,17 @@ from __future__ import annotations
 
 from typing import Any, Unpack, cast
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.callbacks import Callbacks
-from llama_index.embeddings.openai import (
-    OpenAIEmbedding,
-    OpenAIEmbeddingModelType,
-)
 from llama_index.core.callbacks import CallbackManager
+from pydantic import SecretStr
 
 from metis.providers.base import (
     ChatModelOptions,
     LLMProvider,
     OpenAICompatibleProviderConfig,
 )
-
-_ALLOWED_OPENAI_EMBED_MODELS = {member.value for member in OpenAIEmbeddingModelType}
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -71,7 +67,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
-    ) -> OpenAIEmbedding:
+    ) -> LangChainEmbeddingAdapter:
         return self._build_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
@@ -81,7 +77,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def get_embed_model_docs(
         self, *, callback_manager: CallbackManager | None = None
-    ) -> OpenAIEmbedding:
+    ) -> LangChainEmbeddingAdapter:
         return self._build_embedding_model(
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
@@ -95,33 +91,26 @@ class OpenAICompatibleProvider(LLMProvider):
         extra_kwargs: dict[str, object],
         config_key: str,
         callback_manager: CallbackManager | None = None,
-    ) -> OpenAIEmbedding:
+    ) -> LangChainEmbeddingAdapter:
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
 
-        params: dict[str, object] = {}
-        params["model"] = (
-            model_name
-            if model_name in _ALLOWED_OPENAI_EMBED_MODELS
-            else OpenAIEmbeddingModelType.TEXT_EMBED_ADA_002.value
-        )
+        params: dict[str, object] = {"model": model_name}
         if self.api_key:
-            params["api_key"] = self.api_key
+            params["api_key"] = SecretStr(self.api_key)
         if self.base_url:
-            params["api_base"] = self.base_url
+            params["base_url"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
         if extra_kwargs:
             params.update(extra_kwargs)
 
-        embed = OpenAIEmbedding(**cast(dict[str, Any], params))
-        if model_name not in _ALLOWED_OPENAI_EMBED_MODELS:
-            embed._query_engine = model_name
-            embed._text_engine = model_name
-            embed.model_name = model_name
-        return embed
+        client = OpenAIEmbeddings(**cast(dict[str, Any], params))
+        return LangChainEmbeddingAdapter(
+            client,
+            model_name=model_name,
+            callback_manager=callback_manager,
+        )
 
     def get_chat_model(
         self,
