@@ -23,6 +23,15 @@ class QueryEngineInitError(Exception):
         super().__init__("Failed to initialize query engines.")
 
 
+class ToolDisabledError(Exception):
+    """Exception raised when a disabled engine tool is used."""
+
+    def __init__(self, tool_name: str):
+        super().__init__(
+            f"Tool '{tool_name}' is disabled. Enable it with --tools {tool_name}."
+        )
+
+
 class ParsingError(Exception):
     """Exception raised when parsing fails."""
 

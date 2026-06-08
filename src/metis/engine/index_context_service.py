@@ -14,6 +14,9 @@ from .runtime import EngineConfig, EngineState
 
 
 class IndexContextService:
+    name = "index"
+    enabled = True
+
     def __init__(
         self,
         config: EngineConfig,
