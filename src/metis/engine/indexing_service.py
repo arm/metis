@@ -7,7 +7,7 @@ import logging
 import os
 
 import unidiff
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 
 from metis.exceptions import ParsingError
@@ -134,20 +134,11 @@ class IndexingService:
         if not pending:
             return
         nodes_code, nodes_docs = pending
-        storage_context_code, storage_context_docs = (
-            self._config.vector_backend.get_storage_contexts()
-        )
-        VectorStoreIndex(
+        self._config.vector_backend.index_nodes(
             nodes_code,
-            storage_context=storage_context_code,
-            embed_model=self._config.embed_model_code,
-            **self._config.usage_runtime.hooks.embed_model_kwargs(),
-        )
-
-        VectorStoreIndex(
             nodes_docs,
-            storage_context=storage_context_docs,
-            embed_model=self._config.embed_model_docs,
+            embed_model_code=self._config.embed_model_code,
+            embed_model_docs=self._config.embed_model_docs,
             **self._config.usage_runtime.hooks.embed_model_kwargs(),
         )
         self._state.pending_nodes = None
@@ -159,20 +150,10 @@ class IndexingService:
         except Exception as e:
             raise ParsingError(f"Error parsing patch string: {e}")
         self._config.vector_backend.init()
-        storage_context_code, storage_context_docs = (
-            self._config.vector_backend.get_storage_contexts()
-        )
 
-        index_code = VectorStoreIndex.from_vector_store(
-            self._config.vector_backend.vector_store_code,
-            storage_context=storage_context_code,
-            embed_model=self._config.embed_model_code,
-            **self._config.usage_runtime.hooks.embed_model_kwargs(),
-        )
-        index_docs = VectorStoreIndex.from_vector_store(
-            self._config.vector_backend.vector_store_docs,
-            storage_context=storage_context_docs,
-            embed_model=self._config.embed_model_docs,
+        index_code, index_docs = self._config.vector_backend.get_index_handles(
+            embed_model_code=self._config.embed_model_code,
+            embed_model_docs=self._config.embed_model_docs,
             **self._config.usage_runtime.hooks.embed_model_kwargs(),
         )
 

@@ -6,7 +6,7 @@ from threading import RLock
 
 from chromadb import PersistentClient
 from chromadb.config import Settings
-from llama_index.core import StorageContext
+from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from metis.exceptions import RetrieverInitError, VectorStoreInitError
@@ -120,6 +120,49 @@ class ChromaStore(BaseVectorStore):
         docs_collection = self._client.get_or_create_collection("docs")
         self._set_collections(code_collection, docs_collection)
         logger.info("Chroma vector collections reset.")
+
+    def index_nodes(
+        self,
+        nodes_code,
+        nodes_docs,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        VectorStoreIndex(
+            nodes_code,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        VectorStoreIndex(
+            nodes_docs,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+
+    def get_index_handles(
+        self,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        index_code = VectorStoreIndex.from_vector_store(
+            self.vector_store_code,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        index_docs = VectorStoreIndex.from_vector_store(
+            self.vector_store_docs,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+        return index_code, index_docs
 
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs

@@ -22,8 +22,27 @@ class BaseVectorStore(ABC):
         pass
 
     @abstractmethod
-    def get_storage_contexts(self):
-        """Return tuple of storage contexts (code, docs) for indexing."""
+    def index_nodes(
+        self,
+        nodes_code,
+        nodes_docs,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        """Write prepared code and docs nodes to the vector backend."""
+        pass
+
+    @abstractmethod
+    def get_index_handles(
+        self,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        """Return mutable index handles (code, docs) for patch updates."""
         pass
 
     def close(self):
