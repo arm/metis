@@ -5,7 +5,7 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from sqlalchemy import create_engine, text
 from metis.exceptions import (
     VectorStoreInitError,
-    QueryEngineInitError,
+    RetrieverInitError,
     VectorSchemaError,
 )
 from metis.vector_store.base import BaseVectorStore
@@ -81,11 +81,10 @@ class PGVectorStoreImpl(BaseVectorStore):
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
 
-    def get_query_engines(
+    def get_retrievers(
         self,
         llm_provider,
         similarity_top_k,
-        response_mode,
         callback_manager=None,
         callbacks=None,
     ):
@@ -102,8 +101,9 @@ class PGVectorStoreImpl(BaseVectorStore):
                 embed_model=self.embed_model_docs,
                 callback_manager=callback_manager,
             )
-
-            chat_model_kwargs = {"callbacks": callbacks} if callbacks else {}
+            chat_model_kwargs = {"response_format": None}
+            if callbacks:
+                chat_model_kwargs["callbacks"] = callbacks
             retriever_code = QueryAnswerRetriever(
                 LlamaIndexNodeRetriever(
                     index_code.as_retriever(similarity_top_k=similarity_top_k)
@@ -120,8 +120,8 @@ class PGVectorStoreImpl(BaseVectorStore):
             )
             return (retriever_code, retriever_docs)
         except Exception as e:
-            logger.error(f"Error creating PG query engines: {e}")
-            raise QueryEngineInitError()
+            logger.error(f"Error creating PG retrievers: {e}")
+            raise RetrieverInitError()
 
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langchain_core.documents import Document
@@ -11,8 +12,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 
 class QueryAnswerRetriever:
-    """Adapt raw vector retrieval into the existing query-answer contract."""
-
     def __init__(
         self,
         retriever: Any,
@@ -63,8 +62,7 @@ class QueryAnswerRetriever:
     def _retrieve_context(self, query: str) -> str:
         documents = _retrieve_documents(self._retriever, query)
         return "\n\n".join(
-            getattr(document, "page_content", str(document))
-            for document in (documents or [])
+            text for document in (documents or []) if (text := document_text(document))
         )
 
 
@@ -84,13 +82,16 @@ class ChromaCollectionRetriever:
         documents = _first_result_list(result.get("documents"))
         metadatas = _first_result_list(result.get("metadatas"))
         out: list[Document] = []
-        for idx, text in enumerate(documents):
+        row_count = max(len(documents), len(metadatas))
+        for idx in range(row_count):
+            raw_text = documents[idx] if idx < len(documents) else ""
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
+            text = document_text(raw_text) or document_text(metadata)
             if not text:
                 continue
-            metadata = metadatas[idx] if idx < len(metadatas) else {}
             out.append(
                 Document(
-                    page_content=str(text),
+                    page_content=text,
                     metadata=metadata if isinstance(metadata, dict) else {},
                 )
             )
@@ -112,6 +113,36 @@ class LlamaIndexNodeRetriever:
         return self.get_relevant_documents(query)
 
 
+def document_text(document: Any) -> str:
+    if document is None:
+        return ""
+    if isinstance(document, str):
+        return document
+
+    page_content = getattr(document, "page_content", None)
+    if page_content is not None:
+        return str(page_content)
+
+    source = getattr(document, "node", document)
+    get_content = getattr(source, "get_content", None)
+    if callable(get_content):
+        return str(get_content())
+
+    text = getattr(source, "text", None)
+    if text is not None:
+        return str(text)
+
+    if isinstance(source, dict):
+        for key in ("page_content", "text", "document"):
+            if source.get(key) is not None:
+                return str(source[key])
+        node_content = source.get("_node_content")
+        if node_content is not None:
+            return _node_content_text(node_content)
+
+    return ""
+
+
 def _retrieve_documents(retriever: Any, query: str):
     get_relevant_documents = getattr(retriever, "get_relevant_documents", None)
     if callable(get_relevant_documents):
@@ -123,6 +154,32 @@ def _retrieve_documents(retriever: Any, query: str):
     if callable(retrieve):
         return retrieve(query)
     return []
+
+
+def _node_content_text(node_content: Any) -> str:
+    if isinstance(node_content, str):
+        try:
+            payload = json.loads(node_content)
+        except json.JSONDecodeError:
+            return node_content
+    elif isinstance(node_content, dict):
+        payload = node_content
+    else:
+        return ""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    for key in ("text", "text_resource", "page_content", "document"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            nested = document_text(value)
+            if nested:
+                return nested
+
+    return ""
 
 
 def _embed_query(embed_model: Any, query: str) -> list[float]:
@@ -147,13 +204,8 @@ def _first_result_list(value: Any) -> list[Any]:
 
 def _document_from_node(node: Any) -> Document:
     source = getattr(node, "node", node)
-    get_content = getattr(source, "get_content", None)
-    if callable(get_content):
-        text = str(get_content())
-    else:
-        text = str(getattr(source, "text", source))
     metadata = getattr(source, "metadata", None)
     return Document(
-        page_content=text,
+        page_content=document_text(source),
         metadata=metadata if isinstance(metadata, dict) else {},
     )

@@ -92,6 +92,9 @@ class IndexingService:
         )
 
         self._config.vector_backend.init()
+        reset_index = getattr(self._config.vector_backend, "reset_index", None)
+        if callable(reset_index):
+            reset_index()
         doc_splitter = self._repository.get_doc_splitter()
         metisignore_spec = self._repository.load_metisignore()
         base_path = os.path.abspath(self._config.codebase_path)

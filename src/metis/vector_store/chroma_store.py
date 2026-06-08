@@ -9,10 +9,12 @@ from chromadb.config import Settings
 from llama_index.core import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from metis.exceptions import QueryEngineInitError, VectorStoreInitError
+from metis.exceptions import RetrieverInitError, VectorStoreInitError
 from metis.vector_store.base import BaseVectorStore
-from metis.vector_store.retrievers import ChromaCollectionRetriever
-from metis.vector_store.retrievers import QueryAnswerRetriever
+from metis.vector_store.retrievers import (
+    ChromaCollectionRetriever,
+    QueryAnswerRetriever,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,23 +45,7 @@ class ChromaStore(BaseVectorStore):
                 )
                 code_collection = client.get_or_create_collection("code")
                 docs_collection = client.get_or_create_collection("docs")
-                self.collection_code = code_collection
-                self.collection_docs = docs_collection
-
-                self.vector_store_code = ChromaVectorStore(
-                    chroma_collection=code_collection,
-                    embed_model=self.embed_model_code,
-                )
-                self.vector_store_docs = ChromaVectorStore(
-                    chroma_collection=docs_collection,
-                    embed_model=self.embed_model_docs,
-                )
-                self.storage_context_code = StorageContext.from_defaults(
-                    vector_store=self.vector_store_code
-                )
-                self.storage_context_docs = StorageContext.from_defaults(
-                    vector_store=self.vector_store_docs
-                )
+                self._set_collections(code_collection, docs_collection)
                 self._client = client
                 self._initialized = True
                 logger.info("Chroma vector components initialized.")
@@ -68,17 +54,18 @@ class ChromaStore(BaseVectorStore):
                 logger.error(f"Error initializing ChromaStore: {e}")
                 raise VectorStoreInitError()
 
-    def get_query_engines(
+    def get_retrievers(
         self,
         llm_provider,
         similarity_top_k=None,
-        response_mode=None,
         callback_manager=None,
         callbacks=None,
     ):
         try:
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
-            chat_model_kwargs = {"callbacks": callbacks} if callbacks else {}
+            chat_model_kwargs = {"response_format": None}
+            if callbacks:
+                chat_model_kwargs["callbacks"] = callbacks
             retriever_code = QueryAnswerRetriever(
                 ChromaCollectionRetriever(
                     self.collection_code,
@@ -99,8 +86,40 @@ class ChromaStore(BaseVectorStore):
             )
             return (retriever_code, retriever_docs)
         except Exception as e:
-            logger.error(f"Error creating Chroma query engines: {e}")
-            raise QueryEngineInitError()
+            logger.error(f"Error creating Chroma retrievers: {e}")
+            raise RetrieverInitError()
+
+    def _set_collections(self, code_collection, docs_collection):
+        self.collection_code = code_collection
+        self.collection_docs = docs_collection
+        self.vector_store_code = ChromaVectorStore(
+            chroma_collection=code_collection,
+            embed_model=self.embed_model_code,
+        )
+        self.vector_store_docs = ChromaVectorStore(
+            chroma_collection=docs_collection,
+            embed_model=self.embed_model_docs,
+        )
+        self.storage_context_code = StorageContext.from_defaults(
+            vector_store=self.vector_store_code
+        )
+        self.storage_context_docs = StorageContext.from_defaults(
+            vector_store=self.vector_store_docs
+        )
+
+    def reset_index(self):
+        if not self._initialized:
+            self.init()
+        assert self._client is not None
+        for name in ("code", "docs"):
+            try:
+                self._client.delete_collection(name)
+            except Exception:
+                logger.debug("Chroma collection '%s' did not exist during reset", name)
+        code_collection = self._client.get_or_create_collection("code")
+        docs_collection = self._client.get_or_create_collection("docs")
+        self._set_collections(code_collection, docs_collection)
+        logger.info("Chroma vector collections reset.")
 
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs

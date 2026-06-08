@@ -16,7 +16,7 @@ from metis.utils import read_file_content
 from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
-from .options import ReviewOptions, coerce_review_options
+from .options import ReviewOptions
 from .reachability.progress import ReachabilityProgress as Progress
 from .reachability.progress import emit_progress
 from .repository import EngineRepository
@@ -32,17 +32,15 @@ class ReviewService:
         self,
         config: EngineConfig,
         repository: EngineRepository,
-        get_query_engines: Callable[[], tuple[Any, Any]],
+        get_retrievers: Callable[[], tuple[Any, Any]],
         review_graph_factory: Callable[[], Any],
-        retrieval_available: Callable[[], bool] | None = None,
         reachability_service=None,
         reachability_settings: dict[str, Any] | None = None,
     ):
         self._config = config
         self._repository = repository
-        self._get_query_engines = get_query_engines
+        self._get_retrievers = get_retrievers
         self._review_graph_factory = review_graph_factory
-        self._retrieval_available = retrieval_available or (lambda: True)
         self._reachability_backend = (
             ReachabilityReviewBackend(
                 config,
@@ -54,22 +52,8 @@ class ReviewService:
             else None
         )
 
-    def _effective_options(
-        self,
-        options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
-    ) -> ReviewOptions:
-        options = coerce_review_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
-        if options.use_retrieval_context and not self._retrieval_available():
-            return ReviewOptions(use_retrieval_context=False)
-        return options
-
     def get_code_files(self, options: ReviewOptions | None = None):
-        options = self._effective_options(options)
+        options = options or ReviewOptions()
         return self._repository.get_code_files(
             include_suffixed_sources=not options.use_retrieval_context
         )
@@ -133,14 +117,9 @@ class ReviewService:
         self,
         file_path,
         options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
         progress_callback=None,
     ):
-        options = self._effective_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
+        options = options or ReviewOptions()
         if (
             self._reachability_backend is not None
             and self._reachability_backend.is_file_in_codebase(file_path)
@@ -183,16 +162,11 @@ class ReviewService:
         self,
         file_path,
         options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
     ):
-        options = self._effective_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
-        qe_code = qe_docs = None
+        options = options or ReviewOptions()
+        retriever_code = retriever_docs = None
         if options.use_retrieval_context:
-            qe_code, qe_docs = self._get_query_engines()
+            retriever_code, retriever_docs = self._get_retrievers()
         base_path = os.path.abspath(self._config.codebase_path)
         snippet = read_file_content(file_path)
         if not snippet:
@@ -214,8 +188,8 @@ class ReviewService:
             req: ReviewRequest = {
                 "file_path": file_path,
                 "snippet": snippet,
-                "retriever_code": qe_code,
-                "retriever_docs": qe_docs,
+                "retriever_code": retriever_code,
+                "retriever_docs": retriever_docs,
                 "context_prompt": formatted_context_prompt,
                 "language_prompts": language_prompts,
                 "default_prompt_key": "security_review_file",
@@ -259,8 +233,6 @@ class ReviewService:
             kwargs: dict[str, Any] = {}
             if "options" in params or accepts_kwargs:
                 kwargs["options"] = options
-            if "use_retrieval_context" in params:
-                kwargs["use_retrieval_context"] = options.use_retrieval_context
             if kwargs:
                 return review_fn(path, **kwargs)
 
@@ -272,13 +244,9 @@ class ReviewService:
         get_code_files_func=None,
         options: ReviewOptions | None = None,
         *,
-        use_retrieval_context: bool | None = None,
         progress_callback=None,
     ) -> Iterator[dict | None]:
-        options = self._effective_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
+        options = options or ReviewOptions()
         files = (
             get_code_files_func()
             if get_code_files_func is not None
@@ -363,16 +331,11 @@ class ReviewService:
         self,
         patch_file,
         options: ReviewOptions | None = None,
-        *,
-        use_retrieval_context: bool | None = None,
     ):
-        options = self._effective_options(
-            options,
-            use_retrieval_context=use_retrieval_context,
-        )
-        qe_code = qe_docs = None
+        options = options or ReviewOptions()
+        retriever_code = retriever_docs = None
         if options.use_retrieval_context:
-            qe_code, qe_docs = self._get_query_engines()
+            retriever_code, retriever_docs = self._get_retrievers()
         patch_text = read_file_content(patch_file)
         try:
             diff = unidiff.PatchSet.from_string(patch_text)
@@ -414,8 +377,8 @@ class ReviewService:
                 req: ReviewRequest = {
                     "file_path": abs_path,
                     "snippet": snippet,
-                    "retriever_code": qe_code,
-                    "retriever_docs": qe_docs,
+                    "retriever_code": retriever_code,
+                    "retriever_docs": retriever_docs,
                     "context_prompt": formatted_context,
                     "language_prompts": language_prompts,
                     "default_prompt_key": "security_review",

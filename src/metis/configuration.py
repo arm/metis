@@ -245,7 +245,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
         )
         runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
         runtime["model"] = llm_cfg.get("model", "")
-        runtime["force_openai_like"] = True
     elif llm_provider_name == "llamacpp":
         runtime["llm_api_key"] = llm_api_key
         runtime["openai_api_base"] = llm_cfg.get("base_url", "")
@@ -297,7 +296,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
     )
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
     runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
-    runtime["response_mode"] = query_cfg.get("response_mode", "compact")
 
     return runtime
 

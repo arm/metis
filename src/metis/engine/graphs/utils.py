@@ -6,6 +6,7 @@ import re
 from typing import Annotated, Literal, get_args, get_origin
 
 from metis.engine.helpers import apply_custom_guidance
+from metis.vector_store.retrievers import document_text
 from .schemas import ReviewIssueModel
 
 logger = logging.getLogger("metis")
@@ -65,7 +66,7 @@ def retrieve_text(retriever, query):
     """Retrieve context using a retriever with get_relevant_documents."""
     try:
         docs = retriever.get_relevant_documents(query)
-        return "\n\n".join(getattr(d, "page_content", str(d)) for d in (docs or []))
+        return "\n\n".join(text for d in (docs or []) if (text := document_text(d)))
     except Exception as e:
         logger.warning(f"Error retrieving context: {e}")
         return ""

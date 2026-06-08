@@ -6,12 +6,14 @@ from unittest.mock import Mock
 import pytest
 
 from metis.engine import MetisEngine
+from metis.engine.options import ReviewOptions
 from metis.engine.review_validation import (
     parse_review_validation_response,
     rescue_filtered_duplicate_cluster_representatives,
     review_validation_final_keep,
 )
 from metis.engine.review_reachability import ReachabilityReviewBackend
+from metis.exceptions import ToolDisabledError
 
 
 def test_ask_question(engine):
@@ -308,21 +310,21 @@ def test_review_patch_handles_parse_error(engine, tmp_path):
     assert result["reviews"] == []
 
 
-def test_review_file_default_skips_query_engine_init(engine, monkeypatch, tmp_path):
+def test_review_file_default_skips_retriever_init(engine, monkeypatch, tmp_path):
     sample = tmp_path / "sample.c"
     sample.write_text("int main(){return 0;}", encoding="utf-8")
 
-    engine.vector_backend.get_query_engines.reset_mock()
+    engine.vector_backend.get_retrievers.reset_mock()
     monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
 
     result = engine.review.review_file(str(sample))
 
     assert result["reviews"] == []
-    engine.vector_backend.get_query_engines.assert_not_called()
+    engine.vector_backend.get_retrievers.assert_not_called()
 
 
-def test_review_file_disables_retrieval_when_index_tool_disabled(
-    dummy_backend, dummy_llm, monkeypatch, tmp_path
+def test_review_file_requires_index_tool_when_retrieval_requested(
+    dummy_backend, dummy_llm, tmp_path
 ):
     sample = tmp_path / "sample.py"
     sample.write_text("print('hello')\n", encoding="utf-8")
@@ -335,35 +337,36 @@ def test_review_file_disables_retrieval_when_index_tool_disabled(
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
         enabled_tools=frozenset(),
     )
-    dummy_backend.get_query_engines.reset_mock()
-    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
+    dummy_backend.get_retrievers.reset_mock()
 
-    result = engine.review.review_file(str(sample))
+    with pytest.raises(ToolDisabledError):
+        engine.review.review_file(
+            str(sample),
+            options=ReviewOptions(use_retrieval_context=True),
+        )
 
-    assert result["reviews"] == []
-    dummy_backend.get_query_engines.assert_not_called()
+    dummy_backend.get_retrievers.assert_not_called()
 
 
-def test_review_patch_default_skips_query_engine_init(engine, monkeypatch, tmp_path):
+def test_review_patch_default_skips_retriever_init(engine, monkeypatch, tmp_path):
     patch_file = tmp_path / "change.diff"
     patch_file.write_text(
         "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+print('Hello')\n",
         encoding="utf-8",
     )
 
-    engine.vector_backend.get_query_engines.reset_mock()
+    engine.vector_backend.get_retrievers.reset_mock()
     monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph(None))
 
     result = engine.review.review_patch(str(patch_file))
 
     assert isinstance(result["reviews"], list)
-    engine.vector_backend.get_query_engines.assert_not_called()
+    engine.vector_backend.get_retrievers.assert_not_called()
 
 
-def test_review_file_use_index_initializes_query_engines(engine, monkeypatch, tmp_path):
+def test_review_file_use_index_initializes_retrievers(engine, monkeypatch, tmp_path):
     sample = tmp_path / "sample.c"
     sample.write_text("int main(){return 0;}", encoding="utf-8")
 
@@ -374,22 +377,25 @@ def test_review_file_use_index_initializes_query_engines(engine, monkeypatch, tm
             assert req["retriever_docs"] is not None
             return {"file": "sample.c", "reviews": []}
 
-    engine.vector_backend.get_query_engines.reset_mock()
+    engine.vector_backend.get_retrievers.reset_mock()
     monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
 
-    result = engine.review.review_file(str(sample), use_retrieval_context=True)
+    result = engine.review.review_file(
+        str(sample),
+        options=ReviewOptions(use_retrieval_context=True),
+    )
 
     assert result["reviews"] == []
-    engine.vector_backend.get_query_engines.assert_called_once()
+    engine.vector_backend.get_retrievers.assert_called_once()
 
 
-def test_review_code_default_skips_query_engine_init(engine):
+def test_review_code_default_skips_retriever_init(engine):
     def review_file(path, options=None):
         assert options is not None
         assert options.use_retrieval_context is False
         return {"file": path, "reviews": []}
 
-    engine.vector_backend.get_query_engines.reset_mock()
+    engine.vector_backend.get_retrievers.reset_mock()
 
     results = list(
         engine.review.review_code(
@@ -399,4 +405,4 @@ def test_review_code_default_skips_query_engine_init(engine):
     )
 
     assert results == [{"file": "sample.c", "reviews": []}]
-    engine.vector_backend.get_query_engines.assert_not_called()
+    engine.vector_backend.get_retrievers.assert_not_called()

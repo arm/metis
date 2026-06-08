@@ -28,9 +28,8 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         triage_checkpoint_every: int,
         triage_tool_timeout_seconds: int,
         normalize_top_k: Callable[[Any, int], int],
-        create_query_engines: Callable[[int], tuple[Any, Any]],
+        create_retrievers: Callable[[int], tuple[Any, Any]],
         get_plugin_for_extension: Callable[[str], Any],
-        retrieval_available: Callable[[], bool] | None = None,
         usage_hooks: UsageHooks | None = None,
     ):
         self.codebase_path = codebase_path
@@ -42,11 +41,10 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.triage_checkpoint_every = triage_checkpoint_every
         self.triage_tool_timeout_seconds = int(triage_tool_timeout_seconds)
         self._normalize_top_k = normalize_top_k
-        self._create_query_engines = create_query_engines
-        self._retrieval_available = retrieval_available or (lambda: True)
+        self._create_retrievers = create_retrievers
         self._get_plugin_for_extension = get_plugin_for_extension
         self._usage_hooks = usage_hooks
 
         self._triage_graph_local = threading.local()
-        self._triage_query_engines_local = threading.local()
+        self._triage_retrievers_local = threading.local()
         self._triage_analyzers_local = threading.local()

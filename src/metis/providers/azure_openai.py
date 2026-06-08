@@ -11,13 +11,11 @@ from langchain_core.callbacks import Callbacks
 from pydantic import SecretStr
 from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
 from llama_index.core.callbacks import CallbackManager
-from llama_index.llms.langchain import LangChainLLM
 
 from metis.providers.base import (
     AzureOpenAIProviderConfig,
     ChatModelOptions,
     LLMProvider,
-    QueryModelKwargs,
 )
 from metis.providers.registry import register_provider
 
@@ -115,25 +113,6 @@ class AzureOpenAIProvider(LLMProvider):
             ),
             callback_manager=callback_manager,
         )
-
-    def get_query_engine_class(self) -> type[LangChainLLM]:
-        return LangChainLLM
-
-    def get_query_model_kwargs(
-        self,
-        *,
-        callback_manager: CallbackManager | None = None,
-        callbacks: Callbacks = None,
-    ) -> QueryModelKwargs:
-        params: dict[str, object] = {
-            "llm": self.get_chat_model(
-                response_format=None,
-                callbacks=callbacks,
-            )
-        }
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
-        return params
 
     def get_chat_model(
         self,

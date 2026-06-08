@@ -7,7 +7,6 @@ from unittest.mock import patch
 from metis.engine import MetisEngine
 from metis.cli.utils import build_chroma_backend
 from metis.vector_store.chroma_store import ChromaStore
-from metis.providers.openai import OpenAIProvider
 from llama_index.core.settings import Settings
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
 
@@ -26,7 +25,6 @@ def test_chroma_backend_indexing(tmp_path):
         "max_token_length": 2048,
         "llama_query_model": "gpt-test",
         "similarity_top_k": 5,
-        "response_mode": "compact",
         "code_embedding_model": "test-code-embed",
         "docs_embedding_model": "test-docs-embed",
         "enabled_tools": {"index"},
@@ -85,12 +83,45 @@ def test_chroma_store_forces_rust_bindings(tmp_path):
     assert settings.chroma_api_impl == "chromadb.api.rust.RustBindingsAPI"
 
 
+def test_chroma_store_reset_recreates_collections(tmp_path):
+    embed = MockEmbedding(embed_dim=8)
+    backend = ChromaStore(
+        persist_dir=str(tmp_path / "chroma_test"),
+        embed_model_code=embed,
+        embed_model_docs=embed,
+        query_config={},
+    )
+
+    with patch("metis.vector_store.chroma_store.PersistentClient") as client_ctor:
+        client = client_ctor.return_value
+        collections = [object(), object(), object(), object()]
+        client.get_or_create_collection.side_effect = collections
+
+        with (
+            patch("metis.vector_store.chroma_store.ChromaVectorStore") as vector_store,
+            patch("metis.vector_store.chroma_store.StorageContext") as storage_context,
+        ):
+            vector_store.side_effect = [object(), object(), object(), object()]
+            storage_context.from_defaults.side_effect = [
+                object(),
+                object(),
+                object(),
+                object(),
+            ]
+            backend.init()
+            backend.reset_index()
+
+    assert client.delete_collection.call_count == 2
+    client.delete_collection.assert_any_call("code")
+    client.delete_collection.assert_any_call("docs")
+    assert client.get_or_create_collection.call_count == 4
+
+
 def test_build_chroma_backend_receives_full_runtime_config(tmp_path):
     base_url = "https://example.test/openai/v1"
     runtime = {
         "openai_api_base": base_url,
         "similarity_top_k": 7,
-        "response_mode": "tree_summarize",
     }
     embed = MockEmbedding(embed_dim=8)
 
@@ -101,32 +132,3 @@ def test_build_chroma_backend_receives_full_runtime_config(tmp_path):
 
     assert backend.query_config is runtime
     assert backend.query_config["openai_api_base"] == base_url
-
-
-def test_chroma_llm_uses_openai_provider_base_url(tmp_path):
-    base_url = "https://example.test/openai/v1"
-    runtime = {
-        "llm_api_key": "test-key",
-        "openai_api_base": base_url,
-        "openai_default_headers": {"X-Test-Header": "test"},
-        "model": "gpt-test",
-        "llama_query_model": "gpt-test",
-        "llama_query_temperature": 0.0,
-        "llama_query_max_tokens": 256,
-        "max_token_length": 32768,
-        "code_embedding_model": "text-embedding-3-large",
-        "docs_embedding_model": "text-embedding-3-large",
-    }
-    embed = MockEmbedding(embed_dim=8)
-    backend = ChromaStore(
-        persist_dir=str(tmp_path / "chroma_test"),
-        embed_model_code=embed,
-        embed_model_docs=embed,
-        query_config=runtime,
-    )
-
-    llm = backend._build_llm(OpenAIProvider(runtime))
-
-    assert llm.api_base == base_url
-    assert llm.default_headers == {"X-Test-Header": "test"}
-    assert llm.context_window == 32768
