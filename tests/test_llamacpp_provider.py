@@ -4,8 +4,8 @@
 from typing import cast
 
 from langchain_openai import ChatOpenAI
-from llama_index.embeddings.openai import OpenAIEmbedding
 from metis.providers.base import OpenAICompatibleProviderConfig
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 
 from metis.providers.llamacpp import LlamaCppProvider
 
@@ -101,22 +101,24 @@ def test_reasoning_effort_propagated_to_chat_model() -> None:
     assert llm.reasoning_effort == "high"
 
 
-def test_embed_model_code_returns_openai_embedding() -> None:
+def test_embed_model_code_returns_langchain_embedding_adapter() -> None:
     provider = LlamaCppProvider(_config(llm_api_key="test-key"))
 
     embed = provider.get_embed_model_code()
 
-    assert isinstance(embed, OpenAIEmbedding)
+    assert isinstance(embed, LangChainEmbeddingAdapter)
     assert embed.model_name == "nomic-embed-text:v1.5"
+    assert embed._client.model == "nomic-embed-text:v1.5"
 
 
-def test_embed_model_docs_returns_openai_embedding() -> None:
+def test_embed_model_docs_returns_langchain_embedding_adapter() -> None:
     provider = LlamaCppProvider(_config(llm_api_key="test-key"))
 
     embed = provider.get_embed_model_docs()
 
-    assert isinstance(embed, OpenAIEmbedding)
+    assert isinstance(embed, LangChainEmbeddingAdapter)
     assert embed.model_name == "nomic-embed-text:v1.5"
+    assert embed._client.model == "nomic-embed-text:v1.5"
 
 
 def test_lazy_loader_is_registered() -> None:
