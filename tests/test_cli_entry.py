@@ -11,11 +11,31 @@ from metis.cli import entry
 from metis.cli import command_registry
 
 
+def test_configure_enabled_tools_uses_config_when_cli_absent():
+    args = SimpleNamespace(tools=None)
+
+    entry._configure_enabled_tools(  # type: ignore[attr-defined]
+        args, {"enabled_tools": "index"}
+    )
+
+    assert args.enabled_tools == {"index"}
+
+
+def test_configure_enabled_tools_prefers_cli_over_config():
+    args = SimpleNamespace(tools="none")
+
+    entry._configure_enabled_tools(  # type: ignore[attr-defined]
+        args, {"enabled_tools": "index"}
+    )
+
+    assert args.enabled_tools == set()
+
+
 @pytest.mark.parametrize(
     "cmd", ["review_file", "review_code", "review_patch", "triage"]
 )
 def test_prepare_command_runtime_disables_index_by_default_for_supported_command(cmd):
-    args = SimpleNamespace(ignore_index=False, use_index=False, quiet=True)
+    args = SimpleNamespace(ignore_index=False, quiet=True)
 
     runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
         cmd=cmd,
@@ -31,12 +51,18 @@ def test_prepare_command_runtime_disables_index_by_default_for_supported_command
 @pytest.mark.parametrize(
     "cmd", ["review_file", "review_code", "review_patch", "triage"]
 )
-def test_prepare_command_runtime_uses_index_when_requested_for_supported_command(cmd):
-    args = SimpleNamespace(ignore_index=False, use_index=False, quiet=True)
+def test_prepare_command_runtime_uses_index_when_tool_enabled_for_supported_command(
+    cmd,
+):
+    args = SimpleNamespace(
+        enabled_tools={"index"},
+        ignore_index=False,
+        quiet=True,
+    )
 
     runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
         cmd=cmd,
-        cmd_args=["src/a.c", "--use-index"],
+        cmd_args=["src/a.c"],
         args=args,
     )
 
@@ -46,21 +72,100 @@ def test_prepare_command_runtime_uses_index_when_requested_for_supported_command
 
 
 @pytest.mark.parametrize(
+    "cmd", ["review_file", "review_code", "review_patch", "triage"]
+)
+def test_prepare_command_runtime_keeps_optional_retrieval_disabled_without_index_tool(
+    cmd,
+):
+    args = SimpleNamespace(
+        enabled_tools=set(),
+        ignore_index=False,
+        quiet=True,
+        codebase_path="src/metis",
+    )
+
+    runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
+        cmd=cmd,
+        cmd_args=["src/a.c"],
+        args=args,
+    )
+
+    assert runtime is not None
+    assert runtime.command_args == ["src/a.c"]
+    assert runtime.use_retrieval_context is False
+
+
+@pytest.mark.parametrize("cmd", ["ask", "update", "index"])
+def test_prepare_command_runtime_rejects_required_index_by_default(monkeypatch, cmd):
+    args = SimpleNamespace(
+        ignore_index=False,
+        quiet=True,
+        codebase_path="src/metis",
+    )
+    captured = []
+    monkeypatch.setattr(
+        entry,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
+        cmd=cmd,
+        cmd_args=["why"],
+        args=args,
+    )
+
+    assert runtime is None
+    assert any("requires tool 'index'" in message for message in captured)
+
+
+@pytest.mark.parametrize("cmd", ["ask", "update", "index"])
+def test_prepare_command_runtime_rejects_required_index_when_tool_disabled(
+    monkeypatch, cmd
+):
+    args = SimpleNamespace(
+        enabled_tools=set(),
+        ignore_index=False,
+        quiet=True,
+        codebase_path="src/metis",
+    )
+    captured = []
+    monkeypatch.setattr(
+        entry,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
+        cmd=cmd,
+        cmd_args=["why"],
+        args=args,
+    )
+
+    assert runtime is None
+    assert any("requires tool 'index'" in message for message in captured)
+
+
+@pytest.mark.parametrize(
     ("cmd", "expected_use_retrieval"),
     [
-        ("review_file", False),
-        ("review_code", False),
-        ("review_patch", False),
-        ("triage", False),
+        ("review_file", True),
+        ("review_code", True),
+        ("review_patch", True),
+        ("triage", True),
         ("ask", True),
         ("update", True),
-        ("index", False),
+        ("index", True),
     ],
 )
 def test_prepare_command_runtime_accepts_inline_ignore_index_as_noop(
     cmd, expected_use_retrieval
 ):
-    args = SimpleNamespace(ignore_index=False, use_index=False, quiet=True)
+    args = SimpleNamespace(
+        enabled_tools={"index"},
+        ignore_index=False,
+        quiet=True,
+    )
 
     runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
         cmd=cmd,
@@ -79,7 +184,6 @@ def test_execute_command_rejects_triage_flag_for_ask_before_index_gating(monkeyp
         triage=True,
         output_file=None,
         ignore_index=True,
-        use_index=False,
         non_interactive=True,
         codebase_path="src/metis",
     )
@@ -110,7 +214,6 @@ def test_execute_command_allows_interactive_triage_command_with_global_triage_fl
         triage=True,
         output_file=None,
         ignore_index=False,
-        use_index=False,
         non_interactive=False,
         codebase_path="src/metis",
         include_triaged=False,
@@ -143,11 +246,11 @@ def test_execute_command_allows_interactive_triage_command_with_global_triage_fl
 
 def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypatch):
     args = SimpleNamespace(
+        enabled_tools={"index"},
         quiet=True,
         triage=True,
         output_file=None,
         ignore_index=False,
-        use_index=False,
         non_interactive=False,
         codebase_path="src/metis",
     )
@@ -186,11 +289,11 @@ def test_execute_command_accepts_global_ignore_index_as_noop(
     monkeypatch, cmd, cmd_args
 ):
     args = SimpleNamespace(
+        enabled_tools={"index"},
         quiet=True,
         triage=False,
         output_file=None,
         ignore_index=True,
-        use_index=False,
         codebase_path="src/metis",
     )
     calls = []
@@ -222,11 +325,11 @@ def test_execute_command_accepts_global_ignore_index_as_noop(
 @pytest.mark.parametrize("cmd", ["ask", "update"])
 def test_execute_command_accepts_inline_ignore_index_as_noop(monkeypatch, cmd):
     args = SimpleNamespace(
+        enabled_tools={"index"},
         quiet=True,
         triage=False,
         output_file=None,
         ignore_index=False,
-        use_index=False,
         codebase_path="src/metis",
     )
     calls = []

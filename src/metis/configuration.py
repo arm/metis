@@ -281,6 +281,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
+    runtime["enabled_tools"] = engine_cfg.get("tools")
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     # Query config
