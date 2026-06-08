@@ -161,7 +161,7 @@ def test_sanitize_review_payload_fills_missing_fields():
     assert entry["issue"] == "Missing fields"
     assert entry["reasoning"] == ""
     assert entry["mitigation"] == ""
-    assert entry["cwe"] == ""
+    assert entry["cwe"] == "CWE-Unknown"
     assert entry["severity"] == ""
     assert entry["confidence"] == 0.0
 
@@ -195,6 +195,6 @@ def test_review_node_llm_keeps_partial_reviews():
     assert issue["issue"] == "Partial"
     assert issue["reasoning"] == ""
     assert issue["mitigation"] == ""
-    assert issue["cwe"] == ""
+    assert issue["cwe"] == "CWE-Unknown"
     assert issue["severity"] == ""
     assert issue["confidence"] == 0.0

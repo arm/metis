@@ -11,12 +11,13 @@ from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.engine.source import SourceMap
-from metis.utils import split_snippet, parse_json_output, enrich_issues
+from metis.utils import split_snippet, parse_json_output
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
     retrieve_text,
     synthesize_context,
     build_review_system_prompt,
+    normalize_review_fields,
     sanitize_review_payload,
 )
 from .types import ReviewRequest, ReviewState
@@ -30,7 +31,9 @@ def _normalize_reviews(raw) -> list[dict]:
     structured entries with empty fields when necessary.
     """
     if isinstance(raw, ReviewResponseModel):
-        return raw.model_dump().get("reviews", []) or []
+        return [
+            normalize_review_fields(r) for r in (raw.model_dump().get("reviews") or [])
+        ]
 
     payload = None
     if isinstance(raw, dict):
@@ -84,22 +87,6 @@ def _build_body_text(state: ReviewState) -> str:
             sections.extend(["CONTEXT:", context, ""])
 
     return "\n".join(sections)
-
-
-def _post_process_reviews(
-    reviews: list[dict],
-    file_path: str,
-    *,
-    hint: range | None = None,
-) -> list[dict]:
-    """Enrich parsed reviews with derived metadata."""
-    normalized_reviews = reviews or []
-    try:
-        enrich_issues(file_path, normalized_reviews, hint=hint)
-    except Exception:
-        pass
-
-    return normalized_reviews
 
 
 def review_node_retrieve(state: ReviewState) -> ReviewState:
@@ -156,6 +143,7 @@ def review_node_llm(
 
 def review_node_parse(state: ReviewState) -> ReviewState:
     reviews = state.get("parsed_reviews") or []
+    smap = state.get("source_map")
     chunk_start = state.get("chunk_start")
     chunk_end = state.get("chunk_end")
     hint = (
@@ -163,14 +151,26 @@ def review_node_parse(state: ReviewState) -> ReviewState:
         if isinstance(chunk_start, int) and isinstance(chunk_end, int)
         else None
     )
-    normalized = _post_process_reviews(
-        reviews,
-        state.get("file_path", "") or "",
-        hint=hint,
-    )
+
+    for issue in reviews:
+        if not isinstance(issue, dict):
+            continue
+        if smap is None:
+            issue.setdefault("anchor", None)
+            issue.setdefault("line_number", 0)
+            continue
+        anchor = smap.resolve_issue(
+            snippet=str(issue.get("code_snippet") or ""),
+            start_line=issue.get("start_line"),
+            end_line=issue.get("end_line"),
+            hint=hint,
+            context_text=f"{issue.get('issue') or ''} {issue.get('reasoning') or ''}",
+        )
+        issue["anchor"] = anchor.to_dict()
+        issue["line_number"] = anchor.end_line or 0
 
     new_state: ReviewState = state.copy()
-    new_state["parsed_reviews"] = normalized
+    new_state["parsed_reviews"] = reviews
     return new_state
 
 
@@ -279,6 +279,11 @@ class ReviewGraph:
         original_file = request.get("original_file")
         use_retrieval_context = bool(request.get("use_retrieval_context", False))
 
+        smap = (
+            SourceMap.for_text(relative_file or file_path, snippet)
+            if mode == "file"
+            else None
+        )
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
         app = self._build_app(language_prompts, default_prompt_key)
@@ -289,6 +294,7 @@ class ReviewGraph:
                 "snippet": chunk,
                 "chunk_start": chunk_start,
                 "chunk_end": chunk_end,
+                "source_map": smap,
                 "retriever_code": retriever_code,
                 "retriever_docs": retriever_docs,
                 "context_prompt": context_prompt,

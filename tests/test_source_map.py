@@ -167,6 +167,32 @@ def test_enclosing_symbol(smap):
     assert smap.enclosing_symbol(1) is None
 
 
+def test_context_slice(smap):
+    out = smap.context_slice(10, radius=1)
+    assert out.splitlines()[0].lstrip().startswith("9:")
+    assert out.splitlines()[-1].lstrip().startswith("11:")
+    assert len(smap.context_slice(10, radius=2, max_chars=20)) == 20
+
+
+def test_function_slice_uses_explicit_end(smap):
+    out = smap.function_slice(7, 13)
+    lines = out.splitlines()
+    assert lines[0].lstrip().startswith("7:")
+    assert lines[-1].lstrip().startswith("13:")
+
+
+def test_function_slice_infers_end(smap):
+    out = smap.function_slice(7)
+    assert out.splitlines()[-1].lstrip().startswith("13:")
+
+
+def test_find_function_span(smap):
+    assert smap.find_function_span(name="parse") == (7, 13)
+    assert smap.find_function_span(name="other", near_line=18) == (15, 21)
+    assert smap.find_function_span(name="missing") is None
+    assert smap.find_function_span(near_line=10) == (7, 13)
+
+
 def test_anchor_for_lines_auto_symbol(smap):
     a = smap.anchor_for_lines(10, 10)
     assert a.symbol == "src/foo.c::parse"
@@ -218,53 +244,71 @@ def test_split_snippet_returns_offsets():
     assert starts == sorted(starts)
 
 
-def test_enrich_issues_uses_model_lines_when_verified(tmp_path):
-    from metis.utils import enrich_issues
-
-    p = tmp_path / "foo.c"
-    p.write_text(C_FIXTURE)
-    issues = [
-        {
-            "issue": "overflow",
-            "code_snippet": "memcpy(tmp, buf, len);",
-            "start_line": 10,
-            "end_line": 10,
-        }
-    ]
-    enrich_issues(str(p), issues)
-    assert issues[0]["line_number"] == 10
-    assert issues[0]["anchor"]["confidence"] == CONFIDENCE_EXACT
-    assert issues[0]["anchor"]["symbol"] == "foo.c::parse"
+def test_resolve_issue_uses_model_lines_when_verified(smap):
+    a = smap.resolve_issue(snippet="memcpy(tmp, buf, len);", start_line=10, end_line=10)
+    assert a.end_line == 10
+    assert a.confidence == CONFIDENCE_EXACT
+    assert a.symbol == "src/foo.c::parse"
 
 
-def test_enrich_issues_falls_back_when_model_lines_wrong(tmp_path):
-    from metis.utils import enrich_issues
-
-    p = tmp_path / "foo.c"
-    p.write_text(C_FIXTURE)
-    issues = [
-        {
-            "issue": "overflow in other()",
-            "reasoning": "the call to memcpy in other lacks a bound",
-            "code_snippet": "memcpy(tmp, buf, len);",
-            "start_line": 3,  # wrong
-            "end_line": 3,
-        }
-    ]
-    enrich_issues(str(p), issues, hint=range(15, 22))
-    assert issues[0]["line_number"] == 18
-    assert issues[0]["anchor"]["confidence"] == CONFIDENCE_DISAMBIGUATED
+def test_resolve_issue_falls_back_when_model_lines_wrong(smap):
+    a = smap.resolve_issue(
+        snippet="memcpy(tmp, buf, len);",
+        start_line=3,
+        end_line=3,
+        hint=range(15, 22),
+        context_text="overflow in other() — memcpy in other lacks a bound",
+    )
+    assert a.end_line == 18
+    assert a.confidence == CONFIDENCE_DISAMBIGUATED
 
 
-def test_enrich_issues_unresolved_when_no_match(tmp_path):
-    from metis.utils import enrich_issues
+def test_resolve_issue_unresolved_when_no_match(smap):
+    a = smap.resolve_issue(snippet="not in this file at all")
+    assert a.end_line == 0
+    assert a.confidence == CONFIDENCE_UNRESOLVED
 
-    p = tmp_path / "foo.c"
-    p.write_text(C_FIXTURE)
-    issues = [{"issue": "x", "code_snippet": "not in this file at all"}]
-    enrich_issues(str(p), issues)
-    assert issues[0]["line_number"] == 0
-    assert issues[0]["anchor"]["confidence"] == CONFIDENCE_UNRESOLVED
+
+def test_review_node_parse_attaches_anchor():
+    from metis.engine.graphs.review import review_node_parse
+
+    smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
+    state = {
+        "source_map": smap,
+        "chunk_start": 7,
+        "chunk_end": 13,
+        "parsed_reviews": [
+            {
+                "issue": "overflow",
+                "code_snippet": "memcpy(tmp, buf, len);",
+                "start_line": 10,
+                "end_line": 10,
+            }
+        ],
+    }
+    out = review_node_parse(state)
+    issue = out["parsed_reviews"][0]
+    assert issue["line_number"] == 10
+    assert issue["anchor"]["confidence"] == CONFIDENCE_EXACT
+    assert issue["anchor"]["symbol"] == "src/foo.c::parse"
+
+
+def test_review_node_parse_no_source_map():
+    from metis.engine.graphs.review import review_node_parse
+
+    state = {"parsed_reviews": [{"issue": "x", "code_snippet": "y"}]}
+    out = review_node_parse(state)
+    assert out["parsed_reviews"][0]["anchor"] is None
+    assert out["parsed_reviews"][0]["line_number"] == 0
+
+
+def test_normalize_review_fields():
+    from metis.engine.graphs.utils import normalize_review_fields
+
+    assert normalize_review_fields({"severity": "med"})["severity"] == "Medium"
+    assert normalize_review_fields({"severity": "CRITICAL"})["severity"] == "Critical"
+    assert normalize_review_fields({})["cwe"] == "CWE-Unknown"
+    assert normalize_review_fields({"cwe": "CWE-79"})["cwe"] == "CWE-79"
 
 
 def test_annotate_chunk_anchors():

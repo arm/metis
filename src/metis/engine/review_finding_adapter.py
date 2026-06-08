@@ -8,7 +8,7 @@ from .reachability.finding_values import (
     _safe_int,
     _severity_title,
 )
-from .reachability.source_context import _read_line_context
+from .source import SourceMap
 
 REACHABILITY_REASONING_METADATA_PREFIXES = (
     "Primary location:",
@@ -31,6 +31,7 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
     )
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
+    smap = SourceMap.for_file(codebase_path, primary_file) if primary_file else None
     return {
         "issue": issue,
         "line_number": line_number,
@@ -39,11 +40,7 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         "primary_function": primary_fn,
         "analysis_type": finding.analysis_type,
         "path": list(finding.path or []),
-        "code_snippet": (
-            _read_line_context(codebase_path, primary_file, line_number, context=2)
-            if primary_file
-            else ""
-        ),
+        "code_snippet": (smap.context_slice(line_number, radius=2) if smap else ""),
         "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": finding.confidence,
