@@ -15,3 +15,13 @@ def read_file_lines(file_path):
 def create_fingerprint(file_path, line_number, rule_id):
     key = f"{file_path}:{line_number}:{rule_id}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def anchor_fingerprint(anchor):
+    """Line-independent fingerprint derived from a CodeAnchor stable_id."""
+    from metis.engine.source import CodeAnchor
+
+    a = CodeAnchor.from_dict(anchor)
+    if a is None or not a.content_hash:
+        return None
+    return hashlib.sha256(a.stable_id().encode("utf-8")).hexdigest()

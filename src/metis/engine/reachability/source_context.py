@@ -2,43 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-import re
 from collections import defaultdict
 
-from metis.utils import read_file_content
+from metis.engine.source import SourceMap
 
-from .finding_values import _safe_int
-from .domain import FunctionNode
 from .limits import (
     FUNCTION_BODY_DEFAULT_CHARS,
     FUNCTION_BODY_FALLBACK_LINES,
-    FUNCTION_BODY_SCAN_LINES,
     SOURCE_CONTEXT_MAX_TOTAL_CHARS,
     SOURCE_CONTEXT_PER_FUNCTION_CHARS,
 )
 
 
 def _read_function_body(codebase_path, node, max_chars=FUNCTION_BODY_DEFAULT_CHARS):
-    content = read_file_content(os.path.join(codebase_path, node.file_path))
-    if not content:
+    smap = SourceMap.for_file(codebase_path, node.file_path)
+    if smap is None:
         return ""
-    fl = content.splitlines()
-    start = max(0, node.line_number - 1)
-    end = min(len(fl), start + FUNCTION_BODY_FALLBACK_LINES)
-    depth, opened = 0, False
-    for i in range(start, min(len(fl), start + FUNCTION_BODY_SCAN_LINES)):
-        for ch in fl[i]:
-            if ch == "{":
-                depth += 1
-                opened = True
-            elif ch == "}":
-                depth -= 1
-        if opened and depth <= 0:
-            end = i + 1
-            break
-    snippet = "\n".join(f"{start + 1 + j}: {fl[start + j]}" for j in range(end - start))
-    return snippet[:max_chars] + "\n" if len(snippet) > max_chars else snippet
+    return smap.function_slice(
+        node.line_number,
+        node.end_line,
+        max_chars=max_chars,
+        fallback_lines=FUNCTION_BODY_FALLBACK_LINES,
+    )
 
 
 def _build_file_grouped_node_chunks(
@@ -151,53 +136,3 @@ def _build_globals_code(graph, max_chars=20000):
         parts.append(entry)
         total += len(entry)
     return "\n\n".join(parts)
-
-
-def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):
-    content = read_file_content(os.path.join(codebase_path, rel_file))
-    if not content:
-        return ""
-    lines = content.splitlines()
-    if not lines:
-        return ""
-    line_number = max(1, _safe_int(line_number, 1))
-    start = max(0, line_number - 1 - context)
-    end = min(len(lines), line_number + context)
-    snippet = "\n".join(f"{i + 1}: {lines[i]}" for i in range(start, end))
-    return snippet[:max_chars]
-
-
-def _read_named_function_body(
-    codebase_path, rel_file, fn_name, near_line=1, max_chars=6000
-):
-    if not rel_file or not fn_name:
-        return ""
-    content = read_file_content(os.path.join(codebase_path, rel_file))
-    if not content:
-        return ""
-    pattern = re.compile(
-        r"(^|\n)[^\n;{}#]*\b" + re.escape(fn_name) + r"\s*\([^;{}]*\)\s*(?:\n\s*)?\{",
-        re.MULTILINE,
-    )
-    matches = list(pattern.finditer(content))
-    if not matches:
-        return ""
-    near_line = max(1, _safe_int(near_line, 1))
-
-    def match_line(match):
-        return content[: match.start()].count("\n") + 1
-
-    chosen = None
-    for match in matches:
-        line = match_line(match)
-        if line <= near_line:
-            chosen = (line, match)
-        elif chosen is None:
-            chosen = (line, match)
-            break
-    if chosen is None:
-        return ""
-    node = FunctionNode(
-        f"{rel_file}::{fn_name}", rel_file, fn_name, chosen[0], False, False
-    )
-    return _read_function_body(codebase_path, node, max_chars=max_chars)

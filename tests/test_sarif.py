@@ -184,3 +184,75 @@ def test_generate_sarif_clamps_line_numbers_when_file_shorter(tmp_path):
     # Original requested line is preserved in properties
     props = issue_entry["properties"]
     assert props["reportedLineNumber"] == 10
+
+
+def test_generate_sarif_uses_anchor_for_region_and_fingerprint(tmp_path):
+    lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
+    temp_file = tmp_path / "code.c"
+    temp_file.write_text("".join(lines))
+
+    anchor = {
+        "file_path": "code.c",
+        "start_line": 2,
+        "end_line": 4,
+        "symbol": "code.c::fn",
+        "content_hash": "deadbeef",
+        "confidence": "exact",
+    }
+    results = {
+        "reviews": [
+            {
+                "file_path": str(temp_file),
+                "file": "code.c",
+                "reviews": [
+                    {
+                        "issue": "x",
+                        "line_number": 4,
+                        "code_snippet": "b\nc\nd",
+                        "anchor": anchor,
+                    }
+                ],
+            }
+        ]
+    }
+
+    sarif = generate_sarif(results)
+    entry = sarif["runs"][0]["results"][0]
+    region = entry["locations"][0]["physicalLocation"]["region"]
+    assert region["startLine"] == 2
+    assert region["endLine"] == 4
+    assert "metisAnchor/v1" in entry["partialFingerprints"]
+    assert "primaryLocationLineHash" in entry["partialFingerprints"]
+    assert entry["properties"]["anchor"]["content_hash"] == "deadbeef"
+
+
+def test_anchor_fingerprint_line_independent():
+    from metis.sarif.utils import anchor_fingerprint
+
+    a = {
+        "file_path": "f.c",
+        "start_line": 5,
+        "end_line": 7,
+        "symbol": "f.c::g",
+        "content_hash": "abc",
+    }
+    b = {
+        "file_path": "f.c",
+        "start_line": 50,
+        "end_line": 52,
+        "symbol": "f.c::g",
+        "content_hash": "abc",
+    }
+    c = {
+        "file_path": "f.c",
+        "start_line": 5,
+        "end_line": 7,
+        "symbol": "f.c::g",
+        "content_hash": "xyz",
+    }
+    assert anchor_fingerprint(a) == anchor_fingerprint(b)
+    assert anchor_fingerprint(a) != anchor_fingerprint(c)
+    assert anchor_fingerprint(None) is None
+    assert (
+        anchor_fingerprint({"file_path": "f.c", "start_line": 1, "end_line": 1}) is None
+    )

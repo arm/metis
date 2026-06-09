@@ -18,6 +18,24 @@ class FunctionNode:
     source_reason: str = ""
     sink_type: str = ""
     sink_reason: str = ""
+    end_line: int = 0
+    start_byte: int = 0
+    end_byte: int = 0
+
+    @property
+    def anchor(self):
+        from metis.engine.source.anchor import KIND_FUNCTION, CodeAnchor, content_hash
+
+        return CodeAnchor(
+            file_path=self.file_path,
+            start_line=self.line_number,
+            end_line=self.end_line or self.line_number,
+            start_byte=self.start_byte,
+            end_byte=self.end_byte,
+            symbol=self.unique_name,
+            kind=KIND_FUNCTION,
+            content_hash=content_hash(self.name),
+        )
 
 
 @dataclass
@@ -61,11 +79,14 @@ class VulnerabilityFinding:
     primary_function: str = ""
     primary_line: int = 0
     canonical_key: str = ""
+    primary_anchor: dict | None = None
 
     def __post_init__(self):
         if not self.primary_file:
             self.primary_file = self.sink_file or self.source_file
         if not self.primary_function:
             self.primary_function = self.sink_function or self.source_function
+        if self.primary_anchor and not self.primary_line:
+            self.primary_line = int(self.primary_anchor.get("end_line") or 0)
         if not self.primary_line:
             self.primary_line = self.sink_line or self.source_line or 0

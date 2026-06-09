@@ -45,7 +45,7 @@ def _parse_intra(
             # name is still useful. Preserve the existing behavior by assigning
             # it to the first shown function rather than dropping it here.
             fn = functions[0]
-        line = _entry_line(entry, fn.line_number)
+        line = _entry_line(entry, fn)
         results.append(
             _finding_from_llm_entry(
                 entry,
@@ -153,11 +153,15 @@ def _lookup_in_functions(
     return _lookup_fn(str(value or ""), by_name, by_unique, functions)
 
 
-def _entry_line(entry: dict[str, Any], default: int) -> int:
+def _entry_line(entry: dict[str, Any], fn: FunctionNode) -> int:
+    default = fn.line_number
     try:
-        return max(1, int(entry.get("line", default)))
+        line = max(1, int(entry.get("line", default)))
     except (TypeError, ValueError):
         return default
+    if fn.end_line and not (fn.line_number <= line <= fn.end_line):
+        return default
+    return line
 
 
 def _combined_source_sink_names(
