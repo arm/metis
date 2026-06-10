@@ -30,6 +30,8 @@ query:
   - `opus` -> `claude-opus-4-8`
   - `sonnet` -> `claude-sonnet-4-6`
   - `haiku` -> `claude-haiku-4-5`
+  - `fable` -> `claude-fable-5`
+  - `mythos` -> `claude-mythos-5`
 - You can still use an exact Claude model ID when you need stricter version
   control.
 - The Anthropic API key is resolved from `llm_provider.api_key`, then

@@ -136,6 +136,8 @@ _ANTHROPIC_MODEL_ALIASES = {
     "opus": "claude-opus-4-8",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5",
+    "fable": "claude-fable-5",
+    "mythos": "claude-mythos-5",
 }
 
 
@@ -217,9 +219,10 @@ def _resolve_anthropic_model_name(model: str | None) -> str:
     normalized = model.lower()
     resolved = _ANTHROPIC_MODEL_ALIASES.get(normalized, model)
     if not resolved.startswith("claude-"):
+        aliases = ", ".join(_ANTHROPIC_MODEL_ALIASES)
         raise ValueError(
             "Anthropic provider requires an exact Claude model ID or a supported "
-            "short alias: opus, sonnet, or haiku."
+            f"short alias: {aliases}."
         )
     return resolved
 

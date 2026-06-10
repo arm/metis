@@ -645,6 +645,8 @@ query:
         ("opus", "claude-opus-4-8"),
         ("sonnet", "claude-sonnet-4-6"),
         ("haiku", "claude-haiku-4-5"),
+        ("fable", "claude-fable-5"),
+        ("mythos", "claude-mythos-5"),
     ],
 )
 def test_load_runtime_config_accepts_anthropic_model_aliases(
