@@ -27,6 +27,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "vllm": "vLLM",
     "ollama": "Ollama",
     "anthropic": "Anthropic",
+    "gemini": "Gemini",
     "llamacpp": "llama.cpp",
 }
 
@@ -67,6 +68,11 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "code_embedding_model",
         "docs_embedding_model",
     ),
+    "gemini": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
 }
 
 _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
@@ -99,6 +105,12 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": ("ANTHROPIC_API_KEY",),
+    },
+    "gemini": {
+        "required": True,
+        "config_keys": ("api_key",),
+        "config_env_keys": ("api_key_env",),
+        "env_vars": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     },
     "llamacpp": {
         "required": False,
@@ -308,6 +320,19 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["embedding_default_headers"] = llm_cfg.get(
             "embedding_default_headers", {}
         )
+    elif llm_provider_name == "gemini":
+        runtime["llm_api_key"] = llm_api_key
+        runtime["model"] = llm_cfg.get("model", "")
+        runtime["gemini_api_base"] = llm_cfg.get("base_url") or llm_cfg.get(
+            "gemini_api_base"
+        )
+        runtime["gemini_additional_headers"] = llm_cfg.get(
+            "additional_headers", {}
+        ) or llm_cfg.get("gemini_additional_headers", {})
+        runtime["gemini_project"] = llm_cfg.get("project")
+        runtime["gemini_location"] = llm_cfg.get("location")
+        runtime["gemini_vertexai"] = llm_cfg.get("vertexai")
+        runtime["gemini_client_args"] = llm_cfg.get("client_args", {})
     elif llm_provider_name == "llamacpp":
         runtime["llm_api_key"] = llm_api_key
         runtime["openai_api_base"] = llm_cfg.get("base_url", "")

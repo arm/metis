@@ -16,6 +16,8 @@ class ChatModelOptions(TypedDict, total=False):
     deployment_name: str
     temperature: float
     max_tokens: int
+    top_p: float
+    top_k: int
     timeout: float
     request_timeout: float
     max_retries: int
@@ -24,6 +26,14 @@ class ChatModelOptions(TypedDict, total=False):
     seed: int
     logit_bias: Mapping[str, int]
     response_format: Mapping[str, object] | None
+    stop: str | list[str]
+    safety_settings: object
+    thinking_budget: int
+    thinking_level: str
+    include_thoughts: bool
+    response_mime_type: str
+    response_schema: object
+    n: int
 
 
 class OpenAICompatibleProviderConfig(TypedDict, total=False):
@@ -61,7 +71,28 @@ class AzureOpenAIProviderConfig(TypedDict, total=False):
     supports_temperature: NotRequired[bool]
 
 
-ProviderRuntimeConfig = OpenAICompatibleProviderConfig | AzureOpenAIProviderConfig
+class GeminiProviderConfig(TypedDict, total=False):
+    llm_api_key: Required[str]
+    model: Required[str]
+    llama_query_model: str
+    llama_query_temperature: float
+    llama_query_max_tokens: int
+    llama_query_reasoning_effort: str
+    code_embedding_model: Required[str]
+    docs_embedding_model: Required[str]
+    code_embedding_extra_kwargs: Mapping[str, object]
+    docs_embedding_extra_kwargs: Mapping[str, object]
+    gemini_api_base: str
+    gemini_additional_headers: Mapping[str, str]
+    gemini_project: str
+    gemini_location: str
+    gemini_vertexai: bool | None
+    gemini_client_args: Mapping[str, object]
+
+
+ProviderRuntimeConfig = (
+    OpenAICompatibleProviderConfig | AzureOpenAIProviderConfig | GeminiProviderConfig
+)
 
 
 class EmbedModelKwargs(TypedDict, total=False):

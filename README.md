@@ -29,7 +29,7 @@ Metis is an open-source, agentic AI security framework for deep security code re
   Validates findings from its own analysis and third-party SAST tools, gathering evidence to reduce false positives.
 
 - **Provider Flexibility**
-  Support for major LLM services and local models (Anthropic, vLLM, Ollama, llama.cpp, LiteLLM etc.). See the [Anthropic guide](docs/providers/anthropic.md), the [vLLM guide](docs/providers/vllm.md), the [Ollama guide](docs/providers/ollama.md), and the [llama.cpp guide](docs/providers/llamacpp.md) for setup examples.
+  Support for major LLM services and local models (Anthropic, Gemini, vLLM, Ollama, llama.cpp, LiteLLM etc.). See the [Anthropic guide](docs/providers/anthropic.md), the [Gemini guide](docs/providers/gemini.md), the [vLLM guide](docs/providers/vllm.md), the [Ollama guide](docs/providers/ollama.md), and the [llama.cpp guide](docs/providers/llamacpp.md) for setup examples.
 
 ![Demo](.github/demo.gif)
 
@@ -107,6 +107,10 @@ export OPENAI_API_KEY="your-key-here"
 **Anthropic**
 
 Metis can use Claude Opus for chat/review while using OpenAI-compatible embeddings for indexing. See the [Anthropic guide](docs/providers/anthropic.md).
+
+**Gemini**
+
+Metis can use Gemini for chat/review and native Gemini embeddings for indexing. See the [Gemini guide](docs/providers/gemini.md).
 
 ### 3. Index and Run Analysis
 

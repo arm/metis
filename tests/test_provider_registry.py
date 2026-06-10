@@ -9,3 +9,12 @@ def test_registry_loads_anthropic_provider():
 
     assert provider_cls.__name__ == "AnthropicProvider"
     assert provider_cls.__module__ == "metis.providers.anthropic"
+
+
+def test_registry_loads_gemini_provider():
+    provider_cls = get_provider("gemini")
+
+    assert provider_cls.__name__ == "GeminiProvider"
+    assert provider_cls.__module__ == "metis.providers.gemini"
+
+

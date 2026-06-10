@@ -334,6 +334,126 @@ llm_provider:
     assert runtime["llm_api_key"] == ""
 
 
+def test_load_runtime_config_accepts_complete_gemini_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  api_key_env: CUSTOM_GOOGLE_KEY
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+  base_url: https://example.test/gemini
+  additional_headers:
+    X-Test-Header: test
+  project: test-project
+  location: europe-west2
+  vertexai: false
+  client_args:
+    timeout: 30
+metis_engine:
+  embed_dim: 3072
+query:
+  model: gemini-2.5-pro
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_GOOGLE_KEY", "google-key")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "gemini"
+    assert runtime["llm_api_key"] == "google-key"
+    assert runtime["model"] == "gemini-2.5-flash"
+    assert runtime["llama_query_model"] == "gemini-2.5-pro"
+    assert runtime["code_embedding_model"] == "gemini-embedding-001"
+    assert runtime["docs_embedding_model"] == "gemini-embedding-001"
+    assert runtime["gemini_api_base"] == "https://example.test/gemini"
+    assert runtime["gemini_additional_headers"] == {"X-Test-Header": "test"}
+    assert runtime["gemini_project"] == "test-project"
+    assert runtime["gemini_location"] == "europe-west2"
+    assert runtime["gemini_vertexai"] is False
+    assert runtime["gemini_client_args"] == {"timeout": 30}
+    assert runtime["embed_dim"] == 3072
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_reports_missing_gemini_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: ""
+  code_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "Gemini provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.model" in message
+    assert "llm_provider.docs_embedding_model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_reports_missing_gemini_api_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "GOOGLE_API_KEY environment variable" in message
+    assert "GEMINI_API_KEY environment variable" in message
+    assert "Gemini provider" in message
+
+
+def test_load_runtime_config_resolves_gemini_api_key_from_fallback_env(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == "gemini-key"
+    assert runtime["model"] == "gemini-2.5-flash"
+
+
 def test_load_runtime_config_accepts_complete_anthropic_provider_config(
     tmp_path, monkeypatch
 ):
