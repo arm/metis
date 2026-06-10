@@ -41,6 +41,13 @@ class ReachabilityReviewBackend:
             return False
 
     def supports_file(self, file_path):
+        supports_reachability_file = getattr(
+            self._repository,
+            "supports_reachability_file",
+            None,
+        )
+        if callable(supports_reachability_file):
+            return bool(supports_reachability_file(str(file_path)))
         plugin = self._repository.get_plugin_for_path(str(file_path))
         supports = getattr(plugin, "supports_reachability_review", None)
         return bool(callable(supports) and supports())

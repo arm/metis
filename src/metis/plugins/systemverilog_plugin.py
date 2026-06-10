@@ -8,7 +8,6 @@ class SystemVerilogPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing SystemVerilog-specific splitter and prompts."""
 
     NAME = "systemverilog"
-    DEFAULT_EXTENSIONS = [".sv", ".svh"]
 
     def get_splitter(self):
         splitting_cfg = self._plugin_section().get("splitting", {})

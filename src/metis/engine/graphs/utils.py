@@ -44,10 +44,6 @@ _RELEVANT_CONTEXT_PLACEHOLDER_VALUES = {
     "[[RELEVANT_CONTEXT_UNINDENTED]]": "If it is empty, ignore it.",
     "[[RELEVANT_CONTEXT_TWO_SPACE]]": "- If it is empty, ignore it.",
     "[[RELEVANT_CONTEXT_NAMED]]": ("- If RELEVANT_CONTEXT is empty, ignore it."),
-    "[[RELEVANT_CONTEXT_ASSERTION_GUIDANCE]]": (
-        '- Assertions: ensure security properties are not "simulation-only" '
-        "crutches when RELEVANT_CONTEXT expects enforcement in RTL."
-    ),
     "[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]]": " and RELEVANT_CONTEXT",
     "[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]]": ", RELEVANT_CONTEXT",
     "[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]]": " or context",
@@ -260,7 +256,6 @@ def build_review_system_prompt(
     custom_prompt_text,
     custom_guidance_precedence,
     schema_prompt_section,
-    hardware_cwe_guidance="",
     include_relevant_context=True,
 ):
     """Compose the system prompt for a review in a single place."""
@@ -269,7 +264,6 @@ def build_review_system_prompt(
         f"{language_prompts['security_review_checks']} \n {report_prompt}"
     )
     schema_placeholder = "[[REVIEW_SCHEMA_FIELDS]]"
-    hardware_placeholder = "[[HARDWARE_CWE_GUIDANCE]]"
 
     # Fail early here since REVIEW_SCHEMA_FIELDS are required for having a structured output
     if schema_placeholder not in base:
@@ -279,12 +273,6 @@ def build_review_system_prompt(
 
     base = base.replace(schema_placeholder, schema_prompt_section)
 
-    if hardware_placeholder in base:
-        if not hardware_cwe_guidance:
-            raise ValueError(
-                "Hardware CWE guidance placeholder found but guidance text is empty"
-            )
-        base = base.replace(hardware_placeholder, hardware_cwe_guidance)
     base = _replace_relevant_context_placeholders(
         base,
         include_relevant_context=include_relevant_context,

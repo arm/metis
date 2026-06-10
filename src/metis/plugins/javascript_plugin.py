@@ -8,4 +8,3 @@ class JavaScriptPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing JavaScript-specific splitter and prompts."""
 
     NAME = "javascript"
-    DEFAULT_EXTENSIONS = [".js", ".jsx"]

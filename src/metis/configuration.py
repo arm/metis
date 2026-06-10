@@ -300,8 +300,11 @@ def load_runtime_config(config_path=None, enable_psql=False):
     return runtime
 
 
-def load_plugin_config(plugins_path: str | Path | None = None):
-    return config_path_fallback("plugins.yaml", "metis.plugins", plugins_path)
+def load_plugin_config():
+    resource = files("metis.plugins.config") / "global.yaml"
+    with as_file(resource) as real_path:
+        logger.info("Loading default plugin config")
+        return load_yaml(real_path)
 
 
 def load_metis_config(config_path: str | Path | None = None):

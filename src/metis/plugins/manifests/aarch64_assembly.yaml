@@ -1,0 +1,13 @@
+name: aarch64_assembly
+aliases:
+- aarch64_assembly
+extensions:
+- .s
+- .s
+- .asm
+- .a64
+filename_patterns: []
+implementation: metis.plugins.aarch64_assembly_plugin:AArch64AssemblyPlugin
+config_resource: languages/aarch64_assembly.yaml
+capabilities: {}
+priority: 0

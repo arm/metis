@@ -6,7 +6,6 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CPlugin(ConfigBackedLanguagePlugin):
     NAME = "c"
-    DEFAULT_EXTENSIONS = [".c", ".h"]
 
     def supports_reachability_review(self) -> bool:
         return True

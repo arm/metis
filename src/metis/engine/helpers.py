@@ -31,7 +31,7 @@ def summarize_changes(llm_provider, file_path, issues, summary_prompt, callbacks
 def prepare_nodes_iter(
     code_docs,
     doc_docs,
-    get_plugin_for_extension,
+    get_plugin_for_path,
     get_splitter_cached,
     doc_splitter,
 ):
@@ -43,7 +43,7 @@ def prepare_nodes_iter(
 
     for d in code_docs:
         ext = os.path.splitext(d.id_)[1].lower()
-        plugin = get_plugin_for_extension(ext)
+        plugin = get_plugin_for_path(d.id_)
         if plugin:
             try:
                 splitter = get_splitter_cached(plugin)

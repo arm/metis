@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import unidiff  # type: ignore[import-untyped]
+import unidiff
 
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content

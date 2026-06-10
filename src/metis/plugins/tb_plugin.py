@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class TableGenPlugin(ConfigBackedLanguagePlugin):
     NAME = "tablegen"
-    DEFAULT_EXTENSIONS = [".td"]

@@ -28,9 +28,15 @@ class EngineRepository:
         self._state = state
 
     def get_plugin_for_extension(self, extension):
+        registry = self._config.language_registry
+        if registry is not None:
+            return registry.get_plugin_for_extension(extension)
         return self._config.ext_plugin_map.get(extension.lower())
 
     def get_plugin_for_path(self, path: str):
+        registry = self._config.language_registry
+        if registry is not None:
+            return registry.get_plugin_for_path(path)
         ext = os.path.splitext(path)[1].lower()
         plugin = self.get_plugin_for_extension(ext)
         if plugin is not None:
@@ -42,7 +48,27 @@ class EngineRepository:
                 return plugin
         return None
 
+    def get_language_name_for_path(self, path: str) -> str | None:
+        registry = self._config.language_registry
+        if registry is not None:
+            return registry.language_name_for_path(path)
+        plugin = self.get_plugin_for_path(path)
+        if plugin is None:
+            return None
+        return str(getattr(plugin, "get_name", lambda: "")() or "").lower() or None
+
+    def supports_reachability_file(self, path: str) -> bool:
+        registry = self._config.language_registry
+        if registry is not None:
+            return registry.supports_reachability_file(path)
+        plugin = self.get_plugin_for_path(path)
+        supports = getattr(plugin, "supports_reachability_review", None)
+        return bool(callable(supports) and supports())
+
     def get_all_supported_code_extensions(self):
+        registry = self._config.language_registry
+        if registry is not None:
+            return registry.supported_code_extensions()
         return sorted(self._config.code_exts)
 
     def get_splitter_cached(self, plugin):
@@ -125,9 +151,12 @@ class EngineRepository:
             for file in files:
                 full_path = os.path.join(root, file)
                 if include_suffixed_sources:
-                    if self.get_plugin_for_path(file) is None:
+                    if self.get_language_name_for_path(full_path) is None:
                         continue
-                elif os.path.splitext(file)[1].lower() not in self._config.code_exts:
+                elif (
+                    os.path.splitext(file)[1].lower()
+                    not in self.get_all_supported_code_extensions()
+                ):
                     continue
                 rel_path = self.normalize_match_path(full_path)
                 if metisignore_spec and metisignore_spec.match_file(rel_path):

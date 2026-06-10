@@ -1,0 +1,13 @@
+name: systemverilog
+aliases:
+- systemverilog
+extensions:
+- .sv
+- .svh
+filename_patterns:
+- .sv.*
+- .svh.*
+implementation: metis.plugins.systemverilog_plugin:SystemVerilogPlugin
+config_resource: languages/systemverilog.yaml
+capabilities: {}
+priority: 0

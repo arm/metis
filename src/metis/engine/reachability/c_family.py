@@ -163,11 +163,17 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         return _identifier_from_node(declarator or node, source)
 
     def _language_for_file(self, path: str) -> str:
-        plugin = None
-        get_plugin_for_path = getattr(self._repository, "get_plugin_for_path", None)
-        if callable(get_plugin_for_path):
-            plugin = get_plugin_for_path(path)
-        language = str(getattr(plugin, "get_name", lambda: "")() or "").lower()
+        get_language_name_for_path = getattr(
+            self._repository,
+            "get_language_name_for_path",
+            None,
+        )
+        language = (
+            get_language_name_for_path(path)
+            if callable(get_language_name_for_path)
+            else ""
+        )
+        language = str(language or "").lower()
         if language in self._runtimes:
             return language
         return "c"

@@ -29,7 +29,8 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         triage_tool_timeout_seconds: int,
         normalize_top_k: Callable[[Any, int], int],
         create_retrievers: Callable[[int], tuple[Any, Any]],
-        get_plugin_for_extension: Callable[[str], Any],
+        get_plugin_for_path: Callable[[str], Any],
+        get_language_name_for_path: Callable[[str], str | None],
         usage_hooks: UsageHooks | None = None,
     ):
         self.codebase_path = codebase_path
@@ -42,7 +43,8 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.triage_tool_timeout_seconds = int(triage_tool_timeout_seconds)
         self._normalize_top_k = normalize_top_k
         self._create_retrievers = create_retrievers
-        self._get_plugin_for_extension = get_plugin_for_extension
+        self._get_plugin_for_path = get_plugin_for_path
+        self._get_language_name_for_path = get_language_name_for_path
         self._usage_hooks = usage_hooks
 
         self._triage_graph_local = threading.local()

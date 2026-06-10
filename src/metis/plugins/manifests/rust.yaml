@@ -1,0 +1,10 @@
+name: rust
+aliases:
+- rust
+extensions:
+- .rs
+filename_patterns: []
+implementation: metis.plugins.rust_plugin:RustPlugin
+config_resource: languages/rust.yaml
+capabilities: {}
+priority: 0

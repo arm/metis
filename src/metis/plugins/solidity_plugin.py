@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class SolidityPlugin(ConfigBackedLanguagePlugin):
     NAME = "solidity"
-    DEFAULT_EXTENSIONS = [".sol"]

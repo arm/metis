@@ -1,0 +1,69 @@
+splitting:
+  chunk_lines: 60
+  chunk_lines_overlap: 10
+  max_chars: 4000
+prompts:
+  security_review: |-
+    1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
+    Always tie identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
+    and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+
+    You will be given:
+    1) FILE_CHANGES - a set of .td changes with lines marked by "+" (added) or "-" (removed).
+    [[RELEVANT_CONTEXT_INPUT_TD]]
+    [[ORIGINAL_FILE_INDEX_PAREN]] ORIGINAL_FILE - the original TableGen file (this may be empty).
+
+    Your tasks are:
+    1. Security Review Scope
+       - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+" or "-" but taking into account how they interact with the whole file.
+    [[RELEVANT_CONTEXT_UNINDENTED]]
+  security_review_file: |-
+    1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
+    Always tie identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
+    Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+
+    You will be given:
+    1) FILE - a TableGen file (e.g., instruction/operand/register definitions, patterns, features).
+    [[RELEVANT_CONTEXT_INPUT_TD]]
+  security_review_checks: |-
+    Your tasks:
+
+      - Identify security-relevant mis-specifications in FILE that could alter program semantics or expose unsafe code paths. Focus on:
+        * Incorrect codegen or pattern matches that generate unintended instructions.
+        * Privileged or system instructions enabled on unsupported subtargets.
+        * Missing side-effect or memory flags (e.g., hasSideEffects, mayLoad, mayStore) that allow illegal optimization or reordering.
+        * Overly permissive immediates or operand definitions that permit invalid encodings.
+        * Pseudo-instruction expansions dropping required barriers, implicit defs/uses, or side effects.
+        * Incorrect ImplicitUses or ImplicitDefs that permit register clobbers or privilege transitions.
+        * Missing Predicates or Requires clauses that fail to restrict instructions to correct modes or features.
+        * Compression or relaxation patterns that unintentionally modify control flow or privilege level.
+        * Scheduling or itinerary omissions that skip necessary fences or barriers, compromising temporal safety.
+
+      - Validate correctness of the following TableGen constructs and attributes:
+        * Instruction flags: hasSideEffects, mayLoad, mayStore, isBarrier, isPseudo, isCall, isReturn, isBranch, isTrap, isTerminator.
+        * Feature gating: Predicates, Requires, and SubtargetFeature usage.
+        * Operand and register definitions: RegisterClass, RegisterOperand, OperandWithDefaultOps, and AsmOperandClass.
+        * Immediate constraints: ImmLeaf, ComplexPattern, and constant range validation.
+        * Pseudo lowering: UsesCustomInserter, ExpandPseudo - verify preservation of side effects and operand semantics.
+        * Pattern breadth: Pat<> and Pattern= constructs - flag overly generic operand or type matches.
+        * ImplicitUses / ImplicitDefs accuracy - ensure all implicit dependencies are correctly modeled.
+
+      - Perform Security Impact Analysis:
+        * For each issue, describe the specific failure mode (e.g., "mayStore=0 on a memory op allows reordering across fences").
+        * Classify severity (HIGH, MEDIUM, LOW, CRITICAL) and identify relevant preconditions (target, subtarget feature, or execution mode).
+        * Distinguish between compile-time acceptance issues (assembler/matcher) and runtime miscompiles or privilege violations.
+
+      - Propose Minimal Reproduction Tests (non-executable):
+        * Describe 1-2 targeted lit tests (TableGen/MC/CodeGen) that could expose the issue.
+        * Include relevant patterns, features, or intrinsics to trigger the vulnerable behavior.
+
+      - Recommend Remediation:
+        * Provide specific TableGen fixes (flags, predicates, operand constraints, pseudo-lowering adjustments).
+        * Include additional feature gating, implicit defs/uses, or barrier insertion as necessary.
+  snippet_security_summary: |-
+    Summarize the security implications of these TableGen (.td) changes. Focus on:
+    - Mis-specifications that could alter program semantics or expose unsafe paths.
+    - Incorrect feature gating or privilege-related instructions becoming available.
+    - Missing side effects / memory flags impacting reordering or optimization.
+    Keep the summary concise and actionable.
+  validation_review: Validate the following TableGen review for security concerns.

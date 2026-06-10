@@ -32,20 +32,28 @@ class IndexingService:
         self._state = state
         self._repository = repository
 
-    def _get_broken_symlink_excludes(self, supported_exts: list[str]) -> list[str]:
+    def _get_supported_input_files(
+        self,
+        docs_supported_exts: list[str],
+    ) -> list[str]:
         base_path = os.path.abspath(self._config.codebase_path)
-        supported = {ext.lower() for ext in supported_exts}
-        excludes = []
+        docs_supported = {ext.lower() for ext in docs_supported_exts}
+        selected = []
 
         for root, _, files in os.walk(base_path):
             for file_name in files:
                 full_path = os.path.join(root, file_name)
-                if os.path.splitext(file_name)[1].lower() not in supported:
-                    continue
                 if os.path.islink(full_path) and not os.path.exists(full_path):
-                    excludes.append(os.path.relpath(full_path, base_path))
+                    continue
+                ext = os.path.splitext(file_name)[1].lower()
+                if (
+                    ext in docs_supported
+                    or self._repository.get_language_name_for_path(full_path)
+                    is not None
+                ):
+                    selected.append(full_path)
 
-        return excludes
+        return selected
 
     def index_codebase(self):
         self.index_prepare_nodes()
@@ -55,7 +63,7 @@ class IndexingService:
         docs_exts = self._config.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
-        code_count = len(self._repository.get_code_files())
+        code_count = len(self._repository.get_code_files(include_suffixed_sources=True))
 
         doc_count = 0
         base_path = os.path.abspath(self._config.codebase_path)
@@ -75,15 +83,11 @@ class IndexingService:
         docs_supported_exts = self._config.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
-        code_supported_exts = self._repository.get_all_supported_code_extensions()
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
-        supported_exts = code_supported_exts + docs_supported_exts
+        input_files = self._get_supported_input_files(docs_supported_exts)
         reader = SimpleDirectoryReader(
-            input_dir=self._config.codebase_path,
-            recursive=True,
-            required_exts=supported_exts,
-            exclude=self._get_broken_symlink_excludes(supported_exts),
+            input_files=input_files,
             filename_as_id=True,
         )
         documents = reader.load_data()
@@ -109,15 +113,16 @@ class IndexingService:
             doc.doc_id = new_id
             doc.id_ = new_id
 
+            language_name = self._repository.get_language_name_for_path(doc.id_)
             if ext in docs_supported_exts:
                 doc_docs.append(doc)
-            elif ext in code_supported_exts:
+            elif language_name is not None:
                 code_docs.append(doc)
 
         nodes_code, nodes_docs = yield from prepare_nodes_iter(
             code_docs,
             doc_docs,
-            self._repository.get_plugin_for_extension,
+            self._repository.get_plugin_for_path,
             self._repository.get_splitter_cached,
             doc_splitter,
         )
@@ -166,12 +171,8 @@ class IndexingService:
                 os.path.basename(os.path.abspath(self._config.codebase_path)),
                 diff_file.path,
             )
-            ext = os.path.splitext(doc_id)[1].lower()
-            target_index = (
-                index_code
-                if ext in self._repository.get_all_supported_code_extensions()
-                else index_docs
-            )
+            language_name = self._repository.get_language_name_for_path(doc_id)
+            target_index = index_code if language_name is not None else index_docs
 
             if diff_file.is_removed_file:
                 target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
@@ -190,8 +191,8 @@ class IndexingService:
                 )
 
                 if diff_file.is_added_file:
-                    if ext in self._repository.get_all_supported_code_extensions():
-                        plugin = self._repository.get_plugin_for_extension(ext)
+                    if language_name is not None:
+                        plugin = self._repository.get_plugin_for_path(doc_id)
                         if not plugin:
                             continue
                         splitter = self._repository.get_splitter_cached(plugin)
@@ -199,7 +200,10 @@ class IndexingService:
                             nodes = splitter.get_nodes_from_documents([doc])
                         except Exception as e:
                             logger.warning(
-                                f"Could not parse code with language {plugin.get_name()} for file {doc.id_} (ext {ext}): {e}"
+                                "Could not parse code with language %s for file %s: %s",
+                                plugin.get_name(),
+                                doc.id_,
+                                e,
                             )
                             continue
                     else:

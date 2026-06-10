@@ -73,7 +73,6 @@ class BaseLanguagePlugin(ABC):
 
 class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
     NAME = ""
-    DEFAULT_EXTENSIONS: list[str] = []
 
     def __init__(self, plugin_config):
         self.plugin_config = plugin_config
@@ -88,9 +87,7 @@ class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
         return str(extension or "").lower() in self.get_supported_extensions()
 
     def get_supported_extensions(self) -> list:
-        configured = self._plugin_section().get(
-            "supported_extensions", self.DEFAULT_EXTENSIONS
-        )
+        configured = self._plugin_section().get("supported_extensions", [])
         return [str(ext).lower() for ext in configured]
 
     def get_splitter(self):
