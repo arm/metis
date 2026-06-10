@@ -343,6 +343,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
+    runtime["enabled_tools"] = engine_cfg.get("tools")
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     # Query config
@@ -361,7 +362,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
     )
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
     runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
-    runtime["response_mode"] = query_cfg.get("response_mode", "compact")
 
     return runtime
 

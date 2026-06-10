@@ -16,11 +16,20 @@ class DatabaseNotFoundError(Exception):
         super().__init__(f"Requested database '{db_name}' not found.")
 
 
-class QueryEngineInitError(Exception):
-    """Exception raised when the query engines fail to initialize."""
+class RetrieverInitError(Exception):
+    """Exception raised when retriever initialization fails."""
 
     def __init__(self):
-        super().__init__("Failed to initialize query engines.")
+        super().__init__("Failed to initialize retrievers.")
+
+
+class ToolDisabledError(Exception):
+    """Exception raised when a disabled engine tool is used."""
+
+    def __init__(self, tool_name: str):
+        super().__init__(
+            f"Tool '{tool_name}' is disabled. Enable it with --tools {tool_name}."
+        )
 
 
 class ParsingError(Exception):

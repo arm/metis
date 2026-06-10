@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
-from llama_index.core import StorageContext
+from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.vector_stores import SimpleVectorStore
 
@@ -76,7 +76,7 @@ def test_usage_runtime_command_summary_and_persistence(tmp_path):
 def test_review_code_propagates_usage_context_into_worker_threads():
     backend = Mock()
     backend.init = Mock()
-    backend.get_query_engines = Mock(return_value=("code-qe", "docs-qe"))
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
     llm_provider.get_embed_model_code.return_value = Mock()
     llm_provider.get_embed_model_docs.return_value = Mock()
@@ -89,7 +89,6 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
     )
 
     engine.review.get_code_files = lambda options=None: ["a.py", "b.py"]
@@ -148,8 +147,51 @@ class _DummyIndexBackend:
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs
 
-    def get_query_engines(self, *args, **kwargs):
-        return ("code-qe", "docs-qe")
+    def index_nodes(
+        self,
+        nodes_code,
+        nodes_docs,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        VectorStoreIndex(
+            nodes_code,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        VectorStoreIndex(
+            nodes_docs,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+
+    def get_index_handles(
+        self,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        index_code = VectorStoreIndex.from_vector_store(
+            self.storage_context_code.vector_store,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        index_docs = VectorStoreIndex.from_vector_store(
+            self.storage_context_docs.vector_store,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+        return index_code, index_docs
+
+    def get_retrievers(self, *args, **kwargs):
+        return ("code-retriever", "docs-retriever")
 
     def close(self):
         return None
@@ -182,7 +224,7 @@ def test_index_codebase_records_embedding_usage(tmp_path):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
+        enabled_tools={"index"},
     )
 
     with engine.usage_command("index") as command:

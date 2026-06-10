@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack, cast
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.callbacks import Callbacks
+from langchain_openai import OpenAIEmbeddings
 from llama_index.llms.langchain import LangChainLLM
+from llama_index.core.callbacks import CallbackManager
+from pydantic import SecretStr
 
-from metis.providers.base import LLMProvider
-from metis.providers.openai_embeddings import build_openai_compatible_embedding_model
+from metis.providers.base import ChatModelOptions, LLMProvider
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.registry import register_provider
 
 
@@ -19,18 +23,24 @@ class AnthropicProvider(LLMProvider):
         self.api_key = config.get("llm_api_key")
         self.embedding_api_key = config.get("embedding_api_key")
         self.query_model = config.get("llama_query_model") or config.get("model")
-        self.temperature = config.get("llama_query_temperature", 0.0)
+        self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 512))
         self.base_url = config.get("anthropic_api_url") or config.get("base_url")
 
         self.code_embedding_model = config.get("code_embedding_model")
         self.docs_embedding_model = config.get("docs_embedding_model")
-        self.code_embedding_extra_kwargs = config.get("code_embedding_extra_kwargs", {})
-        self.docs_embedding_extra_kwargs = config.get("docs_embedding_extra_kwargs", {})
+        self.code_embedding_extra_kwargs = dict(
+            config.get("code_embedding_extra_kwargs", {})
+        )
+        self.docs_embedding_extra_kwargs = dict(
+            config.get("docs_embedding_extra_kwargs", {})
+        )
         self.embedding_api_base = config.get("embedding_api_base") or config.get(
             "embedding_base_url"
         )
-        self.embedding_default_headers = config.get("embedding_default_headers", {})
+        self.embedding_default_headers = dict(
+            config.get("embedding_default_headers", {})
+        )
 
         if not self.api_key:
             raise ValueError(
@@ -45,38 +55,74 @@ class AnthropicProvider(LLMProvider):
             )
         return self.embedding_api_key
 
-    def get_embed_model_code(self, *, callback_manager=None):
-        return build_openai_compatible_embedding_model(
+    def get_embed_model_code(
+        self, *, callback_manager: CallbackManager | None = None
+    ) -> LangChainEmbeddingAdapter:
+        return self._build_embedding_model(
             self.code_embedding_model,
             self.code_embedding_extra_kwargs,
             "code_embedding_model",
-            api_key=self._require_embedding_api_key(),
-            api_base=self.embedding_api_base,
-            default_headers=self.embedding_default_headers,
             callback_manager=callback_manager,
         )
 
-    def get_embed_model_docs(self, *, callback_manager=None):
-        return build_openai_compatible_embedding_model(
+    def get_embed_model_docs(
+        self, *, callback_manager: CallbackManager | None = None
+    ) -> LangChainEmbeddingAdapter:
+        return self._build_embedding_model(
             self.docs_embedding_model,
             self.docs_embedding_extra_kwargs,
             "docs_embedding_model",
-            api_key=self._require_embedding_api_key(),
-            api_base=self.embedding_api_base,
-            default_headers=self.embedding_default_headers,
+            callback_manager=callback_manager,
+        )
+
+    def _build_embedding_model(
+        self,
+        model_name: str | None,
+        extra_kwargs: dict[str, object],
+        config_key: str,
+        callback_manager: CallbackManager | None = None,
+    ) -> LangChainEmbeddingAdapter:
+        if not model_name:
+            raise ValueError(f"Missing '{config_key}' in configuration")
+
+        params: dict[str, object] = {
+            "model": model_name,
+            "api_key": SecretStr(self._require_embedding_api_key()),
+        }
+        if self.embedding_api_base:
+            params["base_url"] = self.embedding_api_base
+        if self.embedding_default_headers:
+            params["default_headers"] = self.embedding_default_headers
+        if extra_kwargs:
+            params.update(extra_kwargs)
+
+        client = OpenAIEmbeddings(**cast(dict[str, Any], params))
+        return LangChainEmbeddingAdapter(
+            client,
+            model_name=model_name,
             callback_manager=callback_manager,
         )
 
     def get_query_engine_class(self):
         return LangChainLLM
 
-    def get_query_model_kwargs(self, *, callback_manager=None, callbacks=None):
+    def get_query_model_kwargs(
+        self,
+        *,
+        callback_manager: CallbackManager | None = None,
+        callbacks: Callbacks = None,
+    ):
         params: dict[str, Any] = {"llm": self.get_chat_model(callbacks=callbacks)}
         if callback_manager is not None:
             params["callback_manager"] = callback_manager
         return params
 
-    def get_chat_model(self, *args: Any, callbacks=None, **kwargs: Any):
+    def get_chat_model(
+        self,
+        *args: str,
+        callbacks: Callbacks = None,
+        **kwargs: Unpack[ChatModelOptions],
+    ) -> ChatAnthropic:
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
         model_name = requested_model or positional_model or self.query_model
@@ -110,7 +156,7 @@ class AnthropicProvider(LLMProvider):
             if optional_key in kwargs:
                 params[optional_key] = kwargs[optional_key]
 
-        return ChatAnthropic(**params)
+        return ChatAnthropic(**cast(dict[str, Any], params))
 
 
 register_provider("anthropic", AnthropicProvider)

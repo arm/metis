@@ -4,9 +4,8 @@
 from typing import cast
 
 from langchain_openai import ChatOpenAI
-from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai import OpenAIResponses
 from metis.providers.base import OpenAICompatibleProviderConfig
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 
 from metis.providers.llamacpp import LlamaCppProvider
 
@@ -89,42 +88,6 @@ def test_chat_model_uses_configured_base_url() -> None:
     assert llm.openai_api_base == "http://custom:9000/v1"
 
 
-def test_query_engine_uses_responses_llm() -> None:
-    provider = LlamaCppProvider(_config(llm_api_key="test-key"))
-
-    llm_class = provider.get_query_engine_class()
-    assert llm_class is OpenAIResponses
-
-
-def test_query_model_kwargs_include_base_url() -> None:
-    provider = LlamaCppProvider(
-        _config(
-            openai_api_base="http://custom:9000/v1",
-            llama_query_model="llama3.1:8b",
-            llm_api_key="test-key",
-        )
-    )
-
-    params = provider.get_query_model_kwargs()
-
-    assert params["api_base"] == "http://custom:9000/v1"
-    assert params["model"] == "llama3.1:8b"
-
-
-def test_context_window_set_for_custom_base_url() -> None:
-    provider = LlamaCppProvider(
-        _config(
-            openai_api_base="http://custom:9000/v1",
-            llama_query_context_window=32768,
-            llm_api_key="test-key",
-        )
-    )
-
-    params = provider.get_query_model_kwargs()
-
-    assert params["context_window"] == 32768
-
-
 def test_reasoning_effort_propagated_to_chat_model() -> None:
     provider = LlamaCppProvider(
         _config(
@@ -138,37 +101,24 @@ def test_reasoning_effort_propagated_to_chat_model() -> None:
     assert llm.reasoning_effort == "high"
 
 
-def test_reasoning_effort_propagated_to_query_kwargs() -> None:
-    provider = LlamaCppProvider(
-        _config(
-            llama_query_reasoning_effort="low",
-            llm_api_key="test-key",
-        )
-    )
-
-    params = provider.get_query_model_kwargs()
-
-    assert params["reasoning_options"] == {"effort": "low"}
-    additional_kwargs = params["additional_kwargs"]
-    assert additional_kwargs["reasoning"] == {"effort": "low"}
-
-
-def test_embed_model_code_returns_openai_embedding() -> None:
+def test_embed_model_code_returns_langchain_embedding_adapter() -> None:
     provider = LlamaCppProvider(_config(llm_api_key="test-key"))
 
     embed = provider.get_embed_model_code()
 
-    assert isinstance(embed, OpenAIEmbedding)
+    assert isinstance(embed, LangChainEmbeddingAdapter)
     assert embed.model_name == "nomic-embed-text:v1.5"
+    assert embed._client.model == "nomic-embed-text:v1.5"
 
 
-def test_embed_model_docs_returns_openai_embedding() -> None:
+def test_embed_model_docs_returns_langchain_embedding_adapter() -> None:
     provider = LlamaCppProvider(_config(llm_api_key="test-key"))
 
     embed = provider.get_embed_model_docs()
 
-    assert isinstance(embed, OpenAIEmbedding)
+    assert isinstance(embed, LangChainEmbeddingAdapter)
     assert embed.model_name == "nomic-embed-text:v1.5"
+    assert embed._client.model == "nomic-embed-text:v1.5"
 
 
 def test_lazy_loader_is_registered() -> None:

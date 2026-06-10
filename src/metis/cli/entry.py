@@ -13,6 +13,7 @@ from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
+from metis.engine.tools.selection import INDEX_TOOL, parse_engine_tools, tool_enabled
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_provider
@@ -89,6 +90,11 @@ def resolve_custom_prompt(args):
 
 
 def build_engine(args, runtime):
+    runtime = dict(runtime)
+    if getattr(args, "enabled_tools", None) is None:
+        _configure_enabled_tools(args, runtime)
+    runtime["enabled_tools"] = _enabled_tools_for_args(args)
+
     llm_provider_name = runtime.get("llm_provider_name", "openai")
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
@@ -151,29 +157,55 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
-def _command_index_flags(args, cmd_args: list[str]) -> tuple[list[str], bool]:
+def _command_index_flags(cmd_args: list[str]) -> list[str]:
     filtered_args: list[str] = []
-    use_index = bool(getattr(args, "use_index", False))
     for arg in cmd_args:
         if arg == "--ignore-index":
             continue
-        if arg == "--use-index":
-            use_index = True
-            continue
         filtered_args.append(arg)
-    return filtered_args, use_index
+    return filtered_args
+
+
+def _enabled_tools_for_args(args) -> set[str]:
+    enabled_tools = getattr(args, "enabled_tools", None)
+    if enabled_tools is not None:
+        return parse_engine_tools(enabled_tools)
+    return parse_engine_tools(getattr(args, "tools", None))
+
+
+def _configure_enabled_tools(args, runtime) -> None:
+    raw_tools = args.tools if getattr(args, "tools", None) is not None else None
+    if raw_tools is None:
+        raw_tools = runtime.get("enabled_tools")
+    args.enabled_tools = parse_engine_tools(raw_tools)
+
+
+def _format_tool_list(tools: list[str]) -> str:
+    return ", ".join(f"'{tool}'" for tool in tools)
 
 
 def _prepare_command_runtime(cmd, cmd_args, args):
     spec = COMMANDS[cmd]
-    filtered_args, use_index = _command_index_flags(args, cmd_args)
+    filtered_args = _command_index_flags(cmd_args)
     if not spec.validate_options(cmd, args):
         return None
 
-    if spec.index_policy == "optional":
-        use_retrieval_context = use_index
-    else:
-        use_retrieval_context = spec.index_policy == "required"
+    enabled_tools = _enabled_tools_for_args(args)
+    missing_tools = [
+        tool for tool in spec.required_tools if not tool_enabled(enabled_tools, tool)
+    ]
+    if missing_tools:
+        tool_label = "tool" if len(missing_tools) == 1 else "tools"
+        enable_value = ",".join(missing_tools)
+        print_console(
+            f"[red]Error:[/red] Command '{escape(cmd)}' requires {tool_label} {_format_tool_list(missing_tools)}. Enable with --tools {escape(enable_value)}.",
+            args.quiet,
+        )
+        return None
+
+    use_retrieval_context = tool_enabled(enabled_tools, INDEX_TOOL) and (
+        INDEX_TOOL in spec.required_tools or INDEX_TOOL in spec.optional_tools
+    )
 
     return CommandRuntime(
         command=cmd,
@@ -186,12 +218,9 @@ def _interactive_command_uses_index(cmd, cmd_args, args) -> bool:
     spec = COMMANDS.get(cmd)
     if spec is None:
         return False
-    if spec.index_policy == "required":
-        return True
-    if spec.index_policy == "optional":
-        _filtered_args, use_index = _command_index_flags(args, cmd_args)
-        return use_index
-    return False
+    if not tool_enabled(_enabled_tools_for_args(args), INDEX_TOOL):
+        return False
+    return INDEX_TOOL in spec.required_tools or INDEX_TOOL in spec.optional_tools
 
 
 def execute_command(engine, cmd, cmd_args, args):
@@ -356,12 +385,18 @@ def main():
         help="Compatibility no-op retained for existing scripts.",
     )
     parser.add_argument(
-        "--use-index",
-        action="store_true",
-        help="Experimental opt-in to legacy index-backed retrieval for review and triage.",
+        "--tools",
+        type=str,
+        help="Comma-separated engine addons to enable, e.g. index or all.",
     )
 
     args = parser.parse_args()
+    try:
+        if args.tools is not None:
+            parse_engine_tools(args.tools)
+    except ValueError as exc:
+        print_console(f"[red]Error:[/red] {escape(str(exc))}", False)
+        raise SystemExit(1) from exc
 
     if args.output_files:
         if args.output_file:
@@ -391,6 +426,11 @@ def main():
 
     configure_logger(logger, args)
     runtime = load_runtime_config(enable_psql=(args.backend == "postgres"))
+    try:
+        _configure_enabled_tools(args, runtime)
+    except ValueError as exc:
+        print_console(f"[red]Error:[/red] {escape(str(exc))}", False)
+        raise SystemExit(1) from exc
     engine, vector_backend = build_engine(args, runtime)
     exit_code = 0
     farewell = None

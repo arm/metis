@@ -39,6 +39,5 @@ llm_provider:
 
 query:
   similarity_top_k: 5
-  response_mode: "tree_summarize"
   max_tokens: 5000
   temperature: 0.0

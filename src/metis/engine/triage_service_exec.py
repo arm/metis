@@ -6,7 +6,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
-from metis.engine.options import TriageOptions, coerce_triage_options
+from metis.engine.options import TriageOptions
 from metis.engine.graphs.types import TriageRequest
 from metis.sarif.triage import (
     apply_triage_result,
@@ -82,7 +82,7 @@ class TriageServiceExecutionMixin:
     ) -> dict:
         retriever_code = retriever_docs = None
         if options.use_retrieval_context:
-            retriever_code, retriever_docs = self._get_thread_triage_query_engines()
+            retriever_code, retriever_docs = self._get_thread_triage_retrievers()
         req = self._build_triage_request(
             finding=finding,
             retriever_code=retriever_code,
@@ -207,14 +207,8 @@ class TriageServiceExecutionMixin:
         debug_callback=None,
         checkpoint_callback=None,
         options: TriageOptions | None = None,
-        include_triaged: bool | None = None,
-        use_retrieval_context: bool | None = None,
     ) -> dict:
-        options = coerce_triage_options(
-            options,
-            include_triaged=include_triaged,
-            use_retrieval_context=use_retrieval_context,
-        )
+        options = options or TriageOptions()
         triaged = payload
         findings = extract_findings(
             triaged,
@@ -226,7 +220,7 @@ class TriageServiceExecutionMixin:
         total = len(findings)
 
         if options.use_retrieval_context:
-            self._get_thread_triage_query_engines()
+            self._get_thread_triage_retrievers()
 
         self._triage_findings_parallel(
             findings=findings,
@@ -248,14 +242,8 @@ class TriageServiceExecutionMixin:
         debug_callback=None,
         checkpoint_every: int | None = None,
         options: TriageOptions | None = None,
-        include_triaged: bool | None = None,
-        use_retrieval_context: bool | None = None,
     ) -> str:
-        options = coerce_triage_options(
-            options,
-            include_triaged=include_triaged,
-            use_retrieval_context=use_retrieval_context,
-        )
+        options = options or TriageOptions()
         payload = load_sarif_file(input_path)
         target_path = output_path or input_path
 

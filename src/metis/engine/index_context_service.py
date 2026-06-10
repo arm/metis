@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from metis.exceptions import QueryEngineInitError
+from metis.exceptions import RetrieverInitError
 
 from .indexing_service import IndexingService
 from .repository import EngineRepository
@@ -14,6 +14,9 @@ from .runtime import EngineConfig, EngineState
 
 
 class IndexContextService:
+    name = "index"
+    enabled = True
+
     def __init__(
         self,
         config: EngineConfig,
@@ -27,37 +30,42 @@ class IndexContextService:
         self._normalize_top_k = normalize_top_k
         self.indexing = IndexingService(config, state, repository)
 
-    def create_query_engines(self, top_k: int):
+    def create_retrievers(self, top_k: int):
         self._ensure_embed_models()
         self._config.vector_backend.init()
-        qe_code, qe_docs = self._config.vector_backend.get_query_engines(
+        retriever_code, retriever_docs = self._config.vector_backend.get_retrievers(
             self._config.llm_provider,
             top_k,
-            self._config.response_mode,
-            **self._config.usage_runtime.hooks.query_engine_kwargs(),
+            **self._config.usage_runtime.hooks.retriever_kwargs(),
         )
-        if not qe_code or not qe_docs:
-            raise QueryEngineInitError()
-        return qe_code, qe_docs
+        if not retriever_code or not retriever_docs:
+            raise RetrieverInitError()
+        return retriever_code, retriever_docs
 
-    def get_query_engines(self):
-        if self._state.qe_code is not None and self._state.qe_docs is not None:
-            return self._state.qe_code, self._state.qe_docs
-        with self._state.query_engine_lock:
-            if self._state.qe_code is not None and self._state.qe_docs is not None:
-                return self._state.qe_code, self._state.qe_docs
+    def get_retrievers(self):
+        if (
+            self._state.retriever_code is not None
+            and self._state.retriever_docs is not None
+        ):
+            return self._state.retriever_code, self._state.retriever_docs
+        with self._state.retriever_lock:
+            if (
+                self._state.retriever_code is not None
+                and self._state.retriever_docs is not None
+            ):
+                return self._state.retriever_code, self._state.retriever_docs
             top_k = self._normalize_top_k(self._config.similarity_top_k, 5)
-            qe_code, qe_docs = self.create_query_engines(top_k)
-            self._state.qe_code = qe_code
-            self._state.qe_docs = qe_docs
-            return qe_code, qe_docs
+            retriever_code, retriever_docs = self.create_retrievers(top_k)
+            self._state.retriever_code = retriever_code
+            self._state.retriever_docs = retriever_docs
+            return retriever_code, retriever_docs
 
-    def clear_query_cache(self) -> None:
-        self._state.qe_code = None
-        self._state.qe_docs = None
+    def clear_retriever_cache(self) -> None:
+        self._state.retriever_code = None
+        self._state.retriever_docs = None
 
     def close(self) -> None:
-        self.clear_query_cache()
+        self.clear_retriever_cache()
         close_fn = getattr(self._config.vector_backend, "close", None)
         if callable(close_fn):
             close_fn()

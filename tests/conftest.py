@@ -31,7 +31,7 @@ def dummy_backend():
         def __init__(self, text):
             self.page_content = text
 
-    backend.get_query_engines = Mock(
+    backend.get_retrievers = Mock(
         return_value=(
             Mock(get_relevant_documents=Mock(return_value=[_Doc("Code result")])),
             Mock(get_relevant_documents=Mock(return_value=[_Doc("Docs result")])),
@@ -40,6 +40,8 @@ def dummy_backend():
     backend.get_storage_contexts = Mock(
         return_value=(mock_storage_context, mock_storage_context)
     )
+    backend.index_nodes = Mock()
+    backend.get_index_handles = Mock(return_value=(Mock(), Mock()))
     backend.vector_store_code = mock_vector_store
     backend.vector_store_docs = mock_vector_store
 
@@ -50,8 +52,6 @@ def dummy_backend():
 def dummy_llm():
     llm = Mock()
     llm.get_chat_model.return_value = MagicMock()
-    llm.get_query_engine_class.return_value = MagicMock
-    llm.get_query_model_kwargs.return_value = {}
     llm.get_embed_model_code.return_value = Mock()
     llm.get_embed_model_docs.return_value = Mock()
     return llm
@@ -68,7 +68,7 @@ def engine(dummy_backend, dummy_llm):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        response_mode="compact",
+        enabled_tools={"index"},
     )
 
 

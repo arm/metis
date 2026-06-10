@@ -4,8 +4,7 @@
 """
 Ollama provider.
 
-Ollama's /v1 API is compatible with OpenAI's but requires OpenAI-like
-mode to be forced for proper structured output handling.
+Ollama's /v1 API is compatible with OpenAI's chat and embedding APIs.
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ class OllamaProvider(OpenAICompatibleProvider):
             config,
             default_base_url=self.DEFAULT_BASE_URL,
             default_api_key=self.DEFAULT_API_KEY,
-            force_openai_like=True,
         )
 
 

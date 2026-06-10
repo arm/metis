@@ -27,12 +27,12 @@ class EngineConfig:
     max_token_length: int
     llama_query_model: str
     similarity_top_k: int
-    response_mode: str
     doc_chunk_size: int
     doc_chunk_overlap: int
     metisignore_file: str | None
     review_code_include_paths: list[str]
     review_code_exclude_paths: list[str]
+    enabled_tools: set[str]
     code_exts: set[str] = field(default_factory=set)
     ext_plugin_map: dict[str, Any] = field(default_factory=dict)
     ext_pattern_plugin_map: list[tuple[str, Any]] = field(default_factory=list)
@@ -44,7 +44,7 @@ class EngineState:
     doc_splitter: Any | None = None
     review_graph: Any | None = None
     ask_graph: Any | None = None
-    qe_code: Any | None = None
-    qe_docs: Any | None = None
+    retriever_code: Any | None = None
+    retriever_docs: Any | None = None
     pending_nodes: tuple[Any, Any] | None = None
-    query_engine_lock: Lock = field(default_factory=Lock)
+    retriever_lock: Lock = field(default_factory=Lock)

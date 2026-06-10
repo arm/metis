@@ -5,10 +5,11 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from sqlalchemy import create_engine, text
 from metis.exceptions import (
     VectorStoreInitError,
-    QueryEngineInitError,
+    RetrieverInitError,
     VectorSchemaError,
 )
-from metis.vector_store.base import BaseVectorStore, QueryEngineRetriever
+from metis.vector_store.base import BaseVectorStore
+from metis.vector_store.retrievers import LlamaIndexNodeRetriever, QueryAnswerRetriever
 from llama_index.vector_stores.postgres import PGVectorStore
 from sqlalchemy.engine.url import make_url
 
@@ -80,11 +81,10 @@ class PGVectorStoreImpl(BaseVectorStore):
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
 
-    def get_query_engines(
+    def get_retrievers(
         self,
         llm_provider,
         similarity_top_k,
-        response_mode,
         callback_manager=None,
         callbacks=None,
     ):
@@ -101,32 +101,70 @@ class PGVectorStoreImpl(BaseVectorStore):
                 embed_model=self.embed_model_docs,
                 callback_manager=callback_manager,
             )
-
-            llm_code = self._build_llm(
+            chat_model_kwargs = {"response_format": None}
+            if callbacks:
+                chat_model_kwargs["callbacks"] = callbacks
+            retriever_code = QueryAnswerRetriever(
+                LlamaIndexNodeRetriever(
+                    index_code.as_retriever(similarity_top_k=similarity_top_k)
+                ),
                 llm_provider,
-                callback_manager=callback_manager,
-                callbacks=callbacks,
+                chat_model_kwargs=chat_model_kwargs,
             )
-            llm_docs = self._build_llm(
+            retriever_docs = QueryAnswerRetriever(
+                LlamaIndexNodeRetriever(
+                    index_docs.as_retriever(similarity_top_k=similarity_top_k)
+                ),
                 llm_provider,
-                callback_manager=callback_manager,
-                callbacks=callbacks,
+                chat_model_kwargs=chat_model_kwargs,
             )
-
-            qe_code = index_code.as_query_engine(
-                llm=llm_code,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-            )
-            qe_docs = index_docs.as_query_engine(
-                llm=llm_docs,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-            )
-            return (QueryEngineRetriever(qe_code), QueryEngineRetriever(qe_docs))
+            return (retriever_code, retriever_docs)
         except Exception as e:
-            logger.error(f"Error creating PG query engines: {e}")
-            raise QueryEngineInitError()
+            logger.error(f"Error creating PG retrievers: {e}")
+            raise RetrieverInitError()
+
+    def index_nodes(
+        self,
+        nodes_code,
+        nodes_docs,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        VectorStoreIndex(
+            nodes_code,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        VectorStoreIndex(
+            nodes_docs,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+
+    def get_index_handles(
+        self,
+        *,
+        embed_model_code,
+        embed_model_docs,
+        **embed_model_kwargs,
+    ):
+        index_code = VectorStoreIndex.from_vector_store(
+            self.vector_store_code,
+            storage_context=self.storage_context_code,
+            embed_model=embed_model_code,
+            **embed_model_kwargs,
+        )
+        index_docs = VectorStoreIndex.from_vector_store(
+            self.vector_store_docs,
+            storage_context=self.storage_context_docs,
+            embed_model=embed_model_docs,
+            **embed_model_kwargs,
+        )
+        return index_code, index_docs
 
     def get_storage_contexts(self):
         return self.storage_context_code, self.storage_context_docs

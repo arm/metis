@@ -10,7 +10,7 @@ import threading
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
 from metis.engine.tools.registry import build_toolbox
-from metis.exceptions import QueryEngineInitError
+from metis.exceptions import RetrieverInitError
 
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 
@@ -62,21 +62,21 @@ class TriageServiceRuntimeMixin:
             self._triage_graph_local.graph = graph
         return graph
 
-    def _init_and_get_triage_query_engines(self):
+    def _init_and_get_triage_retrievers(self):
         top_k = self._normalize_top_k(
             self.triage_similarity_top_k, DEFAULT_TRIAGE_SIMILARITY_TOP_K
         )
-        qe_code, qe_docs = self._create_query_engines(top_k)
-        if not qe_code or not qe_docs:
-            raise QueryEngineInitError()
-        return qe_code, qe_docs
+        retriever_code, retriever_docs = self._create_retrievers(top_k)
+        if not retriever_code or not retriever_docs:
+            raise RetrieverInitError()
+        return retriever_code, retriever_docs
 
-    def _get_thread_triage_query_engines(self):
-        engines = getattr(self._triage_query_engines_local, "engines", None)
-        if engines is None:
-            engines = self._init_and_get_triage_query_engines()
-            self._triage_query_engines_local.engines = engines
-        return engines
+    def _get_thread_triage_retrievers(self):
+        retrievers = getattr(self._triage_retrievers_local, "retrievers", None)
+        if retrievers is None:
+            retrievers = self._init_and_get_triage_retrievers()
+            self._triage_retrievers_local.retrievers = retrievers
+        return retrievers
 
     def _build_triage_analyzer_for_extension(self, extension: str):
         plugin = self._get_plugin_for_extension(extension)
@@ -129,5 +129,5 @@ class TriageServiceRuntimeMixin:
 
     def close(self):
         self._triage_graph_local = threading.local()
-        self._triage_query_engines_local = threading.local()
+        self._triage_retrievers_local = threading.local()
         self._triage_analyzers_local = threading.local()

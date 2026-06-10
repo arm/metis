@@ -113,7 +113,6 @@ def _setup_cli(monkeypatch, tmp_path):
             "max_token_length": 2048,
             "llama_query_model": "gpt-test",
             "similarity_top_k": 3,
-            "response_mode": "compact",
         },
     )
     monkeypatch.setattr(entry, "get_provider", lambda _name: _DummyProvider)
@@ -138,6 +137,8 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
             "metis",
             "--non-interactive",
             "--verbose",
+            "--tools",
+            "index",
             "--command",
             "ask explain",
             "--codebase-path",
@@ -166,6 +167,8 @@ def test_noninteractive_default_quiet_prints_answer_but_not_usage(
         [
             "metis",
             "--non-interactive",
+            "--tools",
+            "index",
             "--command",
             "ask explain",
             "--codebase-path",
@@ -226,7 +229,7 @@ def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
     monkeypatch.setattr(entry, "prompt", _fake_prompt)
     monkeypatch.setattr(
         "sys.argv",
-        ["metis", "--codebase-path", str(tmp_path)],
+        ["metis", "--tools", "index", "--codebase-path", str(tmp_path)],
     )
 
     entry.main()
