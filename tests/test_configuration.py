@@ -561,6 +561,61 @@ llm_provider:
     assert runtime["embedding_api_key"] == ""
 
 
+def test_load_runtime_config_accepts_bedrock_mantle_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock_mantle
+  model: anthropic.claude-example
+  aws_profile: example-profile
+  aws_region: example-region
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+  embedding_api_key_env: CUSTOM_EMBEDDING_KEY
+query:
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_EMBEDDING_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "bedrock_mantle"
+    assert runtime["llm_api_key"] == ""
+    assert runtime["embedding_api_key"] == "embedding-key"
+    assert runtime["model"] == "anthropic.claude-example"
+    assert runtime["llama_query_model"] == "anthropic.claude-example"
+    assert runtime["aws_profile"] == "example-profile"
+    assert runtime["aws_region"] == "example-region"
+    assert runtime["supports_temperature"] is False
+    assert runtime["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["docs_embedding_model"] == "text-embedding-3-small"
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_does_not_default_bedrock_mantle_region(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock_mantle
+  model: anthropic.claude-example
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["aws_region"] is None
+
+
 def test_load_runtime_config_accepts_anthropic_query_model_alias(tmp_path, monkeypatch):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(
@@ -623,7 +678,7 @@ def test_load_runtime_config_rejects_unknown_anthropic_model_alias(
         """
 llm_provider:
   name: anthropic
-  model: mythos
+  model: unsupported-model-alias
   code_embedding_model: text-embedding-3-large
   docs_embedding_model: text-embedding-3-large
 """,

@@ -18,3 +18,8 @@ def test_registry_loads_gemini_provider():
     assert provider_cls.__module__ == "metis.providers.gemini"
 
 
+def test_registry_loads_bedrock_mantle_provider():
+    provider_cls = get_provider("bedrock_mantle")
+
+    assert provider_cls.__name__ == "BedrockMantleProvider"
+    assert provider_cls.__module__ == "metis.providers.bedrock_mantle"

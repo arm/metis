@@ -27,6 +27,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "vllm": "vLLM",
     "ollama": "Ollama",
     "anthropic": "Anthropic",
+    "bedrock_mantle": "Bedrock Mantle",
     "gemini": "Gemini",
     "llamacpp": "llama.cpp",
 }
@@ -68,6 +69,11 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "code_embedding_model",
         "docs_embedding_model",
     ),
+    "bedrock_mantle": (
+        "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
     "gemini": (
         "model",
         "code_embedding_model",
@@ -105,6 +111,12 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": ("ANTHROPIC_API_KEY",),
+    },
+    "bedrock_mantle": {
+        "required": False,
+        "config_keys": (),
+        "config_env_keys": (),
+        "env_vars": (),
     },
     "gemini": {
         "required": True,
@@ -314,6 +326,23 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["anthropic_api_url"] = llm_cfg.get("base_url") or llm_cfg.get(
             "anthropic_api_url"
         )
+        runtime["embedding_api_base"] = llm_cfg.get(
+            "embedding_base_url"
+        ) or llm_cfg.get("embedding_api_base")
+        runtime["embedding_default_headers"] = llm_cfg.get(
+            "embedding_default_headers", {}
+        )
+    elif llm_provider_name == "bedrock_mantle":
+        runtime["llm_api_key"] = llm_api_key
+        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(llm_cfg)
+        runtime["model"] = llm_cfg.get("model", "")
+        runtime["aws_region"] = llm_cfg.get("aws_region")
+        runtime["aws_profile"] = llm_cfg.get("aws_profile")
+        runtime["bedrock_base_url"] = llm_cfg.get("base_url") or llm_cfg.get(
+            "bedrock_base_url"
+        )
+        runtime["default_headers"] = llm_cfg.get("default_headers", {})
+        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
         runtime["embedding_api_base"] = llm_cfg.get(
             "embedding_base_url"
         ) or llm_cfg.get("embedding_api_base")
