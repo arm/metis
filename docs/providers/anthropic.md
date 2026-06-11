@@ -4,6 +4,12 @@ Metis can use Anthropic Claude models, including Claude Opus, for chat, review,
 and triage. Indexing still requires an OpenAI-compatible embedding model because
 Anthropic does not provide the embedding interface Metis uses.
 
+## Install
+
+```bash
+pip install "metis[anthropic]"
+```
+
 ## Configuration
 
 Add or adjust the `llm_provider` block in your `metis.yaml`:

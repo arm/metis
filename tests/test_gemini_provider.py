@@ -4,6 +4,9 @@
 from unittest.mock import Mock
 
 import pytest
+
+pytest.importorskip("langchain_google_genai")
+
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings

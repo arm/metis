@@ -4,6 +4,9 @@
 from unittest.mock import Mock
 
 import pytest
+
+pytest.importorskip("langchain_anthropic")
+
 from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks.base import BaseCallbackHandler
 from llama_index.core.callbacks import CallbackManager

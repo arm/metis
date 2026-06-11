@@ -1,25 +1,29 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.providers.registry import get_provider
+import importlib.util
+
+import pytest
+
+from metis.providers.registry import _LOADERS, get_provider
 
 
-def test_registry_loads_anthropic_provider():
-    provider_cls = get_provider("anthropic")
+@pytest.mark.parametrize(
+    ("name", "dotted_path", "module"),
+    [
+        ("anthropic", "metis.providers.anthropic:AnthropicProvider", "langchain_anthropic"),
+        ("bedrock", "metis.providers.bedrock:BedrockProvider", "langchain_aws"),
+        ("bedrock_mantle", "metis.providers.bedrock_mantle:BedrockMantleProvider", "anthropic"),
+        ("gemini", "metis.providers.gemini:GeminiProvider", "langchain_google_genai"),
+    ],
+)
+def test_registry_loads_optional_provider(name, dotted_path, module):
+    assert _LOADERS[name] == dotted_path
 
-    assert provider_cls.__name__ == "AnthropicProvider"
-    assert provider_cls.__module__ == "metis.providers.anthropic"
-
-
-def test_registry_loads_gemini_provider():
-    provider_cls = get_provider("gemini")
-
-    assert provider_cls.__name__ == "GeminiProvider"
-    assert provider_cls.__module__ == "metis.providers.gemini"
-
-
-def test_registry_loads_bedrock_mantle_provider():
-    provider_cls = get_provider("bedrock_mantle")
-
-    assert provider_cls.__name__ == "BedrockMantleProvider"
-    assert provider_cls.__module__ == "metis.providers.bedrock_mantle"
+    if importlib.util.find_spec(module) is None:
+        with pytest.raises(ModuleNotFoundError, match="required dependencies"):
+            get_provider(name)
+    else:
+        provider_cls = get_provider(name)
+        assert provider_cls.__module__ == dotted_path.split(":", 1)[0]
+        assert provider_cls.__name__ == dotted_path.split(":", 1)[1]

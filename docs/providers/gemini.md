@@ -3,6 +3,12 @@
 Metis can use Google Gemini models for chat, review, and triage, with native
 Gemini embeddings for indexing.
 
+## Install
+
+```bash
+pip install "metis[gemini]"
+```
+
 ## Configuration
 
 Add or adjust the `llm_provider` block in your `metis.yaml`:

@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
+pytest.importorskip("langchain_anthropic")
+pytest.importorskip("anthropic")
+
 from metis.providers.bedrock_mantle import BedrockMantleProvider
 from metis.providers.bedrock_mantle import ChatBedrockMantle
 

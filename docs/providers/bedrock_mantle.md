@@ -3,6 +3,12 @@
 Use this provider for Anthropic Claude models exposed through Amazon Bedrock
 Mantle with AWS SigV4 authentication.
 
+## Install
+
+```bash
+pip install "metis[bedrock_mantle]"
+```
+
 First configure and log in to an AWS profile with access to Bedrock Mantle:
 
 ```bash
