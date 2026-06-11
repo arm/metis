@@ -184,10 +184,11 @@ class BedrockMantleProvider(LLMProvider):
             raise ValueError(
                 "Bedrock Mantle chat model accepts either temperature or top_p, not both."
             )
-        if "temperature" in kwargs:
-            params["temperature"] = kwargs.get("temperature", self.temperature)
-        elif "top_p" not in kwargs and self.temperature is not None:
-            params["temperature"] = self.temperature
+        if self.supports_temperature:
+            if "temperature" in kwargs:
+                params["temperature"] = kwargs["temperature"]
+            elif "top_p" not in kwargs and self.temperature is not None:
+                params["temperature"] = self.temperature
         if callbacks is not None:
             params["callbacks"] = callbacks
 

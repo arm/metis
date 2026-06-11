@@ -124,10 +124,8 @@ class AnthropicProvider(LLMProvider):
             raise ValueError(
                 "Anthropic chat model accepts either temperature or top_p, not both."
             )
-        if "temperature" in kwargs:
-            params["temperature"] = kwargs["temperature"]
-        elif "top_p" not in kwargs and self.supports_temperature:
-            params["temperature"] = self.temperature
+        if self.supports_temperature and "top_p" not in kwargs:
+            params["temperature"] = kwargs.get("temperature", self.temperature)
         if self.base_url:
             params["base_url"] = self.base_url
         if callbacks is not None:

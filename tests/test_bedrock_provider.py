@@ -84,7 +84,7 @@ def test_chat_model_uses_profile_when_no_explicit_keys(mock_chat):
 
 @patch("metis.providers.bedrock.ChatBedrockConverse")
 def test_chat_model_allows_runtime_overrides_and_callbacks(mock_chat):
-    provider = BedrockProvider(_config())
+    provider = BedrockProvider(_config(supports_temperature=True))
     callback = Mock(spec=BaseCallbackHandler)
 
     provider.get_chat_model(
@@ -99,6 +99,15 @@ def test_chat_model_allows_runtime_overrides_and_callbacks(mock_chat):
     assert kwargs["callbacks"] == [callback]
     assert kwargs["max_tokens"] == 128
     assert kwargs["temperature"] == 0.0
+
+
+@patch("metis.providers.bedrock.ChatBedrockConverse")
+def test_chat_model_drops_explicit_temperature_when_not_supported(mock_chat):
+    provider = BedrockProvider(_config())
+
+    provider.get_chat_model(temperature=0.1)
+
+    assert "temperature" not in mock_chat.call_args.kwargs
 
 
 @patch("metis.providers.bedrock.BedrockEmbeddings")

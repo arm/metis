@@ -104,10 +104,8 @@ class BedrockProvider(LLMProvider):
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             **self._credential_kwargs(),
         }
-        if "temperature" in kwargs:
-            params["temperature"] = kwargs["temperature"]
-        elif self.supports_temperature:
-            params["temperature"] = self.temperature
+        if self.supports_temperature:
+            params["temperature"] = kwargs.get("temperature", self.temperature)
         if callbacks is not None:
             params["callbacks"] = callbacks
 

@@ -80,6 +80,14 @@ def test_chat_model_omits_temperature_when_not_supported():
     assert llm.temperature is None
 
 
+def test_chat_model_drops_explicit_temperature_when_not_supported():
+    provider = AnthropicProvider(_config(supports_temperature=False))
+
+    llm = provider.get_chat_model(temperature=0.1)
+
+    assert llm.temperature is None
+
+
 def test_provider_accepts_callback_manager_for_embeddings():
     provider = AnthropicProvider(_config())
     callback_manager = CallbackManager([])

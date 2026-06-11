@@ -42,6 +42,14 @@ def test_chat_model_can_opt_in_to_temperature():
     assert llm.temperature == 0.2
 
 
+def test_chat_model_drops_explicit_temperature_when_not_supported():
+    provider = BedrockMantleProvider(_config())
+
+    llm = provider.get_chat_model(temperature=0.1)
+
+    assert llm.temperature is None
+
+
 def test_chat_model_does_not_default_to_a_specific_region():
     provider = BedrockMantleProvider(_config(aws_region=None))
 
