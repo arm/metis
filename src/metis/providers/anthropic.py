@@ -42,11 +42,6 @@ class AnthropicProvider(LLMProvider):
             config.get("embedding_default_headers", {})
         )
 
-        if not self.api_key:
-            raise ValueError(
-                "ANTHROPIC_API_KEY environment variable is required for Anthropic provider but not set."
-            )
-
     def _require_embedding_api_key(self) -> str:
         if not self.embedding_api_key:
             raise ValueError(
@@ -114,6 +109,11 @@ class AnthropicProvider(LLMProvider):
         model_name = requested_model or positional_model or self.query_model
         if not model_name:
             raise ValueError("Missing chat model configuration")
+        if not self.api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY environment variable is required for "
+                "Anthropic provider but not set."
+            )
 
         params: dict[str, Any] = {
             "model": model_name,

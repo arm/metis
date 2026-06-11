@@ -39,6 +39,7 @@ class MetisEngine:
         codebase_path=".",
         vector_backend=BaseVectorStore,
         llm_provider=None,
+        embedding_provider=None,
         **kwargs,
     ):
         self.codebase_path = codebase_path
@@ -58,6 +59,7 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
+        self.embedding_provider = embedding_provider or llm_provider
         self.usage_runtime = self._init_usage_runtime(kwargs)
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
@@ -171,7 +173,7 @@ class MetisEngine:
         method_name = (
             "get_embed_model_code" if kind == "code" else "get_embed_model_docs"
         )
-        method = getattr(self.llm_provider, method_name)
+        method = getattr(self.embedding_provider, method_name)
         return method(**self.usage_runtime.hooks.embed_model_kwargs())
 
     def get_embed_model_code(self):

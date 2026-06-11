@@ -3,6 +3,7 @@
 
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
+from metis.configuration import validate_embedding_provider_config
 
 import pytest
 
@@ -160,7 +161,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "OpenAI provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.model" in message
-    assert "llm_provider.docs_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -213,8 +213,6 @@ llm_provider:
     assert "Missing: llm_provider.azure_api_version" in message
     assert "llm_provider.engine" in message
     assert "llm_provider.chat_deployment_model" in message
-    assert "llm_provider.code_embedding_deployment" in message
-    assert "llm_provider.docs_embedding_deployment" in message
     assert "Required keys:" in message
 
 
@@ -266,7 +264,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "vLLM provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.base_url" in message
-    assert "llm_provider.code_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -300,8 +297,7 @@ def test_load_runtime_config_reports_missing_ollama_provider_keys(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3.1:8b
-  code_embedding_model: ""
+  model: ""
 """,
         encoding="utf-8",
     )
@@ -311,8 +307,7 @@ llm_provider:
 
     message = str(exc_info.value)
     assert "Ollama provider requires additional metis.yaml configuration" in message
-    assert "Missing: llm_provider.code_embedding_model" in message
-    assert "llm_provider.docs_embedding_model" in message
+    assert "Missing: llm_provider.model" in message
     assert "Required keys:" in message
 
 
@@ -403,7 +398,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "Gemini provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.model" in message
-    assert "llm_provider.docs_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -511,7 +505,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "Anthropic provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.model" in message
-    assert "llm_provider.docs_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -617,7 +610,6 @@ llm_provider:
     assert "AWS Bedrock provider requires additional metis.yaml" in message
     assert "Missing: llm_provider.model" in message
     assert "llm_provider.region" in message
-    assert "llm_provider.docs_embedding_model" in message
 
 
 def test_load_runtime_config_bedrock_passes_credentials(tmp_path):
@@ -777,8 +769,6 @@ def test_load_runtime_config_reports_missing_llamacpp_provider_keys(tmp_path):
         """
 llm_provider:
   name: llamacpp
-  model: llama3.1:8b
-  docs_embedding_model: nomic-embed-text:v1.5
 """,
         encoding="utf-8",
     )
@@ -788,8 +778,7 @@ llm_provider:
 
     message = str(exc_info.value)
     assert "llama.cpp provider requires additional metis.yaml configuration" in message
-    assert "Missing: llm_provider.code_embedding_model" in message
-    assert "llm_provider.docs_embedding_model" in message
+    assert "Missing: llm_provider.model" in message
     assert "Required keys:" in message
 
 
@@ -833,6 +822,111 @@ llm_provider:
 
     assert runtime["llm_api_key"] == "my-secret-key"
     assert runtime["openai_api_base"] == "http://custom:8080/v1"
+
+
+def test_load_runtime_config_embedding_provider_falls_back_to_llm_provider(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: openai
+  model: gpt-test
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["embedding_provider_name"] == "openai"
+    embed = runtime["embedding_provider_config"]
+    assert embed["llm_api_key"] == "test-key"
+    assert embed["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["embedding_provider_raw_config"]["name"] == "openai"
+
+
+def test_load_runtime_config_separate_embedding_provider(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-8
+embedding_provider:
+  name: openai
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embed-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "anthropic"
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["embedding_provider_name"] == "openai"
+    embed = runtime["embedding_provider_config"]
+    assert embed["llm_api_key"] == "embed-key"
+    assert embed["code_embedding_model"] == "text-embedding-3-large"
+    assert embed["docs_embedding_model"] == "text-embedding-3-small"
+    # llm runtime should not pick up embedding-provider keys
+    assert runtime["code_embedding_model"] == ""
+
+
+def test_load_runtime_config_anthropic_without_embeddings(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: opus
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["code_embedding_model"] == ""
+    assert runtime["embedding_provider_name"] == "anthropic"
+
+
+def test_validate_embedding_provider_config_reports_missing_keys():
+    with pytest.raises(ValueError) as exc_info:
+        validate_embedding_provider_config(
+            "openai", {"code_embedding_model": "x"}, section="embedding_provider"
+        )
+
+    message = str(exc_info.value)
+    assert "OpenAI provider requires additional metis.yaml" in message
+    assert "Missing: embedding_provider.docs_embedding_model" in message
+
+
+def test_validate_embedding_provider_config_passes_when_complete():
+    validate_embedding_provider_config(
+        "openai",
+        {
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
+    )
+
+
+def test_validate_embedding_provider_config_uses_llm_section_label():
+    with pytest.raises(ValueError) as exc_info:
+        validate_embedding_provider_config("ollama", {}, section="llm_provider")
+
+    message = str(exc_info.value)
+    assert "Missing: llm_provider.code_embedding_model" in message
+    assert "llm_provider.docs_embedding_model" in message
 
 
 def test_load_runtime_config_accepts_complete_azure_provider_config(

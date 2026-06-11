@@ -34,58 +34,39 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
 }
 
 _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
-    "openai": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
+    "openai": ("model",),
     "azure_openai": (
         "azure_endpoint",
         "azure_api_version",
         "engine",
         "chat_deployment_model",
+    ),
+    "vllm": ("base_url", "model"),
+    "ollama": ("model",),
+    "llamacpp": ("model",),
+    "anthropic": ("model",),
+    "bedrock": ("model", "region"),
+    "bedrock_mantle": ("model",),
+    "gemini": ("model",),
+}
+
+_EMBEDDING_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
+    "openai": ("code_embedding_model", "docs_embedding_model"),
+    "azure_openai": (
+        "azure_endpoint",
+        "azure_api_version",
         "code_embedding_model",
         "docs_embedding_model",
         "code_embedding_deployment",
         "docs_embedding_deployment",
     ),
-    "vllm": (
-        "base_url",
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "ollama": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "llamacpp": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "anthropic": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "bedrock": (
-        "model",
-        "region",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "bedrock_mantle": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
-    "gemini": (
-        "model",
-        "code_embedding_model",
-        "docs_embedding_model",
-    ),
+    "vllm": ("base_url", "code_embedding_model", "docs_embedding_model"),
+    "ollama": ("code_embedding_model", "docs_embedding_model"),
+    "llamacpp": ("code_embedding_model", "docs_embedding_model"),
+    "anthropic": ("code_embedding_model", "docs_embedding_model"),
+    "bedrock": ("region", "code_embedding_model", "docs_embedding_model"),
+    "bedrock_mantle": ("code_embedding_model", "docs_embedding_model"),
+    "gemini": ("code_embedding_model", "docs_embedding_model"),
 }
 
 _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
@@ -168,8 +149,13 @@ def _missing_required_keys(config: dict, keys: tuple[str, ...]) -> list[str]:
     return missing
 
 
-def _validate_llm_provider_config(provider_name: str, provider_config: dict) -> None:
-    required_keys = _LLM_PROVIDER_REQUIRED_KEYS.get(provider_name)
+def _validate_provider_config(
+    provider_name: str,
+    provider_config: dict,
+    required_table: dict[str, tuple[str, ...]],
+    section: str,
+) -> None:
+    required_keys = required_table.get(provider_name)
     if not required_keys:
         return
     missing_keys = _missing_required_keys(provider_config, required_keys)
@@ -177,11 +163,25 @@ def _validate_llm_provider_config(provider_name: str, provider_config: dict) -> 
         return
 
     display_name = _LLM_PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name)
-    missing = ", ".join(f"llm_provider.{key}" for key in missing_keys)
-    required = ", ".join(f"llm_provider.{key}" for key in required_keys)
+    missing = ", ".join(f"{section}.{key}" for key in missing_keys)
+    required = ", ".join(f"{section}.{key}" for key in required_keys)
     raise ValueError(
         f"{display_name} provider requires additional metis.yaml configuration. "
         f"Missing: {missing}. Required keys: {required}."
+    )
+
+
+def _validate_llm_provider_config(provider_name: str, provider_config: dict) -> None:
+    _validate_provider_config(
+        provider_name, provider_config, _LLM_PROVIDER_REQUIRED_KEYS, "llm_provider"
+    )
+
+
+def validate_embedding_provider_config(
+    provider_name: str, provider_config: dict, section: str = "embedding_provider"
+) -> None:
+    _validate_provider_config(
+        provider_name, provider_config, _EMBEDDING_PROVIDER_REQUIRED_KEYS, section
     )
 
 
@@ -240,6 +240,121 @@ def _resolve_anthropic_model_name(model: str | None) -> str:
     return resolved
 
 
+def _build_provider_runtime(provider_name: str, cfg: dict) -> dict[str, object]:
+    """Build the provider-specific portion of the runtime config dict."""
+    runtime: dict[str, object] = {}
+    api_key = _resolve_llm_api_key(provider_name, cfg)
+
+    runtime["code_embedding_model"] = cfg.get("code_embedding_model", "")
+    runtime["docs_embedding_model"] = cfg.get("docs_embedding_model", "")
+    runtime["code_embedding_extra_kwargs"] = cfg.get("code_embedding_extra_kwargs", {})
+    runtime["docs_embedding_extra_kwargs"] = cfg.get("docs_embedding_extra_kwargs", {})
+
+    if not provider_name:
+        raise ValueError(
+            "Provider configuration is missing 'name' (e.g. 'openai', 'anthropic')."
+        )
+    if provider_name == "openai":
+        runtime["llm_api_key"] = api_key
+        runtime["openai_api_base"] = cfg.get("base_url", "")
+        runtime["openai_default_headers"] = cfg.get("default_headers", {})
+        runtime["model"] = cfg.get("model", "")
+    elif provider_name == "azure_openai":
+        runtime["llm_api_key"] = api_key
+        runtime["azure_endpoint"] = cfg.get("azure_endpoint", "")
+        runtime["azure_api_version"] = cfg.get("azure_api_version", "")
+        runtime["engine"] = cfg.get("engine", "")
+        runtime["chat_deployment_model"] = cfg.get("chat_deployment_model", "")
+        runtime["code_embedding_deployment"] = cfg.get("code_embedding_deployment", "")
+        runtime["docs_embedding_deployment"] = cfg.get("docs_embedding_deployment", "")
+        runtime["model_token_param"] = cfg.get(
+            "model_token_param", "max_completion_tokens"
+        )
+        runtime["supports_temperature"] = cfg.get("supports_temperature", False)
+    elif provider_name == "vllm":
+        runtime["llm_api_key"] = api_key
+        runtime["openai_api_base"] = cfg.get("base_url", "")
+        runtime["openai_default_headers"] = cfg.get("default_headers", {})
+        runtime["model"] = cfg.get("model", "")
+    elif provider_name == "ollama":
+        runtime["llm_api_key"] = api_key
+        runtime["openai_api_base"] = cfg.get("base_url", "http://localhost:11434/v1")
+        runtime["openai_default_headers"] = cfg.get("default_headers", {})
+        runtime["model"] = cfg.get("model", "")
+        runtime["force_openai_like"] = True
+    elif provider_name == "anthropic":
+        raw_model = cfg.get("model")
+        model = _resolve_anthropic_model_name(raw_model) if raw_model else ""
+        runtime["llm_api_key"] = api_key
+        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(cfg)
+        runtime["model"] = model
+        runtime["anthropic_api_url"] = cfg.get("base_url") or cfg.get(
+            "anthropic_api_url"
+        )
+        runtime["embedding_api_base"] = cfg.get("embedding_base_url") or cfg.get(
+            "embedding_api_base"
+        )
+        runtime["embedding_default_headers"] = cfg.get("embedding_default_headers", {})
+        runtime["supports_temperature"] = cfg.get("supports_temperature", True)
+    elif provider_name == "bedrock":
+        runtime["llm_api_key"] = api_key
+        runtime["model"] = cfg.get("model", "")
+        runtime["bedrock_region"] = cfg.get("region") or cfg.get("aws_region")
+        runtime["bedrock_endpoint_url"] = cfg.get("endpoint_url", "")
+        runtime["supports_temperature"] = cfg.get("supports_temperature", False)
+        runtime["aws_profile"] = cfg.get("aws_profile", "")
+        runtime["aws_access_key_id"] = cfg.get(
+            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
+        )
+        runtime["aws_secret_access_key"] = cfg.get(
+            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        )
+        runtime["aws_session_token"] = cfg.get(
+            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
+        )
+    elif provider_name == "bedrock_mantle":
+        runtime["llm_api_key"] = api_key
+        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(cfg)
+        runtime["model"] = cfg.get("model", "")
+        runtime["aws_region"] = cfg.get("aws_region")
+        runtime["aws_profile"] = cfg.get("aws_profile")
+        runtime["aws_access_key_id"] = cfg.get(
+            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
+        )
+        runtime["aws_secret_access_key"] = cfg.get(
+            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        )
+        runtime["aws_session_token"] = cfg.get(
+            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
+        )
+        runtime["bedrock_base_url"] = cfg.get("base_url") or cfg.get("bedrock_base_url")
+        runtime["default_headers"] = cfg.get("default_headers", {})
+        runtime["supports_temperature"] = cfg.get("supports_temperature", False)
+        runtime["embedding_api_base"] = cfg.get("embedding_base_url") or cfg.get(
+            "embedding_api_base"
+        )
+        runtime["embedding_default_headers"] = cfg.get("embedding_default_headers", {})
+    elif provider_name == "gemini":
+        runtime["llm_api_key"] = api_key
+        runtime["model"] = cfg.get("model", "")
+        runtime["gemini_api_base"] = cfg.get("base_url") or cfg.get("gemini_api_base")
+        runtime["gemini_additional_headers"] = cfg.get(
+            "additional_headers", {}
+        ) or cfg.get("gemini_additional_headers", {})
+        runtime["gemini_project"] = cfg.get("project")
+        runtime["gemini_location"] = cfg.get("location")
+        runtime["gemini_vertexai"] = cfg.get("vertexai")
+        runtime["gemini_client_args"] = cfg.get("client_args", {})
+    elif provider_name == "llamacpp":
+        runtime["llm_api_key"] = api_key
+        runtime["openai_api_base"] = cfg.get("base_url", "")
+        runtime["openai_default_headers"] = cfg.get("default_headers", {})
+        runtime["model"] = cfg.get("model", "")
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider_name}")
+    return runtime
+
+
 def _resolve_anthropic_embedding_api_key(provider_config: dict) -> str:
     value = provider_config.get("embedding_api_key")
     if isinstance(value, str) and value.strip():
@@ -287,130 +402,23 @@ def load_runtime_config(config_path=None, enable_psql=False):
         )
 
     llm_cfg = cfg.get("llm_provider", {})
-    runtime["code_embedding_model"] = llm_cfg.get("code_embedding_model", "")
-    runtime["docs_embedding_model"] = llm_cfg.get("docs_embedding_model", "")
-    runtime["code_embedding_extra_kwargs"] = llm_cfg.get(
-        "code_embedding_extra_kwargs", {}
-    )
-    runtime["docs_embedding_extra_kwargs"] = llm_cfg.get(
-        "docs_embedding_extra_kwargs", {}
-    )
-
-    llm_provider_name = cfg.get("llm_provider", {}).get("name", "").lower()
+    llm_provider_name = llm_cfg.get("name", "").lower()
     runtime["llm_provider_name"] = llm_provider_name
     _validate_llm_provider_config(llm_provider_name, llm_cfg)
-    llm_api_key = _resolve_llm_api_key(llm_provider_name, llm_cfg)
-    if llm_provider_name == "openai":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
-        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
-        runtime["model"] = llm_cfg.get("model", "")
-    elif llm_provider_name == "azure_openai":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["azure_endpoint"] = llm_cfg.get("azure_endpoint", "")
-        runtime["azure_api_version"] = llm_cfg.get("azure_api_version", "")
-        runtime["engine"] = llm_cfg.get("engine", "")
-        runtime["chat_deployment_model"] = llm_cfg.get("chat_deployment_model", "")
-        runtime["code_embedding_deployment"] = llm_cfg.get(
-            "code_embedding_deployment", ""
-        )
-        runtime["docs_embedding_deployment"] = llm_cfg.get(
-            "docs_embedding_deployment", ""
-        )
-        runtime["model_token_param"] = llm_cfg.get(
-            "model_token_param", "max_completion_tokens"
-        )
-        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
-    elif llm_provider_name == "vllm":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
-        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
-        runtime["model"] = llm_cfg.get("model", "")
-    elif llm_provider_name == "ollama":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["openai_api_base"] = llm_cfg.get(
-            "base_url", "http://localhost:11434/v1"
-        )
-        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
-        runtime["model"] = llm_cfg.get("model", "")
-        runtime["force_openai_like"] = True
-    elif llm_provider_name == "anthropic":
-        model = _resolve_anthropic_model_name(llm_cfg.get("model"))
-        runtime["llm_api_key"] = llm_api_key
-        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(llm_cfg)
-        runtime["model"] = model
-        runtime["anthropic_api_url"] = llm_cfg.get("base_url") or llm_cfg.get(
-            "anthropic_api_url"
-        )
-        runtime["embedding_api_base"] = llm_cfg.get(
-            "embedding_base_url"
-        ) or llm_cfg.get("embedding_api_base")
-        runtime["embedding_default_headers"] = llm_cfg.get(
-            "embedding_default_headers", {}
-        )
-        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", True)
-    elif llm_provider_name == "bedrock":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["model"] = llm_cfg.get("model", "")
-        runtime["bedrock_region"] = llm_cfg.get("region") or llm_cfg.get("aws_region")
-        runtime["bedrock_endpoint_url"] = llm_cfg.get("endpoint_url", "")
-        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
-        runtime["aws_profile"] = llm_cfg.get("aws_profile", "")
-        runtime["aws_access_key_id"] = llm_cfg.get(
-            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
-        )
-        runtime["aws_secret_access_key"] = llm_cfg.get(
-            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-        )
-        runtime["aws_session_token"] = llm_cfg.get(
-            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
-        )
-    elif llm_provider_name == "bedrock_mantle":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["embedding_api_key"] = _resolve_anthropic_embedding_api_key(llm_cfg)
-        runtime["model"] = llm_cfg.get("model", "")
-        runtime["aws_region"] = llm_cfg.get("aws_region")
-        runtime["aws_profile"] = llm_cfg.get("aws_profile")
-        runtime["aws_access_key_id"] = llm_cfg.get(
-            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
-        )
-        runtime["aws_secret_access_key"] = llm_cfg.get(
-            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-        )
-        runtime["aws_session_token"] = llm_cfg.get(
-            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
-        )
-        runtime["bedrock_base_url"] = llm_cfg.get("base_url") or llm_cfg.get(
-            "bedrock_base_url"
-        )
-        runtime["default_headers"] = llm_cfg.get("default_headers", {})
-        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
-        runtime["embedding_api_base"] = llm_cfg.get(
-            "embedding_base_url"
-        ) or llm_cfg.get("embedding_api_base")
-        runtime["embedding_default_headers"] = llm_cfg.get(
-            "embedding_default_headers", {}
-        )
-    elif llm_provider_name == "gemini":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["model"] = llm_cfg.get("model", "")
-        runtime["gemini_api_base"] = llm_cfg.get("base_url") or llm_cfg.get(
-            "gemini_api_base"
-        )
-        runtime["gemini_additional_headers"] = llm_cfg.get(
-            "additional_headers", {}
-        ) or llm_cfg.get("gemini_additional_headers", {})
-        runtime["gemini_project"] = llm_cfg.get("project")
-        runtime["gemini_location"] = llm_cfg.get("location")
-        runtime["gemini_vertexai"] = llm_cfg.get("vertexai")
-        runtime["gemini_client_args"] = llm_cfg.get("client_args", {})
-    elif llm_provider_name == "llamacpp":
-        runtime["llm_api_key"] = llm_api_key
-        runtime["openai_api_base"] = llm_cfg.get("base_url", "")
-        runtime["openai_default_headers"] = llm_cfg.get("default_headers", {})
-        runtime["model"] = llm_cfg.get("model", "")
+    runtime.update(_build_provider_runtime(llm_provider_name, llm_cfg))
+
+    # Embedding provider — optional separate block; falls back to llm_provider
+    embed_cfg = cfg.get("embedding_provider")
+    if embed_cfg:
+        embed_provider_name = embed_cfg.get("name", llm_provider_name).lower()
+        embed_runtime = _build_provider_runtime(embed_provider_name, embed_cfg)
     else:
-        raise ValueError(f"Unsupported LLM provider: {llm_provider_name}")
+        embed_provider_name = llm_provider_name
+        embed_cfg = llm_cfg
+        embed_runtime = dict(runtime)
+    runtime["embedding_provider_name"] = embed_provider_name
+    runtime["embedding_provider_config"] = embed_runtime
+    runtime["embedding_provider_raw_config"] = dict(embed_cfg)
 
     # Engine/vector store settings
     engine_cfg = cfg.get("metis_engine", {})

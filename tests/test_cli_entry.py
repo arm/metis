@@ -385,6 +385,119 @@ def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     assert "Metis" in capsys.readouterr().out
 
 
+def test_build_embedding_provider_reuses_llm_provider_when_same(monkeypatch):
+    args = SimpleNamespace(quiet=True)
+    llm_provider = object()
+    runtime = {
+        "llm_provider_name": "openai",
+        "embedding_provider_name": "openai",
+        "embedding_provider_config": {"llm_api_key": "k"},
+        "embedding_provider_raw_config": {
+            "name": "openai",
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
+        "enabled_tools": {"index"},
+    }
+
+    result = entry._build_embedding_provider(args, runtime, llm_provider)
+
+    assert result is llm_provider
+
+
+def test_build_embedding_provider_validates_when_index_enabled(monkeypatch):
+    args = SimpleNamespace(quiet=True)
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "embedding_provider_name": "anthropic",
+        "embedding_provider_config": {},
+        "embedding_provider_raw_config": {"name": "anthropic"},
+        "enabled_tools": {"index"},
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        entry._build_embedding_provider(args, runtime, object())
+
+    assert "llm_provider.code_embedding_model" in str(exc_info.value)
+
+
+def test_build_embedding_provider_skips_validation_when_index_disabled():
+    args = SimpleNamespace(quiet=True)
+    llm_provider = object()
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "embedding_provider_name": "anthropic",
+        "embedding_provider_config": {},
+        "embedding_provider_raw_config": {"name": "anthropic"},
+        "enabled_tools": set(),
+    }
+
+    result = entry._build_embedding_provider(args, runtime, llm_provider)
+
+    assert result is llm_provider
+
+
+def test_build_embedding_provider_constructs_separate_provider(monkeypatch):
+    constructed = []
+
+    class FakeEmbedProvider:
+        def __init__(self, cfg):
+            constructed.append(cfg)
+
+    monkeypatch.setattr(entry, "get_provider", lambda name: FakeEmbedProvider)
+    args = SimpleNamespace(quiet=True)
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "embedding_provider_name": "openai",
+        "embedding_provider_config": {
+            "llm_api_key": "embed-key",
+            "code_embedding_model": "text-embedding-3-large",
+        },
+        "embedding_provider_raw_config": {
+            "name": "openai",
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
+        "enabled_tools": {"index"},
+    }
+
+    result = entry._build_embedding_provider(args, runtime, object())
+
+    assert isinstance(result, FakeEmbedProvider)
+    assert constructed[0]["llm_api_key"] == "embed-key"
+
+
+def test_build_embedding_provider_warns_on_incomplete_separate_when_index_off(
+    monkeypatch,
+):
+    captured = []
+    monkeypatch.setattr(
+        entry,
+        "print_console",
+        lambda message, *_args, **_kwargs: captured.append(str(message)),
+    )
+
+    class FakeEmbedProvider:
+        def __init__(self, cfg):
+            pass
+
+    monkeypatch.setattr(entry, "get_provider", lambda name: FakeEmbedProvider)
+    args = SimpleNamespace(quiet=True)
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "embedding_provider_name": "openai",
+        "embedding_provider_config": {},
+        "embedding_provider_raw_config": {"name": "openai"},
+        "enabled_tools": set(),
+    }
+
+    result = entry._build_embedding_provider(args, runtime, object())
+
+    assert isinstance(result, FakeEmbedProvider)
+    assert any("Warning" in m for m in captured)
+    assert any("embedding_provider.code_embedding_model" in m for m in captured)
+
+
 def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path):
     class ProviderWithoutEmbeddings:
         def __init__(self, _runtime):
@@ -415,6 +528,9 @@ def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path)
     )
     runtime = {
         "llm_provider_name": "anthropic",
+        "embedding_provider_name": "anthropic",
+        "embedding_provider_config": {},
+        "embedding_provider_raw_config": {"name": "anthropic"},
         "max_workers": 2,
         "max_token_length": 2048,
         "llama_query_model": "claude-opus-4-1-20250805",

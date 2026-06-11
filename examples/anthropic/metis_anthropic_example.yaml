@@ -23,9 +23,12 @@ llm_provider:
   name: "anthropic"
   model: "opus"
   api_key_env: "ANTHROPIC_API_KEY"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "openai"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"
-  embedding_api_key_env: "OPENAI_API_KEY"
 
 query:
   similarity_top_k: 5

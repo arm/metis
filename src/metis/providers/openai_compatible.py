@@ -53,18 +53,6 @@ class OpenAICompatibleProvider(LLMProvider):
         if not self.api_key and default_api_key:
             self.api_key = default_api_key
 
-        # Validate required configuration
-        if not self.query_model:
-            raise ValueError(
-                "Missing query model configuration "
-                "(set 'model' or 'llama_query_model' in llm_provider config)"
-            )
-        if not self.code_embedding_model or not self.docs_embedding_model:
-            raise ValueError(
-                "Missing embedding model configuration "
-                "(set 'code_embedding_model' and 'docs_embedding_model')"
-            )
-
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
     ) -> LangChainEmbeddingAdapter:

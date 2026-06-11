@@ -47,11 +47,6 @@ class GeminiProvider(LLMProvider):
                 "GOOGLE_API_KEY or GEMINI_API_KEY environment variable is required "
                 "for Gemini provider but not set."
             )
-        if not self.query_model:
-            raise ValueError(
-                "Missing query model configuration "
-                "(set 'model' or 'llama_query_model' in llm_provider config)"
-            )
 
     def _common_params(self) -> dict[str, object]:
         params: dict[str, object] = {}

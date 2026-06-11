@@ -13,9 +13,12 @@ llm_provider:
   name: "anthropic"
   model: "opus"
   api_key_env: "ANTHROPIC_API_KEY"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "openai"
   code_embedding_model: "text-embedding-3-large"
   docs_embedding_model: "text-embedding-3-large"
-  embedding_api_key_env: "OPENAI_API_KEY"
 
 metis_engine:
   embed_dim: 3072
@@ -36,11 +39,12 @@ query:
   control.
 - The Anthropic API key is resolved from `llm_provider.api_key`, then
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
-- The embedding API key is resolved from `llm_provider.embedding_api_key`, then
-  `llm_provider.embedding_api_key_env`, then `OPENAI_API_KEY`.
-- The embedding API key is only required when Metis needs embeddings, such as
-  `index`, `update`, `ask`, or review/triage commands that use index-backed
-  retrieval. It can be omitted for `--ignore-index` scans.
+- Embeddings can be supplied via a separate `embedding_provider` block (any
+  supported provider). The legacy `llm_provider.embedding_api_key` /
+  `embedding_api_key_env` keys still work for OpenAI-compatible embeddings.
+- Embedding configuration is only required when the `index` tool is enabled
+  (`--tools index`). It can be omitted entirely for chat/review/triage
+  without retrieval.
 - `metis_engine.embed_dim` must match the configured embedding model output
   dimension.
 
