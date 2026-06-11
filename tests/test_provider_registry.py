@@ -11,9 +11,17 @@ from metis.providers.registry import _LOADERS, get_provider
 @pytest.mark.parametrize(
     ("name", "dotted_path", "module"),
     [
-        ("anthropic", "metis.providers.anthropic:AnthropicProvider", "langchain_anthropic"),
+        (
+            "anthropic",
+            "metis.providers.anthropic:AnthropicProvider",
+            "langchain_anthropic",
+        ),
         ("bedrock", "metis.providers.bedrock:BedrockProvider", "langchain_aws"),
-        ("bedrock_mantle", "metis.providers.bedrock_mantle:BedrockMantleProvider", "anthropic"),
+        (
+            "bedrock_mantle",
+            "metis.providers.bedrock_mantle:BedrockMantleProvider",
+            "anthropic",
+        ),
         ("gemini", "metis.providers.gemini:GeminiProvider", "langchain_google_genai"),
     ],
 )

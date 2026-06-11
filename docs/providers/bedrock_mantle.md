@@ -6,7 +6,7 @@ Mantle with AWS SigV4 authentication.
 ## Install
 
 ```bash
-pip install "metis[bedrock_mantle]"
+pip install "metis[bedrock-mantle]"
 ```
 
 First configure and log in to an AWS profile with access to Bedrock Mantle:

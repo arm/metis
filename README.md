@@ -114,7 +114,7 @@ Set `llm_provider.name` in `metis.yaml` and install the matching extra:
 | Anthropic                | `anthropic`      | `uv pip install '.[anthropic]'`      | [docs](docs/providers/anthropic.md)         |
 | Google Gemini / Vertex   | `gemini`         | `uv pip install '.[gemini]'`         | [docs](docs/providers/gemini.md)            |
 | AWS Bedrock              | `bedrock`        | `uv pip install '.[bedrock]'`        | [docs](docs/providers/bedrock.md)           |
-| Bedrock Mantle (Claude)  | `bedrock_mantle` | `uv pip install '.[bedrock_mantle]'` | [docs](docs/providers/bedrock_mantle.md)    |
+| Bedrock Mantle (Claude)  | `bedrock_mantle` | `uv pip install '.[bedrock-mantle]'` | [docs](docs/providers/bedrock_mantle.md)    |
 | vLLM                     | `vllm`           | included                             | [docs](docs/providers/vllm.md)              |
 | Ollama                   | `ollama`         | included                             | [docs](docs/providers/ollama.md)            |
 | llama.cpp                | `llamacpp`       | included                             | [docs](docs/providers/llamacpp.md)          |
