@@ -8,7 +8,6 @@ from typing import Any, Unpack, cast
 from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks import Callbacks
 from langchain_openai import OpenAIEmbeddings
-from llama_index.llms.langchain import LangChainLLM
 from llama_index.core.callbacks import CallbackManager
 from pydantic import SecretStr
 
@@ -23,8 +22,9 @@ class AnthropicProvider(LLMProvider):
         self.api_key = config.get("llm_api_key")
         self.embedding_api_key = config.get("embedding_api_key")
         self.query_model = config.get("llama_query_model") or config.get("model")
+        self.supports_temperature = bool(config.get("supports_temperature", True))
         self.temperature = float(config.get("llama_query_temperature", 0.0))
-        self.max_tokens = int(config.get("llama_query_max_tokens", 512))
+        self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.base_url = config.get("anthropic_api_url") or config.get("base_url")
 
         self.code_embedding_model = config.get("code_embedding_model")
@@ -103,20 +103,6 @@ class AnthropicProvider(LLMProvider):
             callback_manager=callback_manager,
         )
 
-    def get_query_engine_class(self):
-        return LangChainLLM
-
-    def get_query_model_kwargs(
-        self,
-        *,
-        callback_manager: CallbackManager | None = None,
-        callbacks: Callbacks = None,
-    ):
-        params: dict[str, Any] = {"llm": self.get_chat_model(callbacks=callbacks)}
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
-        return params
-
     def get_chat_model(
         self,
         *args: str,
@@ -138,8 +124,10 @@ class AnthropicProvider(LLMProvider):
             raise ValueError(
                 "Anthropic chat model accepts either temperature or top_p, not both."
             )
-        if "top_p" not in kwargs:
-            params["temperature"] = kwargs.get("temperature", self.temperature)
+        if "temperature" in kwargs:
+            params["temperature"] = kwargs["temperature"]
+        elif "top_p" not in kwargs and self.supports_temperature:
+            params["temperature"] = self.temperature
         if self.base_url:
             params["base_url"] = self.base_url
         if callbacks is not None:

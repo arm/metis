@@ -12,7 +12,6 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks import Callbacks
 from langchain_openai import OpenAIEmbeddings
 from llama_index.core.callbacks import CallbackManager
-from llama_index.llms.langchain import LangChainLLM
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -27,6 +26,9 @@ class ChatBedrockMantle(ChatAnthropic):
 
     aws_region: str | None = None
     aws_profile: str | None = None
+    aws_access_key: str | None = None
+    aws_secret_key: str | None = None
+    aws_session_token: str | None = None
     bedrock_base_url: str | None = Field(default=None, alias="bedrock_base_url")
 
     @property
@@ -37,6 +39,9 @@ class ChatBedrockMantle(ChatAnthropic):
         params: dict[str, Any] = {
             "aws_region": self.aws_region,
             "aws_profile": self.aws_profile,
+            "aws_access_key": self.aws_access_key,
+            "aws_secret_key": self.aws_secret_key,
+            "aws_session_token": self.aws_session_token,
             "max_retries": self.max_retries,
         }
         if self.bedrock_base_url:
@@ -67,9 +72,12 @@ class BedrockMantleProvider(LLMProvider):
             if self.supports_temperature
             else None
         )
-        self.max_tokens = int(config.get("llama_query_max_tokens", 512))
+        self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.aws_region = config.get("aws_region")
         self.aws_profile = config.get("aws_profile")
+        self.aws_access_key = config.get("aws_access_key_id") or None
+        self.aws_secret_key = config.get("aws_secret_access_key") or None
+        self.aws_session_token = config.get("aws_session_token") or None
         self.base_url = config.get("bedrock_base_url") or config.get("base_url")
         self.default_headers = dict(config.get("default_headers", {}))
 
@@ -145,20 +153,6 @@ class BedrockMantleProvider(LLMProvider):
             callback_manager=callback_manager,
         )
 
-    def get_query_engine_class(self):
-        return LangChainLLM
-
-    def get_query_model_kwargs(
-        self,
-        *,
-        callback_manager: CallbackManager | None = None,
-        callbacks: Callbacks = None,
-    ):
-        params: dict[str, Any] = {"llm": self.get_chat_model(callbacks=callbacks)}
-        if callback_manager is not None:
-            params["callback_manager"] = callback_manager
-        return params
-
     def get_chat_model(
         self,
         *args: str,
@@ -177,6 +171,11 @@ class BedrockMantleProvider(LLMProvider):
             "aws_region": self.aws_region,
             "aws_profile": self.aws_profile,
         }
+        if self.aws_access_key and self.aws_secret_key:
+            params["aws_access_key"] = self.aws_access_key
+            params["aws_secret_key"] = self.aws_secret_key
+            if self.aws_session_token:
+                params["aws_session_token"] = self.aws_session_token
         if self.base_url:
             params["bedrock_base_url"] = self.base_url
         if self.default_headers:

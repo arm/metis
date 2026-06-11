@@ -48,3 +48,36 @@ def test_chat_model_does_not_default_to_a_specific_region():
     llm = provider.get_chat_model()
 
     assert llm.aws_region is None
+
+
+def test_chat_model_passes_explicit_aws_credentials():
+    provider = BedrockMantleProvider(
+        _config(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="secret",
+            aws_session_token="token",
+        )
+    )
+
+    llm = provider.get_chat_model()
+
+    assert llm.aws_access_key == "AKIA"
+    assert llm.aws_secret_key == "secret"
+    assert llm.aws_session_token == "token"
+    params = llm._bedrock_client_params()
+    assert params["aws_access_key"] == "AKIA"
+    assert params["aws_secret_key"] == "secret"
+    assert params["aws_session_token"] == "token"
+
+
+def test_chat_model_omits_explicit_credentials_when_unset():
+    provider = BedrockMantleProvider(
+        _config(aws_access_key_id="", aws_secret_access_key="")
+    )
+
+    llm = provider.get_chat_model()
+
+    assert llm.aws_access_key is None
+    params = llm._bedrock_client_params()
+    assert "aws_access_key" not in params
+    assert "aws_secret_key" not in params

@@ -348,6 +348,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["embedding_default_headers"] = llm_cfg.get(
             "embedding_default_headers", {}
         )
+        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", True)
     elif llm_provider_name == "bedrock":
         runtime["llm_api_key"] = llm_api_key
         runtime["model"] = llm_cfg.get("model", "")
@@ -370,6 +371,15 @@ def load_runtime_config(config_path=None, enable_psql=False):
         runtime["model"] = llm_cfg.get("model", "")
         runtime["aws_region"] = llm_cfg.get("aws_region")
         runtime["aws_profile"] = llm_cfg.get("aws_profile")
+        runtime["aws_access_key_id"] = llm_cfg.get(
+            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
+        )
+        runtime["aws_secret_access_key"] = llm_cfg.get(
+            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        )
+        runtime["aws_session_token"] = llm_cfg.get(
+            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
+        )
         runtime["bedrock_base_url"] = llm_cfg.get("base_url") or llm_cfg.get(
             "bedrock_base_url"
         )

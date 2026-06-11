@@ -7,7 +7,6 @@ import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks.base import BaseCallbackHandler
 from llama_index.core.callbacks import CallbackManager
-from llama_index.llms.langchain import LangChainLLM
 
 from metis.providers.anthropic import AnthropicProvider
 
@@ -73,29 +72,20 @@ def test_chat_model_rejects_temperature_and_top_p_together():
     assert "either temperature or top_p" in str(exc_info.value)
 
 
-def test_query_engine_uses_langchain_adapter():
-    provider = AnthropicProvider(_config())
+def test_chat_model_omits_temperature_when_not_supported():
+    provider = AnthropicProvider(_config(supports_temperature=False))
 
-    assert provider.get_query_engine_class() is LangChainLLM
+    llm = provider.get_chat_model()
 
-    llm = provider.get_query_model_kwargs()["llm"]
-    assert isinstance(llm, ChatAnthropic)
-    assert llm.model == "claude-opus-4-1-20250805"
+    assert llm.temperature is None
 
 
-def test_provider_accepts_callback_manager_for_query_and_embeddings():
+def test_provider_accepts_callback_manager_for_embeddings():
     provider = AnthropicProvider(_config())
     callback_manager = CallbackManager([])
-    callback = Mock(spec=BaseCallbackHandler)
 
-    query_kwargs = provider.get_query_model_kwargs(
-        callback_manager=callback_manager,
-        callbacks=[callback],
-    )
     embeddings = provider.get_embed_model_code(callback_manager=callback_manager)
 
-    assert query_kwargs["callback_manager"] is callback_manager
-    assert query_kwargs["llm"].callbacks == [callback]
     assert embeddings.callback_manager is callback_manager
 
 
