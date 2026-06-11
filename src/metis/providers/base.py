@@ -26,7 +26,11 @@ class ChatModelOptions(TypedDict, total=False):
     seed: int
     logit_bias: Mapping[str, int]
     response_format: Mapping[str, object] | None
+    reasoning_effort: str
+    verbosity: str
     stop: str | list[str]
+    stop_sequences: list[str]
+    default_request_timeout: float
     safety_settings: object
     thinking_budget: int
     thinking_level: str

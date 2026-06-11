@@ -407,13 +407,16 @@ llm_provider:
     assert "Required keys:" in message
 
 
-def test_load_runtime_config_reports_missing_gemini_api_key(tmp_path, monkeypatch):
+def test_load_runtime_config_keeps_gemini_api_key_optional(tmp_path, monkeypatch):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(
         """
 llm_provider:
   name: gemini
   model: gemini-2.5-flash
+  vertexai: true
+  project: test-project
+  location: europe-west2
   code_embedding_model: gemini-embedding-001
   docs_embedding_model: gemini-embedding-001
 """,
@@ -422,13 +425,10 @@ llm_provider:
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        load_runtime_config(config_path)
+    runtime = load_runtime_config(config_path)
 
-    message = str(exc_info.value)
-    assert "GOOGLE_API_KEY environment variable" in message
-    assert "GEMINI_API_KEY environment variable" in message
-    assert "Gemini provider" in message
+    assert runtime["llm_api_key"] == ""
+    assert runtime["gemini_vertexai"] is True
 
 
 def test_load_runtime_config_resolves_gemini_api_key_from_fallback_env(

@@ -42,7 +42,7 @@ class GeminiProvider(LLMProvider):
         self.vertexai = config.get("gemini_vertexai")
         self.client_args = dict(config.get("gemini_client_args", {}))
 
-        if not self.api_key:
+        if not self.api_key and not self.vertexai:
             raise ValueError(
                 "GOOGLE_API_KEY or GEMINI_API_KEY environment variable is required "
                 "for Gemini provider but not set."
@@ -52,14 +52,11 @@ class GeminiProvider(LLMProvider):
                 "Missing query model configuration "
                 "(set 'model' or 'llama_query_model' in llm_provider config)"
             )
-        if not self.code_embedding_model or not self.docs_embedding_model:
-            raise ValueError(
-                "Missing embedding model configuration "
-                "(set 'code_embedding_model' and 'docs_embedding_model')"
-            )
 
     def _common_params(self) -> dict[str, object]:
-        params: dict[str, object] = {"api_key": self.api_key}
+        params: dict[str, object] = {}
+        if self.api_key:
+            params["api_key"] = self.api_key
         if self.base_url:
             params["base_url"] = self.base_url
         if self.additional_headers:

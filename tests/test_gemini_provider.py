@@ -144,8 +144,29 @@ def test_provider_requires_api_key():
     assert "GOOGLE_API_KEY or GEMINI_API_KEY" in str(exc_info.value)
 
 
-def test_provider_requires_embedding_models():
-    with pytest.raises(ValueError) as exc_info:
-        GeminiProvider(_config(code_embedding_model=""))
+def test_provider_allows_vertexai_without_api_key():
+    provider = GeminiProvider(
+        _config(
+            llm_api_key="",
+            gemini_vertexai=True,
+            gemini_project="test-project",
+            gemini_location="europe-west2",
+        )
+    )
 
-    assert "embedding model" in str(exc_info.value)
+    llm = provider.get_chat_model()
+
+    assert llm.vertexai is True
+    assert llm.google_api_key is None
+
+
+def test_embedding_model_required_only_when_used():
+    provider = GeminiProvider(_config(code_embedding_model=""))
+
+    llm = provider.get_chat_model()
+    assert llm.model == "gemini-2.5-flash"
+
+    with pytest.raises(ValueError) as exc_info:
+        provider.get_embed_model_code()
+
+    assert "code_embedding_model" in str(exc_info.value)

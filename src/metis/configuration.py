@@ -132,7 +132,7 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "env_vars": (),
     },
     "gemini": {
-        "required": True,
+        "required": False,
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
