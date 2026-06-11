@@ -71,6 +71,23 @@ class AzureOpenAIProviderConfig(TypedDict, total=False):
     supports_temperature: NotRequired[bool]
 
 
+class BedrockProviderConfig(TypedDict, total=False):
+    bedrock_region: Required[str]
+    model: Required[str]
+    llama_query_model: NotRequired[str]
+    code_embedding_model: NotRequired[str]
+    docs_embedding_model: NotRequired[str]
+    aws_region: NotRequired[str]
+    aws_profile: NotRequired[str]
+    aws_access_key_id: NotRequired[str]
+    aws_secret_access_key: NotRequired[str]
+    aws_session_token: NotRequired[str]
+    bedrock_endpoint_url: NotRequired[str]
+    llama_query_temperature: NotRequired[float]
+    llama_query_max_tokens: NotRequired[int]
+    supports_temperature: NotRequired[bool]
+
+
 class GeminiProviderConfig(TypedDict, total=False):
     llm_api_key: Required[str]
     model: Required[str]
@@ -91,7 +108,10 @@ class GeminiProviderConfig(TypedDict, total=False):
 
 
 ProviderRuntimeConfig = (
-    OpenAICompatibleProviderConfig | AzureOpenAIProviderConfig | GeminiProviderConfig
+    OpenAICompatibleProviderConfig
+    | AzureOpenAIProviderConfig
+    | BedrockProviderConfig
+    | GeminiProviderConfig
 )
 
 

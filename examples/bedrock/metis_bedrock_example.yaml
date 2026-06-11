@@ -1,0 +1,31 @@
+psql_database:
+  provider: "config"
+  credentials:
+    username: "metis_user"
+    password: "metis_password"
+    host: "localhost"
+    port: 5432
+    database_name: "metis_db"
+
+metis_engine:
+  max_token_length: 250000
+  max_workers: 5
+  embed_dim: 1024
+
+llm_provider:
+  name: "bedrock"
+  region: "us-east-1"
+  # Anthropic Claude via Bedrock (use an inference-profile ID where required)
+  model: "us.anthropic.claude-opus-4-8-v1:0"
+  code_embedding_model: "amazon.titan-embed-text-v2:0"
+  docs_embedding_model: "amazon.titan-embed-text-v2:0"
+
+  # Credentials — all optional. If omitted, the boto3 default chain is used
+  # (AWS_PROFILE / AWS_ACCESS_KEY_ID env vars, ~/.aws/credentials, IAM role).
+  # aws_profile: "default"
+  # aws_access_key_id: "..."
+  # aws_secret_access_key: "..."
+
+query:
+  similarity_top_k: 5
+  max_tokens: 5000

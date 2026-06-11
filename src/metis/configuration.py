@@ -27,6 +27,7 @@ _LLM_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "vllm": "vLLM",
     "ollama": "Ollama",
     "anthropic": "Anthropic",
+    "bedrock": "AWS Bedrock",
     "bedrock_mantle": "Bedrock Mantle",
     "gemini": "Gemini",
     "llamacpp": "llama.cpp",
@@ -66,6 +67,12 @@ _LLM_PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "anthropic": (
         "model",
+        "code_embedding_model",
+        "docs_embedding_model",
+    ),
+    "bedrock": (
+        "model",
+        "region",
         "code_embedding_model",
         "docs_embedding_model",
     ),
@@ -111,6 +118,12 @@ _LLM_PROVIDER_API_KEY_SOURCES: dict[str, _ApiKeySources] = {
         "config_keys": ("api_key",),
         "config_env_keys": ("api_key_env",),
         "env_vars": ("ANTHROPIC_API_KEY",),
+    },
+    "bedrock": {
+        "required": False,
+        "config_keys": (),
+        "config_env_keys": (),
+        "env_vars": (),
     },
     "bedrock_mantle": {
         "required": False,
@@ -334,6 +347,22 @@ def load_runtime_config(config_path=None, enable_psql=False):
         ) or llm_cfg.get("embedding_api_base")
         runtime["embedding_default_headers"] = llm_cfg.get(
             "embedding_default_headers", {}
+        )
+    elif llm_provider_name == "bedrock":
+        runtime["llm_api_key"] = llm_api_key
+        runtime["model"] = llm_cfg.get("model", "")
+        runtime["bedrock_region"] = llm_cfg.get("region") or llm_cfg.get("aws_region")
+        runtime["bedrock_endpoint_url"] = llm_cfg.get("endpoint_url", "")
+        runtime["supports_temperature"] = llm_cfg.get("supports_temperature", False)
+        runtime["aws_profile"] = llm_cfg.get("aws_profile", "")
+        runtime["aws_access_key_id"] = llm_cfg.get(
+            "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID", "")
+        )
+        runtime["aws_secret_access_key"] = llm_cfg.get(
+            "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        )
+        runtime["aws_session_token"] = llm_cfg.get(
+            "aws_session_token", os.environ.get("AWS_SESSION_TOKEN", "")
         )
     elif llm_provider_name == "bedrock_mantle":
         runtime["llm_api_key"] = llm_api_key

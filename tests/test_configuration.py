@@ -598,6 +598,82 @@ query:
     assert runtime["llama_query_max_tokens"] == 5000
 
 
+def test_load_runtime_config_reports_missing_bedrock_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  model: ""
+  code_embedding_model: amazon.titan-embed-text-v2:0
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "AWS Bedrock provider requires additional metis.yaml" in message
+    assert "Missing: llm_provider.model" in message
+    assert "llm_provider.region" in message
+    assert "llm_provider.docs_embedding_model" in message
+
+
+def test_load_runtime_config_bedrock_passes_credentials(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  region: eu-west-2
+  model: us.anthropic.claude-opus-4-8-v1:0
+  code_embedding_model: amazon.titan-embed-text-v2:0
+  docs_embedding_model: amazon.titan-embed-text-v2:0
+  aws_profile: my-profile
+  aws_access_key_id: AKIA
+  aws_secret_access_key: secret
+  endpoint_url: https://vpce.example
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "bedrock"
+    assert runtime["bedrock_region"] == "eu-west-2"
+    assert runtime["model"] == "us.anthropic.claude-opus-4-8-v1:0"
+    assert runtime["aws_profile"] == "my-profile"
+    assert runtime["aws_access_key_id"] == "AKIA"
+    assert runtime["aws_secret_access_key"] == "secret"
+    assert runtime["bedrock_endpoint_url"] == "https://vpce.example"
+    assert runtime["supports_temperature"] is False
+
+
+def test_load_runtime_config_bedrock_falls_back_to_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  region: us-east-1
+  model: us.anthropic.claude-opus-4-8-v1:0
+  code_embedding_model: amazon.titan-embed-text-v2:0
+  docs_embedding_model: amazon.titan-embed-text-v2:0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-akia")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["aws_access_key_id"] == "env-akia"
+    assert runtime["aws_secret_access_key"] == "env-secret"
+    assert runtime["aws_session_token"] == ""
+
+
 def test_load_runtime_config_does_not_default_bedrock_mantle_region(tmp_path):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(
