@@ -22,7 +22,7 @@ class AnthropicProvider(LLMProvider):
         self.api_key = config.get("llm_api_key")
         self.embedding_api_key = config.get("embedding_api_key")
         self.query_model = config.get("llama_query_model") or config.get("model")
-        self.supports_temperature = bool(config.get("supports_temperature", True))
+        self.supports_temperature = bool(config.get("supports_temperature", False))
         self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
         self.base_url = config.get("anthropic_api_url") or config.get("base_url")

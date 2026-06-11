@@ -37,11 +37,11 @@ def test_chat_model_uses_anthropic_configuration():
     assert isinstance(llm, ChatAnthropic)
     assert llm.model == "claude-opus-4-1-20250805"
     assert llm.max_tokens == 256
-    assert llm.temperature == 0.2
+    assert llm.temperature is None
 
 
 def test_chat_model_allows_runtime_overrides_and_callbacks():
-    provider = AnthropicProvider(_config())
+    provider = AnthropicProvider(_config(supports_temperature=True))
     callback = Mock(spec=BaseCallbackHandler)
 
     llm = provider.get_chat_model(
@@ -58,7 +58,7 @@ def test_chat_model_allows_runtime_overrides_and_callbacks():
 
 
 def test_chat_model_top_p_omits_default_temperature():
-    provider = AnthropicProvider(_config())
+    provider = AnthropicProvider(_config(supports_temperature=True))
 
     llm = provider.get_chat_model(top_p=0.8)
 
@@ -75,16 +75,16 @@ def test_chat_model_rejects_temperature_and_top_p_together():
     assert "either temperature or top_p" in str(exc_info.value)
 
 
-def test_chat_model_omits_temperature_when_not_supported():
-    provider = AnthropicProvider(_config(supports_temperature=False))
+def test_chat_model_passes_temperature_when_supported():
+    provider = AnthropicProvider(_config(supports_temperature=True))
 
     llm = provider.get_chat_model()
 
-    assert llm.temperature is None
+    assert llm.temperature == 0.2
 
 
 def test_chat_model_drops_explicit_temperature_when_not_supported():
-    provider = AnthropicProvider(_config(supports_temperature=False))
+    provider = AnthropicProvider(_config())
 
     llm = provider.get_chat_model(temperature=0.1)
 

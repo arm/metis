@@ -295,7 +295,7 @@ def _build_provider_runtime(provider_name: str, cfg: dict) -> dict[str, object]:
             "embedding_api_base"
         )
         runtime["embedding_default_headers"] = cfg.get("embedding_default_headers", {})
-        runtime["supports_temperature"] = cfg.get("supports_temperature", True)
+        runtime["supports_temperature"] = cfg.get("supports_temperature", False)
     elif provider_name == "bedrock":
         runtime["llm_api_key"] = api_key
         runtime["model"] = cfg.get("model", "")
