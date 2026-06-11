@@ -10,6 +10,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.devcontainer/devcontainer-lock.json
 .python-version
 uv.lock
 results/
