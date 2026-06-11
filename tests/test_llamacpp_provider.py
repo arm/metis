@@ -52,29 +52,31 @@ def test_uses_configured_api_key() -> None:
     assert provider.api_key == "my-secret-key"
 
 
-def test_raises_on_missing_query_model() -> None:
+def test_raises_on_missing_query_model_when_used() -> None:
     config = _config()
     config["model"] = ""
     config["llama_query_model"] = ""
     config.pop("llm_api_key", None)
 
+    provider = LlamaCppProvider(config)
     try:
-        LlamaCppProvider(config)
+        provider.get_chat_model()
         assert False, "Expected ValueError"
     except ValueError as exc:
-        assert "query model" in str(exc)
+        assert "chat model" in str(exc)
 
 
-def test_raises_on_missing_embedding_models() -> None:
+def test_raises_on_missing_embedding_models_when_used() -> None:
     config = _config()
     config["code_embedding_model"] = ""
     config.pop("llm_api_key", None)
 
+    provider = LlamaCppProvider(config)
     try:
-        LlamaCppProvider(config)
+        provider.get_embed_model_code()
         assert False, "Expected ValueError"
     except ValueError as exc:
-        assert "embedding model" in str(exc)
+        assert "code_embedding_model" in str(exc)
 
 
 def test_chat_model_uses_configured_base_url() -> None:

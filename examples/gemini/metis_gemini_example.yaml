@@ -1,0 +1,13 @@
+llm_provider:
+  name: "gemini"
+  model: "gemini-2.5-flash"
+  api_key_env: "GOOGLE_API_KEY"
+  code_embedding_model: "gemini-embedding-001"
+  docs_embedding_model: "gemini-embedding-001"
+
+metis_engine:
+  embed_dim: 3072
+
+query:
+  max_tokens: 5000
+  temperature: 0.0

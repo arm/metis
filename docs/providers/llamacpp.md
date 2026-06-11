@@ -46,7 +46,7 @@ llm_provider:
 
 - `base_url` defaults to `http://localhost:8080/v1` if not configured.
 - `name` must be `"llamacpp"` (case-insensitive).
-- `model`, `code_embedding_model`, and `docs_embedding_model` are required.
+- `model` is required. `code_embedding_model` / `docs_embedding_model` are only required when the `index` tool is enabled.
 - An API key is **not required** by the llama.cpp server; Metis uses a placeholder by default.
 
 ## Metis usage

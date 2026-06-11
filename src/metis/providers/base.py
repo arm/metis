@@ -16,6 +16,8 @@ class ChatModelOptions(TypedDict, total=False):
     deployment_name: str
     temperature: float
     max_tokens: int
+    top_p: float
+    top_k: int
     timeout: float
     request_timeout: float
     max_retries: int
@@ -24,6 +26,18 @@ class ChatModelOptions(TypedDict, total=False):
     seed: int
     logit_bias: Mapping[str, int]
     response_format: Mapping[str, object] | None
+    reasoning_effort: str
+    verbosity: str
+    stop: str | list[str]
+    stop_sequences: list[str]
+    default_request_timeout: float
+    safety_settings: object
+    thinking_budget: int
+    thinking_level: str
+    include_thoughts: bool
+    response_mime_type: str
+    response_schema: object
+    n: int
 
 
 class OpenAICompatibleProviderConfig(TypedDict, total=False):
@@ -61,7 +75,48 @@ class AzureOpenAIProviderConfig(TypedDict, total=False):
     supports_temperature: NotRequired[bool]
 
 
-ProviderRuntimeConfig = OpenAICompatibleProviderConfig | AzureOpenAIProviderConfig
+class BedrockProviderConfig(TypedDict, total=False):
+    bedrock_region: Required[str]
+    model: Required[str]
+    llama_query_model: NotRequired[str]
+    code_embedding_model: NotRequired[str]
+    docs_embedding_model: NotRequired[str]
+    aws_region: NotRequired[str]
+    aws_profile: NotRequired[str]
+    aws_access_key_id: NotRequired[str]
+    aws_secret_access_key: NotRequired[str]
+    aws_session_token: NotRequired[str]
+    bedrock_endpoint_url: NotRequired[str]
+    llama_query_temperature: NotRequired[float]
+    llama_query_max_tokens: NotRequired[int]
+    supports_temperature: NotRequired[bool]
+
+
+class GeminiProviderConfig(TypedDict, total=False):
+    llm_api_key: Required[str]
+    model: Required[str]
+    llama_query_model: str
+    llama_query_temperature: float
+    llama_query_max_tokens: int
+    llama_query_reasoning_effort: str
+    code_embedding_model: Required[str]
+    docs_embedding_model: Required[str]
+    code_embedding_extra_kwargs: Mapping[str, object]
+    docs_embedding_extra_kwargs: Mapping[str, object]
+    gemini_api_base: str
+    gemini_additional_headers: Mapping[str, str]
+    gemini_project: str
+    gemini_location: str
+    gemini_vertexai: bool | None
+    gemini_client_args: Mapping[str, object]
+
+
+ProviderRuntimeConfig = (
+    OpenAICompatibleProviderConfig
+    | AzureOpenAIProviderConfig
+    | BedrockProviderConfig
+    | GeminiProviderConfig
+)
 
 
 class EmbedModelKwargs(TypedDict, total=False):

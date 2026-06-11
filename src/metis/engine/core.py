@@ -39,6 +39,7 @@ class MetisEngine:
         codebase_path=".",
         vector_backend=BaseVectorStore,
         llm_provider=None,
+        embedding_provider=None,
         **kwargs,
     ):
         self.codebase_path = codebase_path
@@ -58,7 +59,7 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
-        injected_usage_runtime = kwargs.get("usage_runtime")
+        self.embedding_provider = embedding_provider or llm_provider
         self.usage_runtime = self._init_usage_runtime(kwargs)
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
@@ -85,7 +86,7 @@ class MetisEngine:
         self.language_registry = LanguagePluginRegistry.from_config(self.plugin_config)
         self.code_exts = set(self.language_registry.supported_code_extensions())
 
-        self._init_embed_models(injected_usage_runtime)
+        self._init_embed_models()
 
         self._config = EngineConfig(
             codebase_path=self.codebase_path,
@@ -95,8 +96,10 @@ class MetisEngine:
             plugin_config=self.plugin_config,
             custom_prompt_text=self.custom_prompt_text,
             custom_guidance_precedence=self.custom_guidance_precedence,
-            embed_model_code=self.get_embed_model_code(),
-            embed_model_docs=self.get_embed_model_docs(),
+            embed_model_code=self._embed_model_code,
+            embed_model_docs=self._embed_model_docs,
+            engine_get_embed_model_code=self.get_embed_model_code,
+            engine_get_embed_model_docs=self.get_embed_model_docs,
             max_workers=self.max_workers,
             max_token_length=self.max_token_length,
             llama_query_model=self.llama_query_model,
@@ -144,41 +147,37 @@ class MetisEngine:
         if hasattr(self.vector_backend, "embed_model_docs"):
             self.vector_backend.embed_model_docs = self._embed_model_docs
 
-    def _init_embed_models(self, injected_usage_runtime) -> None:
-        self._embed_model_code = self._resolve_embed_model(
-            "code",
-            existing_model=getattr(self.vector_backend, "embed_model_code", None),
-            reuse_existing=injected_usage_runtime is not None,
-        )
-        self._embed_model_docs = self._resolve_embed_model(
-            "docs",
-            existing_model=getattr(self.vector_backend, "embed_model_docs", None),
-            reuse_existing=injected_usage_runtime is not None,
-        )
+    def _get_backend_embed_model(self, attr: str):
+        if attr in getattr(self.vector_backend, "__dict__", {}):
+            return getattr(self.vector_backend, attr)
+        return None
+
+    def _init_embed_models(self) -> None:
+        self._embed_model_code = self._get_backend_embed_model("embed_model_code")
+        self._embed_model_docs = self._get_backend_embed_model("embed_model_docs")
         self._attach_embed_models_to_backend()
 
     def _build_embed_model(self, kind: str):
         method_name = (
             "get_embed_model_code" if kind == "code" else "get_embed_model_docs"
         )
-        method = getattr(self.llm_provider, method_name)
+        method = getattr(self.embedding_provider, method_name)
         return method(**self.usage_runtime.hooks.embed_model_kwargs())
 
-    def _resolve_embed_model(
-        self,
-        kind: str,
-        *,
-        existing_model=None,
-        reuse_existing: bool = False,
-    ):
-        if reuse_existing and existing_model is not None:
-            return existing_model
-        return self._build_embed_model(kind)
-
     def get_embed_model_code(self):
+        if self._embed_model_code is None:
+            self._embed_model_code = self._build_embed_model("code")
+            self._attach_embed_models_to_backend()
+            if hasattr(self, "_config"):
+                self._config.embed_model_code = self._embed_model_code
         return self._embed_model_code
 
     def get_embed_model_docs(self):
+        if self._embed_model_docs is None:
+            self._embed_model_docs = self._build_embed_model("docs")
+            self._attach_embed_models_to_backend()
+            if hasattr(self, "_config"):
+                self._config.embed_model_docs = self._embed_model_docs
         return self._embed_model_docs
 
     def usage_command(

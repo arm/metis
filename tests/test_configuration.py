@@ -3,6 +3,7 @@
 
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
+from metis.configuration import validate_embedding_provider_config
 
 import pytest
 
@@ -160,7 +161,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "OpenAI provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.model" in message
-    assert "llm_provider.docs_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -213,8 +213,6 @@ llm_provider:
     assert "Missing: llm_provider.azure_api_version" in message
     assert "llm_provider.engine" in message
     assert "llm_provider.chat_deployment_model" in message
-    assert "llm_provider.code_embedding_deployment" in message
-    assert "llm_provider.docs_embedding_deployment" in message
     assert "Required keys:" in message
 
 
@@ -266,7 +264,6 @@ llm_provider:
     message = str(exc_info.value)
     assert "vLLM provider requires additional metis.yaml configuration" in message
     assert "Missing: llm_provider.base_url" in message
-    assert "llm_provider.code_embedding_model" in message
     assert "Required keys:" in message
 
 
@@ -300,8 +297,7 @@ def test_load_runtime_config_reports_missing_ollama_provider_keys(tmp_path):
         """
 llm_provider:
   name: ollama
-  model: llama3.1:8b
-  code_embedding_model: ""
+  model: ""
 """,
         encoding="utf-8",
     )
@@ -311,8 +307,7 @@ llm_provider:
 
     message = str(exc_info.value)
     assert "Ollama provider requires additional metis.yaml configuration" in message
-    assert "Missing: llm_provider.code_embedding_model" in message
-    assert "llm_provider.docs_embedding_model" in message
+    assert "Missing: llm_provider.model" in message
     assert "Required keys:" in message
 
 
@@ -334,14 +329,446 @@ llm_provider:
     assert runtime["llm_api_key"] == ""
 
 
+def test_load_runtime_config_accepts_complete_gemini_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  api_key_env: CUSTOM_GOOGLE_KEY
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+  base_url: https://example.test/gemini
+  additional_headers:
+    X-Test-Header: test
+  project: test-project
+  location: europe-west2
+  vertexai: false
+  client_args:
+    timeout: 30
+metis_engine:
+  embed_dim: 3072
+query:
+  model: gemini-2.5-pro
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_GOOGLE_KEY", "google-key")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "gemini"
+    assert runtime["llm_api_key"] == "google-key"
+    assert runtime["model"] == "gemini-2.5-flash"
+    assert runtime["llama_query_model"] == "gemini-2.5-pro"
+    assert runtime["code_embedding_model"] == "gemini-embedding-001"
+    assert runtime["docs_embedding_model"] == "gemini-embedding-001"
+    assert runtime["gemini_api_base"] == "https://example.test/gemini"
+    assert runtime["gemini_additional_headers"] == {"X-Test-Header": "test"}
+    assert runtime["gemini_project"] == "test-project"
+    assert runtime["gemini_location"] == "europe-west2"
+    assert runtime["gemini_vertexai"] is False
+    assert runtime["gemini_client_args"] == {"timeout": 30}
+    assert runtime["embed_dim"] == 3072
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_reports_missing_gemini_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: ""
+  code_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "Gemini provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_keeps_gemini_api_key_optional(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  vertexai: true
+  project: test-project
+  location: europe-west2
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == ""
+    assert runtime["gemini_vertexai"] is True
+
+
+def test_load_runtime_config_resolves_gemini_api_key_from_fallback_env(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: gemini
+  model: gemini-2.5-flash
+  code_embedding_model: gemini-embedding-001
+  docs_embedding_model: gemini-embedding-001
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == "gemini-key"
+    assert runtime["model"] == "gemini-2.5-flash"
+
+
+def test_load_runtime_config_accepts_complete_anthropic_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: opus
+  api_key_env: CUSTOM_ANTHROPIC_KEY
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+  embedding_api_key_env: CUSTOM_EMBEDDING_KEY
+metis_engine:
+  embed_dim: 3072
+query:
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_ANTHROPIC_KEY", "anthropic-key")
+    monkeypatch.setenv("CUSTOM_EMBEDDING_KEY", "embedding-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "anthropic"
+    assert runtime["llm_api_key"] == "anthropic-key"
+    assert runtime["embedding_api_key"] == "embedding-key"
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["llama_query_model"] == "claude-opus-4-8"
+    assert runtime["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["docs_embedding_model"] == "text-embedding-3-small"
+    assert runtime["embed_dim"] == 3072
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_reports_missing_anthropic_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: ""
+  code_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "Anthropic provider requires additional metis.yaml configuration" in message
+    assert "Missing: llm_provider.model" in message
+    assert "Required keys:" in message
+
+
+def test_load_runtime_config_reports_missing_anthropic_api_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "ANTHROPIC_API_KEY environment variable" in message
+    assert "Anthropic provider" in message
+
+
+def test_load_runtime_config_allows_anthropic_without_embedding_api_key(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_api_key"] == "anthropic-key"
+    assert runtime["embedding_api_key"] == ""
+
+
+def test_load_runtime_config_accepts_bedrock_mantle_provider_config(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock_mantle
+  model: anthropic.claude-example
+  aws_profile: example-profile
+  aws_region: example-region
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+  embedding_api_key_env: CUSTOM_EMBEDDING_KEY
+query:
+  max_tokens: 5000
+  temperature: 0.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CUSTOM_EMBEDDING_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "bedrock_mantle"
+    assert runtime["llm_api_key"] == ""
+    assert runtime["embedding_api_key"] == "embedding-key"
+    assert runtime["model"] == "anthropic.claude-example"
+    assert runtime["llama_query_model"] == "anthropic.claude-example"
+    assert runtime["aws_profile"] == "example-profile"
+    assert runtime["aws_region"] == "example-region"
+    assert runtime["supports_temperature"] is False
+    assert runtime["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["docs_embedding_model"] == "text-embedding-3-small"
+    assert runtime["llama_query_max_tokens"] == 5000
+
+
+def test_load_runtime_config_reports_missing_bedrock_provider_keys(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  model: ""
+  code_embedding_model: amazon.titan-embed-text-v2:0
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    message = str(exc_info.value)
+    assert "AWS Bedrock provider requires additional metis.yaml" in message
+    assert "Missing: llm_provider.model" in message
+    assert "llm_provider.region" in message
+
+
+def test_load_runtime_config_bedrock_passes_credentials(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  region: eu-west-2
+  model: us.anthropic.claude-opus-4-8-v1:0
+  code_embedding_model: amazon.titan-embed-text-v2:0
+  docs_embedding_model: amazon.titan-embed-text-v2:0
+  aws_profile: my-profile
+  aws_access_key_id: AKIA
+  aws_secret_access_key: secret
+  endpoint_url: https://vpce.example
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "bedrock"
+    assert runtime["bedrock_region"] == "eu-west-2"
+    assert runtime["model"] == "us.anthropic.claude-opus-4-8-v1:0"
+    assert runtime["aws_profile"] == "my-profile"
+    assert runtime["aws_access_key_id"] == "AKIA"
+    assert runtime["aws_secret_access_key"] == "secret"
+    assert runtime["bedrock_endpoint_url"] == "https://vpce.example"
+    assert runtime["supports_temperature"] is False
+
+
+def test_load_runtime_config_bedrock_falls_back_to_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock
+  region: us-east-1
+  model: us.anthropic.claude-opus-4-8-v1:0
+  code_embedding_model: amazon.titan-embed-text-v2:0
+  docs_embedding_model: amazon.titan-embed-text-v2:0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-akia")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["aws_access_key_id"] == "env-akia"
+    assert runtime["aws_secret_access_key"] == "env-secret"
+    assert runtime["aws_session_token"] == ""
+
+
+def test_load_runtime_config_does_not_default_bedrock_mantle_region(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: bedrock_mantle
+  model: anthropic.claude-example
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+""",
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["aws_region"] is None
+
+
+def test_load_runtime_config_accepts_anthropic_query_model_alias(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-1-20250805
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+query:
+  model: sonnet
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == "claude-opus-4-1-20250805"
+    assert runtime["llama_query_model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.parametrize(
+    ("alias", "resolved"),
+    [
+        ("opus", "claude-opus-4-8"),
+        ("sonnet", "claude-sonnet-4-6"),
+        ("haiku", "claude-haiku-4-5"),
+        ("fable", "claude-fable-5"),
+        ("mythos", "claude-mythos-5"),
+    ],
+)
+def test_load_runtime_config_accepts_anthropic_model_aliases(
+    tmp_path, monkeypatch, alias, resolved
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        f"""
+llm_provider:
+  name: anthropic
+  model: {alias}
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == resolved
+    assert runtime["llama_query_model"] == resolved
+
+
+def test_load_runtime_config_rejects_unknown_anthropic_model_alias(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: unsupported-model-alias
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embedding-key")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_runtime_config(config_path)
+
+    assert "supported short alias" in str(exc_info.value)
+
+
 def test_load_runtime_config_reports_missing_llamacpp_provider_keys(tmp_path):
     config_path = tmp_path / "metis.yaml"
     config_path.write_text(
         """
 llm_provider:
   name: llamacpp
-  model: llama3.1:8b
-  docs_embedding_model: nomic-embed-text:v1.5
 """,
         encoding="utf-8",
     )
@@ -351,8 +778,7 @@ llm_provider:
 
     message = str(exc_info.value)
     assert "llama.cpp provider requires additional metis.yaml configuration" in message
-    assert "Missing: llm_provider.code_embedding_model" in message
-    assert "llm_provider.docs_embedding_model" in message
+    assert "Missing: llm_provider.model" in message
     assert "Required keys:" in message
 
 
@@ -396,6 +822,111 @@ llm_provider:
 
     assert runtime["llm_api_key"] == "my-secret-key"
     assert runtime["openai_api_base"] == "http://custom:8080/v1"
+
+
+def test_load_runtime_config_embedding_provider_falls_back_to_llm_provider(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: openai
+  model: gpt-test
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-large
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["embedding_provider_name"] == "openai"
+    embed = runtime["embedding_provider_config"]
+    assert embed["llm_api_key"] == "test-key"
+    assert embed["code_embedding_model"] == "text-embedding-3-large"
+    assert runtime["embedding_provider_raw_config"]["name"] == "openai"
+
+
+def test_load_runtime_config_separate_embedding_provider(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: claude-opus-4-8
+embedding_provider:
+  name: openai
+  code_embedding_model: text-embedding-3-large
+  docs_embedding_model: text-embedding-3-small
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "embed-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["llm_provider_name"] == "anthropic"
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["embedding_provider_name"] == "openai"
+    embed = runtime["embedding_provider_config"]
+    assert embed["llm_api_key"] == "embed-key"
+    assert embed["code_embedding_model"] == "text-embedding-3-large"
+    assert embed["docs_embedding_model"] == "text-embedding-3-small"
+    # llm runtime should not pick up embedding-provider keys
+    assert runtime["code_embedding_model"] == ""
+
+
+def test_load_runtime_config_anthropic_without_embeddings(tmp_path, monkeypatch):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        """
+llm_provider:
+  name: anthropic
+  model: opus
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["model"] == "claude-opus-4-8"
+    assert runtime["code_embedding_model"] == ""
+    assert runtime["embedding_provider_name"] == "anthropic"
+
+
+def test_validate_embedding_provider_config_reports_missing_keys():
+    with pytest.raises(ValueError) as exc_info:
+        validate_embedding_provider_config(
+            "openai", {"code_embedding_model": "x"}, section="embedding_provider"
+        )
+
+    message = str(exc_info.value)
+    assert "OpenAI provider requires additional metis.yaml" in message
+    assert "Missing: embedding_provider.docs_embedding_model" in message
+
+
+def test_validate_embedding_provider_config_passes_when_complete():
+    validate_embedding_provider_config(
+        "openai",
+        {
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
+    )
+
+
+def test_validate_embedding_provider_config_uses_llm_section_label():
+    with pytest.raises(ValueError) as exc_info:
+        validate_embedding_provider_config("ollama", {}, section="llm_provider")
+
+    message = str(exc_info.value)
+    assert "Missing: llm_provider.code_embedding_model" in message
+    assert "llm_provider.docs_embedding_model" in message
 
 
 def test_load_runtime_config_accepts_complete_azure_provider_config(

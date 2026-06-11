@@ -11,7 +11,7 @@ from rich.markup import escape
 from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
 
-from metis.configuration import load_runtime_config
+from metis.configuration import load_runtime_config, validate_embedding_provider_config
 from metis.engine import MetisEngine
 from metis.engine.tools.selection import INDEX_TOOL, parse_engine_tools, tool_enabled
 from metis.usage import UsageRuntime
@@ -99,32 +99,54 @@ def build_engine(args, runtime):
     provider_cls = get_provider(llm_provider_name)
     llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
 
+    embedding_provider = _build_embedding_provider(args, runtime, llm_provider)
+
     usage_runtime = UsageRuntime(args.codebase_path)
-    embed_model_code = llm_provider.get_embed_model_code(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
-    embed_model_docs = llm_provider.get_embed_model_docs(
-        **usage_runtime.hooks.embed_model_kwargs()
-    )
 
     if args.backend == "postgres":
-        vector_backend = build_pg_backend(
-            args, runtime, embed_model_code, embed_model_docs
-        )
+        vector_backend = build_pg_backend(args, runtime, None, None)
     else:
-        vector_backend = build_chroma_backend(
-            args, runtime, embed_model_code, embed_model_docs
-        )
+        vector_backend = build_chroma_backend(args, runtime, None, None)
 
     engine = MetisEngine(
         codebase_path=args.codebase_path,
         llm_provider=llm_provider,
+        embedding_provider=embedding_provider,
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
         **runtime,
     )
     return engine, vector_backend
+
+
+def _build_embedding_provider(args, runtime, llm_provider):
+    enabled_tools = runtime.get("enabled_tools") or set()
+    index_enabled = tool_enabled(enabled_tools, INDEX_TOOL)
+
+    embed_name = runtime.get("embedding_provider_name")
+    embed_runtime = runtime.get("embedding_provider_config") or {}
+    embed_raw = runtime.get("embedding_provider_raw_config") or {}
+    same_as_llm = embed_name == runtime.get("llm_provider_name")
+    section = "llm_provider" if same_as_llm else "embedding_provider"
+
+    if index_enabled:
+        validate_embedding_provider_config(embed_name, embed_raw, section=section)
+    elif not same_as_llm:
+        try:
+            validate_embedding_provider_config(embed_name, embed_raw, section=section)
+        except ValueError as exc:
+            print_console(
+                f"[yellow]Warning:[/yellow] {escape(str(exc))} "
+                "(index tool disabled; embeddings will fail if requested.)",
+                args.quiet,
+            )
+
+    if same_as_llm:
+        return llm_provider
+
+    embed_cls = get_provider(embed_name)
+    return embed_cls(cast(ProviderRuntimeConfig, embed_runtime))
 
 
 def finalize_cli_session(engine, args):

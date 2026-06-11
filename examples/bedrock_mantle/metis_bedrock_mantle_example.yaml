@@ -1,0 +1,32 @@
+psql_database:
+  provider: "config"
+  credentials:
+    username: "metis_user"
+    password: "metis_password"
+    host: "localhost"
+    port: 5432
+    database_name: "metis_db"
+
+metis_engine:
+  max_token_length: 250000
+  max_workers: 5
+  embed_dim: 1024
+
+llm_provider:
+  name: "bedrock_mantle"
+  model: "anthropic.<claude-model-id>"
+  aws_profile: "<aws-profile>"
+  aws_region: "<aws-region>"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "bedrock"
+  region: "<aws-region>"
+  aws_profile: "<aws-profile>"
+  code_embedding_model: "amazon.titan-embed-text-v2:0"
+  docs_embedding_model: "amazon.titan-embed-text-v2:0"
+
+query:
+  similarity_top_k: 5
+  max_tokens: 5000
+  temperature: 0.0
