@@ -1,46 +1,32 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
 from typing import Any, Unpack, cast
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks import Callbacks
+from langchain_openai import OpenAIEmbeddings
 from llama_index.core.callbacks import CallbackManager
 from pydantic import SecretStr
 
-from metis.providers.base import (
-    ChatModelOptions,
-    LLMProvider,
-    OpenAICompatibleProviderConfig,
-)
+from metis.providers.base import ChatModelOptions, LLMProvider
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
+from metis.providers.registry import register_provider
 
 
-class OpenAICompatibleProvider(LLMProvider):
-    def __init__(
-        self,
-        config: OpenAICompatibleProviderConfig,
-        *,
-        default_base_url: str | None = None,
-        default_api_key: str | None = None,
-    ) -> None:
+class AnthropicProvider(LLMProvider):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.api_key = config.get("llm_api_key")
-        self.base_url = (
-            config.get("openai_api_base")
-            or config.get("api_base")
-            or config.get("base_url")
-            or default_base_url
-        )
-        self.default_headers = dict(
-            config.get("openai_default_headers") or config.get("default_headers") or {}
-        )
+        self.embedding_api_key = config.get("embedding_api_key")
         self.query_model = config.get("llama_query_model") or config.get("model")
+        self.supports_temperature = bool(config.get("supports_temperature", False))
         self.temperature = float(config.get("llama_query_temperature", 0.0))
         self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
-        self.reasoning_effort = config.get("llama_query_reasoning_effort")
+        self.base_url = config.get("anthropic_api_url") or config.get("base_url")
+
         self.code_embedding_model = config.get("code_embedding_model")
         self.docs_embedding_model = config.get("docs_embedding_model")
         self.code_embedding_extra_kwargs = dict(
@@ -49,9 +35,20 @@ class OpenAICompatibleProvider(LLMProvider):
         self.docs_embedding_extra_kwargs = dict(
             config.get("docs_embedding_extra_kwargs", {})
         )
-        # Apply default API key when none provided
-        if not self.api_key and default_api_key:
-            self.api_key = default_api_key
+        self.embedding_api_base = config.get("embedding_api_base") or config.get(
+            "embedding_base_url"
+        )
+        self.embedding_default_headers = dict(
+            config.get("embedding_default_headers", {})
+        )
+
+    def _require_embedding_api_key(self) -> str:
+        if not self.embedding_api_key:
+            raise ValueError(
+                "Anthropic provider embeddings require llm_provider.embedding_api_key, "
+                "llm_provider.embedding_api_key_env, or OPENAI_API_KEY."
+            )
+        return self.embedding_api_key
 
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
@@ -83,13 +80,14 @@ class OpenAICompatibleProvider(LLMProvider):
         if not model_name:
             raise ValueError(f"Missing '{config_key}' in configuration")
 
-        params: dict[str, object] = {"model": model_name}
-        if self.api_key:
-            params["api_key"] = SecretStr(self.api_key)
-        if self.base_url:
-            params["base_url"] = self.base_url
-        if self.default_headers:
-            params["default_headers"] = self.default_headers
+        params: dict[str, object] = {
+            "model": model_name,
+            "api_key": SecretStr(self._require_embedding_api_key()),
+        }
+        if self.embedding_api_base:
+            params["base_url"] = self.embedding_api_base
+        if self.embedding_default_headers:
+            params["default_headers"] = self.embedding_default_headers
         if extra_kwargs:
             params.update(extra_kwargs)
 
@@ -105,43 +103,46 @@ class OpenAICompatibleProvider(LLMProvider):
         *args: str,
         callbacks: Callbacks = None,
         **kwargs: Unpack[ChatModelOptions],
-    ) -> ChatOpenAI:
+    ) -> ChatAnthropic:
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
         model_name = requested_model or positional_model or self.query_model
         if not model_name:
             raise ValueError("Missing chat model configuration")
+        if not self.api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY environment variable is required for "
+                "Anthropic provider but not set."
+            )
 
-        params: dict[str, object] = {
+        params: dict[str, Any] = {
             "model": model_name,
-            "temperature": kwargs.get("temperature", self.temperature),
+            "api_key": self.api_key,
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "use_responses_api": True,
         }
-
-        if self.api_key:
-            params["api_key"] = self.api_key
+        if "top_p" in kwargs and "temperature" in kwargs:
+            raise ValueError(
+                "Anthropic chat model accepts either temperature or top_p, not both."
+            )
+        if self.supports_temperature and "top_p" not in kwargs:
+            params["temperature"] = kwargs.get("temperature", self.temperature)
         if self.base_url:
-            params["openai_api_base"] = self.base_url
-        if self.default_headers:
-            params["default_headers"] = self.default_headers
+            params["base_url"] = self.base_url
         if callbacks is not None:
             params["callbacks"] = callbacks
-        if self.reasoning_effort:
-            params["reasoning_effort"] = self.reasoning_effort
 
         for optional_key in (
             "timeout",
-            "request_timeout",
+            "default_request_timeout",
             "max_retries",
-            "frequency_penalty",
-            "presence_penalty",
-            "seed",
-            "logit_bias",
-            "reasoning_effort",
-            "verbosity",
+            "top_k",
+            "top_p",
+            "stop_sequences",
         ):
             if optional_key in kwargs:
                 params[optional_key] = kwargs[optional_key]
 
-        return ChatOpenAI(**cast(dict[str, Any], params))
+        return ChatAnthropic(**cast(dict[str, Any], params))
+
+
+register_provider("anthropic", AnthropicProvider)

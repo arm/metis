@@ -29,7 +29,7 @@ Metis is an open-source, agentic AI security framework for deep security code re
   Validates findings from its own analysis and third-party SAST tools, gathering evidence to reduce false positives.
 
 - **Provider Flexibility**
-  Support for major LLM services and local models (vLLM, Ollama, llama.cpp, LiteLLM etc.). See the [vLLM guide](docs/providers/vllm.md), the [Ollama guide](docs/providers/ollama.md), and the [llama.cpp guide](docs/providers/llamacpp.md) for local setup examples.
+  Support for major LLM services and local models (OpenAI, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Bedrock Mantle, vLLM, Ollama, llama.cpp, LiteLLM etc.). See [Set up LLM Provider](#2-set-up-llm-provider).
 
 ![Demo](.github/demo.gif)
 
@@ -96,7 +96,7 @@ docker build -t metis .
 
 ### 2. **Set up LLM Provider**
 
-**OpenAI**
+**OpenAI** (default)
 
 Export your OpenAI API key before using Metis:
 
@@ -104,7 +104,29 @@ Export your OpenAI API key before using Metis:
 export OPENAI_API_KEY="your-key-here"
 ```
 
-### 3. Index and Run Analysis
+**Other providers**
+
+Set `llm_provider.name` in `metis.yaml` and install the matching extra:
+
+| Provider                 | `name`           | Install                              | Guide                                       |
+|--------------------------|------------------|--------------------------------------|---------------------------------------------|
+| OpenAI / Azure OpenAI    | `openai` / `azure_openai` | included                    | —                                           |
+| Anthropic                | `anthropic`      | `uv pip install '.[anthropic]'`      | [docs](docs/providers/anthropic.md)         |
+| Google Gemini / Vertex   | `gemini`         | `uv pip install '.[gemini]'`         | [docs](docs/providers/gemini.md)            |
+| AWS Bedrock              | `bedrock`        | `uv pip install '.[bedrock]'`        | [docs](docs/providers/bedrock.md)           |
+| Bedrock Mantle (Claude)  | `bedrock_mantle` | `uv pip install '.[bedrock-mantle]'` | [docs](docs/providers/bedrock_mantle.md)    |
+| vLLM                     | `vllm`           | included                             | [docs](docs/providers/vllm.md)              |
+| Ollama                   | `ollama`         | included                             | [docs](docs/providers/ollama.md)            |
+| llama.cpp                | `llamacpp`       | included                             | [docs](docs/providers/llamacpp.md)          |
+
+Or install everything with `uv pip install '.[all-providers]'`.
+
+Embeddings are only required when using the `index` tool. To use a different
+provider for embeddings than for chat (e.g. Anthropic chat + OpenAI
+embeddings), add a separate `embedding_provider` block — see
+[docs/providers/embedding-provider.md](docs/providers/embedding-provider.md).
+
+### 3. Run Analysis
 
 Run metis by also providing the path to the source you want to analyse:
 
@@ -190,7 +212,7 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
 - `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--use-index` – experimental opt-in to legacy index-backed retrieval for review and triage commands.
+- `--tools index` – opt in to vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage). Off by default.
 - `--ignore-index` – compatibility no-op retained for existing scripts.
 - `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
 

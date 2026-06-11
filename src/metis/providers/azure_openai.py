@@ -24,23 +24,14 @@ logger = logging.getLogger(__name__)
 
 class AzureOpenAIProvider(LLMProvider):
     def __init__(self, config: AzureOpenAIProviderConfig) -> None:
-        self.api_key = config["llm_api_key"]
-        self.azure_endpoint = config["azure_endpoint"]
-        self.api_version = config["azure_api_version"]
-        self.engine = config["engine"]
-        self.chat_deployment_model = config["chat_deployment_model"]
+        self.api_key = config.get("llm_api_key", "")
+        self.azure_endpoint = config.get("azure_endpoint", "")
+        self.api_version = config.get("azure_api_version", "")
+        self.engine = config.get("engine", "")
+        self.chat_deployment_model = config.get("chat_deployment_model", "")
 
-        if not self.engine:
-            raise ValueError("Missing 'engine' (Azure deployment name).")
-
-        if not self.chat_deployment_model:
-            raise ValueError(
-                "Missing 'chat_deployment_model' "
-                "Azure calls must specify a deployment model."
-            )
-
-        self.code_embedding_model = config["code_embedding_model"]
-        self.docs_embedding_model = config["docs_embedding_model"]
+        self.code_embedding_model = config.get("code_embedding_model", "")
+        self.docs_embedding_model = config.get("docs_embedding_model", "")
         self.code_embedding_deployment = config.get(
             "code_embedding_deployment", self.code_embedding_model
         )
@@ -90,6 +81,13 @@ class AzureOpenAIProvider(LLMProvider):
         requested_deployment = kwargs.pop("deployment_name", None)
         positional_deployment = args[0] if args else None
         deployment = requested_deployment or positional_deployment or self.engine
+        if not deployment:
+            raise ValueError("Missing 'engine' (Azure deployment name).")
+        if not self.chat_deployment_model:
+            raise ValueError(
+                "Missing 'chat_deployment_model' "
+                "Azure calls must specify a deployment model."
+            )
         params: dict[str, object] = {
             "api_key": self.api_key,
             "azure_endpoint": self.azure_endpoint,

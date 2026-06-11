@@ -71,4 +71,10 @@ register_provider_loader(
 )
 register_provider_loader("vllm", "metis.providers.vllm:VLLMProvider")
 register_provider_loader("ollama", "metis.providers.ollama:OllamaProvider")
+register_provider_loader("anthropic", "metis.providers.anthropic:AnthropicProvider")
+register_provider_loader("bedrock", "metis.providers.bedrock:BedrockProvider")
+register_provider_loader(
+    "bedrock_mantle", "metis.providers.bedrock_mantle:BedrockMantleProvider"
+)
+register_provider_loader("gemini", "metis.providers.gemini:GeminiProvider")
 register_provider_loader("llamacpp", "metis.providers.llamacpp:LlamaCppProvider")
