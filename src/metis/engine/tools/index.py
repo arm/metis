@@ -84,9 +84,10 @@ class IndexTool:
                 description=(
                     "Search the Metis vector index for relevant code and documentation "
                     "context. Use this when broader project context, related files, "
-                    "definitions, APIs, design notes, or documentation may affect the "
-                    "answer. Treat results as context candidates and verify security "
-                    "claims against concrete source evidence when possible."
+                    "definitions, APIs, design notes, threat model, security "
+                    "assumptions, or documentation may affect the answer. Treat "
+                    "results as context candidates and verify security claims against "
+                    "concrete source evidence when possible."
                 ),
                 args_schema=IndexSearchInput,
                 metadata={"metis_contract": contract} if contract else None,

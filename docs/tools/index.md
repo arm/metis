@@ -37,6 +37,11 @@ Model-callable output:
 
 Model interpretation rules:
 
+- Use indexed documentation to understand the codebase's threat model,
+  deployment assumptions, trust boundaries, and non-goals before deciding
+  whether a generic security issue is relevant to this project.
+- If retrieved documentation changes whether an issue is relevant, cite the
+  documented assumption or boundary alongside the source-code evidence.
 - Treat retrieved passages as context candidates, not proof by themselves.
 - Prefer source-local evidence from navigation or structural analysis when
   validating a finding.

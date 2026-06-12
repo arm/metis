@@ -26,8 +26,13 @@ Model-callable output:
 Model usage rules:
 
 - Use `index_search` when the prompt needs broader project context, related
-  files, definitions, APIs, design intent, or documentation that is not present
-  in the immediate snippet.
+  files, definitions, APIs, design intent, threat model, security assumptions,
+  or documentation that is not present in the immediate snippet.
+- For security review, use indexed documentation to understand the codebase's
+  threat model, deployment assumptions, trust boundaries, and non-goals before
+  deciding whether a generic issue is relevant to this project.
+- If retrieved documentation changes whether an issue is relevant, cite the
+  documented assumption or boundary alongside the source-code evidence.
 - Do not use `index_search` for facts already visible in the prompt.
 - Treat retrieved passages as context candidates, not proof by themselves.
 - Prefer source-local evidence from navigation or structural analysis when
