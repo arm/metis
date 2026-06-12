@@ -50,4 +50,32 @@ capabilities:
     domains: [ask_context, review_context, triage_context]
     provider: index
     operation: search
+    input_schema:
+      type: object
+      required: [query]
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          description: >-
+            Ask a short, human-readable context question that states what you
+            need to understand. Include important symbols, APIs, files, or
+            architecture terms as anchors, but do not submit a keyword-only
+            search string.
+          examples:
+            - >-
+              How does the kleidiai SME2 depthwise convolution kernel manage
+              SMSTART/SMSTOP and ZA preservation under AAPCS64?
+        top_k:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional number of nearest indexed chunks to retrieve. Runtime caps
+            come from config.search.max_top_k.
+        max_chars:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional maximum characters to return across code and docs context.
+            Runtime caps come from config.search.max_chars.
     status: active

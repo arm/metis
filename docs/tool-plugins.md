@@ -44,6 +44,13 @@ capabilities:
     domains: [triage_evidence]
     provider: testname
     operation: analyze
+    input_schema:
+      type: object
+      required: [target]
+      properties:
+        target:
+          type: string
+          description: File, symbol, or natural-language question to analyze.
     status: active
 ```
 
@@ -61,6 +68,10 @@ Python unless they are true code fallbacks.
 For model-callable tools, put per-tool model settings under `config.model_tool`.
 For example, `max_contract_chars` controls how much of that tool's model-facing
 contract is injected into the system prompt.
+
+For model-callable capabilities, define the LangChain input schema in the
+capability's `input_schema` YAML mapping. This keeps model-visible field names,
+descriptions, limits, and examples reviewable without editing Python.
 
 Shared model-tool loop settings belong in `metis.yaml` under
 `metis_engine.model_tools`. For example, `max_rounds` controls how many
@@ -96,17 +107,23 @@ For model-callable tools, expose LangChain tools from the runtime wrapper:
 ```python
 from langchain_core.tools import StructuredTool
 
+from metis.engine.tools import get_tool_manifest
+
 
 class ExampleTool:
     name = "testname"
 
     def langchain_tools(self) -> tuple[StructuredTool, ...]:
+        manifest = get_tool_manifest(self.name)
+        capability = next(
+            item for item in manifest.capabilities if item.id == "testname.analyze"
+        )
         return (
             StructuredTool.from_function(
                 func=self.analyze,
-                name="testname_analyze",
-                description="Run bounded example analysis.",
-                args_schema=ExampleAnalyzeInput,
+                name=capability.name,
+                description=capability.description,
+                args_schema=capability.input_schema,
             ),
         )
 ```

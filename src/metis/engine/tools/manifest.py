@@ -14,6 +14,14 @@ def _as_tuple(values: Iterable[Any] | None) -> tuple[str, ...]:
     )
 
 
+def _as_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Tool capability {field_name} must be a YAML mapping")
+    return dict(value)
+
+
 @dataclass(frozen=True, slots=True)
 class ToolCapabilityManifest:
     id: str
@@ -24,8 +32,8 @@ class ToolCapabilityManifest:
     domains: tuple[str, ...] = ()
     provider: str | None = None
     operation: str | None = None
-    input_schema: str | None = None
-    output_schema: str | None = None
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
     status: str = "active"
 
     def __post_init__(self) -> None:
@@ -56,8 +64,13 @@ class ToolCapabilityManifest:
             domains=tuple(data.get("domains") or ()),
             provider=data.get("provider"),
             operation=data.get("operation"),
-            input_schema=data.get("input_schema"),
-            output_schema=data.get("output_schema"),
+            input_schema=_as_mapping(
+                data.get("input_schema"), field_name="input_schema"
+            ),
+            output_schema=_as_mapping(
+                data.get("output_schema"),
+                field_name="output_schema",
+            ),
             status=str(data.get("status") or "active"),
         )
 

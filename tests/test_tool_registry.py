@@ -67,6 +67,19 @@ def test_index_tool_config_loads_manifest_defaults():
     assert config["search"]["max_chars"] == 24000
 
 
+def test_index_search_input_schema_loads_from_manifest():
+    manifest = get_tool_manifest("index")
+    assert manifest is not None
+    capability = next(
+        item for item in manifest.capabilities if item.id == "index.search"
+    )
+
+    query_schema = capability.input_schema["properties"]["query"]
+    assert capability.input_schema["required"] == ["query"]
+    assert "keyword-only" in query_schema["description"]
+    assert "SMSTART/SMSTOP" in query_schema["examples"][0]
+
+
 def test_tool_config_returns_isolated_copy():
     config = get_tool_config("index")
     config["search"]["max_top_k"] = 1

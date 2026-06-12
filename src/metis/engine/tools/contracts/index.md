@@ -12,8 +12,9 @@ Active capabilities:
 
 Model-callable input:
 
-- `query`: short natural-language context question. Include important symbols,
-  APIs, files, or architecture terms as anchors; do not dump unrelated keywords.
+- `query`: short human-readable context question. State what you need to
+  understand, include important symbols, APIs, files, or architecture terms as
+  anchors, and do not submit a keyword-only search string.
 - `top_k`: optional nearest-neighbor count, capped by the index tool manifest.
 - `max_chars`: optional output budget, capped by the index tool manifest.
 
@@ -30,7 +31,9 @@ Model usage rules:
   files, definitions, APIs, design intent, threat model, security assumptions,
   or documentation that is not present in the immediate snippet.
 - Write queries as human-readable questions that state the intent, then include
-  the most important identifiers or domain terms as anchors.
+  the most important identifiers or domain terms as anchors. For example:
+  "How does the kleidiai SME2 depthwise convolution kernel manage SMSTART/SMSTOP
+  and ZA preservation under AAPCS64?"
 - For security review, use indexed documentation to understand the codebase's
   threat model, deployment assumptions, trust boundaries, and non-goals before
   deciding whether a generic issue is relevant to this project.

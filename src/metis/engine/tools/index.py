@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
-from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
 from ..index_context_service import IndexContextService
@@ -14,30 +14,6 @@ from ..runtime import EngineConfig, EngineState
 from .catalog import get_tool_config, get_tool_contract, get_tool_manifest
 from .handle import ToolHandle
 from .selection import INDEX_TOOL, tool_enabled
-
-
-class IndexSearchInput(BaseModel):
-    query: str = Field(
-        description=(
-            "Short natural-language context question. Include important symbols, "
-            "APIs, files, or architecture terms as anchors instead of dumping "
-            "only keywords."
-        )
-    )
-    top_k: int | None = Field(
-        default=None,
-        description=(
-            "Optional number of nearest indexed chunks to retrieve. Runtime caps "
-            "come from the index tool YAML config."
-        ),
-    )
-    max_chars: int | None = Field(
-        default=None,
-        description=(
-            "Optional maximum characters to return across code and docs context. "
-            "Runtime caps come from the index tool YAML config."
-        ),
-    )
 
 
 class IndexTool:
@@ -95,7 +71,7 @@ class IndexTool:
                 func=self.search,
                 name=capability.name,
                 description=capability.description,
-                args_schema=IndexSearchInput,
+                args_schema=deepcopy(capability.input_schema) or None,
                 metadata=metadata,
             ),
         )

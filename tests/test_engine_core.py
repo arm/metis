@@ -173,6 +173,10 @@ def test_index_tool_exposes_langchain_search_tool(engine):
 
     assert [tool.name for tool in tools] == ["index_search"]
     assert "threat model" in tools[0].description
+    assert "keyword-only" in tools[0].args_schema["properties"]["query"]["description"]
+    assert (
+        "SMSTART/SMSTOP" in tools[0].args_schema["properties"]["query"]["examples"][0]
+    )
     assert "Index Tool Contract" in tools[0].metadata["metis_contract"]
     assert tools[0].metadata["metis_contract_max_chars"] == 6000
     result = tools[0].invoke({"query": "allocator ownership"})
