@@ -8,12 +8,8 @@ import threading
 
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
-from metis.engine.options import normalize_top_k
 from metis.engine.tools.registry import build_toolbox
-from metis.exceptions import RetrieverInitError
 from metis.chat_model_options import merge_chat_model_kwargs
-
-from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 
 logger = logging.getLogger("metis")
 
@@ -67,22 +63,6 @@ class TriageServiceRuntimeMixin:
             self._triage_graph_local.graph = graph
         return graph
 
-    def _init_and_get_triage_retrievers(self):
-        top_k = normalize_top_k(
-            self.triage_similarity_top_k, DEFAULT_TRIAGE_SIMILARITY_TOP_K
-        )
-        retriever_code, retriever_docs = self._create_retrievers(top_k)
-        if not retriever_code or not retriever_docs:
-            raise RetrieverInitError()
-        return retriever_code, retriever_docs
-
-    def _get_thread_triage_retrievers(self):
-        retrievers = getattr(self._triage_retrievers_local, "retrievers", None)
-        if retrievers is None:
-            retrievers = self._init_and_get_triage_retrievers()
-            self._triage_retrievers_local.retrievers = retrievers
-        return retrievers
-
     def _get_triage_plugin(self, file_path: str):
         if not file_path:
             return None
@@ -134,5 +114,4 @@ class TriageServiceRuntimeMixin:
 
     def close(self):
         self._triage_graph_local = threading.local()
-        self._triage_retrievers_local = threading.local()
         self._triage_analyzers_local = threading.local()

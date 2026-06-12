@@ -5,7 +5,7 @@ splitting:
 prompts:
   security_review_checks: |-
     2. What to Check (CWE-based, hardware-focused)
-       - Treat ALL control/inputs as potentially adversarial unless explicitly proven internal-only[[RELEVANT_CONTEXT_INTERNAL_ONLY_SUFFIX]].
+       - Treat ALL control/inputs as potentially adversarial unless explicitly proven internal-only.
          Externally-controlled candidates commonly include: reset, clock enables, test/debug enables,
          strap pins, fuse/OTP reads, JTAG/scan signals, memory-mapped register writes, bus transactions,
          interrupt lines, and power/debug state transitions.

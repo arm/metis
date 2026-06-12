@@ -21,7 +21,6 @@ from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
 from .tools.engine import build_engine_tools
 from .tools.selection import parse_engine_tools
-from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
 
 logger = logging.getLogger("metis")
@@ -64,9 +63,6 @@ class MetisEngine:
         self.chat_model_kwargs = dict(kwargs.get("chat_model_kwargs") or {})
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
-        self.triage_similarity_top_k = kwargs.get(
-            "triage_similarity_top_k", DEFAULT_TRIAGE_SIMILARITY_TOP_K
-        )
         self.triage_checkpoint_every = kwargs.get("triage_checkpoint_every", 50)
         self.triage_tool_timeout_seconds = int(
             kwargs.get("triage_tool_timeout_seconds", 12)
@@ -174,10 +170,8 @@ class MetisEngine:
             chat_model_kwargs=self.chat_model_kwargs,
             plugin_config=self.plugin_config,
             max_workers=self.max_workers,
-            triage_similarity_top_k=self.triage_similarity_top_k,
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
-            create_retrievers=self.tools.index.create_retrievers,
             get_plugin_for_path=self.repository.get_plugin_for_path,
             get_language_name_for_path=self.repository.get_language_name_for_path,
             usage_hooks=self.usage_runtime.hooks,

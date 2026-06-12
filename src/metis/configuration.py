@@ -112,7 +112,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "reasoning_effort"
     ) or llm_cfg.get("reasoning_effort")
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
-    runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
     chat_model_kwargs: dict[str, object] = {}
     if runtime.get("llama_query_temperature") is not None:
         chat_model_kwargs["temperature"] = runtime["llama_query_temperature"]

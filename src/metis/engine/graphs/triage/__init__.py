@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .graph import TriageGraph
-from .nodes import triage_node_collect_evidence, triage_node_llm, triage_node_retrieve
+from .nodes import triage_node_collect_evidence, triage_node_llm
 
 __all__ = [
     "TriageGraph",
-    "triage_node_retrieve",
     "triage_node_collect_evidence",
     "triage_node_llm",
 ]

@@ -12,9 +12,9 @@ config:
   model_tool:
     max_contract_chars: 6000
   search:
-    max_top_k: 20
-    default_max_chars: 12000
-    max_chars: 24000
+    max_top_k: 1
+    default_max_chars: 1500
+    max_chars: 2500
 capabilities:
   - id: index.build
     name: index.build
@@ -33,19 +33,24 @@ capabilities:
   - id: index.retrieve
     name: index.retrieve
     title: Retrieve index context
-    description: Retrieve relevant code and documentation context for a query.
+    description: Retrieve relevant code and documentation context for index-backed orchestration surfaces.
     surfaces: [context_provider, orchestration]
-    domains: [ask_context, review_context, triage_context]
+    domains: [ask_context]
     status: active
   - id: index.search
     name: index_search
     title: Search index
     description: >-
       Search the Metis vector index for relevant code and documentation context.
-      Use this when broader project context, related files, definitions, APIs,
-      design notes, threat model, security assumptions, or documentation may
-      affect the answer. Treat results as context candidates and verify security
-      claims against concrete source evidence when possible.
+      Use this sparingly when broader project context, related definitions,
+      APIs, design notes, threat model, documented assumptions, or
+      documentation can materially improve confidence in a current-file
+      decision. First form a concrete candidate from the reviewed code, then ask
+      one targeted factual question only if a missing project fact controls
+      confidence. Ask for neutral project facts, not audit conclusions or issue
+      classes. Treat results as context candidates that confirm, contradict, or
+      leave unresolved the specific assumptions behind a finding; do not use
+      retrieved context to discover findings or search for bug patterns.
     surfaces: [model_tool]
     domains: [ask_context, review_context, triage_context]
     provider: index
@@ -58,24 +63,35 @@ capabilities:
         query:
           type: string
           description: >-
-            Ask a short, human-readable context question that states what you
-            need to understand. Include important symbols, APIs, files, or
-            architecture terms as anchors, but do not submit a keyword-only
-            search string.
+            Ask a short, human-readable factual question that states the
+            neutral project fact you need to understand: data origin, API
+            contract, trust boundary, configuration source, lifecycle,
+            invariant, or documented assumption. Include important symbols,
+            APIs, files, or architecture terms as anchors. Do not ask the index
+            to produce audit conclusions, classify bugs, or find bug instances.
+            Do not name vulnerability classes, exploit techniques, CWE IDs, or
+            issue types in the query; translate that uncertainty into neutral
+            facts such as input origin, trust boundary, lifecycle, parser
+            behavior, prompt/data separation, or path confinement.
+            Do not use it before the reviewed code has produced a concrete
+            candidate and an exact factual assumption to check. Do not use it as
+            a broad source scan, implementation lookup, discovery mechanism, or
+            keyword-only search string.
           examples:
             - >-
-              How does the kleidiai SME2 depthwise convolution kernel manage
-              SMSTART/SMSTOP and ZA preservation under AAPCS64?
+              How does this project define trust boundaries for configuration
+              files loaded by the CLI?
         top_k:
           type: integer
           minimum: 1
           description: >-
-            Optional number of nearest indexed chunks to retrieve. Runtime caps
-            come from config.search.max_top_k.
+            Optional number of nearest indexed chunks to retrieve. Use 1.
+            Runtime caps come from config.search.max_top_k.
         max_chars:
           type: integer
           minimum: 1
           description: >-
             Optional maximum characters to return across code and docs context.
-            Runtime caps come from config.search.max_chars.
+            Prefer 1000-1500 for normal validation questions. Runtime caps come
+            from config.search.max_chars.
     status: active

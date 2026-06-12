@@ -29,12 +29,11 @@ from .utils import (
 
 
 def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
-    return ReviewOptions(use_retrieval_context=runtime.use_retrieval_context)
+    return ReviewOptions()
 
 
 def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
     return TriageOptions(
-        use_retrieval_context=runtime.use_retrieval_context,
         include_triaged=bool(getattr(args, "include_triaged", False)),
     )
 

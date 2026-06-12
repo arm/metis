@@ -16,7 +16,6 @@ from .adjudication import (
 from .nodes import (
     triage_node_collect_evidence,
     triage_node_llm,
-    triage_node_retrieve,
 )
 from ..types import TriageRequest, TriageState
 
@@ -43,7 +42,7 @@ class TriageGraph:
         )
         self.triage_decision_prompt = (
             general_prompts.get("triage_decision_prompt")
-            or "Given the finding details, RAG context, and tool outputs, return a final triage decision.\n\n"
+            or "Given the finding details and tool outputs, return a final triage decision.\n\n"
             "The reported line number might be off; rely on nearby code regions and related symbols.\n\n"
             "{triage_input}\n\nTool Outputs:\n{tool_outputs}\n"
         )
@@ -66,7 +65,6 @@ class TriageGraph:
             return self._app
         self._ensure_models()
         graph = StateGraph(cast(Any, TriageState))
-        graph.add_node("retrieve", triage_node_retrieve)
         graph.add_node(
             "collect_evidence",
             partial(triage_node_collect_evidence, toolbox=self.toolbox),
@@ -78,8 +76,7 @@ class TriageGraph:
                 decision_model=self._decision_model,
             ),
         )
-        graph.set_entry_point("retrieve")
-        graph.add_edge("retrieve", "collect_evidence")
+        graph.set_entry_point("collect_evidence")
         graph.add_edge("collect_evidence", "triage")
         graph.add_edge("triage", END)
         self._app = graph.compile(cache=InMemoryCache())
@@ -96,15 +93,10 @@ class TriageGraph:
                 "finding_source_tool": request.get("finding_source_tool", ""),
                 "finding_is_metis": bool(request.get("finding_is_metis", False)),
                 "finding_explanation": request.get("finding_explanation", ""),
-                "retriever_code": request["retriever_code"],
-                "retriever_docs": request["retriever_docs"],
                 "triage_analyzer": request.get("triage_analyzer"),
                 "triage_plugin": request.get("triage_plugin"),
                 "triage_codebase_path": request.get("triage_codebase_path", "."),
                 "debug_callback": request.get("debug_callback"),
-                "use_retrieval_context": bool(
-                    request.get("use_retrieval_context", False)
-                ),
                 "triage_system_prompt": self.triage_system_prompt,
                 "triage_decision_prompt": self.triage_decision_prompt,
             }

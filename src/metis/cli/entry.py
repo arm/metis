@@ -225,14 +225,9 @@ def _prepare_command_runtime(cmd, cmd_args, args):
         )
         return None
 
-    use_retrieval_context = tool_enabled(enabled_tools, INDEX_TOOL) and (
-        INDEX_TOOL in spec.required_tools or INDEX_TOOL in spec.optional_tools
-    )
-
     return CommandRuntime(
         command=cmd,
         command_args=filtered_args,
-        use_retrieval_context=use_retrieval_context,
     )
 
 
@@ -441,7 +436,6 @@ def main():
             CommandRuntime(
                 command="version",
                 command_args=[],
-                use_retrieval_context=False,
             ),
         )
         return

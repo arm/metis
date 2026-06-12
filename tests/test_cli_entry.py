@@ -54,54 +54,6 @@ def test_prepare_command_runtime_disables_index_by_default_for_supported_command
 
     assert runtime is not None
     assert runtime.command_args == ["src/a.c"]
-    assert runtime.use_retrieval_context is False
-
-
-@pytest.mark.parametrize(
-    "cmd", ["review_file", "review_code", "review_patch", "triage"]
-)
-def test_prepare_command_runtime_uses_index_when_tool_enabled_for_supported_command(
-    cmd,
-):
-    args = SimpleNamespace(
-        enabled_tools={"index"},
-        ignore_index=False,
-        quiet=True,
-    )
-
-    runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
-        cmd=cmd,
-        cmd_args=["src/a.c"],
-        args=args,
-    )
-
-    assert runtime is not None
-    assert runtime.command_args == ["src/a.c"]
-    assert runtime.use_retrieval_context is True
-
-
-@pytest.mark.parametrize(
-    "cmd", ["review_file", "review_code", "review_patch", "triage"]
-)
-def test_prepare_command_runtime_keeps_optional_retrieval_disabled_without_index_tool(
-    cmd,
-):
-    args = SimpleNamespace(
-        enabled_tools=set(),
-        ignore_index=False,
-        quiet=True,
-        codebase_path="src/metis",
-    )
-
-    runtime = entry._prepare_command_runtime(  # type: ignore[attr-defined]
-        cmd=cmd,
-        cmd_args=["src/a.c"],
-        args=args,
-    )
-
-    assert runtime is not None
-    assert runtime.command_args == ["src/a.c"]
-    assert runtime.use_retrieval_context is False
 
 
 @pytest.mark.parametrize("cmd", ["ask", "update", "index"])
@@ -156,20 +108,10 @@ def test_prepare_command_runtime_rejects_required_index_when_tool_disabled(
 
 
 @pytest.mark.parametrize(
-    ("cmd", "expected_use_retrieval"),
-    [
-        ("review_file", True),
-        ("review_code", True),
-        ("review_patch", True),
-        ("triage", True),
-        ("ask", True),
-        ("update", True),
-        ("index", True),
-    ],
+    "cmd",
+    ["review_file", "review_code", "review_patch", "triage", "ask", "update", "index"],
 )
-def test_prepare_command_runtime_accepts_inline_ignore_index_as_noop(
-    cmd, expected_use_retrieval
-):
+def test_prepare_command_runtime_accepts_inline_ignore_index_as_noop(cmd):
     args = SimpleNamespace(
         enabled_tools={"index"},
         ignore_index=False,
@@ -184,7 +126,6 @@ def test_prepare_command_runtime_accepts_inline_ignore_index_as_noop(
 
     assert runtime is not None
     assert runtime.command_args == ["target"]
-    assert runtime.use_retrieval_context is expected_use_retrieval
 
 
 def test_execute_command_rejects_triage_flag_for_ask_before_index_gating(monkeypatch):
@@ -243,14 +184,14 @@ def test_execute_command_allows_interactive_triage_command_with_global_triage_fl
         command_registry.CommandSpec,
         "invoke",
         lambda self, engine, cmd_args, args, runtime: calls.append(
-            (runtime.command, cmd_args, runtime.use_retrieval_context)
+            (runtime.command, cmd_args)
         ),
     )
 
     result = entry.execute_command(engine, "triage", ["findings.sarif"], args)
 
     assert result is None
-    assert calls == [("triage", ["findings.sarif"], False)]
+    assert calls == [("triage", ["findings.sarif"])]
 
 
 def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypatch):
@@ -280,14 +221,14 @@ def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypa
         command_registry.CommandSpec,
         "invoke",
         lambda self, engine, cmd_args, args, runtime: calls.append(
-            (runtime.command, cmd_args, runtime.use_retrieval_context)
+            (runtime.command, cmd_args)
         ),
     )
 
     result = entry.execute_command(engine, "ask", ["hi"], args)
 
     assert result is None
-    assert calls == [("ask", ["hi"], True)]
+    assert calls == [("ask", ["hi"])]
 
 
 @pytest.mark.parametrize(
@@ -321,14 +262,14 @@ def test_execute_command_accepts_global_ignore_index_as_noop(
         command_registry.CommandSpec,
         "invoke",
         lambda self, engine, cmd_args, args, runtime: calls.append(
-            (runtime.command, cmd_args, runtime.use_retrieval_context)
+            (runtime.command, cmd_args)
         ),
     )
 
     result = entry.execute_command(engine, cmd, cmd_args, args)
 
     assert result is None
-    assert calls == [(cmd, ["hi"], True)]
+    assert calls == [(cmd, ["hi"])]
 
 
 @pytest.mark.parametrize("cmd", ["ask", "update"])
@@ -357,14 +298,14 @@ def test_execute_command_accepts_inline_ignore_index_as_noop(monkeypatch, cmd):
         command_registry.CommandSpec,
         "invoke",
         lambda self, engine, cmd_args, args, runtime: calls.append(
-            (runtime.command, cmd_args, runtime.use_retrieval_context)
+            (runtime.command, cmd_args)
         ),
     )
 
     result = entry.execute_command(engine, cmd, ["hi", "--ignore-index"], args)
 
     assert result is None
-    assert calls == [(cmd, ["hi"], True)]
+    assert calls == [(cmd, ["hi"])]
 
 
 def test_run_non_interactive_keeps_quiet_without_verbose():

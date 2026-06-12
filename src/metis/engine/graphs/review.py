@@ -13,8 +13,6 @@ from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import split_snippet, parse_json_output, enrich_issues
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
-    retrieve_text,
-    synthesize_context,
     build_review_system_prompt,
     sanitize_review_payload,
 )
@@ -54,9 +52,7 @@ def _build_body_text(state: ReviewState) -> str:
     Format the user/body portion of the review prompt based on mode.
     """
     snippet = state.get("snippet", "") or ""
-    context = state.get("context", "") or ""
     mode = state.get("mode", "file")
-    include_context = bool(state.get("use_retrieval_context", False))
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -66,8 +62,6 @@ def _build_body_text(state: ReviewState) -> str:
             snippet,
             "",
         ]
-        if include_context:
-            sections.extend(["CONTEXT:", context, ""])
     else:
         original_file = state.get("original_file") or ""
         sections = [
@@ -78,8 +72,6 @@ def _build_body_text(state: ReviewState) -> str:
             snippet,
             "",
         ]
-        if include_context:
-            sections.extend(["CONTEXT:", context, ""])
 
     return "\n".join(sections)
 
@@ -98,20 +90,6 @@ def _post_process_reviews(
     return normalized_reviews
 
 
-def review_node_retrieve(state: ReviewState) -> ReviewState:
-    if not state.get("use_retrieval_context", False):
-        new_state: ReviewState = state.copy()
-        new_state["context"] = ""
-        return new_state
-    cp = state.get("context_prompt", "")
-    code = retrieve_text(state.get("retriever_code"), cp)
-    docs = retrieve_text(state.get("retriever_docs"), cp)
-    context = synthesize_context(code, docs)
-    new_state: ReviewState = state.copy()
-    new_state["context"] = context
-    return new_state
-
-
 def review_node_build_prompt(
     state: ReviewState,
     language_prompts: dict,
@@ -121,7 +99,6 @@ def review_node_build_prompt(
     custom_guidance_precedence: str,
     schema_prompt_section: str,
 ) -> ReviewState:
-    include_relevant_context = bool(state.get("use_retrieval_context", False))
     system = build_review_system_prompt(
         language_prompts,
         default_prompt_key,
@@ -129,7 +106,6 @@ def review_node_build_prompt(
         custom_prompt_text,
         custom_guidance_precedence,
         schema_prompt_section,
-        include_relevant_context=include_relevant_context,
     )
     new_state: ReviewState = state.copy()
     new_state["system_prompt"] = system
@@ -223,7 +199,6 @@ class ReviewGraph:
             return cached
 
         graph = StateGraph(cast(Any, ReviewState))
-        retrieve = review_node_retrieve
         build_prompt = partial(
             review_node_build_prompt,
             language_prompts=language_prompts,
@@ -239,13 +214,11 @@ class ReviewGraph:
         )
         parse = review_node_parse
 
-        graph.add_node("retrieve", retrieve)
         graph.add_node("build_prompt", build_prompt)
         graph.add_node("review", review)
         graph.add_node("parse", parse)
 
-        graph.set_entry_point("retrieve")
-        graph.add_edge("retrieve", "build_prompt")
+        graph.set_entry_point("build_prompt")
         graph.add_edge("build_prompt", "review")
         graph.add_edge("review", "parse")
         graph.add_edge("parse", END)
@@ -257,15 +230,11 @@ class ReviewGraph:
     def review(self, request: ReviewRequest):
         file_path = request["file_path"]
         snippet = request["snippet"]
-        retriever_code = request["retriever_code"]
-        retriever_docs = request["retriever_docs"]
-        context_prompt = request["context_prompt"]
         language_prompts = request["language_prompts"]
         default_prompt_key = request.get("default_prompt_key", "security_review_file")
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
-        use_retrieval_context = bool(request.get("use_retrieval_context", False))
 
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
@@ -274,13 +243,9 @@ class ReviewGraph:
             state = {
                 "file_path": file_path,
                 "snippet": chunk,
-                "retriever_code": retriever_code,
-                "retriever_docs": retriever_docs,
-                "context_prompt": context_prompt,
                 "relative_file": relative_file,
                 "mode": mode,
                 "original_file": original_file,
-                "use_retrieval_context": use_retrieval_context,
             }
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []

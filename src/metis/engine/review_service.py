@@ -53,10 +53,7 @@ class ReviewService:
         )
 
     def get_code_files(self, options: ReviewOptions | None = None):
-        options = options or ReviewOptions()
-        return self._repository.get_code_files(
-            include_suffixed_sources=not options.use_retrieval_context
-        )
+        return self._repository.get_code_files(include_suffixed_sources=True)
 
     def _get_reachability_reviews(self, *, files=None, progress_callback=None):
         if self._reachability_backend is None:
@@ -163,10 +160,6 @@ class ReviewService:
         file_path,
         options: ReviewOptions | None = None,
     ):
-        options = options or ReviewOptions()
-        retriever_code = retriever_docs = None
-        if options.use_retrieval_context:
-            retriever_code, retriever_docs = self._get_retrievers()
         base_path = os.path.abspath(self._config.codebase_path)
         snippet = read_file_content(file_path)
         if not snippet:
@@ -177,25 +170,16 @@ class ReviewService:
             return None
 
         language_prompts = plugin.get_prompts()
-        context_prompt_template = self._config.plugin_config.get(
-            "general_prompts", {}
-        ).get("retrieve_context", "")
-
-        formatted_context_prompt = context_prompt_template.format(file_path=file_path)
         relative_path = os.path.relpath(file_path, base_path)
 
         try:
             req: ReviewRequest = {
                 "file_path": file_path,
                 "snippet": snippet,
-                "retriever_code": retriever_code,
-                "retriever_docs": retriever_docs,
-                "context_prompt": formatted_context_prompt,
                 "language_prompts": language_prompts,
                 "default_prompt_key": "security_review_file",
                 "relative_file": relative_path,
                 "mode": "file",
-                "use_retrieval_context": options.use_retrieval_context,
             }
             return self._review_graph_factory().review(req)
         except Exception as e:
@@ -332,10 +316,6 @@ class ReviewService:
         patch_file,
         options: ReviewOptions | None = None,
     ):
-        options = options or ReviewOptions()
-        retriever_code = retriever_docs = None
-        if options.use_retrieval_context:
-            retriever_code, retriever_docs = self._get_retrievers()
         patch_text = read_file_content(patch_file)
         try:
             diff = unidiff.PatchSet.from_string(patch_text)
@@ -366,26 +346,17 @@ class ReviewService:
             )
             if not snippet:
                 continue
-            context_prompt = self._config.plugin_config.get("general_prompts", {}).get(
-                "retrieve_context", ""
-            )
-            formatted_context = context_prompt.format(file_path=file_diff.path)
-
             language_prompts = plugin.get_prompts()
             try:
                 original_content = read_file_content(abs_path)
                 req: ReviewRequest = {
                     "file_path": abs_path,
                     "snippet": snippet,
-                    "retriever_code": retriever_code,
-                    "retriever_docs": retriever_docs,
-                    "context_prompt": formatted_context,
                     "language_prompts": language_prompts,
                     "default_prompt_key": "security_review",
                     "relative_file": relative_path,
                     "mode": "patch",
                     "original_file": original_content or "",
-                    "use_retrieval_context": options.use_retrieval_context,
                 }
                 review_dict = self._review_graph_factory().review(req)
             except Exception as e:

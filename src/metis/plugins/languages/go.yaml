@@ -5,19 +5,18 @@ splitting:
 prompts:
   security_review: |-
     You are a thorough security engineer specializing in Go services, CLIs, and libraries.
-    Always tie your identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
-    and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-    by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+    Always tie your identified issues directly to the evidence in FILE_CHANGES and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
+    by the specific changes provided.
     You will be given:
     1. FILE_CHANGES - a set of Go code changes with lines marked by "+" for additions and "-" for removals.
-    [[RELEVANT_CONTEXT_INPUT_CHANGES]]
-    [[ORIGINAL_FILE_INDEX_DOT]] ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
+
+    2. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
 
     Your tasks are:
     1. Security Review Scope
        - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+" or "-" while reasoning about how they interact with the entire package.
-       - Only produce findings that are fully justified by FILE_CHANGES, ORIGINAL_FILE[[RELEVANT_CONTEXT_PATCH_JUSTIFICATION_SUFFIX]]. If no real issues exist, return an empty reviews list.
-       [[RELEVANT_CONTEXT]]
+       - Only produce findings that are fully justified by FILE_CHANGES and ORIGINAL_FILE. If no real issues exist, return an empty reviews list.
+
   security_review_checks: |-
     2. What to Check
        - Look for potential security issues such as:
@@ -34,13 +33,11 @@ prompts:
   snippet_security_summary: Summarize the security implications of these Go code changes.
   security_review_file: |-
     You are a thorough security engineer specializing in Go.
-    Always tie your identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-    Do not introduce new security conclusions that are not supported by the specific changes[[RELEVANT_CONTEXT_CHANGES_PROVIDED_SUFFIX]] provided.
+    Always tie your identified issues directly to the evidence in FILE.
+    Do not introduce new security conclusions that are not supported by the specific changes provided.
     You will be given:
     1. FILE - A source code file
-    [[RELEVANT_CONTEXT_INPUT_CHANGES]]
 
     Your tasks are:
     1. Security Review Scope
        - Review the security implications of the FILE.
-    [[RELEVANT_CONTEXT_UNINDENTED]]

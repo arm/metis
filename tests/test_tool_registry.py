@@ -26,16 +26,16 @@ def test_index_tool_config_loads_manifest_defaults():
 
     assert "max_rounds" not in config["model_tool"]
     assert config["model_tool"]["max_contract_chars"] == 6000
-    assert config["search"]["max_top_k"] == 20
-    assert config["search"]["default_max_chars"] == 12000
-    assert config["search"]["max_chars"] == 24000
+    assert config["search"]["max_top_k"] == 1
+    assert config["search"]["default_max_chars"] == 1500
+    assert config["search"]["max_chars"] == 2500
 
 
 def test_tool_config_returns_isolated_copy():
     config = get_tool_config("index")
     config["search"]["max_top_k"] = 1
 
-    assert get_tool_config("index")["search"]["max_top_k"] == 20
+    assert get_tool_config("index")["search"]["max_top_k"] == 1
 
 
 def test_local_contract_refs_are_not_cached(tmp_path):
