@@ -14,6 +14,12 @@ from .index import IndexTool, build_index_tool
 class EngineTools:
     index: IndexTool
 
+    def langchain_tools(self) -> tuple[object, ...]:
+        return (*self.index.langchain_tools(),)
+
+    def model_tool_max_rounds(self) -> int | None:
+        return self.index.model_tool_max_rounds()
+
     def close(self) -> None:
         self.index.close()
 

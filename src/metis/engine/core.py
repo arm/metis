@@ -192,6 +192,8 @@ class MetisEngine:
                 llama_query_model=self.llama_query_model,
                 max_token_length=self.max_token_length,
                 chat_model_kwargs=self._chat_model_kwargs(),
+                model_tools=self.tools.langchain_tools(),
+                model_tool_max_rounds=self.tools.model_tool_max_rounds(),
             )
         return self._state.review_graph
 

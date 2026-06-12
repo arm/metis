@@ -166,6 +166,63 @@ def test_index_context_builds_embed_models_lazily_with_usage_callback_manager():
     assert backend.embed_model_docs is docs_embed_model
 
 
+def test_index_tool_exposes_langchain_search_tool(engine):
+    engine.vector_backend.get_retrievers.reset_mock()
+
+    tools = engine.tools.langchain_tools()
+
+    assert [tool.name for tool in tools] == ["index_search"]
+    assert "Index Tool Contract" in tools[0].metadata["metis_contract"]
+    result = tools[0].invoke({"query": "allocator ownership"})
+    assert "[INDEX_SEARCH]" in result
+    assert "[CODE_CONTEXT]" in result
+    assert "[DOC_CONTEXT]" in result
+    assert "Code result" in result
+    assert "Docs result" in result
+    engine.vector_backend.get_retrievers.assert_called_once()
+
+
+def test_index_search_uses_manifest_tool_config(monkeypatch):
+    class _Doc:
+        def __init__(self, text):
+            self.page_content = text
+
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_retrievers = Mock(
+        return_value=(
+            Mock(get_relevant_documents=Mock(return_value=[_Doc("C" * 100)])),
+            Mock(get_relevant_documents=Mock(return_value=[_Doc("D" * 100)])),
+        )
+    )
+    monkeypatch.setattr(
+        "metis.engine.tools.catalog.get_tool_config",
+        lambda _name: {
+            "search": {
+                "max_top_k": 2,
+                "default_max_chars": 30,
+                "max_chars": 40,
+            }
+        },
+    )
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools={"index"},
+    )
+
+    result = engine.tools.index.search("allocator ownership", top_k=99, max_chars=99)
+
+    assert backend.get_retrievers.call_args.args[1] == 2
+    assert result.count("[truncated]") == 2
+
+
 def test_create_retrievers_passes_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
@@ -215,6 +272,8 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
 
     def _fake_runner(_runner, request):
         captured["chat_model_kwargs"] = request.chat_model_kwargs
+        captured["model_tools"] = request.model_tools
+        captured["max_tool_rounds"] = request.max_tool_rounds
         return []
 
     monkeypatch.setattr(
@@ -228,6 +287,8 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
         captured["chat_model_kwargs"]["callbacks"]
         == engine.usage_runtime.hooks.callbacks
     )
+    assert [tool.name for tool in captured["model_tools"]] == ["index_search"]
+    assert captured["max_tool_rounds"] == 4
 
 
 def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):

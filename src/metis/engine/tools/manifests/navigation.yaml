@@ -1,0 +1,47 @@
+schema_version: 1
+name: navigation
+title: Source navigation
+description: Local read-only source navigation tools used to collect deterministic evidence.
+implementation: metis.engine.tools.static_tools:StaticToolRunner
+visibility: public
+status: active
+default_enabled: true
+contracts:
+  model: docs/tools/navigation.md
+capabilities:
+  - id: navigation.grep
+    name: grep
+    title: Grep source
+    description: Search source text with a regular expression under the codebase root.
+    surfaces: [orchestration]
+    domains: [triage_evidence]
+    provider: static
+    operation: grep
+    status: active
+  - id: navigation.find_name
+    name: find_name
+    title: Find file by name
+    description: Find files whose basename exactly matches a requested name.
+    surfaces: [orchestration]
+    domains: [triage_evidence]
+    provider: static
+    operation: find_name
+    status: active
+  - id: navigation.cat
+    name: cat
+    title: Read file
+    description: Read a source file under the codebase root.
+    surfaces: [orchestration]
+    domains: [triage_evidence]
+    provider: static
+    operation: cat
+    status: active
+  - id: navigation.sed
+    name: sed
+    title: Read line window
+    description: Read a bounded line window from a source file under the codebase root.
+    surfaces: [orchestration]
+    domains: [triage_evidence]
+    provider: static
+    operation: sed
+    status: active

@@ -11,6 +11,15 @@ from metis.cli import entry
 from metis.cli import command_registry
 
 
+def test_configure_enabled_tools_defaults_to_navigation_when_unset():
+    args = SimpleNamespace(tools=None)
+    configure_enabled_tools = getattr(entry, "_configure_enabled_tools")
+
+    configure_enabled_tools(args, {})
+
+    assert args.enabled_tools == {"navigation"}
+
+
 def test_configure_enabled_tools_uses_config_when_cli_absent():
     args = SimpleNamespace(tools=None)
 

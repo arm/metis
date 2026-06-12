@@ -1,0 +1,24 @@
+schema_version: 1
+name: tree_sitter
+title: Tree-sitter analysis
+description: Structural source-code analysis based on tree-sitter parse trees.
+visibility: public
+status: planned
+default_enabled: false
+contracts:
+  model: docs/tools/tree-sitter.md
+capabilities:
+  - id: tree_sitter.scope
+    name: tree_sitter.scope
+    title: Resolve syntactic scope
+    description: Identify the enclosing syntactic scope and local symbols around a file location.
+    surfaces: [orchestration, context_provider]
+    domains: [triage_evidence, review_context]
+    status: planned
+  - id: tree_sitter.query
+    name: tree_sitter.query
+    title: Run tree-sitter query
+    description: Run a bounded tree-sitter query against a supported source file.
+    surfaces: [model_tool, orchestration]
+    domains: [navigation, review_context]
+    status: planned

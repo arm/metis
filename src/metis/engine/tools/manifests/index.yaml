@@ -1,0 +1,48 @@
+schema_version: 1
+name: index
+title: Vector index
+description: Vector-index-backed code and documentation retrieval.
+implementation: metis.engine.tools.index:IndexTool
+visibility: public
+status: active
+default_enabled: false
+contracts:
+  model: package://metis.engine.tools.contracts/index.md
+config:
+  model_tool:
+    max_rounds: 4
+  search:
+    max_top_k: 20
+    default_max_chars: 12000
+    max_chars: 24000
+capabilities:
+  - id: index.build
+    name: index.build
+    title: Build index
+    description: Build the vector index used by retrieval-backed commands.
+    surfaces: [cli_command, orchestration]
+    domains: [indexing]
+    status: active
+  - id: index.update
+    name: index.update
+    title: Update index
+    description: Incrementally update the vector index from a patch.
+    surfaces: [cli_command, orchestration]
+    domains: [indexing]
+    status: active
+  - id: index.retrieve
+    name: index.retrieve
+    title: Retrieve index context
+    description: Retrieve relevant code and documentation context for a query.
+    surfaces: [context_provider, orchestration]
+    domains: [ask_context, review_context, triage_context]
+    status: active
+  - id: index.search
+    name: index_search
+    title: Search index
+    description: Model-callable retrieval over indexed code and documentation.
+    surfaces: [model_tool]
+    domains: [ask_context, review_context, triage_context]
+    provider: index
+    operation: search
+    status: active

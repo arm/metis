@@ -62,7 +62,8 @@ Options:
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
-    --tools index|all|none     Enable optional engine addons.
+    --tools index,navigation|all|none
+                               Enable optional engine tools.
     --ignore-index             Compatibility no-op retained for existing scripts.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).

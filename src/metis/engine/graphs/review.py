@@ -170,6 +170,8 @@ class ReviewGraph:
         llama_query_model,
         max_token_length,
         chat_model_kwargs: dict[str, Any] | None = None,
+        model_tools: tuple[Any, ...] = (),
+        model_tool_max_rounds: int | None = None,
     ):
         self.llm_provider = llm_provider
         self.plugin_config = plugin_config
@@ -178,6 +180,8 @@ class ReviewGraph:
         self.llama_query_model = llama_query_model
         self.max_token_length = max_token_length
         self.chat_model_kwargs = chat_model_kwargs or {}
+        self.model_tools = tuple(model_tools or ())
+        self.model_tool_max_rounds = model_tool_max_rounds
         self._schema_prompt_section = review_schema_prompt()
 
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
@@ -207,6 +211,8 @@ class ReviewGraph:
                 final_keep_message="returning no findings for this chunk",
                 response_model=ReviewResponseModel,
                 chat_model_kwargs=self.chat_model_kwargs,
+                model_tools=self.model_tools,
+                max_tool_rounds=self.model_tool_max_rounds,
             )
         )
 

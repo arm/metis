@@ -409,7 +409,7 @@ def main():
     parser.add_argument(
         "--tools",
         type=str,
-        help="Comma-separated engine addons to enable, e.g. index or all.",
+        help="Comma-separated engine tools, e.g. index,navigation, all, or none. Defaults to navigation.",
     )
 
     args = parser.parse_args()
