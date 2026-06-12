@@ -20,13 +20,10 @@ def test_chroma_backend_indexing(tmp_path):
     os.makedirs(chroma_dir, exist_ok=True)
 
     runtime = {
-        "llm_api_key": "test-key",
         "max_workers": 2,
         "max_token_length": 2048,
         "llama_query_model": "gpt-test",
         "similarity_top_k": 5,
-        "code_embedding_model": "test-code-embed",
-        "docs_embedding_model": "test-docs-embed",
         "enabled_tools": {"index"},
     }
 
@@ -38,18 +35,11 @@ def test_chroma_backend_indexing(tmp_path):
         query_config=runtime,
     )
 
-    class _Provider:
-        def get_embed_model_code(self, *, callback_manager=None):
-            return embed
-
-        def get_embed_model_docs(self, *, callback_manager=None):
-            return embed
-
     engine = MetisEngine(
         codebase_path="tests/data",
         vector_backend=backend,
         language_plugin="c",
-        llm_provider=_Provider(),
+        llm_provider=object(),
         **runtime,
     )
 
@@ -117,10 +107,12 @@ def test_chroma_store_reset_recreates_collections(tmp_path):
     assert client.get_or_create_collection.call_count == 4
 
 
-def test_build_chroma_backend_receives_full_runtime_config(tmp_path):
-    base_url = "https://example.test/openai/v1"
+def test_build_chroma_backend_receives_retriever_query_config(tmp_path):
     runtime = {
-        "openai_api_base": base_url,
+        "llm_provider_name": "openai",
+        "llm_provider": {"api_key": "secret", "model": "gpt-test"},
+        "llama_query_model": "gpt-test",
+        "chat_model_kwargs": {"reasoning_effort": "low"},
         "similarity_top_k": 7,
     }
     embed = MockEmbedding(embed_dim=8)
@@ -130,5 +122,8 @@ def test_build_chroma_backend_receives_full_runtime_config(tmp_path):
 
     backend = build_chroma_backend(_Args(), runtime, embed, embed)
 
-    assert backend.query_config is runtime
-    assert backend.query_config["openai_api_base"] == base_url
+    assert backend.query_config == {
+        "llama_query_model": "gpt-test",
+        "chat_model_kwargs": {"reasoning_effort": "low"},
+        "similarity_top_k": 7,
+    }

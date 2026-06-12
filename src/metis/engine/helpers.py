@@ -7,14 +7,27 @@ import os
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
+from metis.chat_model_options import merge_chat_model_kwargs
+
 logger = logging.getLogger("metis")
 
 
-def summarize_changes(llm_provider, file_path, issues, summary_prompt, callbacks=None):
+def summarize_changes(
+    llm_provider,
+    file_path,
+    issues,
+    summary_prompt,
+    *,
+    model=None,
+    chat_model_kwargs=None,
+    callbacks=None,
+):
     try:
-        kwargs = {}
-        if callbacks is not None:
-            kwargs["callbacks"] = callbacks
+        kwargs = merge_chat_model_kwargs(
+            chat_model_kwargs,
+            model=model,
+            callbacks=callbacks,
+        )
         chat = llm_provider.get_chat_model(**kwargs)
         prompt_tmpl = ChatPromptTemplate.from_messages(
             [("system", "{system}"), ("user", "{input}")]

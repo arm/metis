@@ -25,6 +25,7 @@ from rich.progress import (
 from metis.engine.options import ReviewOptions
 from .exporters import export_csv, export_html, export_sarif
 from metis.sarif.utils import create_fingerprint
+from metis.vector_store.retrievers import retriever_query_config
 
 try:
     METIS_VERSION = importlib.metadata.version("metis")
@@ -639,6 +640,7 @@ def build_pg_backend(args, runtime, embed_model_code, embed_model_docs, quiet=Fa
         embed_model_code=embed_model_code,
         embed_model_docs=embed_model_docs,
         embed_dim=runtime["embed_dim"],
+        query_config=retriever_query_config(runtime),
         hnsw_kwargs=runtime.get("hnsw_kwargs", {}),
     )
 
@@ -650,5 +652,5 @@ def build_chroma_backend(args, runtime, embed_model_code, embed_model_docs):
         persist_dir=args.chroma_dir,
         embed_model_code=embed_model_code,
         embed_model_docs=embed_model_docs,
-        query_config=runtime,
+        query_config=retriever_query_config(runtime),
     )

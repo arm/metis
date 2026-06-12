@@ -9,10 +9,18 @@ from metis.engine import MetisEngine
 
 
 def _build_engine(tmp_path, dummy_backend, dummy_llm):
+    class _EmbeddingProvider:
+        def get_embed_model_code(self, **_kwargs):
+            return object()
+
+        def get_embed_model_docs(self, **_kwargs):
+            return object()
+
     return MetisEngine(
         codebase_path=str(tmp_path),
         vector_backend=dummy_backend,
         llm_provider=dummy_llm,
+        embedding_provider=_EmbeddingProvider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",

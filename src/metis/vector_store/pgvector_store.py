@@ -10,6 +10,7 @@ from metis.exceptions import (
 )
 from metis.vector_store.base import BaseVectorStore
 from metis.vector_store.retrievers import LlamaIndexNodeRetriever, QueryAnswerRetriever
+from metis.vector_store.retrievers import query_chat_model_kwargs
 from llama_index.vector_stores.postgres import PGVectorStore
 from sqlalchemy.engine.url import make_url
 
@@ -27,6 +28,7 @@ class PGVectorStoreImpl(BaseVectorStore):
         embed_model_code,
         embed_model_docs,
         embed_dim,
+        query_config=None,
         hnsw_kwargs=None,
     ):
         self.connection_string = connection_string
@@ -34,6 +36,7 @@ class PGVectorStoreImpl(BaseVectorStore):
         self.embed_model_code = embed_model_code
         self.embed_model_docs = embed_model_docs
         self.embed_dim = embed_dim
+        self.query_config = query_config or {}
         self.hnsw_kwargs = hnsw_kwargs or {}
         self._initialized = False
 
@@ -101,9 +104,10 @@ class PGVectorStoreImpl(BaseVectorStore):
                 embed_model=self.embed_model_docs,
                 callback_manager=callback_manager,
             )
-            chat_model_kwargs = {"response_format": None}
-            if callbacks:
-                chat_model_kwargs["callbacks"] = callbacks
+            chat_model_kwargs = query_chat_model_kwargs(
+                self.query_config,
+                callbacks=callbacks,
+            )
             retriever_code = QueryAnswerRetriever(
                 LlamaIndexNodeRetriever(
                     index_code.as_retriever(similarity_top_k=similarity_top_k)

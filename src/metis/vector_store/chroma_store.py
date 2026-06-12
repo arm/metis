@@ -14,6 +14,7 @@ from metis.vector_store.base import BaseVectorStore
 from metis.vector_store.retrievers import (
     ChromaCollectionRetriever,
     QueryAnswerRetriever,
+    query_chat_model_kwargs,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,10 @@ class ChromaStore(BaseVectorStore):
     ):
         try:
             top_k = similarity_top_k or self.query_config.get("similarity_top_k", 5)
-            chat_model_kwargs = {"response_format": None}
-            if callbacks:
-                chat_model_kwargs["callbacks"] = callbacks
+            chat_model_kwargs = query_chat_model_kwargs(
+                self.query_config,
+                callbacks=callbacks,
+            )
             retriever_code = QueryAnswerRetriever(
                 ChromaCollectionRetriever(
                     self.collection_code,

@@ -52,18 +52,25 @@ def dummy_backend():
 def dummy_llm():
     llm = Mock()
     llm.get_chat_model.return_value = MagicMock()
-    llm.get_embed_model_code.return_value = Mock()
-    llm.get_embed_model_docs.return_value = Mock()
     return llm
 
 
 @pytest.fixture
-def engine(dummy_backend, dummy_llm):
+def dummy_embedding_provider():
+    provider = Mock()
+    provider.get_embed_model_code.return_value = Mock()
+    provider.get_embed_model_docs.return_value = Mock()
+    return provider
+
+
+@pytest.fixture
+def engine(dummy_backend, dummy_llm, dummy_embedding_provider):
     return MetisEngine(
         codebase_path="./tests/data",
         vector_backend=dummy_backend,
         language_plugin="c",
         llm_provider=dummy_llm,
+        embedding_provider=dummy_embedding_provider,
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -78,6 +85,13 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run tests marked with @pytest.mark.postgres",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "postgres: tests that require a local Postgres service",
     )
 
 

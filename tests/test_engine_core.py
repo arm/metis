@@ -14,6 +14,13 @@ from metis.exceptions import (
 from metis.usage import UsageRuntime
 
 
+def _embedding_provider(code_embedding_model=None, docs_embedding_model=None):
+    provider = Mock()
+    provider.get_embed_model_code.return_value = code_embedding_model or Mock()
+    provider.get_embed_model_docs.return_value = docs_embedding_model or Mock()
+    return provider
+
+
 def test_supported_languages():
     langs = MetisEngine.supported_languages()
     assert "c" in langs
@@ -39,6 +46,7 @@ def test_init_and_get_retrievers_raises_on_missing_backend():
     engine = MetisEngine(
         vector_backend=bad_backend,
         llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -95,6 +103,7 @@ def test_init_and_get_retrievers_is_thread_safe():
     engine = MetisEngine(
         vector_backend=backend,
         llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
         max_workers=4,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -118,44 +127,10 @@ def test_init_and_get_retrievers_is_thread_safe():
     backend.get_retrievers.assert_called_once()
 
 
-def test_engine_builds_embed_models_lazily_with_usage_callback_manager():
+def test_index_context_builds_embed_models_lazily_with_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    llm_provider = Mock()
-    code_embed_model = Mock()
-    docs_embed_model = Mock()
-    llm_provider.get_embed_model_code.return_value = code_embed_model
-    llm_provider.get_embed_model_docs.return_value = docs_embed_model
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=llm_provider,
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools={"index"},
-    )
-
-    llm_provider.get_embed_model_code.assert_not_called()
-    llm_provider.get_embed_model_docs.assert_not_called()
-
-    assert engine.get_embed_model_code() is code_embed_model
-    assert engine.get_embed_model_docs() is docs_embed_model
-    assert llm_provider.get_embed_model_code.call_args.kwargs == {
-        "callback_manager": engine.usage_runtime.hooks.callback_manager
-    }
-    assert llm_provider.get_embed_model_docs.call_args.kwargs == {
-        "callback_manager": engine.usage_runtime.hooks.callback_manager
-    }
-    assert backend.embed_model_code is code_embed_model
-    assert backend.embed_model_docs is docs_embed_model
-
-
-def test_engine_uses_separate_embedding_provider_when_supplied():
-    backend = Mock()
-    backend.init = Mock()
     llm_provider = Mock()
     embedding_provider = Mock()
     code_embed_model = Mock()
@@ -174,40 +149,32 @@ def test_engine_uses_separate_embedding_provider_when_supplied():
         enabled_tools={"index"},
     )
 
-    assert engine.embedding_provider is embedding_provider
-    assert engine.get_embed_model_code() is code_embed_model
-    assert engine.get_embed_model_docs() is docs_embed_model
-    llm_provider.get_embed_model_code.assert_not_called()
-    llm_provider.get_embed_model_docs.assert_not_called()
+    embedding_provider.get_embed_model_code.assert_not_called()
+    embedding_provider.get_embed_model_docs.assert_not_called()
 
-
-def test_engine_defaults_embedding_provider_to_llm_provider():
-    backend = Mock()
-    llm_provider = Mock()
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=llm_provider,
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
+    assert engine.index_context.get_embedding_models() == (
+        code_embed_model,
+        docs_embed_model,
     )
-
-    assert engine.embedding_provider is llm_provider
+    assert embedding_provider.get_embed_model_code.call_args.kwargs == {
+        "callback_manager": engine.usage_runtime.hooks.callback_manager
+    }
+    assert embedding_provider.get_embed_model_docs.call_args.kwargs == {
+        "callback_manager": engine.usage_runtime.hooks.callback_manager
+    }
+    assert backend.embed_model_code is code_embed_model
+    assert backend.embed_model_docs is docs_embed_model
 
 
 def test_create_retrievers_passes_usage_callback_manager():
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
 
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -232,8 +199,6 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
     llm_provider.get_chat_model.return_value = Mock(with_structured_output=Mock())
 
     engine = MetisEngine(
@@ -278,31 +243,31 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
         codebase_path=str(tmp_path),
         vector_backend=backend,
         llm_provider=llm_provider,
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
         usage_runtime=runtime,
+        enabled_tools={"index"},
     )
 
     assert engine.usage_runtime is runtime
-    assert engine.get_embed_model_code() is backend.embed_model_code
-    assert engine.get_embed_model_docs() is backend.embed_model_docs
-    llm_provider.get_embed_model_code.assert_not_called()
-    llm_provider.get_embed_model_docs.assert_not_called()
+    assert engine.index_context.get_embedding_models() == (
+        backend.embed_model_code,
+        backend.embed_model_docs,
+    )
+    llm_provider.get_chat_model.assert_not_called()
 
 
 def test_engine_exposes_focused_services_without_compat_aliases():
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
-
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -321,6 +286,7 @@ def test_engine_exposes_focused_services_without_compat_aliases():
     assert engine.review is not None
     assert engine.indexing is not None
     assert engine.indexing is engine.index_context.indexing
+    assert not hasattr(engine, "embedding_provider")
     assert not hasattr(engine, "review_service")
     assert not hasattr(engine, "indexing_service")
     assert results == [{"file": "a.py"}]
@@ -334,13 +300,12 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
     backend.reset_index = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
 
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
+    embedding_provider = _embedding_provider()
 
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
+        embedding_provider=embedding_provider,
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -358,6 +323,8 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
     monkeypatch.setattr("metis.engine.indexing_service.SimpleDirectoryReader", _Reader)
     engine.indexing.index_prepare_nodes()
 
+    embedding_provider.get_embed_model_code.assert_called_once()
+    embedding_provider.get_embed_model_docs.assert_called_once()
     backend.init.assert_called_once()
     backend.reset_index.assert_called_once()
 
@@ -367,13 +334,13 @@ def test_index_finalize_embeddings_delegates_node_writes_to_backend():
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.index_nodes = Mock()
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
+    code_embed_model = Mock()
+    docs_embed_model = Mock()
 
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(code_embed_model, docs_embed_model),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -387,8 +354,8 @@ def test_index_finalize_embeddings_delegates_node_writes_to_backend():
     backend.index_nodes.assert_called_once_with(
         ["code-node"],
         ["docs-node"],
-        embed_model_code=engine.get_embed_model_code(),
-        embed_model_docs=engine.get_embed_model_docs(),
+        embed_model_code=code_embed_model,
+        embed_model_docs=docs_embed_model,
         callback_manager=engine.usage_runtime.hooks.callback_manager,
     )
     assert engine._state.pending_nodes is None
@@ -399,13 +366,11 @@ def test_close_clears_retriever_cache_and_closes_backend():
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.close = Mock()
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
 
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -431,13 +396,10 @@ def test_disabled_index_tool_blocks_required_index_access():
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
     backend.close = Mock()
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
 
     engine = MetisEngine(
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",

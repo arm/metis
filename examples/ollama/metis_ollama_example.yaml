@@ -27,6 +27,11 @@ llm_provider:
   model: "llama3.1:8b" # for 8GB system
 #  model: "qwen3.5:9b" # for 16GB system
 #  model: "qwen3.6:35b-a3b" # for 24GB system
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "ollama"
+  base_url: "http://localhost:11434/v1"
   code_embedding_model: "nomic-embed-text:v1.5"
   docs_embedding_model: "nomic-embed-text:v1.5"
 

@@ -15,17 +15,15 @@ class EngineConfig:
     codebase_path: str
     vector_backend: Any
     llm_provider: Any
+    embedding_provider: Any | None
     usage_runtime: UsageRuntime
     plugin_config: dict[str, Any]
     custom_prompt_text: str | None
     custom_guidance_precedence: str
-    embed_model_code: Any
-    embed_model_docs: Any
-    engine_get_embed_model_code: Any
-    engine_get_embed_model_docs: Any
     max_workers: int
     max_token_length: int
     llama_query_model: str
+    chat_model_kwargs: dict[str, Any]
     similarity_top_k: int
     doc_chunk_size: int
     doc_chunk_overlap: int

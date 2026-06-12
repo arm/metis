@@ -8,6 +8,8 @@ from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
+from metis.chat_model_options import merge_chat_model_kwargs
+
 
 @dataclass(frozen=True, slots=True)
 class JsonPromptRequest:
@@ -28,22 +30,6 @@ class JsonPromptRequest:
     chat_model_kwargs: dict[str, Any] | None = None
 
 
-def _chat_model_kwargs(
-    usage_runtime=None, *, reasoning_effort=None, chat_model_kwargs=None
-):
-    kwargs = {}
-    if usage_runtime is not None:
-        kwargs.update(usage_runtime.hooks.chat_model_kwargs())
-    if chat_model_kwargs:
-        kwargs.update(chat_model_kwargs)
-    if (
-        reasoning_effort
-        and str(reasoning_effort).lower() not in "none off false default".split()
-    ):
-        kwargs["reasoning_effort"] = reasoning_effort
-    return kwargs
-
-
 class JsonPromptRunner:
     def __init__(self, llm_provider, usage_runtime=None):
         self._llm_provider = llm_provider
@@ -53,18 +39,21 @@ class JsonPromptRunner:
         last_failure = "unknown failure"
         for attempt in range(2):
             try:
-                params: dict[str, Any] = {"model": request.model}
+                usage_chat_kwargs = (
+                    self._usage_runtime.hooks.chat_model_kwargs()
+                    if self._usage_runtime is not None
+                    else None
+                )
+                params = merge_chat_model_kwargs(
+                    request.chat_model_kwargs,
+                    usage_chat_kwargs,
+                    model=request.model,
+                    reasoning_effort=request.reasoning_effort,
+                )
                 if request.max_tokens is not None:
                     params["max_tokens"] = request.max_tokens
                 if request.temperature is not None:
                     params["temperature"] = request.temperature
-                params.update(
-                    _chat_model_kwargs(
-                        self._usage_runtime,
-                        reasoning_effort=request.reasoning_effort,
-                        chat_model_kwargs=request.chat_model_kwargs,
-                    )
-                )
                 chat = self._llm_provider.get_chat_model(**params)
                 prompt = ChatPromptTemplate.from_messages(
                     [

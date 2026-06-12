@@ -15,12 +15,6 @@ class _DummyProvider:
     def __init__(self, _config):
         pass
 
-    def get_embed_model_code(self, **_kwargs):
-        return object()
-
-    def get_embed_model_docs(self, **_kwargs):
-        return object()
-
 
 class _DummyEngine:
     def __init__(self, codebase_path=".", **_kwargs):
@@ -109,13 +103,20 @@ def _setup_cli(monkeypatch, tmp_path):
         "load_runtime_config",
         lambda enable_psql=False: {
             "llm_provider_name": "dummy",
+            "llm_provider": {"model": "gpt-test"},
+            "embedding_provider_raw_config": {
+                "name": "ollama",
+                "code_embedding_model": "embed-code-test",
+                "docs_embedding_model": "embed-docs-test",
+            },
             "max_workers": 2,
             "max_token_length": 2048,
             "llama_query_model": "gpt-test",
             "similarity_top_k": 3,
         },
     )
-    monkeypatch.setattr(entry, "get_provider", lambda _name: _DummyProvider)
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: _DummyProvider)
+    monkeypatch.setattr(entry, "get_embedding_provider", lambda _name: _DummyProvider)
     monkeypatch.setattr(entry, "build_chroma_backend", lambda *args, **kwargs: object())
     monkeypatch.setattr(entry, "build_pg_backend", lambda *args, **kwargs: object())
     monkeypatch.setattr(entry, "MetisEngine", _DummyEngine)
