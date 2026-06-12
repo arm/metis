@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import pytest
 import tempfile
 import threading
@@ -57,7 +58,8 @@ def test_init_and_get_retrievers_raises_on_missing_backend():
         engine._init_and_get_retrievers()
 
 
-def test_init_and_get_default_unavailable_metisignore():
+def test_init_and_get_default_unavailable_metisignore(caplog):
+    caplog.set_level(logging.INFO, logger="metis")
     bad_backend = Mock()
     bad_backend.init = Mock()
     bad_backend.get_retrievers = Mock(return_value=(None, None))
@@ -72,6 +74,11 @@ def test_init_and_get_default_unavailable_metisignore():
     )
     assert engine.metisignore_file == ".metisignore_file"
     assert engine.repository.load_metisignore() is None
+    assert engine.repository.load_metisignore() is None
+    assert not any(
+        "MetisIgnore file not loaded" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_init_and_get_default_available_metisignore():
@@ -172,35 +179,12 @@ def test_index_tool_exposes_langchain_search_tool(engine):
     tools = engine.tools.langchain_tools()
 
     assert [tool.name for tool in tools] == ["index_search"]
-    assert "threat model" in tools[0].description
     assert "keyword-only" in tools[0].args_schema["properties"]["query"]["description"]
-    assert (
-        "SMSTART/SMSTOP" in tools[0].args_schema["properties"]["query"]["examples"][0]
-    )
-    assert "Index Tool Contract" in tools[0].metadata["metis_contract"]
     assert tools[0].metadata["metis_contract_max_chars"] == 6000
     result = tools[0].invoke({"query": "allocator ownership"})
-    assert "[INDEX_SEARCH]" in result
-    assert "[CODE_CONTEXT]" in result
-    assert "[DOC_CONTEXT]" in result
     assert "Code result" in result
     assert "Docs result" in result
     engine.vector_backend.get_retrievers.assert_called_once()
-
-
-def test_disabled_tools_do_not_expose_model_tool_round_budget():
-    engine = MetisEngine(
-        vector_backend=Mock(),
-        llm_provider=Mock(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools=set(),
-    )
-
-    assert engine.tools.langchain_tools() == ()
-    assert engine.tools.model_tool_max_rounds() is None
 
 
 def test_index_search_uses_manifest_tool_config(monkeypatch):

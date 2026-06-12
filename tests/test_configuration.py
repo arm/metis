@@ -39,6 +39,9 @@ def test_load_runtime_config_accepts_chat_provider_without_embeddings(
     config_path = _write_config(
         tmp_path,
         """
+metis_engine:
+  model_tools:
+    max_rounds: 9
 llm_provider:
   name: openai
   model: gpt-test
@@ -61,29 +64,10 @@ query:
         "model": "gpt-test",
     }
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
-    assert runtime["model_tool_max_rounds"] == 6
+    assert runtime["model_tool_max_rounds"] == 9
     assert "embedding_provider" not in runtime
     assert runtime["embedding_provider_raw_config"] is None
     assert "llm_api_key" not in runtime
-
-
-def test_load_runtime_config_accepts_model_tool_round_budget(tmp_path, monkeypatch):
-    config_path = _write_config(
-        tmp_path,
-        """
-metis_engine:
-  model_tools:
-    max_rounds: 9
-llm_provider:
-  name: openai
-  model: gpt-test
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["model_tool_max_rounds"] == 9
 
 
 def test_build_embedding_provider_config_resolves_openai_embedding_provider(

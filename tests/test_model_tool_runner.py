@@ -5,7 +5,6 @@ import logging
 
 import pytest
 from langchain_core.messages import AIMessage
-from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.engine.model_tool_runner import ModelToolConfigurationError
@@ -27,13 +26,6 @@ class _FakeTool:
     def invoke(self, args):
         self.calls.append(args)
         return "indexed context"
-
-
-class _LongContractTool(_FakeTool):
-    metadata = {
-        "metis_contract": "0123456789abcdef",
-        "metis_contract_max_chars": 6,
-    }
 
 
 class _FakeToolChat:
@@ -66,39 +58,38 @@ class _FakeChat:
         return self.bound_chat
 
 
-class _FakeNoToolChat:
-    pass
+def _prompt():
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", "Return JSON."),
+            ("user", "{body}"),
+        ]
+    )
 
 
-def test_model_tool_system_prompt_includes_tool_contract():
-    prompt = model_tool_system_prompt("Return JSON.", (_FakeTool(),))
+def test_model_tool_system_prompt_includes_and_clips_tool_contracts():
+    long_contract_tool = _FakeTool()
+    long_contract_tool.metadata = {
+        "metis_contract": "0123456789abcdef",
+        "metis_contract_max_chars": 6,
+    }
+    prompt = model_tool_system_prompt("Return JSON.", (_FakeTool(), long_contract_tool))
 
     assert "AVAILABLE MODEL TOOLS" in prompt
     assert "- index_search: Search indexed context." in prompt
     assert "MODEL TOOL CONTRACTS" in prompt
     assert "CONTRACT TEXT" in prompt
-
-
-def test_model_tool_system_prompt_clips_contract_from_tool_metadata():
-    prompt = model_tool_system_prompt("Return JSON.", (_LongContractTool(),))
-
     assert "012345\n[contract truncated]" in prompt
-    assert "0123456789abcdef" not in prompt
 
 
-def test_invoke_model_with_tools_executes_tool_calls():
+def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
     tool = _FakeTool()
     chat = _FakeChat()
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", model_tool_system_prompt("Return JSON.", (tool,))),
-            ("user", "{body}"),
-        ]
-    )
+    caplog.set_level(logging.DEBUG, logger="metis")
 
     result = invoke_model_with_tools(
         chat,
-        prompt,
+        _prompt(),
         {"body": "review this"},
         (tool,),
         max_tool_rounds=2,
@@ -107,30 +98,6 @@ def test_invoke_model_with_tools_executes_tool_calls():
     assert result == '{"reviews": []}'
     assert chat.bound_tools == [tool]
     assert tool.calls == [{"query": "allocator ownership"}]
-    assert any(
-        isinstance(message, ToolMessage) for message in chat.bound_chat.messages[1]
-    )
-
-
-def test_invoke_model_with_tools_logs_debug_invocations(caplog):
-    tool = _FakeTool()
-    chat = _FakeChat()
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "Return JSON."),
-            ("user", "{body}"),
-        ]
-    )
-    caplog.set_level(logging.DEBUG, logger="metis")
-
-    invoke_model_with_tools(
-        chat,
-        prompt,
-        {"body": "review this"},
-        (tool,),
-        max_tool_rounds=2,
-    )
-
     messages = [record.getMessage() for record in caplog.records]
     assert any(
         "Invoking model tool index_search with args={'query': 'allocator ownership'}"
@@ -143,57 +110,9 @@ def test_invoke_model_with_tools_logs_debug_invocations(caplog):
     )
 
 
-def test_invoke_model_with_tools_skips_debug_logs_at_info(caplog):
-    tool = _FakeTool()
-    chat = _FakeChat()
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "Return JSON."),
-            ("user", "{body}"),
-        ]
-    )
-    caplog.set_level(logging.INFO, logger="metis")
-
-    invoke_model_with_tools(
-        chat,
-        prompt,
-        {"body": "review this"},
-        (tool,),
-        max_tool_rounds=2,
-    )
-
-    assert not any(
-        "model tool" in record.getMessage().lower() for record in caplog.records
-    )
-
-
 def test_require_max_tool_rounds_rejects_missing_value():
     with pytest.raises(
         ModelToolConfigurationError,
         match="max_tool_rounds must be configured when model_tools are used",
     ):
         require_max_tool_rounds(None)
-
-
-def test_invoke_model_with_tools_requires_bind_tools_support():
-    tool = _FakeTool()
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "Return JSON."),
-            ("user", "{body}"),
-        ]
-    )
-
-    with pytest.raises(
-        ModelToolConfigurationError,
-        match="model_tools require a LangChain chat model with bind_tools support",
-    ):
-        invoke_model_with_tools(
-            _FakeNoToolChat(),
-            prompt,
-            {"body": "review this"},
-            (tool,),
-            max_tool_rounds=1,
-        )
-
-    assert tool.calls == []

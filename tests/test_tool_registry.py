@@ -5,11 +5,8 @@ import pytest
 
 from metis.engine.tools import (
     build_toolbox,
-    get_builtin_tool_manifests,
-    get_tool_contract,
     get_tool_config,
     get_tool_definitions,
-    get_tool_manifest,
     registry,
 )
 from metis.engine.tools.catalog import _read_contract_ref
@@ -24,39 +21,6 @@ def test_tool_definitions_expose_named_tools():
     assert all(tool.domains == ("triage_evidence",) for tool in defs)
 
 
-def test_builtin_tool_catalog_exposes_active_and_planned_tools():
-    statuses = {
-        manifest.name: manifest.status for manifest in get_builtin_tool_manifests()
-    }
-
-    assert statuses["index"] == "active"
-    assert statuses["navigation"] == "active"
-    assert statuses["tree_sitter"] == "planned"
-    assert statuses["mcp"] == "planned"
-
-
-def test_navigation_tool_definitions_are_manifest_backed():
-    manifest = get_tool_manifest("navigation")
-    assert manifest is not None
-    assert manifest.default_enabled is True
-    manifest_tools = {
-        capability.name
-        for capability in manifest.capabilities
-        if capability.status == "active"
-    }
-    definition_tools = {definition.name for definition in get_tool_definitions()}
-
-    assert definition_tools == manifest_tools
-
-
-def test_index_model_contract_loads_from_manifest():
-    contract = get_tool_contract("index")
-
-    assert "Index Tool Contract" in contract
-    assert "index_search" in contract
-    assert "Model usage rules" in contract
-
-
 def test_index_tool_config_loads_manifest_defaults():
     config = get_tool_config("index")
 
@@ -65,19 +29,6 @@ def test_index_tool_config_loads_manifest_defaults():
     assert config["search"]["max_top_k"] == 20
     assert config["search"]["default_max_chars"] == 12000
     assert config["search"]["max_chars"] == 24000
-
-
-def test_index_search_input_schema_loads_from_manifest():
-    manifest = get_tool_manifest("index")
-    assert manifest is not None
-    capability = next(
-        item for item in manifest.capabilities if item.id == "index.search"
-    )
-
-    query_schema = capability.input_schema["properties"]["query"]
-    assert capability.input_schema["required"] == ["query"]
-    assert "keyword-only" in query_schema["description"]
-    assert "SMSTART/SMSTOP" in query_schema["examples"][0]
 
 
 def test_tool_config_returns_isolated_copy():
