@@ -31,6 +31,7 @@ class EngineConfig:
     review_code_include_paths: list[str]
     review_code_exclude_paths: list[str]
     enabled_tools: set[str]
+    model_tool_max_rounds: int
     language_registry: Any
     code_exts: set[str] = field(default_factory=set)
     ext_plugin_map: dict[str, Any] = field(default_factory=dict)

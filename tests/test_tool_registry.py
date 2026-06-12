@@ -60,7 +60,7 @@ def test_index_model_contract_loads_from_manifest():
 def test_index_tool_config_loads_manifest_defaults():
     config = get_tool_config("index")
 
-    assert config["model_tool"]["max_rounds"] == 4
+    assert "max_rounds" not in config["model_tool"]
     assert config["model_tool"]["max_contract_chars"] == 6000
     assert config["search"]["max_top_k"] == 20
     assert config["search"]["default_max_chars"] == 12000

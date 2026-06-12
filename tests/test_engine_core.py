@@ -184,6 +184,21 @@ def test_index_tool_exposes_langchain_search_tool(engine):
     engine.vector_backend.get_retrievers.assert_called_once()
 
 
+def test_disabled_tools_do_not_expose_model_tool_round_budget():
+    engine = MetisEngine(
+        vector_backend=Mock(),
+        llm_provider=Mock(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools=set(),
+    )
+
+    assert engine.tools.langchain_tools() == ()
+    assert engine.tools.model_tool_max_rounds() is None
+
+
 def test_index_search_uses_manifest_tool_config(monkeypatch):
     class _Doc:
         def __init__(self, text):
@@ -290,7 +305,7 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
         == engine.usage_runtime.hooks.callbacks
     )
     assert [tool.name for tool in captured["model_tools"]] == ["index_search"]
-    assert captured["max_tool_rounds"] == 4
+    assert captured["max_tool_rounds"] == 6
 
 
 def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):

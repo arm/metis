@@ -12,7 +12,8 @@ Current active capabilities:
 
 Model-callable input:
 
-- `query`: natural-language context question.
+- `query`: short natural-language context question. Include important symbols,
+  APIs, files, or architecture terms as anchors; do not dump unrelated keywords.
 - `top_k`: optional nearest-neighbor count, capped by the index tool manifest.
 - `max_chars`: optional output budget, capped by the index tool manifest.
 
@@ -21,12 +22,21 @@ Manifest configuration:
 ```yaml
 config:
   model_tool:
-    max_rounds: 4
     max_contract_chars: 6000
   search:
     max_top_k: 20
     default_max_chars: 12000
     max_chars: 24000
+```
+
+`max_contract_chars` is per-tool prompt-budget metadata. The model tool-call
+round budget is shared across all model-callable tools in one model call and is
+configured in `metis.yaml`:
+
+```yaml
+metis_engine:
+  model_tools:
+    max_rounds: 6
 ```
 
 Model-callable output:
@@ -41,6 +51,8 @@ Model interpretation rules:
 - Use indexed documentation to understand the codebase's threat model,
   deployment assumptions, trust boundaries, and non-goals before deciding
   whether a generic security issue is relevant to this project.
+- Write queries as human-readable questions that state the intent, then include
+  the most important identifiers or domain terms as anchors.
 - If retrieved documentation changes whether an issue is relevant, cite the
   documented assumption or boundary alongside the source-code evidence.
 - Treat retrieved passages as context candidates, not proof by themselves.

@@ -19,7 +19,9 @@ from .selection import INDEX_TOOL, tool_enabled
 class IndexSearchInput(BaseModel):
     query: str = Field(
         description=(
-            "Natural-language search query for indexed code and documentation context."
+            "Short natural-language context question. Include important symbols, "
+            "APIs, files, or architecture terms as anchors instead of dumping "
+            "only keywords."
         )
     )
     top_k: int | None = Field(
@@ -98,10 +100,8 @@ class IndexTool:
             ),
         )
 
-    def model_tool_max_rounds(self) -> int | None:
-        if not self.enabled or _index_search_model_tool_capability() is None:
-            return None
-        return _positive_int(_index_model_tool_config().get("max_rounds"))
+    def has_model_tools(self) -> bool:
+        return self.enabled and _index_search_model_tool_capability() is not None
 
     def clear_retriever_cache(self) -> None:
         if self.enabled:

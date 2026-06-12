@@ -10,7 +10,6 @@ contracts:
   model: package://metis.engine.tools.contracts/index.md
 config:
   model_tool:
-    max_rounds: 4
     max_contract_chars: 6000
   search:
     max_top_k: 20

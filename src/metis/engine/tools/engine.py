@@ -12,13 +12,16 @@ from .index import IndexTool, build_index_tool
 
 @dataclass(frozen=True, slots=True)
 class EngineTools:
+    config: EngineConfig
     index: IndexTool
 
     def langchain_tools(self) -> tuple[object, ...]:
         return (*self.index.langchain_tools(),)
 
     def model_tool_max_rounds(self) -> int | None:
-        return self.index.model_tool_max_rounds()
+        if not self.index.has_model_tools():
+            return None
+        return self.config.model_tool_max_rounds
 
     def close(self) -> None:
         self.index.close()
@@ -30,9 +33,10 @@ def build_engine_tools(
     repository: EngineRepository,
 ) -> EngineTools:
     return EngineTools(
+        config=config,
         index=build_index_tool(
             config,
             state,
             repository,
-        )
+        ),
     )

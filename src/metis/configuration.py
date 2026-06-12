@@ -91,6 +91,13 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "review_code_exclude_paths", []
     )
     runtime["enabled_tools"] = engine_cfg.get("tools")
+    model_tools_cfg = engine_cfg.get("model_tools") or {}
+    if not isinstance(model_tools_cfg, dict):
+        model_tools_cfg = {}
+    runtime["model_tool_max_rounds"] = _positive_int(
+        model_tools_cfg.get("max_rounds"),
+        fallback=6,
+    )
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     query_cfg = cfg.get("query", {})
@@ -154,6 +161,16 @@ def _get_provider_cls(provider_name: str, section: str) -> type:
         return get_embedding_provider(provider_name)
     except ValueError as exc:
         raise ValueError(f"Unsupported {section} provider: {provider_name}") from exc
+
+
+def _positive_int(value: object, *, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed <= 0:
+        return fallback
+    return parsed
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

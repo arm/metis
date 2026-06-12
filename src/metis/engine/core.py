@@ -76,6 +76,10 @@ class MetisEngine:
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
         self.enabled_tools = parse_engine_tools(kwargs.get("enabled_tools"))
+        self.model_tool_max_rounds = _positive_int(
+            kwargs.get("model_tool_max_rounds"),
+            fallback=6,
+        )
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -107,6 +111,7 @@ class MetisEngine:
             review_code_include_paths=list(self.review_code_include_paths),
             review_code_exclude_paths=list(self.review_code_exclude_paths),
             enabled_tools=self.enabled_tools,
+            model_tool_max_rounds=self.model_tool_max_rounds,
             language_registry=self.language_registry,
             code_exts=self.code_exts,
         )
@@ -280,3 +285,13 @@ class MetisEngine:
         self.tools.index.clear_retriever_cache()
         self._triage_service.close()
         self.tools.close()
+
+
+def _positive_int(value: object, *, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed <= 0:
+        return fallback
+    return parsed

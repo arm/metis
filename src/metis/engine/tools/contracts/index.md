@@ -12,7 +12,8 @@ Active capabilities:
 
 Model-callable input:
 
-- `query`: natural-language context question.
+- `query`: short natural-language context question. Include important symbols,
+  APIs, files, or architecture terms as anchors; do not dump unrelated keywords.
 - `top_k`: optional nearest-neighbor count, capped by the index tool manifest.
 - `max_chars`: optional output budget, capped by the index tool manifest.
 
@@ -28,6 +29,8 @@ Model usage rules:
 - Use `index_search` when the prompt needs broader project context, related
   files, definitions, APIs, design intent, threat model, security assumptions,
   or documentation that is not present in the immediate snippet.
+- Write queries as human-readable questions that state the intent, then include
+  the most important identifiers or domain terms as anchors.
 - For security review, use indexed documentation to understand the codebase's
   threat model, deployment assumptions, trust boundaries, and non-goals before
   deciding whether a generic issue is relevant to this project.

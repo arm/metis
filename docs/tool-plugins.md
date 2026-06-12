@@ -58,10 +58,14 @@ Required fields:
 Use `config` for tool-owned runtime defaults. Do not put these constants in
 Python unless they are true code fallbacks.
 
-For model-callable tools, put model-loop settings under `config.model_tool`.
-For example, `max_rounds` controls how many tool-call turns the model may take
-before it must produce a final answer, and `max_contract_chars` controls how
-much of the model-facing contract is injected into the system prompt.
+For model-callable tools, put per-tool model settings under `config.model_tool`.
+For example, `max_contract_chars` controls how much of that tool's model-facing
+contract is injected into the system prompt.
+
+Shared model-tool loop settings belong in `metis.yaml` under
+`metis_engine.model_tools`. For example, `max_rounds` controls how many
+tool-call turns the model may take across all enabled model-callable tools
+before it must produce a final answer.
 
 ## 3. Add the Contract
 
