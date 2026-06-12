@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class RustPlugin(ConfigBackedLanguagePlugin):
     NAME = "rust"
-    DEFAULT_EXTENSIONS = [".rs"]

@@ -8,4 +8,3 @@ class GoPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing Go-specific splitter and prompts."""
 
     NAME = "go"
-    DEFAULT_EXTENSIONS = [".go"]

@@ -1,0 +1,14 @@
+name: c
+aliases:
+- c
+extensions:
+- .c
+- .h
+filename_patterns: []
+implementation: metis.plugins.c_plugin:CPlugin
+config_resource: languages/c.yaml
+capabilities:
+  reachability_review: true
+  c_family_triage_evidence: true
+priority: 0
+prompt_profile: c_family

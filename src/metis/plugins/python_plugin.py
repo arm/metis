@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class PythonPlugin(ConfigBackedLanguagePlugin):
     NAME = "python"
-    DEFAULT_EXTENSIONS = [".py"]

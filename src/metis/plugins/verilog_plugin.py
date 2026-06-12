@@ -8,4 +8,3 @@ class VerilogPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing Verilog-specific splitter and prompts."""
 
     NAME = "verilog"
-    DEFAULT_EXTENSIONS = [".v", ".vh"]

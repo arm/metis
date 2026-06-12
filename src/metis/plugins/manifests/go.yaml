@@ -1,0 +1,10 @@
+name: go
+aliases:
+- go
+extensions:
+- .go
+filename_patterns: []
+implementation: metis.plugins.go_plugin:GoPlugin
+config_resource: languages/go.yaml
+capabilities: {}
+priority: 0

@@ -157,7 +157,17 @@ def _get_provider_cls(provider_name: str, section: str) -> type:
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):
-    return config_path_fallback("plugins.yaml", "metis.plugins", plugins_path)
+    if plugins_path is not None:
+        plugins_path = Path(plugins_path)
+        if not plugins_path.is_file():
+            raise FileNotFoundError(f"Config not found: {plugins_path}")
+        logger.info(f"Loading {plugins_path.name} from {plugins_path}")
+        return load_yaml(plugins_path)
+
+    resource = files("metis.plugins.config") / "global.yaml"
+    with as_file(resource) as real_path:
+        logger.info("Loading default plugin config")
+        return load_yaml(real_path)
 
 
 def load_metis_config(config_path: str | Path | None = None):

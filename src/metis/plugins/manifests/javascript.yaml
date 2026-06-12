@@ -1,0 +1,11 @@
+name: javascript
+aliases:
+- javascript
+extensions:
+- .js
+- .jsx
+filename_patterns: []
+implementation: metis.plugins.javascript_plugin:JavaScriptPlugin
+config_resource: languages/javascript.yaml
+capabilities: {}
+priority: 0

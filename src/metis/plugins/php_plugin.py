@@ -8,18 +8,3 @@ class PHPPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing PHP-specific splitter and prompts."""
 
     NAME = "php"
-    DEFAULT_EXTENSIONS = [
-        ".php",
-        ".phps",
-        ".phtm",
-        ".phtml",
-        ".phpt",
-        ".pht",
-        ".php2",
-        ".php3",
-        ".php4",
-        ".php5",
-        ".php6",
-        ".php7",
-        ".php8",
-    ]

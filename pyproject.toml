@@ -72,19 +72,6 @@ optional-dependencies.test = [
   "pytest-cov>=7.1.0",
 ]
 scripts.metis = "metis.cli.entry:main"
-entry-points."metis.plugins".aarch64_assembly = "metis.plugins.aarch64_assembly_plugin:AArch64AssemblyPlugin"
-entry-points."metis.plugins".c = "metis.plugins.c_plugin:CPlugin"
-entry-points."metis.plugins".cpp = "metis.plugins.cpp_plugin:CppPlugin"
-entry-points."metis.plugins".go = "metis.plugins.go_plugin:GoPlugin"
-entry-points."metis.plugins".javascript = "metis.plugins.javascript_plugin:JavaScriptPlugin"
-entry-points."metis.plugins".php = "metis.plugins.php_plugin:PHPPlugin"
-entry-points."metis.plugins".python = "metis.plugins.python_plugin:PythonPlugin"
-entry-points."metis.plugins".rust = "metis.plugins.rust_plugin:RustPlugin"
-entry-points."metis.plugins".systemverilog = "metis.plugins.systemverilog_plugin:SystemVerilogPlugin"
-entry-points."metis.plugins".tablegen = "metis.plugins.tb_plugin:TableGenPlugin"
-entry-points."metis.plugins".terraform = "metis.plugins.terraform_plugin:TerraformPlugin"
-entry-points."metis.plugins".typescript = "metis.plugins.typescript_plugin:TypeScriptPlugin"
-entry-points."metis.plugins".verilog = "metis.plugins.verilog_plugin:VerilogPlugin"
 entry-points."metis.providers"."anthropic.chat" = "metis.providers.anthropic:AnthropicProvider"
 entry-points."metis.providers"."azure_openai.chat" = "metis.providers.azure_openai:AzureOpenAIProvider"
 entry-points."metis.providers"."azure_openai.embedding" = "metis.providers.azure_openai:AzureOpenAIEmbeddingProvider"
@@ -104,7 +91,16 @@ entry-points."metis.providers"."vllm.embedding" = "metis.providers.vllm:VLLMEmbe
 [tool.setuptools]
 include-package-data = true
 package-data."metis.cli" = [ "report_template.html" ]
-package-data."metis.plugins" = [ "plugins.yaml" ]
+package-data."metis.plugins" = [
+  "config/*.yaml",
+  "languages/*.yaml",
+  "manifests/*.yaml",
+  "profiles/*.yaml",
+]
+package-data."metis.plugins.config" = [ "*.yaml" ]
+package-data."metis.plugins.languages" = [ "*.yaml" ]
+package-data."metis.plugins.manifests" = [ "*.yaml" ]
+package-data."metis.plugins.profiles" = [ "*.yaml" ]
 package-data."metis.schemas" = [ "*.json" ]
 package-data.metis = [ "metis.yaml" ]
 

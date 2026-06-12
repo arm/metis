@@ -159,6 +159,13 @@ class ReachabilityGraphCache:
         return [str(path) for path in files if self._supports_reachability_file(path)]
 
     def _supports_reachability_file(self, path) -> bool:
+        supports_reachability_file = getattr(
+            self._repository,
+            "supports_reachability_file",
+            None,
+        )
+        if callable(supports_reachability_file):
+            return bool(supports_reachability_file(str(path)))
         plugin = self._repository.get_plugin_for_path(str(path))
         supports = getattr(plugin, "supports_reachability_review", None)
         return bool(callable(supports) and supports())

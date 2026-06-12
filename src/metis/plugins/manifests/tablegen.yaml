@@ -1,0 +1,10 @@
+name: tablegen
+aliases:
+- tablegen
+extensions:
+- .td
+filename_patterns: []
+implementation: metis.plugins.tb_plugin:TableGenPlugin
+config_resource: languages/tablegen.yaml
+capabilities: {}
+priority: 0

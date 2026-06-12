@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class RubyPlugin(ConfigBackedLanguagePlugin):
     NAME = "ruby"
-    DEFAULT_EXTENSIONS = [".rb"]

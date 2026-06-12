@@ -55,7 +55,6 @@ class AArch64AssemblyPlugin(ConfigBackedLanguagePlugin):
     """Language plugin providing AArch64 assembly-specific prompts."""
 
     NAME = "aarch64_assembly"
-    DEFAULT_EXTENSIONS = [".s", ".S", ".asm", ".a64"]
 
     def get_triage_analyzer_factory(self):
         return None

@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import logging
 
+from metis.chat_model_options import merge_chat_model_kwargs
 from metis.configuration import load_plugin_config
 from metis.exceptions import PluginNotFoundError
-from metis.plugin_loader import discover_supported_language_names, load_plugins
-from metis.chat_model_options import merge_chat_model_kwargs
+from metis.plugins.registry import LanguagePluginRegistry
 from metis.reachability_settings import coerce_reachability_settings
 from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
@@ -84,19 +84,8 @@ class MetisEngine:
         self.custom_guidance_precedence = self.plugin_config.get(
             "general_prompts", {}
         ).get("custom_guidance_precedence", "")
-        self.plugins = load_plugins(self.plugin_config)
-
-        self.code_exts = set()
-        self.ext_plugin_map = {}
-        self.ext_pattern_plugin_map = []
-        for plugin in self.plugins:
-            for extension in plugin.get_supported_extensions():
-                lowered = extension.lower()
-                if "*" in lowered:
-                    self.ext_pattern_plugin_map.append((lowered, plugin))
-                    continue
-                self.code_exts.add(lowered)
-                self.ext_plugin_map[lowered] = plugin
+        self.language_registry = LanguagePluginRegistry.from_config(self.plugin_config)
+        self.code_exts = set(self.language_registry.supported_code_extensions())
 
         self._config = EngineConfig(
             codebase_path=self.codebase_path,
@@ -118,9 +107,8 @@ class MetisEngine:
             review_code_include_paths=list(self.review_code_include_paths),
             review_code_exclude_paths=list(self.review_code_exclude_paths),
             enabled_tools=self.enabled_tools,
+            language_registry=self.language_registry,
             code_exts=self.code_exts,
-            ext_plugin_map=self.ext_plugin_map,
-            ext_pattern_plugin_map=self.ext_pattern_plugin_map,
         )
         self._state = EngineState()
         self.repository = EngineRepository(self._config, self._state)
@@ -185,7 +173,8 @@ class MetisEngine:
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
             create_retrievers=self.tools.index.create_retrievers,
-            get_plugin_for_extension=self._get_plugin_for_extension,
+            get_plugin_for_path=self.repository.get_plugin_for_path,
+            get_language_name_for_path=self.repository.get_language_name_for_path,
             usage_hooks=self.usage_runtime.hooks,
         )
 
@@ -224,21 +213,16 @@ class MetisEngine:
     def supported_languages(cls):
         if cls._SUPPORTED_LANGUAGES is None:
             plugin_config = load_plugin_config()
-            cls._SUPPORTED_LANGUAGES = discover_supported_language_names(plugin_config)
+            registry = LanguagePluginRegistry.from_config(plugin_config)
+            cls._SUPPORTED_LANGUAGES = registry.supported_language_names()
         return cls._SUPPORTED_LANGUAGES
 
     def get_plugin_from_name(self, name):
-        for plugin in self.plugins:
-            if (
-                hasattr(plugin, "get_name")
-                and plugin.get_name().lower() == name.lower()
-            ):
-                return plugin
+        plugin = self.language_registry.get_plugin(name)
+        if plugin is not None:
+            return plugin
         logger.error(f"Plugin '{name}' not found.")
         raise PluginNotFoundError(name)
-
-    def _get_plugin_for_extension(self, extension):
-        return self.repository.get_plugin_for_extension(extension)
 
     def ask_question(self, question):
         retriever_code, retriever_docs = self.tools.index.get_retrievers()

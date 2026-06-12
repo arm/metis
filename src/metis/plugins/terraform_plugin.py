@@ -6,4 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class TerraformPlugin(ConfigBackedLanguagePlugin):
     NAME = "terraform"
-    DEFAULT_EXTENSIONS = [".tf"]

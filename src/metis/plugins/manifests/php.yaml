@@ -1,0 +1,22 @@
+name: php
+aliases:
+- php
+extensions:
+- .php
+- .phps
+- .phtm
+- .phtml
+- .phpt
+- .pht
+- .php2
+- .php3
+- .php4
+- .php5
+- .php6
+- .php7
+- .php8
+filename_patterns: []
+implementation: metis.plugins.php_plugin:PHPPlugin
+config_resource: languages/php.yaml
+capabilities: {}
+priority: 0
