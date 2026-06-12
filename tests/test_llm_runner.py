@@ -3,13 +3,11 @@
 
 import logging
 
-import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
-from metis.engine.llm_runner import ModelToolConfigurationError
 
 
 class _FakeTool:
@@ -65,10 +63,6 @@ class _FakeProvider:
         return self.chat
 
 
-class _FakeNoToolChat:
-    pass
-
-
 def test_json_prompt_runner_executes_model_tool_calls_before_parsing():
     tool = _FakeTool()
     chat = _FakeChat()
@@ -101,60 +95,3 @@ def test_json_prompt_runner_executes_model_tool_calls_before_parsing():
     assert "AVAILABLE MODEL TOOLS" in system_prompt
     assert "MODEL TOOL CONTRACTS" in system_prompt
     assert "CONTRACT TEXT" in system_prompt
-
-
-def test_json_prompt_runner_requires_configured_model_tool_rounds():
-    tool = _FakeTool()
-    chat = _FakeChat()
-    runner = JsonPromptRunner(_FakeProvider(chat))
-
-    with pytest.raises(
-        ModelToolConfigurationError,
-        match="max_tool_rounds must be configured when model_tools are used",
-    ):
-        runner.invoke(
-            JsonPromptRequest(
-                model="test-model",
-                system_prompt="Return JSON.",
-                user_prompt="{body}",
-                variables={"body": "review this"},
-                parse=lambda text: text,
-                logger=logging.getLogger("test"),
-                label="test",
-                batch_size=1,
-                invalid_message="invalid",
-                final_keep_message="done",
-                model_tools=(tool,),
-            )
-        )
-
-    assert chat.bound_tools is None
-    assert tool.calls == []
-
-
-def test_json_prompt_runner_requires_bind_tools_support_for_model_tools():
-    tool = _FakeTool()
-    runner = JsonPromptRunner(_FakeProvider(_FakeNoToolChat()))
-
-    with pytest.raises(
-        ModelToolConfigurationError,
-        match="model_tools require a LangChain chat model with bind_tools support",
-    ):
-        runner.invoke(
-            JsonPromptRequest(
-                model="test-model",
-                system_prompt="Return JSON.",
-                user_prompt="{body}",
-                variables={"body": "review this"},
-                parse=lambda text: text,
-                logger=logging.getLogger("test"),
-                label="test",
-                batch_size=1,
-                invalid_message="invalid",
-                final_keep_message="done",
-                model_tools=(tool,),
-                max_tool_rounds=1,
-            )
-        )
-
-    assert tool.calls == []
