@@ -60,7 +60,8 @@ Python unless they are true code fallbacks.
 
 For model-callable tools, put model-loop settings under `config.model_tool`.
 For example, `max_rounds` controls how many tool-call turns the model may take
-before it must produce a final answer.
+before it must produce a final answer, and `max_contract_chars` controls how
+much of the model-facing contract is injected into the system prompt.
 
 ## 3. Add the Contract
 

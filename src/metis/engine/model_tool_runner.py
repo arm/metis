@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from typing import Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-_MAX_TOOL_CONTRACT_CHARS = 6000
+logger = logging.getLogger("metis")
 
 
 class ModelToolConfigurationError(ValueError):
@@ -83,10 +84,23 @@ def invoke_model_with_tools(
             status = "success"
             try:
                 tool = tool_by_name[name]
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Invoking model tool %s with args=%s",
+                        name,
+                        _debug_tool_args(args),
+                    )
                 content = tool.invoke(args)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Model tool %s completed with %d output chars",
+                        name,
+                        len(str(content)),
+                    )
             except Exception as exc:
                 status = "error"
                 content = f"Tool {name!r} failed: {exc}"
+                logger.debug("Model tool %s failed: %s", name, exc)
             messages.append(
                 ToolMessage(
                     content=str(content),
@@ -104,7 +118,10 @@ def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:
         metadata = getattr(tool, "metadata", None) or {}
         if not isinstance(metadata, dict):
             continue
-        contract = _clip_tool_contract(str(metadata.get("metis_contract") or ""))
+        contract = _clip_tool_contract(
+            str(metadata.get("metis_contract") or ""),
+            metadata.get("metis_contract_max_chars"),
+        )
         if not contract:
             continue
         name = getattr(tool, "name", "tool")
@@ -112,11 +129,34 @@ def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:
     return sections
 
 
-def _clip_tool_contract(contract: str) -> str:
+def _clip_tool_contract(contract: str, max_chars: Any) -> str:
     text = contract.strip()
-    if len(text) <= _MAX_TOOL_CONTRACT_CHARS:
+    limit = _positive_int(max_chars)
+    if limit is None or len(text) <= limit:
         return text
-    return text[:_MAX_TOOL_CONTRACT_CHARS].rstrip() + "\n[contract truncated]"
+    return text[:limit].rstrip() + "\n[contract truncated]"
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _debug_tool_args(args: Any) -> Any:
+    if not isinstance(args, dict):
+        return args
+    clipped = {}
+    for key, value in args.items():
+        if isinstance(value, str) and len(value) > 300:
+            clipped[key] = value[:300] + "...[truncated]"
+        else:
+            clipped[key] = value
+    return clipped
 
 
 def _message_content_text(message: Any) -> str:

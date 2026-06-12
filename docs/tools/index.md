@@ -22,6 +22,7 @@ Manifest configuration:
 config:
   model_tool:
     max_rounds: 4
+    max_contract_chars: 6000
   search:
     max_top_k: 20
     default_max_chars: 12000

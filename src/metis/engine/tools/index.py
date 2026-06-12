@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
@@ -73,38 +75,33 @@ class IndexTool:
         )
 
     def langchain_tools(self) -> tuple[StructuredTool, ...]:
-        if not self.enabled or not _index_search_model_tool_active():
+        capability = _index_search_model_tool_capability()
+        if not self.enabled or capability is None:
             return ()
         contract = get_tool_contract(INDEX_TOOL)
+        metadata: dict[str, object] | None = None
+        if contract:
+            metadata = {"metis_contract": contract}
+            max_contract_chars = _positive_int(
+                _index_model_tool_config().get("max_contract_chars")
+            )
+            if max_contract_chars is not None:
+                metadata["metis_contract_max_chars"] = max_contract_chars
 
         return (
             StructuredTool.from_function(
                 func=self.search,
-                name="index_search",
-                description=(
-                    "Search the Metis vector index for relevant code and documentation "
-                    "context. Use this when broader project context, related files, "
-                    "definitions, APIs, design notes, threat model, security "
-                    "assumptions, or documentation may affect the answer. Treat "
-                    "results as context candidates and verify security claims against "
-                    "concrete source evidence when possible."
-                ),
+                name=capability.name,
+                description=capability.description,
                 args_schema=IndexSearchInput,
-                metadata={"metis_contract": contract} if contract else None,
+                metadata=metadata,
             ),
         )
 
     def model_tool_max_rounds(self) -> int | None:
-        if not self.enabled or not _index_search_model_tool_active():
+        if not self.enabled or _index_search_model_tool_capability() is None:
             return None
-        model_tool_config = get_tool_config(INDEX_TOOL).get("model_tool") or {}
-        if not isinstance(model_tool_config, dict):
-            return None
-        try:
-            max_rounds = int(model_tool_config.get("max_rounds"))
-        except (TypeError, ValueError):
-            return None
-        return max_rounds if max_rounds > 0 else None
+        return _positive_int(_index_model_tool_config().get("max_rounds"))
 
     def clear_retriever_cache(self) -> None:
         if self.enabled:
@@ -131,11 +128,30 @@ def build_index_tool(
     return IndexTool(ToolHandle(INDEX_TOOL, service))
 
 
-def _index_search_model_tool_active() -> bool:
+def _index_search_model_tool_capability():
     manifest = get_tool_manifest(INDEX_TOOL)
     if manifest is None or not manifest.active:
-        return False
+        return None
     for capability in manifest.capabilities:
         if capability.id == "index.search":
-            return capability.status == "active" and "model_tool" in capability.surfaces
-    return False
+            if capability.status == "active" and "model_tool" in capability.surfaces:
+                return capability
+            return None
+    return None
+
+
+def _index_model_tool_config() -> dict[str, Any]:
+    config = get_tool_config(INDEX_TOOL).get("model_tool") or {}
+    if isinstance(config, dict):
+        return config
+    return {}
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed

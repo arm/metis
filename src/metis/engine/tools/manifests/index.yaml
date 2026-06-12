@@ -11,6 +11,7 @@ contracts:
 config:
   model_tool:
     max_rounds: 4
+    max_contract_chars: 6000
   search:
     max_top_k: 20
     default_max_chars: 12000
@@ -40,7 +41,12 @@ capabilities:
   - id: index.search
     name: index_search
     title: Search index
-    description: Model-callable retrieval over indexed code and documentation.
+    description: >-
+      Search the Metis vector index for relevant code and documentation context.
+      Use this when broader project context, related files, definitions, APIs,
+      design notes, threat model, security assumptions, or documentation may
+      affect the answer. Treat results as context candidates and verify security
+      claims against concrete source evidence when possible.
     surfaces: [model_tool]
     domains: [ask_context, review_context, triage_context]
     provider: index
