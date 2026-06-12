@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import os
+from typing import Any
 
 import unidiff
 from llama_index.core import SimpleDirectoryReader
@@ -27,10 +29,13 @@ class IndexingService:
         config: EngineConfig,
         state: EngineState,
         repository: EngineRepository,
+        *,
+        get_embedding_models: Callable[[], tuple[Any, Any]],
     ):
         self._config = config
         self._state = state
         self._repository = repository
+        self._get_embedding_models = get_embedding_models
 
     def _get_supported_input_files(
         self,
@@ -80,7 +85,7 @@ class IndexingService:
         return code_count + doc_count
 
     def index_prepare_nodes_iter(self):
-        self._ensure_embed_models()
+        self._get_embedding_models()
         docs_supported_exts = self._config.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
@@ -139,19 +144,19 @@ class IndexingService:
         pending = self._state.pending_nodes
         if not pending:
             return
-        self._ensure_embed_models()
+        embed_model_code, embed_model_docs = self._get_embedding_models()
         nodes_code, nodes_docs = pending
         self._config.vector_backend.index_nodes(
             nodes_code,
             nodes_docs,
-            embed_model_code=self._config.embed_model_code,
-            embed_model_docs=self._config.embed_model_docs,
+            embed_model_code=embed_model_code,
+            embed_model_docs=embed_model_docs,
             **self._config.usage_runtime.hooks.embed_model_kwargs(),
         )
         self._state.pending_nodes = None
 
     def update_index(self, patch_text):
-        self._ensure_embed_models()
+        embed_model_code, embed_model_docs = self._get_embedding_models()
         try:
             patch_set = unidiff.PatchSet.from_string(patch_text)
             logger.info("Parsed the provided patch string successfully.")
@@ -160,8 +165,8 @@ class IndexingService:
         self._config.vector_backend.init()
 
         index_code, index_docs = self._config.vector_backend.get_index_handles(
-            embed_model_code=self._config.embed_model_code,
-            embed_model_docs=self._config.embed_model_docs,
+            embed_model_code=embed_model_code,
+            embed_model_docs=embed_model_docs,
             **self._config.usage_runtime.hooks.embed_model_kwargs(),
         )
 
@@ -216,7 +221,3 @@ class IndexingService:
                     target_index.refresh_ref_docs([doc])
                 target_index.docstore.set_document_hash(doc.id_, doc.hash)
         logger.info("Index update complete based on the provided patch diff.")
-
-    def _ensure_embed_models(self):
-        self._config.embed_model_code = self._config.engine_get_embed_model_code()
-        self._config.embed_model_docs = self._config.engine_get_embed_model_docs()

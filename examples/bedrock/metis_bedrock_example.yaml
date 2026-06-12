@@ -17,14 +17,19 @@ llm_provider:
   region: "us-east-1"
   # Anthropic Claude via Bedrock (use an inference-profile ID where required)
   model: "us.anthropic.claude-opus-4-8-v1:0"
-  code_embedding_model: "amazon.titan-embed-text-v2:0"
-  docs_embedding_model: "amazon.titan-embed-text-v2:0"
 
   # Credentials — all optional. If omitted, the boto3 default chain is used
   # (AWS_PROFILE / AWS_ACCESS_KEY_ID env vars, ~/.aws/credentials, IAM role).
   # aws_profile: "default"
   # aws_access_key_id: "..."
   # aws_secret_access_key: "..."
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "bedrock"
+  region: "us-east-1"
+  code_embedding_model: "amazon.titan-embed-text-v2:0"
+  docs_embedding_model: "amazon.titan-embed-text-v2:0"
 
 query:
   similarity_top_k: 5

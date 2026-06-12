@@ -2,8 +2,12 @@ llm_provider:
   name: "gemini"
   model: "gemini-2.5-flash"
   api_key_env: "GOOGLE_API_KEY"
-  code_embedding_model: "gemini-embedding-001"
-  docs_embedding_model: "gemini-embedding-001"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "openai"
+  code_embedding_model: "text-embedding-3-large"
+  docs_embedding_model: "text-embedding-3-large"
 
 metis_engine:
   embed_dim: 3072

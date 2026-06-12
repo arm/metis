@@ -3,50 +3,156 @@
 
 from __future__ import annotations
 
-from typing import Any, Unpack, cast
+from typing import Any, NotRequired, Required, TypedDict, cast
 
-import logging
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_core.callbacks import Callbacks
-from pydantic import SecretStr
+from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureOpenAIEmbeddings
 from llama_index.core.callbacks import CallbackManager
+from pydantic import SecretStr
 
-from metis.providers.base import (
-    AzureOpenAIProviderConfig,
-    ChatModelOptions,
-    LLMProvider,
-)
+from metis.providers.base import ChatProvider
+from metis.providers.base import EmbeddingProvider
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
-from metis.providers.registry import register_provider
+from metis.providers.config import ApiKeySources
+from metis.providers.config import ProviderConfigSpec
 
-logger = logging.getLogger(__name__)
+
+class AzureOpenAIChatConfig(TypedDict, total=False):
+    api_key: Required[str]
+    azure_endpoint: Required[str]
+    azure_api_version: Required[str]
+    engine: Required[str]
+    chat_deployment_model: Required[str]
+    model: NotRequired[str]
+    supports_temperature: NotRequired[bool]
+    use_responses_api: NotRequired[bool]
 
 
-class AzureOpenAIProvider(LLMProvider):
-    def __init__(self, config: AzureOpenAIProviderConfig) -> None:
-        self.api_key = config.get("llm_api_key", "")
-        self.azure_endpoint = config.get("azure_endpoint", "")
-        self.api_version = config.get("azure_api_version", "")
-        self.engine = config.get("engine", "")
-        self.chat_deployment_model = config.get("chat_deployment_model", "")
+class AzureOpenAIEmbeddingConfig(TypedDict, total=False):
+    api_key: Required[str]
+    azure_endpoint: Required[str]
+    azure_api_version: Required[str]
+    code_embedding_model: Required[str]
+    docs_embedding_model: Required[str]
+    code_deployment: Required[str]
+    docs_deployment: Required[str]
 
-        self.code_embedding_model = config.get("code_embedding_model", "")
-        self.docs_embedding_model = config.get("docs_embedding_model", "")
-        self.code_embedding_deployment = config.get(
-            "code_embedding_deployment", self.code_embedding_model
-        )
-        self.docs_embedding_deployment = config.get(
-            "docs_embedding_deployment", self.docs_embedding_model
-        )
 
-        self.temperature = float(config.get("llama_query_temperature", 0.0))
-        self.max_tokens = int(config.get("llama_query_max_tokens", 3072))
-        self.reasoning_effort = config.get("llama_query_reasoning_effort")
+class AzureOpenAIProvider(ChatProvider):
+    CONFIG_SPEC = ProviderConfigSpec(
+        display_name="Azure OpenAI",
+        required_keys=(
+            "azure_endpoint",
+            "azure_api_version",
+            "engine",
+            "chat_deployment_model",
+        ),
+        api_key=ApiKeySources(required=True, env_vars=("AZURE_OPENAI_API_KEY",)),
+        copy_keys={
+            "azure_endpoint": ("azure_endpoint",),
+            "azure_api_version": ("azure_api_version",),
+            "engine": ("engine",),
+            "chat_deployment_model": ("chat_deployment_model",),
+            "model": ("chat_deployment_model",),
+            "supports_temperature": ("supports_temperature",),
+            "use_responses_api": ("use_responses_api",),
+        },
+    )
 
-        self.model_token_param = config.get(
-            "model_token_param", "max_completion_tokens"
-        )
+    def __init__(self, config: AzureOpenAIChatConfig) -> None:
+        self.api_key = config["api_key"]
+        self.azure_endpoint = config["azure_endpoint"]
+        self.api_version = config["azure_api_version"]
+        self.engine = config["engine"]
+        self.chat_deployment_model = config["chat_deployment_model"]
         self.supports_temperature = config.get("supports_temperature", False)
+        self.use_responses_api = config.get("use_responses_api")
+
+        if not self.engine:
+            raise ValueError("Missing 'engine' (Azure deployment name).")
+        if not self.chat_deployment_model:
+            raise ValueError(
+                "Missing 'chat_deployment_model' "
+                "Azure calls must specify a deployment model."
+            )
+
+    def get_chat_model(
+        self,
+        *args: str,
+        callbacks: Callbacks = None,
+        **kwargs: object,
+    ) -> AzureChatOpenAI:
+        requested_deployment = kwargs.pop("deployment_name", None)
+        positional_deployment = args[0] if args else None
+        deployment = requested_deployment or positional_deployment or self.engine
+        params: dict[str, object] = {
+            "api_key": self.api_key,
+            "azure_endpoint": self.azure_endpoint,
+            "api_version": self.api_version,
+            "azure_deployment": deployment,
+            "model": self.chat_deployment_model,
+        }
+        if self.use_responses_api is not None:
+            params["use_responses_api"] = bool(self.use_responses_api)
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is not None:
+            params["max_tokens"] = int(max_tokens)
+        if callbacks is not None:
+            params["callbacks"] = callbacks
+        if "response_format" in kwargs:
+            if kwargs["response_format"] is not None:
+                params["response_format"] = kwargs["response_format"]
+        else:
+            params["response_format"] = {"type": "json_object"}
+        if self.supports_temperature:
+            temperature = kwargs.get("temperature")
+            if temperature is not None:
+                params["temperature"] = float(temperature)
+        for optional_key in (
+            "timeout",
+            "max_retries",
+            "seed",
+            "frequency_penalty",
+            "presence_penalty",
+            "reasoning_effort",
+            "verbosity",
+        ):
+            if optional_key in kwargs:
+                params[optional_key] = kwargs[optional_key]
+        return AzureChatOpenAI(**cast(dict[str, Any], params))
+
+
+class AzureOpenAIEmbeddingProvider(EmbeddingProvider):
+    CONFIG_SPEC = ProviderConfigSpec(
+        display_name="Azure OpenAI embeddings",
+        required_keys=(
+            "azure_endpoint",
+            "azure_api_version",
+            "code_embedding_model",
+            "docs_embedding_model",
+            "code_deployment",
+            "docs_deployment",
+        ),
+        api_key=ApiKeySources(required=True, env_vars=("AZURE_OPENAI_API_KEY",)),
+        copy_keys=(
+            "azure_endpoint",
+            "azure_api_version",
+            "code_embedding_model",
+            "docs_embedding_model",
+            "code_deployment",
+            "docs_deployment",
+        ),
+    )
+
+    def __init__(self, config: AzureOpenAIEmbeddingConfig) -> None:
+        self.api_key = config["api_key"]
+        self.azure_endpoint = config["azure_endpoint"]
+        self.api_version = config["azure_api_version"]
+        self.code_embedding_model = config["code_embedding_model"]
+        self.docs_embedding_model = config["docs_embedding_model"]
+        self.code_deployment = config["code_deployment"]
+        self.docs_deployment = config["docs_deployment"]
 
     def get_embed_model_code(
         self, *, callback_manager: CallbackManager | None = None
@@ -54,7 +160,7 @@ class AzureOpenAIProvider(LLMProvider):
         return LangChainEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.code_embedding_model,
-                deployment=self.code_embedding_deployment,
+                deployment=self.code_deployment,
             ),
             model_name=self.code_embedding_model,
             callback_manager=callback_manager,
@@ -66,61 +172,11 @@ class AzureOpenAIProvider(LLMProvider):
         return LangChainEmbeddingAdapter(
             self._build_embeddings_client(
                 model=self.docs_embedding_model,
-                deployment=self.docs_embedding_deployment,
+                deployment=self.docs_deployment,
             ),
             model_name=self.docs_embedding_model,
             callback_manager=callback_manager,
         )
-
-    def get_chat_model(
-        self,
-        *args: str,
-        callbacks: Callbacks = None,
-        **kwargs: Unpack[ChatModelOptions],
-    ) -> AzureChatOpenAI:
-        requested_deployment = kwargs.pop("deployment_name", None)
-        positional_deployment = args[0] if args else None
-        deployment = requested_deployment or positional_deployment or self.engine
-        if not deployment:
-            raise ValueError("Missing 'engine' (Azure deployment name).")
-        if not self.chat_deployment_model:
-            raise ValueError(
-                "Missing 'chat_deployment_model' "
-                "Azure calls must specify a deployment model."
-            )
-        params: dict[str, object] = {
-            "api_key": self.api_key,
-            "azure_endpoint": self.azure_endpoint,
-            "api_version": self.api_version,
-            "azure_deployment": deployment,
-            "model": self.chat_deployment_model,
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "use_responses_api": True,
-        }
-        if callbacks is not None:
-            params["callbacks"] = callbacks
-        if self.reasoning_effort:
-            params["reasoning_effort"] = self.reasoning_effort
-        if "response_format" in kwargs:
-            if kwargs["response_format"] is not None:
-                params["response_format"] = kwargs["response_format"]
-        else:
-            params["response_format"] = {"type": "json_object"}
-        if self.supports_temperature:
-            params["temperature"] = kwargs.get("temperature", self.temperature)
-        for optional_key in (
-            "timeout",
-            "max_retries",
-            "seed",
-            "frequency_penalty",
-            "presence_penalty",
-            "response_format",
-            "reasoning_effort",
-            "verbosity",
-        ):
-            if optional_key in kwargs and optional_key != "response_format":
-                params[optional_key] = kwargs[optional_key]
-        return AzureChatOpenAI(**cast(dict[str, Any], params))
 
     def _build_embeddings_client(
         self, model: str, deployment: str
@@ -133,6 +189,3 @@ class AzureOpenAIProvider(LLMProvider):
             api_version=self.api_version,
             base_url=None,
         )
-
-
-register_provider("azure_openai", AzureOpenAIProvider)

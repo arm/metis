@@ -434,7 +434,12 @@ def test_index_prepare_nodes_includes_suffix_pattern_code_files(tmp_path, monkey
     state = SimpleNamespace(pending_nodes=None)
     monkeypatch.setattr("metis.engine.indexing_service.SimpleDirectoryReader", Reader)
 
-    service = IndexingService(config, state, repo)
+    service = IndexingService(
+        config,
+        state,
+        repo,
+        get_embedding_models=lambda: (None, None),
+    )
     list(service.index_prepare_nodes_iter())
 
     assert str(source) in captured["input_files"]

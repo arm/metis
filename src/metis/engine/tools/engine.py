@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from ..repository import EngineRepository
 from ..runtime import EngineConfig, EngineState
@@ -24,14 +22,11 @@ def build_engine_tools(
     config: EngineConfig,
     state: EngineState,
     repository: EngineRepository,
-    *,
-    normalize_top_k: Callable[[Any, int], int],
 ) -> EngineTools:
     return EngineTools(
         index=build_index_tool(
             config,
             state,
             repository,
-            normalize_top_k=normalize_top_k,
         )
     )

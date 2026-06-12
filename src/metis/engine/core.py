@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 
+from metis.chat_model_options import merge_chat_model_kwargs
 from metis.configuration import load_plugin_config
 from metis.exceptions import PluginNotFoundError
 from metis.plugins.registry import LanguagePluginRegistry
@@ -59,8 +60,8 @@ class MetisEngine:
             setattr(self, k, kwargs[k])
 
         self.llm_provider = llm_provider
-        self.embedding_provider = embedding_provider or llm_provider
         self.usage_runtime = self._init_usage_runtime(kwargs)
+        self.chat_model_kwargs = dict(kwargs.get("chat_model_kwargs") or {})
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
         self.triage_similarity_top_k = kwargs.get(
@@ -86,23 +87,19 @@ class MetisEngine:
         self.language_registry = LanguagePluginRegistry.from_config(self.plugin_config)
         self.code_exts = set(self.language_registry.supported_code_extensions())
 
-        self._init_embed_models()
-
         self._config = EngineConfig(
             codebase_path=self.codebase_path,
             vector_backend=self.vector_backend,
             llm_provider=self.llm_provider,
+            embedding_provider=embedding_provider,
             usage_runtime=self.usage_runtime,
             plugin_config=self.plugin_config,
             custom_prompt_text=self.custom_prompt_text,
             custom_guidance_precedence=self.custom_guidance_precedence,
-            embed_model_code=self._embed_model_code,
-            embed_model_docs=self._embed_model_docs,
-            engine_get_embed_model_code=self.get_embed_model_code,
-            engine_get_embed_model_docs=self.get_embed_model_docs,
             max_workers=self.max_workers,
             max_token_length=self.max_token_length,
             llama_query_model=self.llama_query_model,
+            chat_model_kwargs=self.chat_model_kwargs,
             similarity_top_k=self.similarity_top_k,
             doc_chunk_size=self.doc_chunk_size,
             doc_chunk_overlap=self.doc_chunk_overlap,
@@ -119,7 +116,6 @@ class MetisEngine:
             self._config,
             self._state,
             self.repository,
-            normalize_top_k=self._normalize_top_k,
         )
         self.index_context = self.tools.index
         self.reachability = TreeSitterReachabilityService(
@@ -140,45 +136,6 @@ class MetisEngine:
 
     def _init_usage_runtime(self, kwargs) -> UsageRuntime:
         return kwargs.get("usage_runtime") or UsageRuntime(self.codebase_path)
-
-    def _attach_embed_models_to_backend(self) -> None:
-        if hasattr(self.vector_backend, "embed_model_code"):
-            self.vector_backend.embed_model_code = self._embed_model_code
-        if hasattr(self.vector_backend, "embed_model_docs"):
-            self.vector_backend.embed_model_docs = self._embed_model_docs
-
-    def _get_backend_embed_model(self, attr: str):
-        if attr in getattr(self.vector_backend, "__dict__", {}):
-            return getattr(self.vector_backend, attr)
-        return None
-
-    def _init_embed_models(self) -> None:
-        self._embed_model_code = self._get_backend_embed_model("embed_model_code")
-        self._embed_model_docs = self._get_backend_embed_model("embed_model_docs")
-        self._attach_embed_models_to_backend()
-
-    def _build_embed_model(self, kind: str):
-        method_name = (
-            "get_embed_model_code" if kind == "code" else "get_embed_model_docs"
-        )
-        method = getattr(self.embedding_provider, method_name)
-        return method(**self.usage_runtime.hooks.embed_model_kwargs())
-
-    def get_embed_model_code(self):
-        if self._embed_model_code is None:
-            self._embed_model_code = self._build_embed_model("code")
-            self._attach_embed_models_to_backend()
-            if hasattr(self, "_config"):
-                self._config.embed_model_code = self._embed_model_code
-        return self._embed_model_code
-
-    def get_embed_model_docs(self):
-        if self._embed_model_docs is None:
-            self._embed_model_docs = self._build_embed_model("docs")
-            self._attach_embed_models_to_backend()
-            if hasattr(self, "_config"):
-                self._config.embed_model_docs = self._embed_model_docs
-        return self._embed_model_docs
 
     def usage_command(
         self,
@@ -209,12 +166,12 @@ class MetisEngine:
             codebase_path=self.codebase_path,
             llm_provider=self.llm_provider,
             llama_query_model=self.llama_query_model,
+            chat_model_kwargs=self.chat_model_kwargs,
             plugin_config=self.plugin_config,
             max_workers=self.max_workers,
             triage_similarity_top_k=self.triage_similarity_top_k,
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
-            normalize_top_k=self._normalize_top_k,
             create_retrievers=self.tools.index.create_retrievers,
             get_plugin_for_path=self.repository.get_plugin_for_path,
             get_language_name_for_path=self.repository.get_language_name_for_path,
@@ -234,9 +191,15 @@ class MetisEngine:
                 custom_guidance_precedence=self.custom_guidance_precedence,
                 llama_query_model=self.llama_query_model,
                 max_token_length=self.max_token_length,
-                chat_model_kwargs=self.usage_runtime.hooks.chat_model_kwargs(),
+                chat_model_kwargs=self._chat_model_kwargs(),
             )
         return self._state.review_graph
+
+    def _chat_model_kwargs(self) -> dict:
+        return merge_chat_model_kwargs(
+            self.chat_model_kwargs,
+            self.usage_runtime.hooks.chat_model_kwargs(),
+        )
 
     def _get_ask_graph(self):
         if self._state.ask_graph is None:
@@ -270,15 +233,6 @@ class MetisEngine:
             "retriever_docs": retriever_docs,
         }
         return self._get_ask_graph().ask(req)
-
-    def _normalize_top_k(self, value, default: int) -> int:
-        try:
-            parsed = int(value)
-        except Exception:
-            parsed = default
-        if parsed <= 0:
-            return default
-        return parsed
 
     def _create_retrievers(self, top_k: int):
         return self.tools.index.create_retrievers(top_k)

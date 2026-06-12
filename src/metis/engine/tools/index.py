@@ -3,9 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
-
 from ..index_context_service import IndexContextService
 from ..repository import EngineRepository
 from ..runtime import EngineConfig, EngineState
@@ -33,6 +30,9 @@ class IndexTool:
     def get_retrievers(self):
         return self._handle.require().get_retrievers()
 
+    def get_embedding_models(self):
+        return self._handle.require().get_embedding_models()
+
     def clear_retriever_cache(self) -> None:
         if self.enabled:
             self._handle.require().clear_retriever_cache()
@@ -45,8 +45,6 @@ def build_index_tool(
     config: EngineConfig,
     state: EngineState,
     repository: EngineRepository,
-    *,
-    normalize_top_k: Callable[[Any, int], int],
 ) -> IndexTool:
     if not tool_enabled(config.enabled_tools, INDEX_TOOL):
         handle: ToolHandle[IndexContextService] = ToolHandle(INDEX_TOOL, None)
@@ -56,6 +54,5 @@ def build_index_tool(
         config,
         state,
         repository,
-        normalize_top_k=normalize_top_k,
     )
     return IndexTool(ToolHandle(INDEX_TOOL, service))

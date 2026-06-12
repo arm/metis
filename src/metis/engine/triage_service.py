@@ -22,12 +22,12 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         codebase_path: str,
         llm_provider: Any,
         llama_query_model: str,
+        chat_model_kwargs: dict[str, Any] | None,
         plugin_config: dict[str, Any],
         max_workers: int,
         triage_similarity_top_k: int,
         triage_checkpoint_every: int,
         triage_tool_timeout_seconds: int,
-        normalize_top_k: Callable[[Any, int], int],
         create_retrievers: Callable[[int], tuple[Any, Any]],
         get_plugin_for_path: Callable[[str], Any],
         get_language_name_for_path: Callable[[str], str | None],
@@ -36,12 +36,12 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.codebase_path = codebase_path
         self.llm_provider = llm_provider
         self.llama_query_model = llama_query_model
+        self.chat_model_kwargs = dict(chat_model_kwargs or {})
         self.plugin_config = plugin_config
         self.max_workers = max(1, max_workers)
         self.triage_similarity_top_k = triage_similarity_top_k
         self.triage_checkpoint_every = triage_checkpoint_every
         self.triage_tool_timeout_seconds = int(triage_tool_timeout_seconds)
-        self._normalize_top_k = normalize_top_k
         self._create_retrievers = create_retrievers
         self._get_plugin_for_path = get_plugin_for_path
         self._get_language_name_for_path = get_language_name_for_path

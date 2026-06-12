@@ -11,13 +11,13 @@ from rich.markup import escape
 from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
 
-from metis.configuration import load_runtime_config, validate_embedding_provider_config
+from metis.configuration import build_embedding_provider_config, load_runtime_config
 from metis.engine import MetisEngine
 from metis.engine.tools.selection import INDEX_TOOL, parse_engine_tools, tool_enabled
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
-from metis.providers.registry import get_provider
-from metis.providers.base import ProviderRuntimeConfig
+from metis.providers.registry import get_chat_provider
+from metis.providers.registry import get_embedding_provider
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -94,12 +94,31 @@ def build_engine(args, runtime):
     if getattr(args, "enabled_tools", None) is None:
         _configure_enabled_tools(args, runtime)
     runtime["enabled_tools"] = _enabled_tools_for_args(args)
+    engine_runtime = dict(runtime)
 
-    llm_provider_name = runtime.get("llm_provider_name", "openai")
-    provider_cls = get_provider(llm_provider_name)
-    llm_provider = provider_cls(cast(ProviderRuntimeConfig, runtime))
+    llm_provider_name = runtime.get("llm_provider_name")
+    if not llm_provider_name:
+        raise RuntimeError("llm_provider configuration is required.")
+    llm_provider_name = str(llm_provider_name)
+    chat_provider_cls = get_chat_provider(llm_provider_name)
+    llm_provider = chat_provider_cls(cast(dict, runtime["llm_provider"]))
+    engine_runtime.pop("llm_provider_name", None)
+    engine_runtime.pop("llm_provider", None)
 
-    embedding_provider = _build_embedding_provider(args, runtime, llm_provider)
+    embedding_provider = None
+    if tool_enabled(runtime["enabled_tools"], INDEX_TOOL):
+        embedding_provider_config = build_embedding_provider_config(
+            cast(dict | None, runtime.get("embedding_provider_raw_config"))
+        )
+        if embedding_provider_config is None:
+            raise RuntimeError("Index tool requires embedding_provider configuration.")
+        embedding_provider_cls = get_embedding_provider(
+            str(embedding_provider_config["name"])
+        )
+        embedding_provider = embedding_provider_cls(
+            cast(dict, embedding_provider_config)
+        )
+    engine_runtime.pop("embedding_provider_raw_config", None)
 
     usage_runtime = UsageRuntime(args.codebase_path)
 
@@ -115,38 +134,9 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
-        **runtime,
+        **engine_runtime,
     )
     return engine, vector_backend
-
-
-def _build_embedding_provider(args, runtime, llm_provider):
-    enabled_tools = runtime.get("enabled_tools") or set()
-    index_enabled = tool_enabled(enabled_tools, INDEX_TOOL)
-
-    embed_name = runtime.get("embedding_provider_name")
-    embed_runtime = runtime.get("embedding_provider_config") or {}
-    embed_raw = runtime.get("embedding_provider_raw_config") or {}
-    same_as_llm = embed_name == runtime.get("llm_provider_name")
-    section = "llm_provider" if same_as_llm else "embedding_provider"
-
-    if index_enabled:
-        validate_embedding_provider_config(embed_name, embed_raw, section=section)
-    elif not same_as_llm:
-        try:
-            validate_embedding_provider_config(embed_name, embed_raw, section=section)
-        except ValueError as exc:
-            print_console(
-                f"[yellow]Warning:[/yellow] {escape(str(exc))} "
-                "(index tool disabled; embeddings will fail if requested.)",
-                args.quiet,
-            )
-
-    if same_as_llm:
-        return llm_provider
-
-    embed_cls = get_provider(embed_name)
-    return embed_cls(cast(ProviderRuntimeConfig, embed_runtime))
 
 
 def finalize_cli_session(engine, args):

@@ -11,3 +11,6 @@ dist/
 .python-version
 uv.lock
 results/
+/local-tests/
+/metis.local.yaml
+/metis.local.yml

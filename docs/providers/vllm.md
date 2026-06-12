@@ -110,6 +110,10 @@ llm_provider:
   name: "vllm"
   base_url: "http://${LLM_HOST_IP}:8888/v1"
   model: "<chat-model-id>"
+
+embedding_provider:
+  name: "vllm"
+  base_url: "http://${LLM_HOST_IP}:8888/v1"
   code_embedding_model: "<embedding-model-id>"
   docs_embedding_model: "<embedding-model-id>"
 

@@ -1,7 +1,8 @@
 # Gemini Provider
 
-Metis can use Google Gemini models for chat, review, and triage, with native
-Gemini embeddings for indexing.
+Metis can use Google Gemini models for chat, review, and triage. Gemini is
+currently a chat-only provider in Metis; use a separate `embedding_provider`
+when enabling the `index` tool.
 
 ## Install
 
@@ -18,8 +19,12 @@ llm_provider:
   name: "gemini"
   model: "gemini-2.5-flash"
   api_key_env: "GOOGLE_API_KEY"
-  code_embedding_model: "gemini-embedding-001"
-  docs_embedding_model: "gemini-embedding-001"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "openai"
+  code_embedding_model: "text-embedding-3-large"
+  docs_embedding_model: "text-embedding-3-large"
 
 metis_engine:
   embed_dim: 3072
@@ -32,13 +37,10 @@ query:
 - `model` is passed directly to the Gemini API. Use an exact Gemini model ID.
 - The Gemini API key is resolved from `llm_provider.api_key`, then
   `llm_provider.api_key_env`, then `GOOGLE_API_KEY`, then `GEMINI_API_KEY`.
-- The same API key is used for Gemini chat and Gemini embeddings.
-- `code_embedding_model` and `docs_embedding_model` are native Gemini embedding
-  model names.
-- `metis_engine.embed_dim` must match the configured embedding model output
-  dimension. You can set `output_dimensionality` through
-  `code_embedding_extra_kwargs` and `docs_embedding_extra_kwargs` when using a
-  reduced embedding size.
+- Configure embeddings separately through `embedding_provider` if you enable
+  the `index` tool.
+- `metis_engine.embed_dim` must match the configured embedding provider output
+  dimension.
 - `query.reasoning_effort` values `minimal`, `low`, `medium`, and `high` are
   forwarded as Gemini `thinking_level`.
 
@@ -49,8 +51,6 @@ llm_provider:
   name: "gemini"
   model: "gemini-2.5-flash"
   api_key_env: "GOOGLE_API_KEY"
-  code_embedding_model: "gemini-embedding-001"
-  docs_embedding_model: "gemini-embedding-001"
   base_url: "https://example.test/gemini"
   additional_headers:
     X-Custom-Header: "value"

@@ -27,6 +27,11 @@ llm_provider:
   model: "Llama3.1-8B" # for 8GB system
 #  model: "Qwen3.5-9B" # for 16GB system
 #  model: "Qwen3.6-35B-A3B" # for 24GB system
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "llamacpp"
+  base_url: "http://localhost:8080/v1"
   code_embedding_model: "nomic-embed-text-v1.5"
   docs_embedding_model: "nomic-embed-text-v1.5"
 

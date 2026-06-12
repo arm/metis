@@ -40,13 +40,18 @@ llm_provider:
   name: "llamacpp"
   base_url: "http://localhost:8080/v1"
   model: "Llama3.1-8B"
+
+embedding_provider:
+  name: "llamacpp"
+  base_url: "http://localhost:8080/v1"
   code_embedding_model: "nomic-embed-text-v1.5"
   docs_embedding_model: "nomic-embed-text-v1.5"
 ```
 
 - `base_url` defaults to `http://localhost:8080/v1` if not configured.
 - `name` must be `"llamacpp"` (case-insensitive).
-- `model` is required. `code_embedding_model` / `docs_embedding_model` are only required when the `index` tool is enabled.
+- `model` is required under `llm_provider`. `code_embedding_model` / `docs_embedding_model` are
+  only required under `embedding_provider` when the `index` tool is enabled.
 - An API key is **not required** by the llama.cpp server; Metis uses a placeholder by default.
 
 ## Metis usage
