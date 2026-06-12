@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import logging
 
-from metis.providers.openai_compatible import OpenAICompatibleProvider
-from metis.providers.registry import register_provider
+from metis.providers.openai_compatible import OpenAICompatibleChatProvider
+from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
+from metis.providers.config import ApiKeySources
+from metis.providers.config import ProviderConfigSpec
 
 logger = logging.getLogger(__name__)
 
 
-class LlamaCppProvider(OpenAICompatibleProvider):
+class LlamaCppProvider(OpenAICompatibleChatProvider):
     """Provider for llama.cpp HTTP server.
 
     The server is OpenAI-API compatible and supports:
@@ -36,23 +38,39 @@ class LlamaCppProvider(OpenAICompatibleProvider):
 
     DEFAULT_BASE_URL = "http://localhost:8080/v1"
     DEFAULT_API_KEY = "sk-no-key-required"
+    CONFIG_SPEC = ProviderConfigSpec(
+        display_name="llama.cpp",
+        required_keys=("model",),
+        api_key=ApiKeySources(required=False, env_vars=("LLAMACPP_API_KEY",)),
+        copy_keys=("base_url", "default_headers", "model"),
+    )
 
     def __init__(self, config):
-        super().__init__(
-            config,
-            default_base_url=self.DEFAULT_BASE_URL,
-            default_api_key=self.DEFAULT_API_KEY,
-        )
+        super().__init__(config)
 
-        if (
-            not config.get("openai_api_base")
-            and not config.get("api_base")
-            and not config.get("base_url")
-        ):
+        if not config.get("base_url"):
             logger.info(
                 "llama.cpp base URL not configured, defaulting to %s",
                 self.DEFAULT_BASE_URL,
             )
 
 
-register_provider("llamacpp", LlamaCppProvider)
+class LlamaCppEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
+    DEFAULT_BASE_URL = LlamaCppProvider.DEFAULT_BASE_URL
+    DEFAULT_API_KEY = LlamaCppProvider.DEFAULT_API_KEY
+    CONFIG_SPEC = ProviderConfigSpec(
+        display_name="llama.cpp embeddings",
+        required_keys=("code_embedding_model", "docs_embedding_model"),
+        api_key=ApiKeySources(required=False, env_vars=("LLAMACPP_API_KEY",)),
+        copy_keys=(
+            "base_url",
+            "default_headers",
+            "code_embedding_model",
+            "docs_embedding_model",
+            "code_extra_kwargs",
+            "docs_extra_kwargs",
+        ),
+    )
+
+    def __init__(self, config):
+        super().__init__(config)

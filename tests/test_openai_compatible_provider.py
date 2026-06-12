@@ -1,70 +1,52 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast
+from typing import Any, cast
 
 from langchain_openai import ChatOpenAI
-from metis.providers.base import OpenAICompatibleProviderConfig
 
-from metis.providers.openai_compatible import OpenAICompatibleProvider
+from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
+from metis.providers.openai_compatible import OpenAICompatibleChatConfig
+from metis.providers.openai_compatible import OpenAICompatibleChatProvider
+from metis.providers.openai_compatible import OpenAICompatibleEmbeddingConfig
+from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
 
 
-def _config(**overrides: object) -> OpenAICompatibleProviderConfig:
+def _chat_config(**overrides: object) -> OpenAICompatibleChatConfig:
     config: dict[str, object] = {
-        "llm_api_key": "test-key",
+        "api_key": "test-key",
         "model": "gpt-test",
-        "llama_query_model": "gpt-test",
-        "llama_query_temperature": 0.0,
-        "llama_query_max_tokens": 256,
-        "code_embedding_model": "text-embedding-3-large",
-        "docs_embedding_model": "text-embedding-3-large",
     }
     config.update(overrides)
-    return cast(OpenAICompatibleProviderConfig, config)
+    return cast(OpenAICompatibleChatConfig, config)
 
 
-def test_chat_model_uses_configured_reasoning_effort() -> None:
-    provider = OpenAICompatibleProvider(_config(llama_query_reasoning_effort="high"))
+def _embedding_config(**overrides: object) -> OpenAICompatibleEmbeddingConfig:
+    config: dict[str, object] = {
+        "api_key": "test-key",
+        "code_embedding_model": "text-embedding-3-large",
+        "docs_embedding_model": "text-embedding-3-small",
+    }
+    config.update(overrides)
+    return cast(OpenAICompatibleEmbeddingConfig, config)
 
-    llm = provider.get_chat_model()
+
+def test_chat_model_forwards_supported_runtime_options() -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config())
+
+    llm = provider.get_chat_model(reasoning_effort="high", max_tokens=256)
 
     assert isinstance(llm, ChatOpenAI)
     assert llm.reasoning_effort == "high"
+    assert llm.max_tokens == 256
     assert llm.use_responses_api is True
 
 
-def test_chat_model_uses_configured_max_tokens() -> None:
-    provider = OpenAICompatibleProvider(_config())
-
-    llm = provider.get_chat_model()
-
-    assert isinstance(llm, ChatOpenAI)
-    assert llm.max_tokens == 256
-
-
-def test_chat_model_uses_default_max_tokens() -> None:
-    config = dict(_config())
-    config.pop("llama_query_max_tokens")
-    provider = OpenAICompatibleProvider(cast(OpenAICompatibleProviderConfig, config))
-
-    llm = provider.get_chat_model()
-
-    assert llm.max_tokens == 3072
-
-
-def test_reasoning_effort_is_omitted_when_unconfigured() -> None:
-    provider = OpenAICompatibleProvider(_config())
-
-    llm = provider.get_chat_model()
-
-    assert getattr(llm, "reasoning_effort", None) is None
-
-
 def test_chat_model_uses_custom_base_and_headers() -> None:
-    provider = OpenAICompatibleProvider(
-        _config(
-            openai_api_base="https://example.test/v1",
-            openai_default_headers={"X-Test-Header": "test"},
+    provider = OpenAICompatibleChatProvider(
+        _chat_config(
+            base_url="https://example.test/v1",
+            default_headers={"X-Test-Header": "test"},
         )
     )
 
@@ -72,3 +54,28 @@ def test_chat_model_uses_custom_base_and_headers() -> None:
 
     assert llm.openai_api_base == "https://example.test/v1"
     assert llm.default_headers == {"X-Test-Header": "test"}
+
+
+def test_embedding_provider_builds_separate_code_and_docs_models() -> None:
+    provider = OpenAICompatibleEmbeddingProvider(
+        _embedding_config(
+            base_url="https://example.test/v1",
+            default_headers={"X-Test-Header": "test"},
+            code_extra_kwargs={"dimensions": 1536},
+        )
+    )
+
+    code_embeddings = provider.get_embed_model_code()
+    docs_embeddings = provider.get_embed_model_docs()
+    code_client = cast(Any, code_embeddings._client)
+    docs_client = cast(Any, docs_embeddings._client)
+
+    assert isinstance(code_embeddings, LangChainEmbeddingAdapter)
+    assert isinstance(docs_embeddings, LangChainEmbeddingAdapter)
+    assert code_embeddings.model_name == "text-embedding-3-large"
+    assert docs_embeddings.model_name == "text-embedding-3-small"
+    assert code_client.model == "text-embedding-3-large"
+    assert docs_client.model == "text-embedding-3-small"
+    assert code_client.openai_api_base == "https://example.test/v1"
+    assert code_client.default_headers == {"X-Test-Header": "test"}
+    assert code_client.dimensions == 1536

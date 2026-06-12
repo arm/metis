@@ -77,14 +77,11 @@ def test_review_code_propagates_usage_context_into_worker_threads():
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    llm_provider = Mock()
-    llm_provider.get_embed_model_code.return_value = Mock()
-    llm_provider.get_embed_model_docs.return_value = Mock()
 
     engine = MetisEngine(
         codebase_path="./tests/data",
         vector_backend=backend,
-        llm_provider=llm_provider,
+        llm_provider=Mock(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
@@ -214,11 +211,15 @@ def test_index_codebase_records_embedding_usage(tmp_path):
             callback_manager=runtime.hooks.callback_manager,
         ),
     )
+    embedding_provider = Mock()
+    embedding_provider.get_embed_model_code.return_value = backend.embed_model_code
+    embedding_provider.get_embed_model_docs.return_value = backend.embed_model_docs
 
     engine = MetisEngine(
         codebase_path=str(codebase),
         vector_backend=backend,
         llm_provider=Mock(),
+        embedding_provider=embedding_provider,
         usage_runtime=runtime,
         max_workers=2,
         max_token_length=2048,

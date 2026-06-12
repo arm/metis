@@ -10,6 +10,26 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
+from metis.chat_model_options import merge_chat_model_kwargs
+
+
+def retriever_query_config(runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "llama_query_model": runtime.get("llama_query_model"),
+        "chat_model_kwargs": dict(runtime.get("chat_model_kwargs") or {}),
+        "similarity_top_k": runtime.get("similarity_top_k", 5),
+    }
+
+
+def query_chat_model_kwargs(
+    query_config: dict[str, Any], *, callbacks: Any = None
+) -> dict[str, Any]:
+    return merge_chat_model_kwargs(
+        query_config.get("chat_model_kwargs") or {},
+        model=query_config.get("llama_query_model"),
+        callbacks=callbacks,
+    )
+
 
 class QueryAnswerRetriever:
     def __init__(

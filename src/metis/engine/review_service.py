@@ -409,6 +409,8 @@ class ReviewService:
                     file_diff.path,
                     issues,
                     summary_prompt,
+                    model=self._config.llama_query_model,
+                    chat_model_kwargs=self._config.chat_model_kwargs,
                     callbacks=self._config.usage_runtime.hooks.callbacks,
                 )
                 if changes_summary:

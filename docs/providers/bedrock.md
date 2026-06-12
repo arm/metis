@@ -17,6 +17,10 @@ llm_provider:
   name: "bedrock"
   region: "us-east-1"
   model: "us.anthropic.claude-opus-4-8-v1:0"
+
+embedding_provider:
+  name: "bedrock"
+  region: "us-east-1"
   code_embedding_model: "amazon.titan-embed-text-v2:0"
   docs_embedding_model: "amazon.titan-embed-text-v2:0"
 ```
@@ -24,7 +28,7 @@ llm_provider:
 | Key                     | Required | Notes                                                              |
 | ----------------------- | -------- | ------------------------------------------------------------------ |
 | `region`                | yes      | Bedrock region (e.g. `us-east-1`).                                 |
-| `model`                 | yes      | Bedrock model or inference-profile ID.                             |
+| `model`                 | yes²     | Bedrock chat model or inference-profile ID.                        |
 | `code_embedding_model`  | yes¹     | Bedrock embedding model ID for code indexing.                      |
 | `docs_embedding_model`  | yes¹     | Bedrock embedding model ID for docs indexing.                      |
 | `aws_profile`           | no       | Named profile from `~/.aws/credentials`.                           |
@@ -34,7 +38,8 @@ llm_provider:
 | `endpoint_url`          | no       | Override Bedrock endpoint (e.g. VPC interface endpoint).           |
 | `supports_temperature`  | no       | Set `true` only if the target model accepts `temperature`.         |
 
-¹ Only required when the `index` engine tool is enabled.
+¹ Only required under `embedding_provider` when the `index` engine tool is enabled.
+² Only required under `llm_provider`.
 
 ## Credentials
 

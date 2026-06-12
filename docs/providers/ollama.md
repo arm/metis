@@ -30,6 +30,10 @@ llm_provider:
   name: "ollama"
   base_url: "http://localhost:11434/v1"
   model: "llama3.1:8b"
+
+embedding_provider:
+  name: "ollama"
+  base_url: "http://localhost:11434/v1"
   code_embedding_model: "nomic-embed-text:v1.5"
   docs_embedding_model: "nomic-embed-text:v1.5"
 ```

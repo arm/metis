@@ -9,8 +9,10 @@ import threading
 
 from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
+from metis.engine.options import normalize_top_k
 from metis.engine.tools.registry import build_toolbox
 from metis.exceptions import RetrieverInitError
+from metis.chat_model_options import merge_chat_model_kwargs
 
 from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 
@@ -45,13 +47,17 @@ class TriageServiceRuntimeMixin:
             codebase_path=self.codebase_path,
             timeout_seconds=self.triage_tool_timeout_seconds,
         )
+        usage_chat_kwargs = (
+            self._usage_hooks.chat_model_kwargs() if self._usage_hooks else None
+        )
         return TriageGraph(
             llm_provider=self.llm_provider,
             llama_query_model=self.llama_query_model,
             toolbox=toolbox,
             plugin_config=self.plugin_config,
-            chat_model_kwargs=(
-                self._usage_hooks.chat_model_kwargs() if self._usage_hooks else {}
+            chat_model_kwargs=merge_chat_model_kwargs(
+                self.chat_model_kwargs,
+                usage_chat_kwargs,
             ),
         )
 
@@ -63,7 +69,7 @@ class TriageServiceRuntimeMixin:
         return graph
 
     def _init_and_get_triage_retrievers(self):
-        top_k = self._normalize_top_k(
+        top_k = normalize_top_k(
             self.triage_similarity_top_k, DEFAULT_TRIAGE_SIMILARITY_TOP_K
         )
         retriever_code, retriever_docs = self._create_retrievers(top_k)

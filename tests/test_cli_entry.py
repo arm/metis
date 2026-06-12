@@ -385,121 +385,12 @@ def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     assert "Metis" in capsys.readouterr().out
 
 
-def test_build_embedding_provider_reuses_llm_provider_when_same(monkeypatch):
-    args = SimpleNamespace(quiet=True)
-    llm_provider = object()
-    runtime = {
-        "llm_provider_name": "openai",
-        "embedding_provider_name": "openai",
-        "embedding_provider_config": {"llm_api_key": "k"},
-        "embedding_provider_raw_config": {
-            "name": "openai",
-            "code_embedding_model": "text-embedding-3-large",
-            "docs_embedding_model": "text-embedding-3-large",
-        },
-        "enabled_tools": {"index"},
-    }
-
-    result = entry._build_embedding_provider(args, runtime, llm_provider)
-
-    assert result is llm_provider
-
-
-def test_build_embedding_provider_validates_when_index_enabled(monkeypatch):
-    args = SimpleNamespace(quiet=True)
-    runtime = {
-        "llm_provider_name": "anthropic",
-        "embedding_provider_name": "anthropic",
-        "embedding_provider_config": {},
-        "embedding_provider_raw_config": {"name": "anthropic"},
-        "enabled_tools": {"index"},
-    }
-
-    with pytest.raises(ValueError) as exc_info:
-        entry._build_embedding_provider(args, runtime, object())
-
-    assert "llm_provider.code_embedding_model" in str(exc_info.value)
-
-
-def test_build_embedding_provider_skips_validation_when_index_disabled():
-    args = SimpleNamespace(quiet=True)
-    llm_provider = object()
-    runtime = {
-        "llm_provider_name": "anthropic",
-        "embedding_provider_name": "anthropic",
-        "embedding_provider_config": {},
-        "embedding_provider_raw_config": {"name": "anthropic"},
-        "enabled_tools": set(),
-    }
-
-    result = entry._build_embedding_provider(args, runtime, llm_provider)
-
-    assert result is llm_provider
-
-
-def test_build_embedding_provider_constructs_separate_provider(monkeypatch):
-    constructed = []
-
-    class FakeEmbedProvider:
-        def __init__(self, cfg):
-            constructed.append(cfg)
-
-    monkeypatch.setattr(entry, "get_provider", lambda name: FakeEmbedProvider)
-    args = SimpleNamespace(quiet=True)
-    runtime = {
-        "llm_provider_name": "anthropic",
-        "embedding_provider_name": "openai",
-        "embedding_provider_config": {
-            "llm_api_key": "embed-key",
-            "code_embedding_model": "text-embedding-3-large",
-        },
-        "embedding_provider_raw_config": {
-            "name": "openai",
-            "code_embedding_model": "text-embedding-3-large",
-            "docs_embedding_model": "text-embedding-3-large",
-        },
-        "enabled_tools": {"index"},
-    }
-
-    result = entry._build_embedding_provider(args, runtime, object())
-
-    assert isinstance(result, FakeEmbedProvider)
-    assert constructed[0]["llm_api_key"] == "embed-key"
-
-
-def test_build_embedding_provider_warns_on_incomplete_separate_when_index_off(
-    monkeypatch,
-):
-    captured = []
-    monkeypatch.setattr(
-        entry,
-        "print_console",
-        lambda message, *_args, **_kwargs: captured.append(str(message)),
-    )
-
-    class FakeEmbedProvider:
-        def __init__(self, cfg):
+def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path):
+    class ChatProvider:
+        def __init__(self, _runtime):
             pass
 
-    monkeypatch.setattr(entry, "get_provider", lambda name: FakeEmbedProvider)
-    args = SimpleNamespace(quiet=True)
-    runtime = {
-        "llm_provider_name": "anthropic",
-        "embedding_provider_name": "openai",
-        "embedding_provider_config": {},
-        "embedding_provider_raw_config": {"name": "openai"},
-        "enabled_tools": set(),
-    }
-
-    result = entry._build_embedding_provider(args, runtime, object())
-
-    assert isinstance(result, FakeEmbedProvider)
-    assert any("Warning" in m for m in captured)
-    assert any("embedding_provider.code_embedding_model" in m for m in captured)
-
-
-def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path):
-    class ProviderWithoutEmbeddings:
+    class EmbeddingProvider:
         def __init__(self, _runtime):
             pass
 
@@ -525,20 +416,32 @@ def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path)
         chroma_dir=str(tmp_path / "chromadb"),
         codebase_path=str(tmp_path),
         custom_prompt=None,
+        enabled_tools={"index"},
     )
     runtime = {
         "llm_provider_name": "anthropic",
-        "embedding_provider_name": "anthropic",
-        "embedding_provider_config": {},
-        "embedding_provider_raw_config": {"name": "anthropic"},
+        "llm_provider": {
+            "api_key": "anthropic-key",
+            "model": "claude-opus-4-1-20250805",
+        },
+        "embedding_provider_raw_config": {
+            "api_key_env": "OPENAI_EMBEDDING_KEY",
+            "name": "openai",
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
         "max_workers": 2,
         "max_token_length": 2048,
         "llama_query_model": "claude-opus-4-1-20250805",
         "similarity_top_k": 3,
         "response_mode": "compact",
     }
+    monkeypatch.setenv("OPENAI_EMBEDDING_KEY", "embedding-key")
 
-    monkeypatch.setattr(entry, "get_provider", lambda _name: ProviderWithoutEmbeddings)
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: ChatProvider)
+    monkeypatch.setattr(
+        entry, "get_embedding_provider", lambda _name: EmbeddingProvider
+    )
     monkeypatch.setattr(entry, "build_chroma_backend", build_backend)
     monkeypatch.setattr(entry, "MetisEngine", DummyEngine)
 
@@ -546,4 +449,101 @@ def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path)
 
     assert captured["embed_model_code"] is None
     assert captured["embed_model_docs"] is None
+    assert isinstance(
+        captured["engine_kwargs"]["embedding_provider"], EmbeddingProvider
+    )
     assert captured["engine_kwargs"]["usage_runtime"].codebase_path == str(tmp_path)
+
+
+def test_build_engine_skips_embedding_provider_when_index_tool_disabled(
+    monkeypatch, tmp_path
+):
+    class ChatProvider:
+        def __init__(self, _runtime):
+            pass
+
+    class DummyEngine:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    captured = {}
+
+    def build_backend(_args, _runtime, embed_model_code, embed_model_docs):
+        captured["embed_model_code"] = embed_model_code
+        captured["embed_model_docs"] = embed_model_docs
+        return SimpleNamespace(embed_model_code=None, embed_model_docs=None)
+
+    def fail_get_embedding_provider(_name):
+        raise AssertionError("embedding provider should not be loaded")
+
+    args = SimpleNamespace(
+        backend="chroma",
+        chroma_dir=str(tmp_path / "chromadb"),
+        codebase_path=str(tmp_path),
+        custom_prompt=None,
+        enabled_tools=set(),
+    )
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "llm_provider": {
+            "api_key": "anthropic-key",
+            "model": "claude-opus-4-1-20250805",
+        },
+        "embedding_provider_raw_config": {
+            "name": "openai",
+            "code_embedding_model": "text-embedding-3-large",
+            "docs_embedding_model": "text-embedding-3-large",
+        },
+        "max_workers": 2,
+        "max_token_length": 2048,
+        "llama_query_model": "claude-opus-4-1-20250805",
+        "similarity_top_k": 3,
+        "response_mode": "compact",
+    }
+
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: ChatProvider)
+    monkeypatch.setattr(entry, "get_embedding_provider", fail_get_embedding_provider)
+    monkeypatch.setattr(entry, "build_chroma_backend", build_backend)
+    monkeypatch.setattr(entry, "MetisEngine", DummyEngine)
+
+    engine, _backend = entry.build_engine(args, runtime)
+
+    assert captured["embed_model_code"] is None
+    assert captured["embed_model_docs"] is None
+    assert engine.kwargs["embedding_provider"] is None
+
+
+def test_build_engine_requires_embedding_config_when_index_tool_enabled(
+    monkeypatch, tmp_path
+):
+    class ChatProvider:
+        def __init__(self, _runtime):
+            pass
+
+    args = SimpleNamespace(
+        backend="chroma",
+        chroma_dir=str(tmp_path / "chromadb"),
+        codebase_path=str(tmp_path),
+        custom_prompt=None,
+        enabled_tools={"index"},
+    )
+    runtime = {
+        "llm_provider_name": "anthropic",
+        "llm_provider": {
+            "api_key": "anthropic-key",
+            "model": "claude-opus-4-1-20250805",
+        },
+        "embedding_provider_raw_config": None,
+        "max_workers": 2,
+        "max_token_length": 2048,
+        "llama_query_model": "claude-opus-4-1-20250805",
+        "similarity_top_k": 3,
+        "response_mode": "compact",
+    }
+
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: ChatProvider)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        entry.build_engine(args, runtime)
+
+    assert "embedding_provider" in str(exc_info.value)

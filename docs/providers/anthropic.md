@@ -1,7 +1,7 @@
 # Anthropic Provider
 
 Metis can use Anthropic Claude models, including Claude Opus, for chat, review,
-and triage. Indexing still requires an OpenAI-compatible embedding model because
+and triage. Indexing still requires a separate `embedding_provider` because
 Anthropic does not provide the embedding interface Metis uses.
 
 ## Install
@@ -17,7 +17,7 @@ Add or adjust the `llm_provider` block in your `metis.yaml`:
 ```yaml
 llm_provider:
   name: "anthropic"
-  model: "opus"
+  model: "<claude-model-id>"
   api_key_env: "ANTHROPIC_API_KEY"
 
 # Optional — only needed when the index tool is enabled.
@@ -34,20 +34,11 @@ query:
   temperature: 0.0
 ```
 
-- `model` can be an exact Claude model ID or one of Metis' short aliases.
-- Short aliases map to Claude API model aliases as follows:
-  - `opus` -> `claude-opus-4-8`
-  - `sonnet` -> `claude-sonnet-4-6`
-  - `haiku` -> `claude-haiku-4-5`
-  - `fable` -> `claude-fable-5`
-  - `mythos` -> `claude-mythos-5`
-- You can still use an exact Claude model ID when you need stricter version
-  control.
+- `model` must be a Claude model ID accepted by the Anthropic API.
 - The Anthropic API key is resolved from `llm_provider.api_key`, then
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
 - Embeddings can be supplied via a separate `embedding_provider` block (any
-  supported provider). The legacy `llm_provider.embedding_api_key` /
-  `embedding_api_key_env` keys still work for OpenAI-compatible embeddings.
+  supported embedding provider).
 - Embedding configuration is only required when the `index` tool is enabled
   (`--tools index`). It can be omitted entirely for chat/review/triage
   without retrieval.

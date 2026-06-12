@@ -24,6 +24,11 @@ llm_provider:
   name: "vllm"
   base_url: "http://YOUR-OLLAMA-HOST:8888/v1"
   model: "YOUR-CHAT-MODEL"
+
+# Optional — only needed when the index tool is enabled.
+embedding_provider:
+  name: "vllm"
+  base_url: "http://YOUR-OLLAMA-HOST:8888/v1"
   code_embedding_model: "YOUR-EMBEDDING-MODEL"
   docs_embedding_model: "YOUR-EMBEDDING-MODEL"
 
