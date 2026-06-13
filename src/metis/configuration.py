@@ -91,6 +91,17 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "review_code_exclude_paths", []
     )
     runtime["enabled_tools"] = engine_cfg.get("tools")
+    model_tools_cfg = engine_cfg.get("model_tools") or {}
+    if not isinstance(model_tools_cfg, dict):
+        model_tools_cfg = {}
+    runtime["model_tool_max_rounds"] = _positive_int(
+        model_tools_cfg.get("max_rounds"),
+        fallback=6,
+    )
+    index_search_cfg = engine_cfg.get("index_search") or {}
+    runtime["index_search_config"] = (
+        dict(index_search_cfg) if isinstance(index_search_cfg, dict) else {}
+    )
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     query_cfg = cfg.get("query", {})
@@ -105,7 +116,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "reasoning_effort"
     ) or llm_cfg.get("reasoning_effort")
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
-    runtime["triage_similarity_top_k"] = query_cfg.get("triage_similarity_top_k", 3)
     chat_model_kwargs: dict[str, object] = {}
     if runtime.get("llama_query_temperature") is not None:
         chat_model_kwargs["temperature"] = runtime["llama_query_temperature"]
@@ -154,6 +164,16 @@ def _get_provider_cls(provider_name: str, section: str) -> type:
         return get_embedding_provider(provider_name)
     except ValueError as exc:
         raise ValueError(f"Unsupported {section} provider: {provider_name}") from exc
+
+
+def _positive_int(value: object, *, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed <= 0:
+        return fallback
+    return parsed
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

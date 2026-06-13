@@ -1,0 +1,31 @@
+schema_version: 1
+name: mcp
+title: MCP servers
+description: Adapter layer for tools, resources, and prompts exposed by configured MCP servers.
+visibility: public
+status: planned
+default_enabled: false
+contracts:
+  model: docs/tools/mcp.md
+capabilities:
+  - id: mcp.import_tools
+    name: mcp.import_tools
+    title: Import MCP tools
+    description: Discover and wrap MCP server tools as Metis tool capabilities.
+    surfaces: [model_tool, orchestration]
+    domains: [external_tools]
+    status: planned
+  - id: mcp.import_resources
+    name: mcp.import_resources
+    title: Import MCP resources
+    description: Load MCP resources as Metis context providers.
+    surfaces: [context_provider, orchestration]
+    domains: [external_context]
+    status: planned
+  - id: mcp.import_prompts
+    name: mcp.import_prompts
+    title: Import MCP prompts
+    description: Load MCP prompts as model contracts or workflow prompts.
+    surfaces: [prompt_contract]
+    domains: [external_context]
+    status: planned

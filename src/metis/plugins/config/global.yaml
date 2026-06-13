@@ -11,11 +11,6 @@ general_prompts:
     instructions or checks below, follow 'Custom Guidance'. If guidance excludes
     certain issue classes, omit them from analysis and do not report them unless
     directly necessary to explain another issue.
-  retrieve_context: |-
-    You are a senior software engineer and your task is to explain what the following FILE does and what its purpose is.
-    Include any data flows, function calls, or dependencies that could impact security.
-    Make sure you flag any function input that is externally controlled.
-    FILE: {file_path}
   security_review_report: |-
     3. How to Report
         - List all identified security issues in a JSON array.
@@ -36,7 +31,7 @@ general_prompts:
     - Return status=invalid only when concrete evidence contradicts the finding.
     - For valid, include at least one evidence citation in file:line format and a non-empty resolution_chain.
   triage_decision_prompt: |-
-    Given the finding details, RAG context, and tool outputs, return a final triage decision.
+    Given the finding details and tool outputs, return a final triage decision.
     The reported line number might be off; rely on nearby code regions and related symbols.
     If evidence is not at the exact reported line, use closest relevant function/block and call sites.
     Search for definitions and references across the whole codebase before concluding inconclusive.

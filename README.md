@@ -166,6 +166,8 @@ Metis configuration can be over-ridden using a YAML configuration file (`metis.y
 - **Engine behavior:** max workers, max token length, similarity top-k
 - **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
 - **Index storage:** backend-specific storage parameters for commands that still use the index.
+- **Tool defaults:** tool manifests define per-tool runtime defaults such as
+  `index.search` result limits.
 - **Reachability:** tree-sitter reachability tuning, including review-file mode and path-confirmation limits.
 
 This file is **required** to run Metis and should be customized per deployment.
@@ -212,9 +214,12 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
 - `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--tools index` – opt in to vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage). Off by default.
+- `--tools index,navigation|all|none` – configure engine tools. `navigation` is the default read-only source navigation umbrella for grep/sed-style evidence tools. `index` enables vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage) plus the model-callable `index_search` tool for review prompts, and remains opt-in. Use `--tools none` to disable the default tool set.
 - `--ignore-index` – compatibility no-op retained for existing scripts.
 - `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
+
+See [docs/tool-plugins.md](docs/tool-plugins.md) for the tool plugin contract and
+planned tree-sitter, model-tool, MCP, and private-tool extension path.
 
 ### `index`
 Builds the legacy vector index used by `ask` and `update`.

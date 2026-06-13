@@ -1,0 +1,112 @@
+schema_version: 1
+name: index
+title: Vector index
+description: Vector-index-backed code and documentation retrieval.
+implementation: metis.engine.tools.index:IndexTool
+visibility: public
+status: active
+default_enabled: false
+contracts:
+  model: package://metis.engine.tools.contracts/index.md
+config:
+  model_tool:
+    max_contract_chars: 6000
+  search:
+    max_top_k: 4
+    code_top_k: 1
+    docs_top_k: 4
+    docs_char_ratio: 1.0
+    default_max_chars: 5000
+    max_chars: 7000
+capabilities:
+  - id: index.build
+    name: index.build
+    title: Build index
+    description: Build the vector index used by retrieval-backed commands.
+    surfaces: [cli_command, orchestration]
+    domains: [indexing]
+    status: active
+  - id: index.update
+    name: index.update
+    title: Update index
+    description: Incrementally update the vector index from a patch.
+    surfaces: [cli_command, orchestration]
+    domains: [indexing]
+    status: active
+  - id: index.retrieve
+    name: index.retrieve
+    title: Retrieve index context
+    description: Retrieve relevant code and documentation context for index-backed orchestration surfaces.
+    surfaces: [context_provider, orchestration]
+    domains: [ask_context]
+    status: active
+  - id: index.search
+    name: index_search
+    title: Search index
+    description: >-
+      Search the Metis vector index for relevant code and documentation context.
+      Use this sparingly when broader project context, related definitions,
+      APIs, design notes, threat model, documented assumptions, or
+      documentation can materially improve confidence in a current-file
+      decision. First form a concrete candidate from the reviewed code, then ask
+      one targeted factual question only if a missing project fact controls
+      confidence. Ask for neutral project facts, not audit conclusions or issue
+      classes. Treat results as context candidates that confirm, contradict, or
+      leave unresolved the specific assumptions behind a finding; do not use
+      retrieved context to discover findings or search for bug patterns.
+    surfaces: [model_tool]
+    domains: [ask_context, review_context, triage_context]
+    provider: index
+    operation: search
+    input_schema:
+      type: object
+      required: [query]
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          description: >-
+            Ask a short, human-readable factual question that states the
+            neutral project fact you need to understand: data origin, API
+            contract, trust boundary, configuration source, lifecycle,
+            invariant, or documented assumption. Include important symbols,
+            APIs, files, or architecture terms as anchors. Do not ask the index
+            to produce audit conclusions, classify bugs, or find bug instances.
+            Do not name vulnerability classes, exploit techniques, CWE IDs, or
+            issue types in the query; translate that uncertainty into neutral
+            facts such as input origin, trust boundary, lifecycle, parser
+            behavior, prompt/data separation, or path confinement.
+            Do not use it before the reviewed code has produced a concrete
+            candidate and an exact factual assumption to check. Do not use it as
+            a broad source scan, implementation lookup, discovery mechanism, or
+            keyword-only search string.
+          examples:
+            - >-
+              How does this project define trust boundaries for configuration
+              files loaded by the CLI?
+        top_k:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional shared nearest-neighbor fallback. Usually omit this so
+            runtime source-specific defaults can retrieve more documentation
+            than code. Runtime caps come from config.search.max_top_k.
+        max_chars:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional maximum characters to return across code and docs context.
+            Usually omit this so the tested runtime profile controls the
+            retrieval budget. If you set it, choose the smallest budget that can
+            answer the factual question. Runtime caps come from
+            config.search.max_chars.
+        source:
+          type: string
+          enum: [both, docs, code]
+          description: >-
+            Optional retrieval source. Use docs for threat model, trust
+            boundary, deployment, configuration ownership, documented
+            assumptions, and non-goal questions. Use code for related
+            definitions or API behavior. Use both when a factual assumption
+            needs source and documentation context.
+    status: active

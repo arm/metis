@@ -26,6 +26,8 @@ class EngineRepository:
     def __init__(self, config: EngineConfig, state: EngineState):
         self._config = config
         self._state = state
+        self._metisignore_loaded = False
+        self._metisignore_spec: pathspec.GitIgnoreSpec | None = None
 
     def get_plugin_for_extension(self, extension):
         registry = self._config.language_registry
@@ -120,17 +122,21 @@ class EngineRepository:
         return bool(spec and spec.match_file(self.normalize_match_path(path)))
 
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
+        if self._metisignore_loaded:
+            return self._metisignore_spec
+        self._metisignore_loaded = True
+
         metisignore_path = self.resolve_metisignore_path()
         try:
             if not metisignore_path:
-                logger.info("No MetisIgnore file provided")
+                logger.debug("No MetisIgnore file provided")
                 return None
             with open(metisignore_path, "r") as f:
-                spec = pathspec.GitIgnoreSpec.from_lines(f)
+                self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(f)
                 logger.info(f"MetisIgnore file loaded: {metisignore_path}")
-            return spec
+            return self._metisignore_spec
         except FileNotFoundError:
-            logger.info(f"MetisIgnore file not loaded {metisignore_path}")
+            logger.debug(f"MetisIgnore file not loaded {metisignore_path}")
             return None
 
     def get_code_files(self, *, include_suffixed_sources: bool = False):

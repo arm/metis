@@ -27,6 +27,8 @@ metis_engine:
   reachability_security_functions: []
   reachability_domain_profiles: []
   reachability_domain_hints: []
+  model_tools:
+    max_rounds: 6
 
 llm_provider:
   name: "openai"

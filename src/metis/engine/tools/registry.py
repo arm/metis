@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+from .catalog import get_tool_manifest
 from .base import ToolBox, ToolContext, ToolDefinition
 from .static_tools import StaticToolRunner
 
 
 def get_tool_policies() -> dict[str, tuple[str, ...]]:
-    return {
-        "triage_evidence": ("grep", "find_name", "cat", "sed"),
-    }
+    policies: dict[str, list[str]] = {}
+    for definition in get_tool_definitions():
+        for domain in definition.domains:
+            policies.setdefault(domain, []).append(definition.name)
+    return {name: tuple(tools) for name, tools in sorted(policies.items())}
 
 
 def _build_providers(context: ToolContext) -> dict[str, object]:
@@ -67,32 +70,24 @@ def _validate_policy_map(
 
 
 def get_tool_definitions() -> tuple[ToolDefinition, ...]:
-    return (
-        ToolDefinition(
-            name="grep",
-            domains=tuple(get_tool_policies()),
-            provider="static",
-            operation="grep",
-        ),
-        ToolDefinition(
-            name="find_name",
-            domains=tuple(get_tool_policies()),
-            provider="static",
-            operation="find_name",
-        ),
-        ToolDefinition(
-            name="cat",
-            domains=tuple(get_tool_policies()),
-            provider="static",
-            operation="cat",
-        ),
-        ToolDefinition(
-            name="sed",
-            domains=tuple(get_tool_policies()),
-            provider="static",
-            operation="sed",
-        ),
-    )
+    manifest = get_tool_manifest("navigation")
+    if manifest is None:
+        return ()
+    definitions = []
+    for capability in manifest.capabilities:
+        if capability.status != "active":
+            continue
+        if not capability.provider or not capability.operation:
+            continue
+        definitions.append(
+            ToolDefinition(
+                name=capability.name,
+                domains=capability.domains,
+                provider=capability.provider,
+                operation=capability.operation,
+            )
+        )
+    return tuple(definitions)
 
 
 def build_toolbox(

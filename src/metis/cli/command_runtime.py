@@ -10,4 +10,3 @@ from dataclasses import dataclass
 class CommandRuntime:
     command: str
     command_args: list[str]
-    use_retrieval_context: bool

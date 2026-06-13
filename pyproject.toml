@@ -91,6 +91,8 @@ entry-points."metis.providers"."vllm.embedding" = "metis.providers.vllm:VLLMEmbe
 [tool.setuptools]
 include-package-data = true
 package-data."metis.cli" = [ "report_template.html" ]
+package-data."metis.engine.tools.contracts" = [ "*.md" ]
+package-data."metis.engine.tools.manifests" = [ "*.yaml" ]
 package-data."metis.plugins" = [
   "config/*.yaml",
   "languages/*.yaml",

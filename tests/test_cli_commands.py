@@ -7,21 +7,19 @@ from types import SimpleNamespace
 
 from metis.cli import commands
 from metis.cli.command_runtime import CommandRuntime
-from metis.engine.options import ReviewOptions, TriageOptions
+from metis.engine.options import TriageOptions
 
 
 def test_run_review_code_uses_review_domain_surface(monkeypatch):
     calls = []
 
     class _ReviewDomain:
-        def get_code_files(self, options=None):
-            assert isinstance(options, ReviewOptions)
-            calls.append(("get_code_files", options.use_retrieval_context))
+        def get_code_files(self):
+            calls.append("get_code_files")
             return ["a.py"]
 
-        def review_code(self, options=None):
-            assert isinstance(options, ReviewOptions)
-            calls.append(("review_code", options.use_retrieval_context))
+        def review_code(self):
+            calls.append("review_code")
             yield {"file": "a.py", "reviews": []}
 
     engine = SimpleNamespace(review=_ReviewDomain())
@@ -34,7 +32,6 @@ def test_run_review_code_uses_review_domain_surface(monkeypatch):
     runtime = CommandRuntime(
         command="review_code",
         command_args=[],
-        use_retrieval_context=True,
     )
 
     monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
@@ -47,7 +44,7 @@ def test_run_review_code_uses_review_domain_surface(monkeypatch):
 
     commands.run_review_code(engine, args, runtime)
 
-    assert calls == [("get_code_files", True), ("review_code", True)]
+    assert calls == ["get_code_files", "review_code"]
 
 
 def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):
@@ -77,7 +74,6 @@ def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):
         CommandRuntime(
             command="update",
             command_args=[str(patch_file)],
-            use_retrieval_context=True,
         ),
     )
 
@@ -115,16 +111,15 @@ def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):
     assert calls == ["count", "prepare", "finalize"]
 
 
-def test_run_triage_propagates_no_index_mode_without_warning(tmp_path, monkeypatch):
+def test_run_triage_passes_triage_options(tmp_path, monkeypatch):
     sarif_path = tmp_path / "input.sarif"
     sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
-    captured = []
 
     class _DummyEngine:
         def triage_sarif_file(self, input_path, output_path=None, **kwargs):
             assert input_path == str(sarif_path)
             assert isinstance(kwargs["options"], TriageOptions)
-            assert kwargs["options"].use_retrieval_context is False
+            assert kwargs["options"].include_triaged is False
             return output_path or input_path
 
     args = SimpleNamespace(
@@ -135,28 +130,19 @@ def test_run_triage_propagates_no_index_mode_without_warning(tmp_path, monkeypat
     runtime = CommandRuntime(
         command="triage",
         command_args=[str(sarif_path)],
-        use_retrieval_context=False,
     )
-    monkeypatch.setattr(
-        commands,
-        "print_console",
-        lambda message, *_args, **_kwargs: captured.append(str(message)),
-    )
+    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
 
     commands.run_triage(_DummyEngine(), str(sarif_path), args, runtime)
 
-    assert not any("Running without index" in message for message in captured)
 
-
-def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
-    patch_file = tmp_path / "change.diff"
-    patch_file.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
-    captured = []
+def test_run_review_patch_uses_review_domain_surface(monkeypatch, tmp_path):
+    patch_path = tmp_path / "change.diff"
+    patch_path.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
 
     class _ReviewDomain:
-        def review_patch(self, patch_file=None, options=None):
-            assert isinstance(options, ReviewOptions)
-            assert options.use_retrieval_context is False
+        def review_patch(self, patch_file=None):
+            assert patch_file == str(patch_path)
             return {"reviews": [], "overall_changes": ""}
 
     engine = SimpleNamespace(review=_ReviewDomain())
@@ -167,8 +153,7 @@ def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
     )
     runtime = CommandRuntime(
         command="review_patch",
-        command_args=[str(patch_file)],
-        use_retrieval_context=False,
+        command_args=[str(patch_path)],
     )
 
     monkeypatch.setattr(
@@ -177,7 +162,7 @@ def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(
         commands,
         "print_console",
-        lambda message, *_args, **_kwargs: captured.append(str(message)),
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         commands,
@@ -188,19 +173,17 @@ def test_run_review_patch_propagates_no_index_mode(monkeypatch, tmp_path):
         ),
     )
 
-    commands.run_review(engine, str(patch_file), args, runtime)
-
-    assert not any("Running without index" in message for message in captured)
+    commands.run_review(engine, str(patch_path), args, runtime)
 
 
 def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     calls = []
 
     class _ReviewDomain:
-        def get_code_files(self, options=None):
+        def get_code_files(self):
             return ["a.py"]
 
-        def review_code(self, options=None):
+        def review_code(self):
             yield {"file": "a.py", "reviews": []}
 
     class _Engine:
@@ -223,7 +206,6 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     runtime = CommandRuntime(
         command="review_code",
         command_args=[],
-        use_retrieval_context=True,
     )
 
     monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)

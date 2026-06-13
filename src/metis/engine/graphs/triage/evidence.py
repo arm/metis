@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import re
 
+from metis.engine.analysis.c_family_helpers import extract_code_like_symbols
 from metis.engine.analysis.c_family_macro import is_c_macro_like_symbol
 
 from . import constants as C
 from ..types import TriageState
-from .retrieval import _extract_symbol_candidates
 from .evidence_text import (
     _extract_call_like_identifiers,
     _extract_terms,
@@ -31,6 +31,10 @@ from .obligations import (
     compute_obligation_coverage,
     derive_obligations,
 )
+
+
+def _extract_symbol_candidates(*texts: str, limit: int = 12) -> list[str]:
+    return extract_code_like_symbols(*texts, limit=limit)
 
 
 def _enforce_section_limit(

@@ -70,40 +70,9 @@ def test_triage_graph_accepts_inconclusive(monkeypatch):
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
-
-
-def test_triage_graph_propagates_retrieval_context_flag(monkeypatch):
-    g = _build_graph()
-    app = _App(
-        {
-            "decision_status": "valid",
-            "decision_reason": "ok",
-            "decision_evidence": ["a.c:1"],
-            "decision_resolution_chain": ["x -> y"],
-            "decision_unresolved_hops": [],
-        }
-    )
-    monkeypatch.setattr(g, "_get_app", lambda: app)
-
-    g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-            "retriever_code": None,
-            "retriever_docs": None,
-            "use_retrieval_context": False,
-        }
-    )
-
-    assert app.last_input["use_retrieval_context"] is False
 
 
 def test_triage_graph_fills_unresolved_hops_for_inconclusive(monkeypatch):
@@ -128,8 +97,6 @@ def test_triage_graph_fills_unresolved_hops_for_inconclusive(monkeypatch):
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
@@ -158,8 +125,6 @@ def test_triage_graph_keeps_inconclusive_when_uncertainty_exists(monkeypatch):
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
@@ -187,8 +152,6 @@ def test_triage_graph_allows_valid_with_non_critical_unresolved_hops(monkeypatch
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "valid"
@@ -216,8 +179,6 @@ def test_triage_graph_keeps_inconclusive_with_critical_unresolved_hops(monkeypat
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
@@ -254,8 +215,6 @@ def test_triage_graph_allows_valid_when_macro_unresolved_hop_is_resolved(monkeyp
             "finding_line": 1,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "valid"
@@ -285,8 +244,6 @@ def test_triage_graph_does_not_force_inconclusive_for_assumption_findings(monkey
             "finding_line": 75,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "valid"
@@ -314,8 +271,6 @@ def test_triage_graph_does_not_upgrade_invalid_to_valid(monkeypatch):
             "finding_line": 10,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "invalid"
@@ -344,8 +299,6 @@ def test_triage_graph_applies_evidence_gate_override(monkeypatch):
             "finding_line": 10,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
@@ -385,8 +338,6 @@ def test_triage_graph_applies_status_specific_obligation_gate(monkeypatch):
             "finding_line": 10,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "inconclusive"
@@ -430,8 +381,6 @@ def test_triage_graph_relaxes_invalid_constraint_gate_when_core_evidence_present
             "finding_line": 10,
             "finding_rule_id": "R1",
             "finding_snippet": "",
-            "retriever_code": object(),
-            "retriever_docs": object(),
         }
     )
     assert out["status"] == "invalid"

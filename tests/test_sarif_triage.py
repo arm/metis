@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
-
-import pytest
-
-from metis.engine.options import TriageOptions
-from metis.exceptions import ToolDisabledError
 from metis.sarif.triage import extract_findings
 
 
@@ -145,11 +139,6 @@ def test_triage_payload_skips_failed_finding(engine, monkeypatch):
                 raise RuntimeError("boom")
             return {"status": "valid", "reason": "confirmed"}
 
-    monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (SimpleNamespace(), SimpleNamespace()),
-    )
     engine.max_workers = 1
     engine._triage_service.max_workers = 1
     dummy_graph = _DummyGraph()
@@ -196,11 +185,6 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
         writes.append(triaged_count)
 
     monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (SimpleNamespace(), SimpleNamespace()),
-    )
-    monkeypatch.setattr(
         engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
     )
     monkeypatch.setattr("metis.engine.triage_service_exec.save_sarif_file", _save)
@@ -211,87 +195,6 @@ def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
 
     assert out_path == str(input_path)
     assert writes == [2, 4, 5]
-
-
-def test_triage_payload_no_index_skips_retriever_init(engine, monkeypatch):
-    payload = {
-        "version": "2.1.0",
-        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
-    }
-
-    class _DummyGraph:
-        def triage(self, request):
-            assert request["use_retrieval_context"] is False
-            assert request["retriever_code"] is None
-            assert request["retriever_docs"] is None
-            return {"status": "valid", "reason": "confirmed"}
-
-    monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("should not initialize retrievers")
-        ),
-    )
-    monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
-    )
-    engine._triage_service.max_workers = 1
-
-    out = engine.triage_sarif_payload(payload)
-
-    result = out["runs"][0]["results"][0]
-    assert result["properties"]["metisTriaged"] is True
-
-
-def test_triage_payload_requires_index_tool_when_retrieval_requested(
-    dummy_backend, dummy_llm
-):
-    from metis.engine import MetisEngine
-
-    payload = {
-        "version": "2.1.0",
-        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
-    }
-    engine = MetisEngine(
-        codebase_path="./tests/data",
-        vector_backend=dummy_backend,
-        llm_provider=dummy_llm,
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools=frozenset(),
-    )
-
-    engine._triage_service.max_workers = 1
-
-    with pytest.raises(ToolDisabledError):
-        engine.triage_sarif_payload(
-            payload,
-            options=TriageOptions(use_retrieval_context=True),
-        )
-
-    dummy_backend.get_retrievers.assert_not_called()
-
-
-def test_triage_payload_raises_when_retriever_init_fails(engine, monkeypatch):
-    payload = {
-        "version": "2.1.0",
-        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
-    }
-
-    monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    with pytest.raises(RuntimeError, match="boom"):
-        engine.triage_sarif_payload(
-            payload,
-            options=TriageOptions(use_retrieval_context=True),
-        )
 
 
 def test_triage_request_propagates_source_metadata(engine, monkeypatch):
@@ -325,11 +228,6 @@ def test_triage_request_propagates_source_metadata(engine, monkeypatch):
             captured["source_tool"] = request.get("finding_source_tool")
             return {"status": "valid", "reason": "ok"}
 
-    monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (SimpleNamespace(), SimpleNamespace()),
-    )
     monkeypatch.setattr(
         engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
     )
@@ -379,11 +277,6 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
             captured["explanation"] = request.get("finding_explanation")
             return {"status": "valid", "reason": "ok"}
 
-    monkeypatch.setattr(
-        engine._triage_service,
-        "_init_and_get_triage_retrievers",
-        lambda: (SimpleNamespace(), SimpleNamespace()),
-    )
     monkeypatch.setattr(
         engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
     )

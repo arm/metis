@@ -8,13 +8,7 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewOptions:
-    use_retrieval_context: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class TriageOptions:
-    use_retrieval_context: bool = False
     include_triaged: bool = False
 
 

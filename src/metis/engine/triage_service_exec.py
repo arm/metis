@@ -48,10 +48,7 @@ class TriageServiceExecutionMixin:
         self,
         *,
         finding,
-        retriever_code,
-        retriever_docs,
         debug_callback,
-        options: TriageOptions,
     ) -> TriageRequest:
         analyzer = self._get_thread_triage_analyzer(finding.file_path)
         plugin = self._get_triage_plugin(finding.file_path)
@@ -64,13 +61,10 @@ class TriageServiceExecutionMixin:
             "finding_source_tool": getattr(finding, "source_tool", ""),
             "finding_is_metis": bool(getattr(finding, "is_metis_source", False)),
             "finding_explanation": getattr(finding, "explanation", ""),
-            "retriever_code": retriever_code,
-            "retriever_docs": retriever_docs,
             "debug_callback": debug_callback,
             "triage_analyzer": analyzer,
             "triage_plugin": plugin,
             "triage_codebase_path": self.codebase_path,
-            "use_retrieval_context": options.use_retrieval_context,
         }
 
     def _triage_one_finding(
@@ -78,17 +72,10 @@ class TriageServiceExecutionMixin:
         finding,
         *,
         debug_callback,
-        options: TriageOptions,
     ) -> dict:
-        retriever_code = retriever_docs = None
-        if options.use_retrieval_context:
-            retriever_code, retriever_docs = self._get_thread_triage_retrievers()
         req = self._build_triage_request(
             finding=finding,
-            retriever_code=retriever_code,
-            retriever_docs=retriever_docs,
             debug_callback=debug_callback,
-            options=options,
         )
         return self._get_thread_triage_graph().triage(req)
 
@@ -158,7 +145,6 @@ class TriageServiceExecutionMixin:
         progress_callback,
         debug_callback,
         checkpoint_callback,
-        options: TriageOptions,
     ) -> None:
         processed = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -176,7 +162,6 @@ class TriageServiceExecutionMixin:
                     self._triage_one_finding,
                     finding,
                     debug_callback=debug_callback,
-                    options=options,
                 )
                 future_map[future] = (idx, finding)
 
@@ -219,9 +204,6 @@ class TriageServiceExecutionMixin:
 
         total = len(findings)
 
-        if options.use_retrieval_context:
-            self._get_thread_triage_retrievers()
-
         self._triage_findings_parallel(
             findings=findings,
             triaged_payload=triaged,
@@ -229,7 +211,6 @@ class TriageServiceExecutionMixin:
             progress_callback=progress_callback,
             debug_callback=debug_callback,
             checkpoint_callback=checkpoint_callback,
-            options=options,
         )
 
         return triaged

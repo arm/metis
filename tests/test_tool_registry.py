@@ -3,7 +3,13 @@
 
 import pytest
 
-from metis.engine.tools import build_toolbox, get_tool_definitions, registry
+from metis.engine.tools import (
+    build_toolbox,
+    get_tool_config,
+    get_tool_definitions,
+    registry,
+)
+from metis.engine.tools.catalog import _read_contract_ref
 from metis.engine.tools.base import ToolContext, ToolDefinition
 
 
@@ -13,6 +19,37 @@ def test_tool_definitions_expose_named_tools():
 
     assert names == {"grep", "find_name", "cat", "sed"}
     assert all(tool.domains == ("triage_evidence",) for tool in defs)
+
+
+def test_index_tool_config_loads_manifest_defaults():
+    config = get_tool_config("index")
+
+    assert "max_rounds" not in config["model_tool"]
+    assert config["model_tool"]["max_contract_chars"] == 6000
+    assert config["search"]["max_top_k"] == 4
+    assert config["search"]["code_top_k"] == 1
+    assert config["search"]["docs_top_k"] == 4
+    assert config["search"]["docs_char_ratio"] == 1.0
+    assert config["search"]["default_max_chars"] == 5000
+    assert config["search"]["max_chars"] == 7000
+
+
+def test_tool_config_returns_isolated_copy():
+    config = get_tool_config("index")
+    config["search"]["max_top_k"] = 99
+
+    assert get_tool_config("index")["search"]["max_top_k"] == 4
+
+
+def test_local_contract_refs_are_not_cached(tmp_path):
+    contract = tmp_path / "contract.md"
+    contract.write_text("first", encoding="utf-8")
+
+    assert _read_contract_ref(str(contract)) == "first"
+
+    contract.write_text("second", encoding="utf-8")
+
+    assert _read_contract_ref(str(contract)) == "second"
 
 
 def test_build_toolbox_for_policy_exposes_list_and_invocation(tmp_path):

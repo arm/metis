@@ -25,10 +25,8 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         chat_model_kwargs: dict[str, Any] | None,
         plugin_config: dict[str, Any],
         max_workers: int,
-        triage_similarity_top_k: int,
         triage_checkpoint_every: int,
         triage_tool_timeout_seconds: int,
-        create_retrievers: Callable[[int], tuple[Any, Any]],
         get_plugin_for_path: Callable[[str], Any],
         get_language_name_for_path: Callable[[str], str | None],
         usage_hooks: UsageHooks | None = None,
@@ -39,14 +37,11 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.chat_model_kwargs = dict(chat_model_kwargs or {})
         self.plugin_config = plugin_config
         self.max_workers = max(1, max_workers)
-        self.triage_similarity_top_k = triage_similarity_top_k
         self.triage_checkpoint_every = triage_checkpoint_every
         self.triage_tool_timeout_seconds = int(triage_tool_timeout_seconds)
-        self._create_retrievers = create_retrievers
         self._get_plugin_for_path = get_plugin_for_path
         self._get_language_name_for_path = get_language_name_for_path
         self._usage_hooks = usage_hooks
 
         self._triage_graph_local = threading.local()
-        self._triage_retrievers_local = threading.local()
         self._triage_analyzers_local = threading.local()

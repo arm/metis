@@ -21,7 +21,6 @@ from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
 from .tools.engine import build_engine_tools
 from .tools.selection import parse_engine_tools
-from .triage_constants import DEFAULT_TRIAGE_SIMILARITY_TOP_K
 from .triage_service import TriageService
 
 logger = logging.getLogger("metis")
@@ -64,9 +63,6 @@ class MetisEngine:
         self.chat_model_kwargs = dict(kwargs.get("chat_model_kwargs") or {})
         self.doc_chunk_size = kwargs.get("doc_chunk_size", 1024)
         self.doc_chunk_overlap = kwargs.get("doc_chunk_overlap", 200)
-        self.triage_similarity_top_k = kwargs.get(
-            "triage_similarity_top_k", DEFAULT_TRIAGE_SIMILARITY_TOP_K
-        )
         self.triage_checkpoint_every = kwargs.get("triage_checkpoint_every", 50)
         self.triage_tool_timeout_seconds = int(
             kwargs.get("triage_tool_timeout_seconds", 12)
@@ -76,6 +72,11 @@ class MetisEngine:
         self.review_code_include_paths = kwargs.get("review_code_include_paths", [])
         self.review_code_exclude_paths = kwargs.get("review_code_exclude_paths", [])
         self.enabled_tools = parse_engine_tools(kwargs.get("enabled_tools"))
+        self.model_tool_max_rounds = _positive_int(
+            kwargs.get("model_tool_max_rounds"),
+            fallback=6,
+        )
+        self.index_search_config = dict(kwargs.get("index_search_config") or {})
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -107,6 +108,8 @@ class MetisEngine:
             review_code_include_paths=list(self.review_code_include_paths),
             review_code_exclude_paths=list(self.review_code_exclude_paths),
             enabled_tools=self.enabled_tools,
+            model_tool_max_rounds=self.model_tool_max_rounds,
+            index_search_config=self.index_search_config,
             language_registry=self.language_registry,
             code_exts=self.code_exts,
         )
@@ -169,10 +172,8 @@ class MetisEngine:
             chat_model_kwargs=self.chat_model_kwargs,
             plugin_config=self.plugin_config,
             max_workers=self.max_workers,
-            triage_similarity_top_k=self.triage_similarity_top_k,
             triage_checkpoint_every=self.triage_checkpoint_every,
             triage_tool_timeout_seconds=self.triage_tool_timeout_seconds,
-            create_retrievers=self.tools.index.create_retrievers,
             get_plugin_for_path=self.repository.get_plugin_for_path,
             get_language_name_for_path=self.repository.get_language_name_for_path,
             usage_hooks=self.usage_runtime.hooks,
@@ -192,6 +193,8 @@ class MetisEngine:
                 llama_query_model=self.llama_query_model,
                 max_token_length=self.max_token_length,
                 chat_model_kwargs=self._chat_model_kwargs(),
+                model_tools=self.tools.langchain_tools(),
+                model_tool_max_rounds=self.tools.model_tool_max_rounds(),
             )
         return self._state.review_graph
 
@@ -278,3 +281,13 @@ class MetisEngine:
         self.tools.index.clear_retriever_cache()
         self._triage_service.close()
         self.tools.close()
+
+
+def _positive_int(value: object, *, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed <= 0:
+        return fallback
+    return parsed

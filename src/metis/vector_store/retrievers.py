@@ -80,7 +80,7 @@ class QueryAnswerRetriever:
         )
 
     def _retrieve_context(self, query: str) -> str:
-        documents = _retrieve_documents(self._retriever, query)
+        documents = retrieve_documents(self._retriever, query)
         return "\n\n".join(
             text for document in (documents or []) if (text := document_text(document))
         )
@@ -163,7 +163,7 @@ def document_text(document: Any) -> str:
     return ""
 
 
-def _retrieve_documents(retriever: Any, query: str):
+def retrieve_documents(retriever: Any, query: str):
     get_relevant_documents = getattr(retriever, "get_relevant_documents", None)
     if callable(get_relevant_documents):
         return get_relevant_documents(query)

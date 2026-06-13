@@ -5,26 +5,25 @@ splitting:
 prompts:
   security_review: |-
     1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
-    Always tie identified issues directly to the evidence in FILE_CHANGES[[RELEVANT_CONTEXT_PATCH_EVIDENCE_SUFFIX]],
-    and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+    Always tie identified issues directly to the evidence in FILE_CHANGES and ORIGINAL_FILE. Do not introduce conclusions that are not supported by the .td contents.
 
     You will be given:
     1) FILE_CHANGES - a set of .td changes with lines marked by "+" (added) or "-" (removed).
-    [[RELEVANT_CONTEXT_INPUT_TD]]
-    [[ORIGINAL_FILE_INDEX_PAREN]] ORIGINAL_FILE - the original TableGen file (this may be empty).
+
+    2) ORIGINAL_FILE - the original TableGen file (this may be empty).
 
     Your tasks are:
     1. Security Review Scope
        - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+" or "-" but taking into account how they interact with the whole file.
-    [[RELEVANT_CONTEXT_UNINDENTED]]
+
   security_review_file: |-
     1. You are a thorough security engineer specializing in LLVM TableGen (.td) specifications.
-    Always tie identified issues directly to the evidence in FILE[[RELEVANT_CONTEXT_FILE_EVIDENCE_SUFFIX]].
-    Do not introduce conclusions that are not supported by the .td contents[[RELEVANT_CONTEXT_TD_PROVIDED_SUFFIX]].
+    Always tie identified issues directly to the evidence in FILE.
+    Do not introduce conclusions that are not supported by the .td contents.
 
     You will be given:
     1) FILE - a TableGen file (e.g., instruction/operand/register definitions, patterns, features).
-    [[RELEVANT_CONTEXT_INPUT_TD]]
+
   security_review_checks: |-
     Your tasks:
 

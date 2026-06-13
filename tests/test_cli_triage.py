@@ -29,43 +29,12 @@ def test_build_triaged_sarif_payload_reuses_engine_path():
     runtime = CommandRuntime(
         command="review_code",
         command_args=[],
-        use_retrieval_context=True,
     )
     results = {"reviews": []}
 
     payload = _build_triaged_sarif_payload(engine, results, args, runtime)
     assert engine.called is True
     assert isinstance(payload, dict)
-    assert payload["runs"] == []
-
-
-def test_build_triaged_sarif_payload_propagates_no_index_mode():
-    class _DummyEngine:
-        def __init__(self):
-            self.called = False
-
-        def triage_sarif_payload(self, payload, **kwargs):
-            self.called = True
-            assert isinstance(kwargs.get("options"), TriageOptions)
-            assert kwargs["options"].use_retrieval_context is False
-            payload["runs"] = []
-            return payload
-
-    engine = _DummyEngine()
-    args = SimpleNamespace(
-        triage=True,
-        quiet=True,
-        include_triaged=False,
-    )
-    runtime = CommandRuntime(
-        command="review_code",
-        command_args=[],
-        use_retrieval_context=False,
-    )
-    results = {"reviews": []}
-
-    payload = _build_triaged_sarif_payload(engine, results, args, runtime)
-    assert engine.called is True
     assert payload["runs"] == []
 
 
@@ -89,7 +58,6 @@ def test_run_triage_defaults_to_inplace(tmp_path):
         CommandRuntime(
             command="triage",
             command_args=[str(sarif_path)],
-            use_retrieval_context=True,
         ),
     )
 
@@ -119,7 +87,6 @@ def test_run_triage_uses_sarif_output_target(tmp_path):
         CommandRuntime(
             command="triage",
             command_args=[str(sarif_path)],
-            use_retrieval_context=True,
         ),
     )
 

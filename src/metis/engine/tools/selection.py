@@ -5,14 +5,19 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable
 
+from .catalog import default_engine_tools as _default_engine_tools
+from .catalog import format_known_engine_tools as _format_known_engine_tools
+from .catalog import known_engine_tools as _known_engine_tools
+
 
 INDEX_TOOL = "index"
-KNOWN_ENGINE_TOOLS = (INDEX_TOOL,)
-DEFAULT_ENGINE_TOOLS: tuple[str, ...] = ()
+NAVIGATION_TOOL = "navigation"
+KNOWN_ENGINE_TOOLS = _known_engine_tools()
+DEFAULT_ENGINE_TOOLS = _default_engine_tools()
 
 
 def format_known_engine_tools() -> str:
-    return ", ".join(sorted(KNOWN_ENGINE_TOOLS))
+    return _format_known_engine_tools()
 
 
 def parse_engine_tools(value: object | None) -> set[str]:

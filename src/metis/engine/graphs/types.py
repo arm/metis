@@ -11,19 +11,15 @@ class ReviewRequest(TypedDict):
     # Required fields
     file_path: Required[str]
     snippet: Required[str]
-    context_prompt: Required[str]
     language_prompts: Required[dict[str, str]]
 
     # Optional fields
-    retriever_code: NotRequired[Any | None]
-    retriever_docs: NotRequired[Any | None]
     default_prompt_key: NotRequired[str]
     relative_file: NotRequired[str | None]
     # Explicit mode: 'file' or 'patch'
     mode: NotRequired[str]
     # Optional original file contents for patch mode
     original_file: NotRequired[str | None]
-    use_retrieval_context: NotRequired[bool]
     debug_callback: NotRequired[Any]
 
 
@@ -38,16 +34,11 @@ class ReviewState(TypedDict, total=False):
     # Input
     file_path: str
     snippet: str
-    retriever_code: Any
-    retriever_docs: Any
-    context_prompt: str
     relative_file: str | None
     mode: str
     original_file: str | None
-    use_retrieval_context: bool
     debug_callback: Any
     # Derived
-    context: str
     system_prompt: str
     parsed_reviews: list[dict]
 
@@ -73,13 +64,10 @@ class TriageRequest(TypedDict):
     finding_source_tool: NotRequired[str]
     finding_is_metis: NotRequired[bool]
     finding_explanation: NotRequired[str]
-    retriever_code: NotRequired[Any | None]
-    retriever_docs: NotRequired[Any | None]
     debug_callback: NotRequired[Any]
     triage_analyzer: NotRequired[Any]
     triage_plugin: NotRequired[Any]
     triage_codebase_path: NotRequired[str]
-    use_retrieval_context: NotRequired[bool]
 
 
 class TriageState(TypedDict, total=False):
@@ -91,16 +79,12 @@ class TriageState(TypedDict, total=False):
     finding_source_tool: str
     finding_is_metis: bool
     finding_explanation: str
-    retriever_code: Any
-    retriever_docs: Any
     debug_callback: Any
     triage_analyzer: Any
     triage_plugin: Any
     triage_codebase_path: str
-    use_retrieval_context: bool
     triage_system_prompt: str
     triage_decision_prompt: str
-    context: str
     evidence_pack: str
     tool_transcript: str
     decision_status: str
