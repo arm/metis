@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-06-13)
+
+
+### Features
+
+* **cli:** make index-backed retrieval opt-in ([#220](https://github.com/arm/metis/issues/220)) ([b095e88](https://github.com/arm/metis/commit/b095e88be2b998937aaf02bb693a1b7675fe89a6))
+* **providers:** add Anthropic, Gemini, Bedrock, Bedrock Mantle; decouple embedding provider ([#234](https://github.com/arm/metis/issues/234)) ([e0527b6](https://github.com/arm/metis/commit/e0527b65ecf0ea55f090d46f8ed472da527d2106))
+* **rag:** use LangChain answer retrievers ([476bd8f](https://github.com/arm/metis/commit/476bd8f363d2c7bfac6d2e35517888542f0b2399))
+* **rag:** use LangChain retrievers for indexed answers ([#226](https://github.com/arm/metis/issues/226)) ([476bd8f](https://github.com/arm/metis/commit/476bd8f363d2c7bfac6d2e35517888542f0b2399))
+* **reachability:** Add tree-sitter C/C++ reachability review ([#199](https://github.com/arm/metis/issues/199)) ([2cfaa4c](https://github.com/arm/metis/commit/2cfaa4cf1f8a4007b869581c00f64dd6cb700fe4))
+* **tools:** add engine tool selection ([#223](https://github.com/arm/metis/issues/223)) ([b3ce47d](https://github.com/arm/metis/commit/b3ce47d36318ecac5292bdf6a3e4d95c008565a9))
+* **tools:** Expose index as a configurable model tool ([#236](https://github.com/arm/metis/issues/236)) ([8d4d7ef](https://github.com/arm/metis/commit/8d4d7ef3e2b9e2e8077cb82dedcb25303b9ffb1d))
+
 ## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-06-03)
 
 
