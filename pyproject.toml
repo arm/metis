@@ -4,7 +4,7 @@ requires = [ "setuptools>=82.0.1" ]
 
 [project]
 name = "metis"
-version = "1.4.0"
+version = "1.5.0"
 description = "Metis is a command line tool for performing security code reviews using LLMs"
 readme = "README.md"
 keywords = [ "code-review", "llm", "security" ]
