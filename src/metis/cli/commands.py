@@ -7,7 +7,7 @@ import inspect
 from pathlib import Path
 from rich.markup import escape
 
-from metis.engine.options import ReviewOptions, TriageOptions
+from metis.engine.options import TriageOptions
 from .command_runtime import CommandRuntime
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
@@ -26,10 +26,6 @@ from .utils import (
     save_output,
     print_console,
 )
-
-
-def _review_options_for_runtime(runtime: CommandRuntime) -> ReviewOptions:
-    return ReviewOptions()
 
 
 def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
@@ -63,7 +59,6 @@ Options:
     --include-triaged          Include findings already triaged by Metis.
     --tools index,navigation|all|none
                                Enable optional engine tools.
-    --ignore-index             Compatibility no-op retained for existing scripts.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -80,12 +75,10 @@ def show_version(args=None):
 def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
-    options = _review_options_for_runtime(runtime)
     results = with_spinner(
         "Reviewing patch...",
         engine.review.review_patch,
         patch_file=patch_file,
-        options=options,
         quiet=args.quiet,
     )
     _finalize_review_output(engine, results, args, runtime)
@@ -94,12 +87,10 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
-    options = _review_options_for_runtime(runtime)
     raw_result = with_spinner(
         f"Reviewing file {file_path}...",
         engine.review.review_file,
         file_path=file_path,
-        options=options,
         quiet=args.quiet,
     )
 
@@ -112,20 +103,18 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 
 
 def run_review_code(engine, args, runtime: CommandRuntime):
-    options = _review_options_for_runtime(runtime)
     if not args.quiet:
-        code_files = list(engine.review.get_code_files(options=options))
+        code_files = list(engine.review.get_code_files())
         file_reviews = _collect_review_code_with_progress(
             engine,
-            options,
             code_files,
         )
         results = {"reviews": file_reviews}
     elif args.verbose:
-        code_files = list(engine.review.get_code_files(options=options))
+        code_files = list(engine.review.get_code_files())
         file_reviews = iterate_with_progress(
             len(code_files),
-            _review_code_iter(engine.review, options, code_files=code_files),
+            _review_code_iter(engine.review, code_files=code_files),
         )
         results = {"reviews": file_reviews}
     else:
@@ -133,13 +122,12 @@ def run_review_code(engine, args, runtime: CommandRuntime):
             "Reviewing codebase...",
             collect_reviews,
             engine,
-            options=options,
             quiet=args.quiet,
         )
     _finalize_review_output(engine, results, args, runtime)
 
 
-def _collect_review_code_with_progress(engine, options, code_files):
+def _collect_review_code_with_progress(engine, code_files):
     results = []
     total = len(code_files)
     with build_standard_progress(transient=True) as progress:
@@ -149,7 +137,6 @@ def _collect_review_code_with_progress(engine, options, code_files):
         )
         for item in _review_code_iter(
             engine.review,
-            options,
             progress_callback=progress_reporter,
             code_files=code_files,
         ):
@@ -160,9 +147,9 @@ def _collect_review_code_with_progress(engine, options, code_files):
     return results
 
 
-def _review_code_iter(review_domain, options, progress_callback=None, code_files=None):
+def _review_code_iter(review_domain, progress_callback=None, code_files=None):
     review_code = review_domain.review_code
-    kwargs = {"options": options}
+    kwargs = {}
     try:
         signature = inspect.signature(review_code)
     except (TypeError, ValueError):

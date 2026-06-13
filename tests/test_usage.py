@@ -88,7 +88,7 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         similarity_top_k=3,
     )
 
-    engine.review.get_code_files = lambda options=None: ["a.py", "b.py"]
+    engine.review.get_code_files = lambda: ["a.py", "b.py"]
 
     def _review_file(path):
         engine.usage_runtime.collector.record(

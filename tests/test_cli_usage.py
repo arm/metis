@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 
 from metis.cli import entry
-from metis.engine.options import ReviewOptions
 from metis.usage.context import current_operation, current_scope
 from metis.usage.runtime import UsageRuntime
 
@@ -54,12 +53,10 @@ class _DummyEngine:
         )
         return {"code": "ctx", "docs": "docs"}
 
-    def get_code_files(self, options=None):
-        assert isinstance(options, ReviewOptions)
+    def get_code_files(self):
         return ["src/example.py"]
 
-    def review_code(self, options=None, progress_callback=None):
-        assert isinstance(options, ReviewOptions)
+    def review_code(self, progress_callback=None):
         self.usage_runtime.collector.record(
             scope_id=current_scope(),
             operation=current_operation(),

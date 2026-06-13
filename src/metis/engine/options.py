@@ -8,11 +8,6 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewOptions:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
 class TriageOptions:
     include_triaged: bool = False
 

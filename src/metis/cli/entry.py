@@ -179,15 +179,6 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
-def _command_index_flags(cmd_args: list[str]) -> list[str]:
-    filtered_args: list[str] = []
-    for arg in cmd_args:
-        if arg == "--ignore-index":
-            continue
-        filtered_args.append(arg)
-    return filtered_args
-
-
 def _enabled_tools_for_args(args) -> set[str]:
     enabled_tools = getattr(args, "enabled_tools", None)
     if enabled_tools is not None:
@@ -208,7 +199,6 @@ def _format_tool_list(tools: list[str]) -> str:
 
 def _prepare_command_runtime(cmd, cmd_args, args):
     spec = COMMANDS[cmd]
-    filtered_args = _command_index_flags(cmd_args)
     if not spec.validate_options(cmd, args):
         return None
 
@@ -227,7 +217,7 @@ def _prepare_command_runtime(cmd, cmd_args, args):
 
     return CommandRuntime(
         command=cmd,
-        command_args=filtered_args,
+        command_args=cmd_args,
     )
 
 
@@ -400,11 +390,6 @@ def main():
         "--include-triaged",
         action="store_true",
         help="Include findings already triaged by Metis when running triage.",
-    )
-    parser.add_argument(
-        "--ignore-index",
-        action="store_true",
-        help="Compatibility no-op retained for existing scripts.",
     )
     parser.add_argument(
         "--tools",

@@ -52,7 +52,6 @@ class AskGraph:
                 "retriever_docs": request["retriever_docs"],
             }
         )
-        # Return separate code/docs contexts for CLI printing compatibility
         return {
             "code": out.get("code", ""),
             "docs": out.get("docs", ""),

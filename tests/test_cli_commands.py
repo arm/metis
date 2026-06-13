@@ -7,20 +7,18 @@ from types import SimpleNamespace
 
 from metis.cli import commands
 from metis.cli.command_runtime import CommandRuntime
-from metis.engine.options import ReviewOptions, TriageOptions
+from metis.engine.options import TriageOptions
 
 
 def test_run_review_code_uses_review_domain_surface(monkeypatch):
     calls = []
 
     class _ReviewDomain:
-        def get_code_files(self, options=None):
-            assert isinstance(options, ReviewOptions)
+        def get_code_files(self):
             calls.append("get_code_files")
             return ["a.py"]
 
-        def review_code(self, options=None):
-            assert isinstance(options, ReviewOptions)
+        def review_code(self):
             calls.append("review_code")
             yield {"file": "a.py", "reviews": []}
 
@@ -138,13 +136,13 @@ def test_run_triage_passes_triage_options(tmp_path, monkeypatch):
     commands.run_triage(_DummyEngine(), str(sarif_path), args, runtime)
 
 
-def test_run_review_patch_passes_review_options(monkeypatch, tmp_path):
-    patch_file = tmp_path / "change.diff"
-    patch_file.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
+def test_run_review_patch_uses_review_domain_surface(monkeypatch, tmp_path):
+    patch_path = tmp_path / "change.diff"
+    patch_path.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
 
     class _ReviewDomain:
-        def review_patch(self, patch_file=None, options=None):
-            assert isinstance(options, ReviewOptions)
+        def review_patch(self, patch_file=None):
+            assert patch_file == str(patch_path)
             return {"reviews": [], "overall_changes": ""}
 
     engine = SimpleNamespace(review=_ReviewDomain())
@@ -155,7 +153,7 @@ def test_run_review_patch_passes_review_options(monkeypatch, tmp_path):
     )
     runtime = CommandRuntime(
         command="review_patch",
-        command_args=[str(patch_file)],
+        command_args=[str(patch_path)],
     )
 
     monkeypatch.setattr(
@@ -175,17 +173,17 @@ def test_run_review_patch_passes_review_options(monkeypatch, tmp_path):
         ),
     )
 
-    commands.run_review(engine, str(patch_file), args, runtime)
+    commands.run_review(engine, str(patch_path), args, runtime)
 
 
 def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     calls = []
 
     class _ReviewDomain:
-        def get_code_files(self, options=None):
+        def get_code_files(self):
             return ["a.py"]
 
-        def review_code(self, options=None):
+        def review_code(self):
             yield {"file": "a.py", "reviews": []}
 
     class _Engine:

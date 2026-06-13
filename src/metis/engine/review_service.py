@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
 import logging
 import os
 from collections.abc import Callable, Iterator
@@ -16,7 +15,6 @@ from metis.utils import read_file_content
 from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
-from .options import ReviewOptions
 from .reachability.progress import ReachabilityProgress as Progress
 from .reachability.progress import emit_progress
 from .repository import EngineRepository
@@ -52,7 +50,7 @@ class ReviewService:
             else None
         )
 
-    def get_code_files(self, options: ReviewOptions | None = None):
+    def get_code_files(self):
         return self._repository.get_code_files(include_suffixed_sources=True)
 
     def _get_reachability_reviews(self, *, files=None, progress_callback=None):
@@ -113,10 +111,8 @@ class ReviewService:
     def review_file(
         self,
         file_path,
-        options: ReviewOptions | None = None,
         progress_callback=None,
     ):
-        options = options or ReviewOptions()
         if (
             self._reachability_backend is not None
             and self._reachability_backend.is_file_in_codebase(file_path)
@@ -137,7 +133,7 @@ class ReviewService:
                 if result is not None:
                     return self._finalize_single_review_result(result)
         return self._finalize_single_review_result(
-            self._review_file_standard(file_path, options=options)
+            self._review_file_standard(file_path)
         )
 
     def _get_global_reachability_review_for_file(
@@ -158,7 +154,6 @@ class ReviewService:
     def _review_file_standard(
         self,
         file_path,
-        options: ReviewOptions | None = None,
     ):
         base_path = os.path.abspath(self._config.codebase_path)
         snippet = read_file_content(file_path)
@@ -202,39 +197,20 @@ class ReviewService:
         self,
         review_fn,
         path: str,
-        options: ReviewOptions,
     ):
-        try:
-            signature = inspect.signature(review_fn)
-        except (TypeError, ValueError):
-            signature = None
-
-        if signature is not None:
-            params = signature.parameters
-            accepts_kwargs = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-            )
-            kwargs: dict[str, Any] = {}
-            if "options" in params or accepts_kwargs:
-                kwargs["options"] = options
-            if kwargs:
-                return review_fn(path, **kwargs)
-
         return review_fn(path)
 
     def review_code(
         self,
         review_file_func=None,
         get_code_files_func=None,
-        options: ReviewOptions | None = None,
         *,
         progress_callback=None,
     ) -> Iterator[dict | None]:
-        options = options or ReviewOptions()
         files = (
             get_code_files_func()
             if get_code_files_func is not None
-            else self.get_code_files(options=options)
+            else self.get_code_files()
         )
         if not files:
             return
@@ -294,7 +270,6 @@ class ReviewService:
                     self._invoke_review_file,
                     review_fn,
                     path,
-                    options,
                 ): path
                 for path in files
             }
@@ -314,7 +289,6 @@ class ReviewService:
     def review_patch(
         self,
         patch_file,
-        options: ReviewOptions | None = None,
     ):
         patch_text = read_file_content(patch_file)
         try:
