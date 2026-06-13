@@ -18,6 +18,7 @@ Model-callable input:
   anchors, and do not submit a keyword-only search string.
 - `top_k`: optional nearest-neighbor count, capped by the index tool manifest.
 - `max_chars`: optional output budget, capped by the index tool manifest.
+- `source`: optional retrieval source: `docs`, `code`, or `both`.
 
 Manifest configuration:
 
@@ -26,9 +27,12 @@ config:
   model_tool:
     max_contract_chars: 6000
   search:
-    max_top_k: 1
-    default_max_chars: 1500
-    max_chars: 2500
+    max_top_k: 4
+    code_top_k: 1
+    docs_top_k: 4
+    docs_char_ratio: 1.0
+    default_max_chars: 5000
+    max_chars: 7000
 ```
 
 `max_contract_chars` is per-tool prompt-budget metadata. The model tool-call
@@ -39,6 +43,19 @@ configured in `metis.yaml`:
 metis_engine:
   model_tools:
     max_rounds: 6
+```
+
+Search retrieval defaults can be overridden from `metis.yaml` without editing
+the tool manifest:
+
+```yaml
+metis_engine:
+  index_search:
+    code_top_k: 1
+    docs_top_k: 4
+    docs_char_ratio: 1.0
+    default_max_chars: 5000
+    max_chars: 7000
 ```
 
 Model-callable output:
@@ -55,9 +72,21 @@ Model interpretation rules:
 - Do not apply a numeric reporting threshold from this contract. The index tool
   should improve confidence by supplying relevant project facts, not by changing
   reporting thresholds.
-- Use indexed documentation sparingly to understand the codebase's threat
-  model, deployment assumptions, trust boundaries, and non-goals only when that
-  context can materially change a current-file decision.
+- Prefer fewer, better-supported findings. For each candidate, ask whether the
+  security impact depends on a project-level trust boundary or caller
+  responsibility not visible in the file.
+- When it does, use indexed docs to infer the intended consumer, whether inputs
+  are trusted or caller-validated, who owns size/bounds checks, and what
+  behavior is out of scope for the component.
+- Lower confidence for candidates that only describe invalid use outside
+  documented responsibilities. Keep confidence high for concrete defects under
+  valid use, violations of documented contracts, or cases where docs show data
+  comes from an untrusted boundary.
+- Cite the retrieved project fact whenever it changes confidence.
+- Use `source: "docs"` for threat model, trust boundary, deployment,
+  configuration ownership, documented assumptions, and non-goal questions. Use
+  `source: "code"` for related definitions or API behavior. Use `source: "both"`
+  only when the same factual assumption needs source and documentation context.
 - First form a concrete candidate finding from the reviewed code. Then call
   `index_search` only if confidence depends on one exact missing project fact.
   Do not use the index before the current-file evidence has produced a
@@ -110,9 +139,11 @@ Model interpretation rules:
   trying to make, then include the most important identifiers or architecture
   terms as anchors. For example: "How does this project define trust boundaries
   for configuration files loaded by the CLI?"
-- Prefer small retrieval requests: `top_k` 1 and `max_chars` 1000-1500 are
-  usually enough. Ask for more only when the current-file decision truly needs
-  several related definitions or documents.
+- Usually omit `top_k`; runtime source-specific defaults retrieve more
+  documentation than code.
+- Usually omit `max_chars` so the tested runtime profile controls retrieval
+  budget. If you set it, choose the smallest budget that can answer the factual
+  question.
 - If retrieved documentation changes whether an issue is relevant, cite the
   documented assumption or boundary alongside the source-code evidence.
 - For findings informed by index context, explain the specific fact retrieved

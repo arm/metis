@@ -76,6 +76,7 @@ class MetisEngine:
             kwargs.get("model_tool_max_rounds"),
             fallback=6,
         )
+        self.index_search_config = dict(kwargs.get("index_search_config") or {})
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -108,6 +109,7 @@ class MetisEngine:
             review_code_exclude_paths=list(self.review_code_exclude_paths),
             enabled_tools=self.enabled_tools,
             model_tool_max_rounds=self.model_tool_max_rounds,
+            index_search_config=self.index_search_config,
             language_registry=self.language_registry,
             code_exts=self.code_exts,
         )

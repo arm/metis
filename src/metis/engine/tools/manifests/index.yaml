@@ -12,9 +12,12 @@ config:
   model_tool:
     max_contract_chars: 6000
   search:
-    max_top_k: 1
-    default_max_chars: 1500
-    max_chars: 2500
+    max_top_k: 4
+    code_top_k: 1
+    docs_top_k: 4
+    docs_char_ratio: 1.0
+    default_max_chars: 5000
+    max_chars: 7000
 capabilities:
   - id: index.build
     name: index.build
@@ -85,13 +88,25 @@ capabilities:
           type: integer
           minimum: 1
           description: >-
-            Optional number of nearest indexed chunks to retrieve. Use 1.
-            Runtime caps come from config.search.max_top_k.
+            Optional shared nearest-neighbor fallback. Usually omit this so
+            runtime source-specific defaults can retrieve more documentation
+            than code. Runtime caps come from config.search.max_top_k.
         max_chars:
           type: integer
           minimum: 1
           description: >-
             Optional maximum characters to return across code and docs context.
-            Prefer 1000-1500 for normal validation questions. Runtime caps come
-            from config.search.max_chars.
+            Usually omit this so the tested runtime profile controls the
+            retrieval budget. If you set it, choose the smallest budget that can
+            answer the factual question. Runtime caps come from
+            config.search.max_chars.
+        source:
+          type: string
+          enum: [both, docs, code]
+          description: >-
+            Optional retrieval source. Use docs for threat model, trust
+            boundary, deployment, configuration ownership, documented
+            assumptions, and non-goal questions. Use code for related
+            definitions or API behavior. Use both when a factual assumption
+            needs source and documentation context.
     status: active

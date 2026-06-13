@@ -65,9 +65,40 @@ query:
     }
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
     assert runtime["model_tool_max_rounds"] == 9
+    assert runtime["index_search_config"] == {}
     assert "embedding_provider" not in runtime
     assert runtime["embedding_provider_raw_config"] is None
     assert "llm_api_key" not in runtime
+
+
+def test_load_runtime_config_accepts_index_search_overrides(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  index_search:
+    code_top_k: 1
+    docs_top_k: 3
+    docs_char_ratio: 0.8
+    default_max_chars: 2500
+    max_chars: 4000
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["index_search_config"] == {
+        "code_top_k": 1,
+        "docs_top_k": 3,
+        "docs_char_ratio": 0.8,
+        "default_max_chars": 2500,
+        "max_chars": 4000,
+    }
 
 
 def test_build_embedding_provider_config_resolves_openai_embedding_provider(

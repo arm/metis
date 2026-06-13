@@ -45,11 +45,13 @@ class IndexTool:
         *,
         top_k: int | None = None,
         max_chars: int | None = None,
+        source: str | None = None,
     ) -> str:
         return self._handle.require().search(
             query,
             top_k=top_k,
             max_chars=max_chars,
+            source=source,
         )
 
     def langchain_tools(self) -> tuple[StructuredTool, ...]:

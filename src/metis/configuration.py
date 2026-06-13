@@ -98,6 +98,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
         model_tools_cfg.get("max_rounds"),
         fallback=6,
     )
+    index_search_cfg = engine_cfg.get("index_search") or {}
+    runtime["index_search_config"] = (
+        dict(index_search_cfg) if isinstance(index_search_cfg, dict) else {}
+    )
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     query_cfg = cfg.get("query", {})

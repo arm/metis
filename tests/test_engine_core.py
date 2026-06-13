@@ -180,11 +180,20 @@ def test_index_tool_exposes_langchain_search_tool(engine):
 
     assert [tool.name for tool in tools] == ["index_search"]
     assert "keyword-only" in tools[0].args_schema["properties"]["query"]["description"]
+    assert tools[0].args_schema["properties"]["source"]["enum"] == [
+        "both",
+        "docs",
+        "code",
+    ]
     assert tools[0].metadata["metis_contract_max_chars"] == 6000
     result = tools[0].invoke({"query": "allocator ownership"})
-    assert "Code result" in result
+    assert "Code result" not in result
     assert "Docs result" in result
-    engine.vector_backend.get_retrievers.assert_called_once()
+    assert [
+        call.args[1] for call in engine.vector_backend.get_retrievers.call_args_list
+    ] == [
+        4,
+    ]
 
 
 def test_index_search_uses_manifest_tool_config(monkeypatch):
@@ -204,8 +213,11 @@ def test_index_search_uses_manifest_tool_config(monkeypatch):
         "metis.engine.tools.catalog.get_tool_config",
         lambda _name: {
             "search": {
-                "max_top_k": 2,
-                "default_max_chars": 30,
+                "max_top_k": 3,
+                "code_top_k": 1,
+                "docs_top_k": 2,
+                "docs_char_ratio": 0.75,
+                "default_max_chars": 40,
                 "max_chars": 40,
             }
         },
@@ -224,8 +236,52 @@ def test_index_search_uses_manifest_tool_config(monkeypatch):
 
     result = engine.tools.index.search("allocator ownership", top_k=99, max_chars=99)
 
-    assert backend.get_retrievers.call_args.args[1] == 2
+    assert [call.args[1] for call in backend.get_retrievers.call_args_list] == [1, 2]
     assert result.count("[truncated]") == 2
+
+
+def test_index_search_can_retrieve_docs_only(monkeypatch):
+    class _Doc:
+        def __init__(self, text):
+            self.page_content = text
+
+    code_retriever = Mock(get_relevant_documents=Mock(return_value=[_Doc("code")]))
+    docs_retriever = Mock(get_relevant_documents=Mock(return_value=[_Doc("docs")]))
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_retrievers = Mock(return_value=(code_retriever, docs_retriever))
+    monkeypatch.setattr(
+        "metis.engine.tools.catalog.get_tool_config",
+        lambda _name: {
+            "search": {
+                "max_top_k": 1,
+                "code_top_k": 1,
+                "docs_top_k": 1,
+                "docs_char_ratio": 0.7,
+                "default_max_chars": 5000,
+                "max_chars": 7000,
+            }
+        },
+    )
+
+    engine = MetisEngine(
+        vector_backend=backend,
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools={"index"},
+    )
+
+    result = engine.tools.index.search("trust boundary", source="docs")
+
+    assert "[CODE_CONTEXT]" not in result
+    assert "[DOC_CONTEXT]" in result
+    assert backend.get_retrievers.call_args.args[1] == 1
+    code_retriever.get_relevant_documents.assert_not_called()
+    docs_retriever.get_relevant_documents.assert_called_once_with("trust boundary")
 
 
 def test_create_retrievers_passes_usage_callback_manager():
@@ -294,6 +350,38 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
     )
     assert [tool.name for tool in captured["model_tools"]] == ["index_search"]
     assert captured["max_tool_rounds"] == 6
+
+
+def test_review_graph_omits_model_tools_when_index_disabled(monkeypatch):
+    llm_provider = Mock()
+    llm_provider.get_chat_model.return_value = Mock(with_structured_output=Mock())
+
+    engine = MetisEngine(
+        vector_backend=Mock(),
+        llm_provider=llm_provider,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools=set(),
+    )
+
+    captured = {}
+
+    def _fake_runner(_runner, request):
+        captured["model_tools"] = request.model_tools
+        captured["max_tool_rounds"] = request.max_tool_rounds
+        return []
+
+    monkeypatch.setattr(
+        "metis.engine.llm_runner.JsonPromptRunner.invoke",
+        _fake_runner,
+    )
+    graph = engine._get_review_graph()
+    graph._invoke_review_model("system", "body")
+
+    assert captured["model_tools"] == ()
+    assert captured["max_tool_rounds"] is None
 
 
 def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
