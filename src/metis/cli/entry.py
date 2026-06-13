@@ -339,11 +339,6 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--project-schema", type=str, default="myproject-main")
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to a Metis YAML config file. Defaults to metis.yaml/metis.yml discovery.",
-    )
     parser.add_argument("--chroma-dir", type=str, default="./chromadb")
     parser.add_argument("--codebase-path", type=str, default=".")
     parser.add_argument(
@@ -431,10 +426,7 @@ def main():
         return
 
     configure_logger(logger, args)
-    runtime = load_runtime_config(
-        config_path=args.config,
-        enable_psql=(args.backend == "postgres"),
-    )
+    runtime = load_runtime_config(enable_psql=(args.backend == "postgres"))
     try:
         _configure_enabled_tools(args, runtime)
     except ValueError as exc:
