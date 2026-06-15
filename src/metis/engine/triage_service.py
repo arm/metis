@@ -30,6 +30,10 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         get_plugin_for_path: Callable[[str], Any],
         get_language_name_for_path: Callable[[str], str | None],
         usage_hooks: UsageHooks | None = None,
+        model_tools: tuple[Any, ...] = (),
+        model_tool_max_rounds: int | None = None,
+        reachability_service: Any = None,
+        reachability_settings: dict[str, Any] | None = None,
     ):
         self.codebase_path = codebase_path
         self.llm_provider = llm_provider
@@ -42,6 +46,9 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self._get_plugin_for_path = get_plugin_for_path
         self._get_language_name_for_path = get_language_name_for_path
         self._usage_hooks = usage_hooks
+        self.model_tools = tuple(model_tools or ())
+        self.model_tool_max_rounds = model_tool_max_rounds
+        self.reachability_service = reachability_service
+        self.reachability_settings = dict(reachability_settings or {})
 
         self._triage_graph_local = threading.local()
-        self._triage_analyzers_local = threading.local()

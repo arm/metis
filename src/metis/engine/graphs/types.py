@@ -65,9 +65,8 @@ class TriageRequest(TypedDict):
     finding_is_metis: NotRequired[bool]
     finding_explanation: NotRequired[str]
     debug_callback: NotRequired[Any]
-    triage_analyzer: NotRequired[Any]
-    triage_plugin: NotRequired[Any]
-    triage_codebase_path: NotRequired[str]
+    triage_language: NotRequired[str]
+    triage_language_guidance: NotRequired[str]
 
 
 class TriageState(TypedDict, total=False):
@@ -80,9 +79,8 @@ class TriageState(TypedDict, total=False):
     finding_is_metis: bool
     finding_explanation: str
     debug_callback: Any
-    triage_analyzer: Any
-    triage_plugin: Any
-    triage_codebase_path: str
+    triage_language: str
+    triage_language_guidance: str
     triage_system_prompt: str
     triage_decision_prompt: str
     evidence_pack: str

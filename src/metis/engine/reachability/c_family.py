@@ -5,15 +5,15 @@
 from dataclasses import dataclass, field
 import os
 
-from metis.engine.analysis.c_family_analyzer_common import (
+from .c_family_nodes import (
     _identifier_from_node,
     _node_child_by_field_name,
     _node_kind,
     _node_line,
     _node_text,
 )
-from metis.engine.analysis.c_family_ast import CFamilyAstMixin
-from metis.engine.analysis.treesitter_runtime import TreeSitterRuntime
+from .c_family_ast import CFamilyAstMixin
+from .treesitter_runtime import TreeSitterRuntime
 
 from .domain import FunctionNode, GlobalConstruct
 from .c_family_rules import CONTROL_CALLS

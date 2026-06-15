@@ -13,7 +13,6 @@ _CONTRADICTION_SIGNALS = (
     "cannot reproduce",
     "false positive",
     "guarded against",
-    "bounded",
     "validated before use",
 )
 
@@ -43,7 +42,34 @@ ALLOWED_STATUSES = ("valid", "invalid", "inconclusive")
 
 def _contains_any_signal(*texts: str, signals: tuple[str, ...]) -> bool:
     hay = "\n".join(str(t or "") for t in texts).lower()
-    return any(s in hay for s in signals)
+    for signal in signals:
+        pattern = _signal_pattern(signal)
+        for match in re.finditer(pattern, hay):
+            if _is_negated_signal_match(hay, signal=signal, start=match.start()):
+                continue
+            return True
+    return False
+
+
+def _signal_pattern(signal: str) -> str:
+    if signal == "contradict":
+        return r"\bcontradict(?:s|ed|ing|ion|ory)?\b"
+    escaped = re.escape(signal).replace(r"\ ", r"\s+")
+    return rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+
+
+def _is_negated_signal_match(text: str, *, signal: str, start: int) -> bool:
+    if signal != "contradict":
+        return False
+    prefix = text[max(0, start - 32) : start]
+    return bool(
+        re.search(
+            r"(?:\b(?:does|do|did|is|are|was|were|can|could|would|should)\s+not\s+$)"
+            r"|(?:\bnot\s+$)"
+            r"|(?:\bno\s+$)",
+            prefix,
+        )
+    )
 
 
 def contains_contradiction_signal(*texts: str) -> bool:

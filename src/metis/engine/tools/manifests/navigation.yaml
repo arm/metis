@@ -8,40 +8,116 @@ status: active
 default_enabled: true
 contracts:
   model: docs/tools/navigation.md
+config:
+  model_tool:
+    max_contract_chars: 6000
+    max_chars: 16000
+    timeout_seconds: 8
 capabilities:
   - id: navigation.grep
     name: grep
     title: Grep source
-    description: Search source text with a regular expression under the codebase root.
-    surfaces: [orchestration]
+    description: >-
+      Search source text with a regular expression under the codebase root.
+      Use for targeted symbol, import, call-site, configuration-key, or guard
+      lookups while validating a specific reported finding. Prefer exact terms
+      from the reported code, including validators, sanitizers, escaping,
+      clamping, allowlists, reject paths, and early returns that could directly
+      contradict the finding.
+    surfaces: [orchestration, model_tool]
     domains: [triage_evidence]
     provider: static
     operation: grep
+    input_schema:
+      type: object
+      required: [pattern, path]
+      additionalProperties: false
+      properties:
+        pattern:
+          type: string
+          description: >-
+            A concrete regular expression for a symbol, function, import,
+            config key, guard, sanitizer, validator, reject path, or call-site
+            relevant to the current finding. Do not search for vulnerability
+            classes, CWE IDs, exploit words, or broad audit concepts.
+        path:
+          type: string
+          default: "."
+          description: >-
+            File or directory under the codebase root to search. Prefer the
+            reported file, a narrowed package directory, or a specific candidate
+            file over the repository root.
     status: active
   - id: navigation.find_name
     name: find_name
     title: Find file by name
-    description: Find files whose basename exactly matches a requested name.
-    surfaces: [orchestration]
+    description: >-
+      Find files whose basename exactly matches a requested name. Use to
+      resolve imports, referenced modules, generated config files, or filenames
+      named by the current evidence chain.
+    surfaces: [orchestration, model_tool]
     domains: [triage_evidence]
     provider: static
     operation: find_name
+    input_schema:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Exact basename to find, without directory separators.
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+          description: Maximum number of matching paths to return.
     status: active
   - id: navigation.cat
     name: cat
     title: Read file
-    description: Read a source file under the codebase root.
-    surfaces: [orchestration]
+    description: >-
+      Read a source file under the codebase root. Prefer sed for local evidence;
+      use cat only for short files where whole-file context is necessary.
+    surfaces: [orchestration, model_tool]
     domains: [triage_evidence]
     provider: static
     operation: cat
+    input_schema:
+      type: object
+      required: [path]
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: File path under the codebase root.
     status: active
   - id: navigation.sed
     name: sed
     title: Read line window
-    description: Read a bounded line window from a source file under the codebase root.
-    surfaces: [orchestration]
+    description: >-
+      Read a bounded line window from a source file under the codebase root.
+      Use this first for reported-line context, candidate source/sink lines,
+      guards, validators, sanitizers, wrappers, and definition windows.
+    surfaces: [orchestration, model_tool]
     domains: [triage_evidence]
     provider: static
     operation: sed
+    input_schema:
+      type: object
+      required: [path, start_line, end_line]
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: File path under the codebase root.
+        start_line:
+          type: integer
+          minimum: 1
+          description: First 1-based line to read.
+        end_line:
+          type: integer
+          minimum: 1
+          description: Last 1-based line to read. Keep windows focused.
     status: active

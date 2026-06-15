@@ -155,6 +155,36 @@ def test_triage_payload_skips_failed_finding(engine, monkeypatch):
     assert "properties" not in second
 
 
+def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
+    }
+
+    class _DummyGraph:
+        def triage(self, _request):
+            return {
+                "status": "inconclusive",
+                "reason": "missing caller",
+                "evidence_obligations": ["local_context", "use_site"],
+                "evidence_coverage": {"local_context": 1, "use_site": 0},
+                "missing_evidence": ["use_site"],
+            }
+
+    monkeypatch.setattr(
+        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+    )
+    engine.max_workers = 1
+    engine._triage_service.max_workers = 1
+
+    out = engine.triage_sarif_payload(payload)
+    props = out["runs"][0]["results"][0]["properties"]
+
+    assert props["metisEvidenceRequirements"] == ["local_context", "use_site"]
+    assert props["metisEvidenceCoverage"] == {"local_context": 1, "use_site": 0}
+    assert props["metisMissingEvidence"] == ["use_site"]
+
+
 def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
     input_path = tmp_path / "findings.sarif"
     input_path.write_text(
@@ -209,7 +239,7 @@ def test_triage_request_propagates_source_metadata(engine, monkeypatch):
                         "locations": [
                             {
                                 "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
+                                    "artifactLocation": {"uri": "src/a.py"},
                                     "region": {"startLine": 12},
                                 }
                             }
@@ -253,7 +283,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
                         "locations": [
                             {
                                 "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
+                                    "artifactLocation": {"uri": "src/a.py"},
                                     "region": {"startLine": 12},
                                 }
                             }

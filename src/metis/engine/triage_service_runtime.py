@@ -6,33 +6,13 @@ from __future__ import annotations
 import logging
 import threading
 
-from metis.engine.analysis.base import AnalyzerEvidence, AnalyzerRequest
 from metis.engine.graphs import TriageGraph
+from metis.engine.reachability.options import ReachabilityReviewOptions
+from metis.engine.reachability.triage import ReachabilityTriageRequest
 from metis.engine.tools.registry import build_toolbox
 from metis.chat_model_options import merge_chat_model_kwargs
 
 logger = logging.getLogger("metis")
-
-
-class _FallbackTriageAnalyzer:
-    def supports_file(self, rel_path: str) -> bool:
-        return bool(rel_path)
-
-    def collect_evidence(self, request: AnalyzerRequest) -> AnalyzerEvidence:
-        unresolved = []
-        if request.file_path:
-            unresolved.append(
-                f"SYMBOL_DEFINITION_UNRESOLVED:{request.file_path}:{request.line}"
-            )
-        return AnalyzerEvidence(
-            supported=False,
-            language="fallback",
-            summary=(
-                "No language-specific triage analyzer is available for this finding. "
-                "Falling back to grep/sed based evidence collection."
-            ),
-            unresolved_hops=unresolved,
-        )
 
 
 class TriageServiceRuntimeMixin:
@@ -54,6 +34,8 @@ class TriageServiceRuntimeMixin:
                 self.chat_model_kwargs,
                 usage_chat_kwargs,
             ),
+            model_tools=self.model_tools,
+            model_tool_max_rounds=self.model_tool_max_rounds,
         )
 
     def _get_thread_triage_graph(self):
@@ -68,50 +50,43 @@ class TriageServiceRuntimeMixin:
             return None
         return self._get_plugin_for_path(file_path)
 
-    def _build_triage_analyzer_from_plugin(self, plugin, language_name: str):
-        method = getattr(plugin, "get_triage_analyzer_factory", None)
-        if not callable(method):
-            return _FallbackTriageAnalyzer()
+    def _get_triage_language_guidance(self, plugin) -> str:
+        if plugin is None:
+            return ""
+        get_prompts = getattr(plugin, "get_prompts", None)
+        if not callable(get_prompts):
+            return ""
         try:
-            factory = method()
+            prompts = get_prompts()
         except Exception as exc:
-            logger.warning(
-                "Failed to obtain triage analyzer factory for language '%s': %s",
-                language_name,
-                exc,
-            )
-            return _FallbackTriageAnalyzer()
-        if not callable(factory):
-            return _FallbackTriageAnalyzer()
-        try:
-            return factory(self.codebase_path)
-        except Exception as exc:
-            logger.warning(
-                "Failed to build triage analyzer for language '%s': %s",
-                language_name,
-                exc,
-            )
-            return _FallbackTriageAnalyzer()
+            logger.warning("Failed to load triage language guidance: %s", exc)
+            return ""
+        if not isinstance(prompts, dict):
+            return ""
+        return str(prompts.get("triage_navigation") or "").strip()
 
-    def _get_thread_triage_analyzer(self, file_path: str):
-        language_name = self._get_language_name_for_path(file_path or "")
-        if not language_name:
-            return _FallbackTriageAnalyzer()
-        analyzers = getattr(self._triage_analyzers_local, "by_language", None)
-        if analyzers is None:
-            analyzers = {}
-            self._triage_analyzers_local.by_language = analyzers
-        if language_name not in analyzers:
-            plugin = self._get_plugin_for_path(file_path)
-            if plugin is None:
-                analyzers[language_name] = _FallbackTriageAnalyzer()
-            else:
-                analyzers[language_name] = self._build_triage_analyzer_from_plugin(
-                    plugin,
-                    language_name,
-                )
-        return analyzers[language_name]
+    def _supports_reachability_triage(self, file_path: str) -> bool:
+        supports_file = getattr(self.reachability_service, "supports_file", None)
+        if not callable(supports_file):
+            return False
+        return bool(supports_file(file_path))
+
+    def _reachability_triage_options(self):
+        return ReachabilityReviewOptions.from_kwargs(
+            self.reachability_settings,
+            default_workers=self.max_workers,
+        )
+
+    def _reachability_triage_request(self, finding) -> ReachabilityTriageRequest:
+        return ReachabilityTriageRequest(
+            message=finding.message,
+            file_path=finding.file_path,
+            line=finding.line,
+            rule_id=finding.rule_id,
+            snippet=finding.snippet,
+            source_tool=getattr(finding, "source_tool", ""),
+            explanation=getattr(finding, "explanation", ""),
+        )
 
     def close(self):
         self._triage_graph_local = threading.local()
-        self._triage_analyzers_local = threading.local()

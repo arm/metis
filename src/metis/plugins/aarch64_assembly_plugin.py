@@ -56,9 +56,6 @@ class AArch64AssemblyPlugin(ConfigBackedLanguagePlugin):
 
     NAME = "aarch64_assembly"
 
-    def get_triage_analyzer_factory(self):
-        return None
-
     def get_splitter(self):
         splitting_cfg = self._plugin_section().get("splitting", {})
         chunk_lines = splitting_cfg.get("chunk_lines") or 60

@@ -110,6 +110,23 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
     )
 
 
+def test_invoke_model_with_tools_requests_final_answer_after_last_tool_round():
+    tool = _FakeTool()
+    chat = _FakeChat()
+
+    result = invoke_model_with_tools(
+        chat,
+        _prompt(),
+        {"body": "review this"},
+        (tool,),
+        max_tool_rounds=1,
+    )
+
+    assert result == '{"reviews": []}'
+    assert tool.calls == [{"query": "allocator ownership"}]
+    assert len(chat.bound_chat.messages) == 2
+
+
 def test_require_max_tool_rounds_rejects_missing_value():
     with pytest.raises(
         ModelToolConfigurationError,

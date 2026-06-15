@@ -177,6 +177,10 @@ class MetisEngine:
             get_plugin_for_path=self.repository.get_plugin_for_path,
             get_language_name_for_path=self.repository.get_language_name_for_path,
             usage_hooks=self.usage_runtime.hooks,
+            model_tools=self.tools.triage_langchain_tools(),
+            model_tool_max_rounds=self.tools.triage_model_tool_max_rounds(),
+            reachability_service=self.reachability,
+            reachability_settings=self.reachability_settings,
         )
 
     @property

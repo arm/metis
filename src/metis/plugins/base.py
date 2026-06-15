@@ -50,26 +50,6 @@ class BaseLanguagePlugin(ABC):
     def supports_reachability_review(self) -> bool:
         return False
 
-    def supports_c_family_triage_evidence(self) -> bool:
-        return False
-
-    def get_triage_analyzer_factory(self):
-        """Return optional factory(codebase_path) -> analyzer used by triage."""
-        language = str(self.get_name() or "").strip().lower()
-        if not language:
-            return None
-        from metis.engine.analysis.generic_treesitter_analyzer import (
-            build_generic_treesitter_analyzer_factory,
-        )
-
-        supported_extensions = [
-            str(ext).lower() for ext in self.get_supported_extensions()
-        ]
-        return build_generic_treesitter_analyzer_factory(
-            language,
-            supported_extensions=supported_extensions,
-        )
-
 
 class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
     NAME = ""

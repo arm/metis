@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from metis.engine.analysis.c_family_ast import CFamilyAstMixin
 from metis.engine.reachability import (
     Deduplicator,
     FunctionNode,
@@ -13,6 +12,7 @@ from metis.engine.reachability import (
     SourceRootedPathTracer,
     VulnerabilityFinding,
 )
+from metis.engine.reachability.c_family_ast import CFamilyAstMixin
 from metis.engine.reachability.c_family import CFamilyTreeSitterExtractor
 from metis.engine.reachability.file_focus import FileFocusBuilder
 from metis.engine.reachability.finding_identity import _canonical_fields
@@ -20,7 +20,90 @@ from metis.engine.reachability.finding_paths import FindingPathAnnotator
 from metis.engine.reachability.graph_cache import ReachabilityGraphCache
 from metis.engine.reachability.graph_utils import select_confirmation_paths
 from metis.plugins.c_plugin import CPlugin
-from test_c_family_analyzer import _Node, _Runtime
+
+
+class _Point:
+    def __init__(self, row, column):
+        self.row = row
+        self.column = column
+
+
+class _Node:
+    def __init__(
+        self,
+        node_type,
+        *,
+        text="",
+        line=1,
+        children=None,
+        fields=None,
+        start_byte=0,
+        end_byte=0,
+    ):
+        self._type = node_type
+        self.text = text
+        self._start_position = _Point(line - 1, 0)
+        self._end_position = _Point(line - 1, 0)
+        self._start_byte = start_byte
+        self._end_byte = end_byte
+        self._children = children or []
+        self._fields = fields or {}
+        self._parent = None
+        for child in self._children:
+            child._parent = self
+        for child in self._fields.values():
+            child._parent = self
+
+    def kind(self):
+        return self._type
+
+    def start_position(self):
+        return self._start_position
+
+    def end_position(self):
+        return self._end_position
+
+    def start_byte(self):
+        return self._start_byte
+
+    def end_byte(self):
+        return self._end_byte
+
+    def child_count(self):
+        return len(self._children)
+
+    def child(self, index):
+        return self._children[index]
+
+    def child_by_field_name(self, name):
+        return self._fields.get(name)
+
+    def parent(self):
+        return self._parent
+
+
+class _Tree:
+    def __init__(self, root):
+        self._root = root
+
+    def root_node(self):
+        return self._root
+
+
+class _Parsed:
+    def __init__(self, root):
+        self.text = ""
+        self.tree = _Tree(root)
+
+
+class _Runtime:
+    def __init__(self, root):
+        self._root = root
+        self.is_available = True
+        self.init_error = ""
+
+    def parse_file(self, _codebase_path, _rel_path):
+        return _Parsed(self._root)
 
 
 def _reachability_cache(codebase_path):
@@ -34,7 +117,7 @@ def _reachability_cache(codebase_path):
 
 
 def _patch_ids(monkeypatch):
-    import metis.engine.analysis.c_family_ast as c_family_ast
+    import metis.engine.reachability.c_family_ast as c_family_ast
     import metis.engine.reachability.c_family as c_family
 
     def fake_identifier(node, _source):
@@ -292,13 +375,11 @@ def test_c_family_ast_helpers_handle_deep_trees_without_recursion():
     )
     harness = CFamilyAstMixin()
 
-    nodes = harness._index_tree(root)
-    calls = harness._collect_calls(root, b"deep_call")
-    refs = harness._collect_references(root, b"deep_call")
+    nodes = list(harness._iter_nodes(root))
+    calls = harness._collect_calls_in_scope(root, b"deep_call")
 
     assert len(nodes) == 1502
-    assert calls["deep_call"][0].symbol == "deep_call"
-    assert refs["deep_call"][0].symbol == "deep_call"
+    assert calls[0].symbol == "deep_call"
 
 
 def test_file_focus_prefers_source_to_reviewed_file_paths():

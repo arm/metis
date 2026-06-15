@@ -9,16 +9,3 @@ class CppPlugin(ConfigBackedLanguagePlugin):
 
     def supports_reachability_review(self) -> bool:
         return True
-
-    def supports_c_family_triage_evidence(self) -> bool:
-        return True
-
-    def get_triage_analyzer_factory(self):
-        from metis.engine.analysis.c_family_analyzer import (
-            build_c_family_analyzer_factory,
-        )
-
-        return build_c_family_analyzer_factory(
-            "cpp",
-            supported_extensions=self.get_supported_extensions(),
-        )

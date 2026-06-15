@@ -34,6 +34,17 @@ def test_index_tool_config_loads_manifest_defaults():
     assert config["search"]["max_chars"] == 7000
 
 
+def test_navigation_tool_config_and_model_tool_schemas_load():
+    config = get_tool_config("navigation")
+    defs = get_tool_definitions()
+    names = {tool.name for tool in defs}
+
+    assert config["model_tool"]["max_contract_chars"] == 6000
+    assert config["model_tool"]["max_chars"] == 16000
+    assert config["model_tool"]["timeout_seconds"] == 8
+    assert names == {"grep", "find_name", "cat", "sed"}
+
+
 def test_tool_config_returns_isolated_copy():
     config = get_tool_config("index")
     config["search"]["max_top_k"] = 99

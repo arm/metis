@@ -15,6 +15,9 @@ METIS_TRIAGED_KEY = "metisTriaged"
 METIS_TRIAGE_STATUS_KEY = "metisTriageStatus"
 METIS_TRIAGE_REASON_KEY = "metisTriageReason"
 METIS_TRIAGE_TIMESTAMP_KEY = "metisTriageTimestamp"
+METIS_EVIDENCE_REQUIREMENTS_KEY = "metisEvidenceRequirements"
+METIS_EVIDENCE_COVERAGE_KEY = "metisEvidenceCoverage"
+METIS_MISSING_EVIDENCE_KEY = "metisMissingEvidence"
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,7 @@ def apply_triage_result(
     result_index: int,
     status: str,
     reason: str,
+    metadata: dict[str, Any] | None = None,
 ) -> bool:
     runs = payload.get("runs")
     if not isinstance(runs, list) or run_index >= len(runs):
@@ -214,4 +218,25 @@ def apply_triage_result(
     properties[METIS_TRIAGE_STATUS_KEY] = status
     properties[METIS_TRIAGE_REASON_KEY] = reason
     properties[METIS_TRIAGE_TIMESTAMP_KEY] = datetime.now(timezone.utc).isoformat()
+    _apply_triage_metadata(properties, metadata or {})
     return True
+
+
+def _apply_triage_metadata(
+    properties: dict[str, Any], metadata: dict[str, Any]
+) -> None:
+    evidence_requirements = metadata.get("evidence_requirements")
+    if isinstance(evidence_requirements, list):
+        properties[METIS_EVIDENCE_REQUIREMENTS_KEY] = [
+            str(item) for item in evidence_requirements if str(item or "").strip()
+        ]
+
+    evidence_coverage = metadata.get("evidence_coverage")
+    if isinstance(evidence_coverage, dict):
+        properties[METIS_EVIDENCE_COVERAGE_KEY] = dict(evidence_coverage)
+
+    missing_evidence = metadata.get("missing_evidence")
+    if isinstance(missing_evidence, list):
+        properties[METIS_MISSING_EVIDENCE_KEY] = [
+            str(item) for item in missing_evidence if str(item or "").strip()
+        ]

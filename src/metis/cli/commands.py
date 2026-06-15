@@ -4,6 +4,7 @@
 
 from importlib.metadata import version as package_version
 import inspect
+import json
 from pathlib import Path
 from rich.markup import escape
 
@@ -45,7 +46,7 @@ Type one of the following commands (with arguments):
 - [cyan]review_patch mypatch.diff[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
 - [cyan]review_code[/cyan]
-- [cyan]triage findings.sarif[/cyan]
+- [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
 - [cyan]update patch.diff[/cyan]
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
@@ -222,11 +223,17 @@ def run_ask(engine, question, args, runtime: CommandRuntime):
     save_output(args.output_file, answer, args.quiet)
 
 
-def run_triage(engine, sarif_path, args, runtime: CommandRuntime):
-    if not check_file_exists(sarif_path, quiet=args.quiet):
+def run_triage(engine, findings_path, args, runtime: CommandRuntime):
+    if not check_file_exists(findings_path, quiet=args.quiet):
         return
-    if Path(sarif_path).suffix.lower() != ".sarif":
-        print_console("[red]Only .sarif input files are supported.[/red]", args.quiet)
+    suffix = Path(findings_path).suffix.lower()
+    if suffix == ".json":
+        return _run_json_triage(engine, findings_path, args, runtime)
+    if suffix != ".sarif":
+        print_console(
+            "[red]Only .sarif and Metis .json input files are supported.[/red]",
+            args.quiet,
+        )
         return
     print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
     options = _triage_options_for_runtime(args, runtime)
@@ -239,12 +246,13 @@ def run_triage(engine, sarif_path, args, runtime: CommandRuntime):
         if sarif_targets:
             output_target = sarif_targets[0]
 
-    def _invoke(kwargs):
+    def _invoke(debug_callback=None, progress_callback=None):
         return engine.triage_sarif_file(
-            sarif_path,
+            findings_path,
             output_target,
             options=options,
-            **kwargs,
+            debug_callback=debug_callback,
+            progress_callback=progress_callback,
         )
 
     saved_path = run_triage_action(
@@ -258,6 +266,39 @@ def run_triage(engine, sarif_path, args, runtime: CommandRuntime):
     )
 
 
+def _run_json_triage(engine, json_path, args, runtime: CommandRuntime):
+    print_console("[cyan]Loading Metis JSON findings...[/cyan]", args.quiet)
+    with Path(json_path).open("r", encoding="utf-8") as f:
+        results = json.load(f)
+    if not isinstance(results, dict) or not isinstance(results.get("reviews"), list):
+        print_console(
+            "[red]JSON input must be a Metis results object with a reviews array.[/red]",
+            args.quiet,
+        )
+        return
+
+    options = _triage_options_for_runtime(args, runtime)
+    sarif_payload = generate_sarif(results)
+
+    def _invoke(debug_callback=None, progress_callback=None):
+        return engine.triage_sarif_payload(
+            sarif_payload,
+            options=options,
+            debug_callback=debug_callback,
+            progress_callback=progress_callback,
+        )
+
+    triaged_sarif = run_triage_action(
+        args,
+        action=_invoke,
+        spinner_text="Triaging JSON findings...",
+    )
+
+    output_files = args.output_file or [json_path]
+    save_output(output_files, results, args.quiet, sarif_payload=triaged_sarif)
+    print_console("[green]Triage complete.[/green]", args.quiet)
+
+
 def _build_triaged_sarif_payload(engine, results, args, runtime: CommandRuntime):
     if not getattr(args, "triage", False):
         return None
@@ -265,11 +306,12 @@ def _build_triaged_sarif_payload(engine, results, args, runtime: CommandRuntime)
         sarif_payload = generate_sarif(results)
         options = _triage_options_for_runtime(args, runtime)
 
-        def _invoke(kwargs):
+        def _invoke(debug_callback=None, progress_callback=None):
             return engine.triage_sarif_payload(
                 sarif_payload,
                 options=options,
-                **kwargs,
+                debug_callback=debug_callback,
+                progress_callback=progress_callback,
             )
 
         with usage_operation("triage"):

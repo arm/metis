@@ -35,3 +35,9 @@ prompts:
     Your tasks are:
     1. Security Review Scope
        - Review the security implications of the FILE.
+  triage_navigation: |-
+    Python triage navigation variant:
+    - Start with the reported function/class and inspect decorators, context managers, imports, and wrapper calls before widening search.
+    - Prefer exact symbol searches for validators, serializers, escaping, path normalization, permission checks, and exception/early-return guards.
+    - Resolve one concrete import or alias hop when it directly controls the finding; mark inconclusive instead of broadening if the hop remains unresolved.
+    - For framework findings, inspect the route/CLI/task registration and the called handler before accepting reachability.
