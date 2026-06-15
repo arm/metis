@@ -158,6 +158,9 @@ class ReachabilityGraphCache:
     def _reachability_files(self, files) -> list[str]:
         return [str(path) for path in files if self._supports_reachability_file(path)]
 
+    def supports_file(self, path) -> bool:
+        return self._supports_reachability_file(path)
+
     def _supports_reachability_file(self, path) -> bool:
         supports_reachability_file = getattr(
             self._repository,

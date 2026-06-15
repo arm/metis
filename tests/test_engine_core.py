@@ -196,6 +196,52 @@ def test_index_tool_exposes_langchain_search_tool(engine):
     ]
 
 
+def test_navigation_tool_exposes_triage_model_tools_without_review_tools(tmp_path):
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+    (tmp_path / "a.py").write_text("alpha\nbeta\n", encoding="utf-8")
+    engine = MetisEngine(
+        codebase_path=str(tmp_path),
+        vector_backend=backend,
+        llm_provider=Mock(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools={"navigation"},
+    )
+
+    review_tools = engine.tools.langchain_tools()
+    triage_tools = engine.tools.triage_langchain_tools()
+
+    assert review_tools == ()
+    assert [tool.name for tool in triage_tools] == ["grep", "find_name", "cat", "sed"]
+    assert triage_tools[0].metadata["metis_contract_max_chars"] == 6000
+    assert engine.tools.model_tool_max_rounds() is None
+    assert engine.tools.triage_model_tool_max_rounds() == 6
+    assert "a.py:2:beta" in triage_tools[0].invoke({"pattern": "beta", "path": "."})
+
+
+def test_navigation_tool_omits_triage_model_tools_when_disabled(tmp_path):
+    backend = Mock()
+    backend.init = Mock()
+    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+    engine = MetisEngine(
+        codebase_path=str(tmp_path),
+        vector_backend=backend,
+        llm_provider=Mock(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools=set(),
+    )
+
+    assert engine.tools.triage_langchain_tools() == ()
+    assert engine.tools.triage_model_tool_max_rounds() is None
+
+
 def test_index_search_uses_manifest_tool_config(monkeypatch):
     class _Doc:
         def __init__(self, text):

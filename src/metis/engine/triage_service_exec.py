@@ -50,7 +50,7 @@ class TriageServiceExecutionMixin:
         finding,
         debug_callback,
     ) -> TriageRequest:
-        analyzer = self._get_thread_triage_analyzer(finding.file_path)
+        language_name = self._get_language_name_for_path(finding.file_path or "") or ""
         plugin = self._get_triage_plugin(finding.file_path)
         return {
             "finding_message": finding.message,
@@ -62,9 +62,8 @@ class TriageServiceExecutionMixin:
             "finding_is_metis": bool(getattr(finding, "is_metis_source", False)),
             "finding_explanation": getattr(finding, "explanation", ""),
             "debug_callback": debug_callback,
-            "triage_analyzer": analyzer,
-            "triage_plugin": plugin,
-            "triage_codebase_path": self.codebase_path,
+            "triage_language": language_name,
+            "triage_language_guidance": self._get_triage_language_guidance(plugin),
         }
 
     def _triage_one_finding(
@@ -73,6 +72,15 @@ class TriageServiceExecutionMixin:
         *,
         debug_callback,
     ) -> dict:
+        if self._supports_reachability_triage(finding.file_path):
+            del debug_callback
+            return self.reachability_service.triage_finding(
+                self._reachability_triage_request(finding),
+                options=self._reachability_triage_options(),
+                model_tools=self.model_tools,
+                model_tool_max_rounds=self.model_tool_max_rounds,
+                chat_model_kwargs=self.chat_model_kwargs,
+            )
         req = self._build_triage_request(
             finding=finding,
             debug_callback=debug_callback,
@@ -86,6 +94,11 @@ class TriageServiceExecutionMixin:
             result_index=finding.result_index,
             status=decision["status"],
             reason=decision["reason"],
+            metadata={
+                "evidence_requirements": decision.get("evidence_obligations"),
+                "evidence_coverage": decision.get("evidence_coverage"),
+                "missing_evidence": decision.get("missing_evidence"),
+            },
         )
 
     def _record_triage_failure(self, finding, exc):

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+from dataclasses import replace
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import parse_json_output
@@ -26,6 +27,10 @@ from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
 from .review_output import group_findings_as_reviews, reviews_for_findings
 from .supplementary import SupplementaryAnalyzer
+from .triage import (
+    ReachabilityTriageRequest,
+    ReachabilityTriageRunner,
+)
 from .workers import serialized_progress_callback
 
 logger = logging.getLogger(__name__)
@@ -204,6 +209,50 @@ class TreeSitterReachabilityService:
             files=len(reviews),
         )
         return reviews
+
+    def supports_file(self, file_path) -> bool:
+        try:
+            _abs_target, relative_target = self._normalize_target_file(file_path)
+        except Exception:
+            return False
+        return self._graphs.supports_file(relative_target)
+
+    def triage_finding(
+        self,
+        finding: ReachabilityTriageRequest,
+        *,
+        options: ReachabilityReviewOptions,
+        model_tools: tuple[object, ...] = (),
+        model_tool_max_rounds: int | None = None,
+        chat_model_kwargs: dict | None = None,
+    ) -> dict:
+        options = self._review_options(options)
+        _abs_target, relative_target = self._normalize_target_file(finding.file_path)
+        graph = self._graphs.ensure_graph(options=options)
+        if graph.node_count() == 0:
+            return {
+                "status": "inconclusive",
+                "reason": "No C/C++ reachability graph was available for triage.",
+                "evidence": [],
+                "resolution_chain": [],
+                "unresolved_hops": ["reachability graph unavailable"],
+                "evidence_obligations": ["reachability_context"],
+                "evidence_coverage": {"reachability_context": 0},
+                "missing_evidence": ["reachability_context"],
+            }
+        return ReachabilityTriageRunner(
+            self._llm_provider,
+            self._review_model(options),
+            self._usage_runtime,
+            self._config.codebase_path,
+            options=options,
+            chat_model_kwargs=chat_model_kwargs,
+            model_tools=model_tools,
+            max_tool_rounds=model_tool_max_rounds,
+        ).triage(
+            replace(finding, file_path=relative_target),
+            graph,
+        )
 
     def _review_options(self, options):
         if options.progress_callback is None:

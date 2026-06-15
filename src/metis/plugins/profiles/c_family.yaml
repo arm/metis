@@ -65,3 +65,9 @@ prompts:
     You are a thorough security engineer specializing in C/C++.
     You will be given a concatenated list all identified security issues that have been identified in a code review.
     Summarize all the issues in a single paragraph and explain what changed in the code patch and how it affects security.
+  triage_navigation: |-
+    C-family triage navigation variant:
+    - Start with the reported function and inspect local guards, bounds checks, null checks, ownership/lifetime balance, and error-unwind paths before widening search.
+    - Prefer exact symbol searches for macros, inline helpers, wrappers, allocation/free pairs, lock/unlock pairs, callbacks, and table dispatch entries.
+    - Resolve one concrete macro/include/generated-code/build-gate hop when it directly controls the finding; mark inconclusive instead of broadening if the hop remains unresolved.
+    - For embedded-like findings, prefer register/MMIO access sites, dispatch/vector tables, linker/build gates, and concrete memory access evidence over generic source-to-sink language.

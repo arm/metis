@@ -109,6 +109,7 @@ def invoke_model_with_tools(
                     status=status,
                 )
             )
+    last_response = tool_chat.invoke(messages)
     return _message_content_text(last_response)
 
 

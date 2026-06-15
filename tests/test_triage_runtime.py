@@ -29,38 +29,3 @@ def test_triage_plugin_lookup_uses_manifest_filename_patterns(engine):
 
     assert plugin is not None
     assert plugin.get_name() == "systemverilog"
-
-
-def test_triage_analyzer_cache_uses_resolved_language_name(engine, monkeypatch):
-    service = engine._triage_service
-    analyzer = object()
-    plugin_paths = []
-    factory_paths = []
-
-    class _Plugin:
-        def get_triage_analyzer_factory(self):
-            def _factory(codebase_path):
-                factory_paths.append(codebase_path)
-                return analyzer
-
-            return _factory
-
-    def _language_name_for_path(path):
-        if ".demo." in path:
-            return "demo"
-        return None
-
-    def _plugin_for_path(path):
-        plugin_paths.append(path)
-        return _Plugin()
-
-    monkeypatch.setattr(service, "_get_language_name_for_path", _language_name_for_path)
-    monkeypatch.setattr(service, "_get_plugin_for_path", _plugin_for_path)
-
-    first = service._get_thread_triage_analyzer("rtl/a.demo.generated")
-    second = service._get_thread_triage_analyzer("rtl/b.demo.preprocessed")
-
-    assert first is analyzer
-    assert second is analyzer
-    assert plugin_paths == ["rtl/a.demo.generated"]
-    assert factory_paths == [engine.codebase_path]

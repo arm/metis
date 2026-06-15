@@ -10,18 +10,20 @@ def run_triage_action(args, *, action, spinner_text):
     debug_cb = _make_triage_debug_callback(args)
     if getattr(args, "verbose", False):
 
-        def _runner(progress_cb):
-            kwargs = _build_triage_kwargs(
-                args,
-                debug_cb=debug_cb,
-                progress_cb=progress_cb,
+        def _runner(progress_callback):
+            return action(
+                debug_callback=debug_cb,
+                progress_callback=progress_callback,
             )
-            return action(kwargs)
 
         return _run_with_triage_progress(args, _runner)
 
-    kwargs = _build_triage_kwargs(args, debug_cb=debug_cb)
-    return with_spinner(spinner_text, action, kwargs, quiet=args.quiet)
+    return with_spinner(
+        spinner_text,
+        action,
+        debug_callback=debug_cb,
+        quiet=args.quiet,
+    )
 
 
 def _run_with_triage_progress(args, runner):
@@ -36,17 +38,6 @@ def _run_with_triage_progress(args, runner):
         else:
             progress.update(task, completed=1)
     return result
-
-
-def _build_triage_kwargs(args, *, debug_cb=None, progress_cb=None):
-    kwargs = {
-        "include_triaged": bool(getattr(args, "include_triaged", False)),
-    }
-    if debug_cb is not None:
-        kwargs["debug_callback"] = debug_cb
-    if progress_cb is not None:
-        kwargs["progress_callback"] = progress_cb
-    return kwargs
 
 
 def _make_triage_progress_callback(args, progress, task):

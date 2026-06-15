@@ -91,6 +91,82 @@ def test_run_triage_uses_sarif_output_target(tmp_path):
     )
 
 
+def test_run_triage_accepts_metis_json_input(tmp_path):
+    json_path = tmp_path / "results.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "reviews": [
+                    {
+                        "file": "src/a.c",
+                        "reviews": [{"issue": "Issue A", "line_number": 10}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _DummyEngine:
+        def triage_sarif_payload(self, payload, **kwargs):
+            assert isinstance(kwargs.get("options"), TriageOptions)
+            assert kwargs["options"].include_triaged is False
+            payload["runs"][0]["results"][0]["properties"] = {
+                "metisTriaged": True,
+                "metisTriageStatus": "invalid",
+                "metisTriageReason": "Contradicted by source.",
+                "metisTriageTimestamp": "2026-01-01T00:00:00Z",
+            }
+            return payload
+
+    args = SimpleNamespace(quiet=True, output_file=None, include_triaged=False)
+
+    run_triage(
+        _DummyEngine(),
+        str(json_path),
+        args,
+        CommandRuntime(
+            command="triage",
+            command_args=[str(json_path)],
+        ),
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    issue = payload["reviews"][0]["reviews"][0]
+    assert issue["metisTriaged"] is True
+    assert issue["metisTriageStatus"] == "invalid"
+    assert issue["metisTriageReason"] == "Contradicted by source."
+
+
+def test_run_triage_rejects_non_metis_json_input(tmp_path, monkeypatch):
+    json_path = tmp_path / "input.json"
+    json_path.write_text('{"runs":[]}', encoding="utf-8")
+    messages = []
+
+    class _DummyEngine:
+        def triage_sarif_payload(self, payload, **kwargs):
+            raise AssertionError("should not triage non-Metis JSON")
+
+    monkeypatch.setattr(
+        "metis.cli.commands.print_console",
+        lambda message, quiet=False: messages.append(str(message)),
+    )
+
+    args = SimpleNamespace(quiet=False, output_file=None, include_triaged=False)
+
+    run_triage(
+        _DummyEngine(),
+        str(json_path),
+        args,
+        CommandRuntime(
+            command="triage",
+            command_args=[str(json_path)],
+        ),
+    )
+
+    assert any("Metis results object" in message for message in messages)
+
+
 def test_save_output_json_includes_triage_annotations(tmp_path):
     output_path = tmp_path / "results.json"
     results = {
