@@ -302,6 +302,54 @@ def test_review_node_parse_no_source_map():
     assert out["parsed_reviews"][0]["line_number"] == 0
 
 
+def test_review_node_parse_line_number_is_start():
+    from metis.engine.graphs.review import review_node_parse
+
+    smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
+    state = {
+        "source_map": smap,
+        "mode": "file",
+        "chunk_start": 7,
+        "chunk_end": 13,
+        "parsed_reviews": [
+            {
+                "issue": "overflow",
+                "code_snippet": "    char tmp[8];\n    if (len > 0) {\n        memcpy(tmp, buf, len);",
+            }
+        ],
+    }
+    out = review_node_parse(state)
+    issue = out["parsed_reviews"][0]
+    assert issue["anchor"]["start_line"] == 8
+    assert issue["anchor"]["end_line"] == 10
+    assert issue["line_number"] == 8
+
+
+def test_review_node_parse_patch_mode_resolves_against_original():
+    from metis.engine.graphs.review import review_node_parse
+
+    smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
+    state = {
+        "source_map": smap,
+        "mode": "patch",
+        "chunk_start": 1,
+        "chunk_end": 3,
+        "parsed_reviews": [
+            {
+                "issue": "overflow in parse",
+                "reasoning": "memcpy in parse() lacks bound",
+                "code_snippet": "memcpy(tmp, buf, len);",
+            }
+        ],
+    }
+    out = review_node_parse(state)
+    issue = out["parsed_reviews"][0]
+    # chunk hint (1-3) is ignored in patch mode; symbol-name disambiguation
+    # via context_text picks parse() at line 10
+    assert issue["line_number"] == 10
+    assert issue["anchor"]["symbol"] == "src/foo.c::parse"
+
+
 def test_normalize_review_fields():
     from metis.engine.graphs.utils import normalize_review_fields
 

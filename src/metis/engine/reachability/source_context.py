@@ -30,7 +30,9 @@ def _read_line_context(codebase_path, rel_file, line_number, context=2, max_char
     smap = SourceMap.for_file(codebase_path, rel_file)
     if smap is None:
         return ""
-    return smap.context_slice(int(line_number or 1), radius=context, max_chars=max_chars)
+    return smap.context_slice(
+        int(line_number or 1), radius=context, max_chars=max_chars
+    )
 
 
 def _build_file_grouped_node_chunks(

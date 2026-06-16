@@ -71,7 +71,7 @@ def _build_body_text(state: ReviewState) -> str:
         original_file = state.get("original_file") or ""
         sections = [
             "ORIGINAL_FILE:",
-            original_file,
+            SourceMap.number_text(original_file, 1) if original_file else "",
             "",
             "FILE_CHANGES:",
             snippet,
@@ -126,6 +126,7 @@ def review_node_parse(state: ReviewState) -> ReviewState:
         else None
     )
 
+    use_hint = state.get("mode", "file") == "file"
     for issue in reviews:
         if not isinstance(issue, dict):
             continue
@@ -137,11 +138,11 @@ def review_node_parse(state: ReviewState) -> ReviewState:
             snippet=str(issue.get("code_snippet") or ""),
             start_line=issue.get("start_line"),
             end_line=issue.get("end_line"),
-            hint=hint,
+            hint=hint if use_hint else None,
             context_text=f"{issue.get('issue') or ''} {issue.get('reasoning') or ''}",
         )
         issue["anchor"] = anchor.to_dict()
-        issue["line_number"] = anchor.end_line or 0
+        issue["line_number"] = anchor.start_line or 0
 
     new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
@@ -248,11 +249,13 @@ class ReviewGraph:
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
 
-        smap = (
-            SourceMap.for_text(relative_file or file_path, snippet)
-            if mode == "file"
-            else None
-        )
+        rel_path = relative_file or file_path
+        if mode == "file":
+            smap = SourceMap.for_text(rel_path, snippet)
+        elif original_file:
+            smap = SourceMap.for_text(rel_path, original_file)
+        else:
+            smap = None
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
         app = self._build_app(language_prompts, default_prompt_key)
