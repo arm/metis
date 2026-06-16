@@ -10,10 +10,12 @@ from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
-from metis.utils import split_snippet, parse_json_output, enrich_issues
+from metis.engine.source import SourceMap
+from metis.utils import split_snippet, parse_json_output
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
     build_review_system_prompt,
+    normalize_review_fields,
     sanitize_review_payload,
 )
 from .types import ReviewRequest, ReviewState
@@ -27,7 +29,9 @@ def _normalize_reviews(raw) -> list[dict]:
     structured entries with empty fields when necessary.
     """
     if isinstance(raw, ReviewResponseModel):
-        return raw.model_dump().get("reviews", []) or []
+        return [
+            normalize_review_fields(r) for r in (raw.model_dump().get("reviews") or [])
+        ]
 
     payload = None
     if isinstance(raw, dict):
@@ -56,17 +60,18 @@ def _build_body_text(state: ReviewState) -> str:
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
+        chunk_start = state.get("chunk_start") or 1
         sections = [
             f"FILE: {file_path}",
             "SNIPPET:",
-            snippet,
+            SourceMap.number_text(snippet, chunk_start),
             "",
         ]
     else:
         original_file = state.get("original_file") or ""
         sections = [
             "ORIGINAL_FILE:",
-            original_file,
+            SourceMap.number_text(original_file, 1) if original_file else "",
             "",
             "FILE_CHANGES:",
             snippet,
@@ -74,20 +79,6 @@ def _build_body_text(state: ReviewState) -> str:
         ]
 
     return "\n".join(sections)
-
-
-def _post_process_reviews(
-    reviews: list[dict],
-    file_path: str,
-) -> list[dict]:
-    """Enrich parsed reviews with derived metadata."""
-    normalized_reviews = reviews or []
-    try:
-        enrich_issues(file_path, normalized_reviews)
-    except Exception:
-        pass
-
-    return normalized_reviews
 
 
 def review_node_build_prompt(
@@ -126,13 +117,35 @@ def review_node_llm(
 
 def review_node_parse(state: ReviewState) -> ReviewState:
     reviews = state.get("parsed_reviews") or []
-    normalized = _post_process_reviews(
-        reviews,
-        state.get("file_path", "") or "",
+    smap = state.get("source_map")
+    chunk_start = state.get("chunk_start")
+    chunk_end = state.get("chunk_end")
+    hint = (
+        range(chunk_start, chunk_end + 1)
+        if isinstance(chunk_start, int) and isinstance(chunk_end, int)
+        else None
     )
 
+    use_hint = state.get("mode", "file") == "file"
+    for issue in reviews:
+        if not isinstance(issue, dict):
+            continue
+        if smap is None:
+            issue.setdefault("anchor", None)
+            issue.setdefault("line_number", 0)
+            continue
+        anchor = smap.resolve_issue(
+            snippet=str(issue.get("code_snippet") or ""),
+            start_line=issue.get("start_line"),
+            end_line=issue.get("end_line"),
+            hint=hint if use_hint else None,
+            context_text=f"{issue.get('issue') or ''} {issue.get('reasoning') or ''}",
+        )
+        issue["anchor"] = anchor.to_dict()
+        issue["line_number"] = anchor.start_line or 0
+
     new_state: ReviewState = state.copy()
-    new_state["parsed_reviews"] = normalized
+    new_state["parsed_reviews"] = reviews
     return new_state
 
 
@@ -236,13 +249,24 @@ class ReviewGraph:
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
 
+        rel_path = relative_file or file_path
+        if mode == "file":
+            smap = SourceMap.for_text(rel_path, snippet)
+        elif original_file:
+            smap = SourceMap.for_text(rel_path, original_file)
+        else:
+            smap = None
         chunks = split_snippet(snippet, self.max_token_length)
         accumulated = []
         app = self._build_app(language_prompts, default_prompt_key)
-        for chunk in chunks:
+        for chunk, chunk_start in chunks:
+            chunk_end = chunk_start + chunk.count("\n")
             state = {
                 "file_path": file_path,
                 "snippet": chunk,
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
+                "source_map": smap,
                 "relative_file": relative_file,
                 "mode": mode,
                 "original_file": original_file,

@@ -34,6 +34,9 @@ class ReviewState(TypedDict, total=False):
     # Input
     file_path: str
     snippet: str
+    chunk_start: int
+    chunk_end: int
+    source_map: Any
     relative_file: str | None
     mode: str
     original_file: str | None

@@ -66,13 +66,20 @@ def _canonical_key_from_parts(
     primary_line,
     vulnerability_type,
     root_cause_token,
+    *,
+    anchor=None,
 ):
     file_key = _canonical_path(primary_file)
     function_key = _canonical_function(primary_function)
     if not file_key or not function_key:
         return ""
     vtype = _normalise_vuln_type(vulnerability_type)
-    root_token = root_cause_token or f"line_{_line_bucket(primary_line)}"
+    if root_cause_token:
+        root_token = root_cause_token
+    elif isinstance(anchor, dict) and anchor.get("content_hash"):
+        root_token = f"anchor_{anchor['content_hash']}"
+    else:
+        root_token = f"line_{_line_bucket(primary_line)}"
     return f"{file_key}:{function_key}:{vtype}:{root_token}"
 
 

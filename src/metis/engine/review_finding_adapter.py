@@ -8,7 +8,7 @@ from .reachability.finding_values import (
     _safe_int,
     _severity_title,
 )
-from .reachability.source_context import _read_line_context
+from .source import SourceMap
 
 REACHABILITY_REASONING_METADATA_PREFIXES = (
     "Primary location:",
@@ -23,7 +23,7 @@ REACHABILITY_REASONING_METADATA_PREFIXES = (
 
 def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""):
     line_number = int(
-        finding.primary_line or finding.sink_line or finding.source_line or 1
+        finding.primary_line or finding.sink_line or finding.source_line or 0
     )
     vtype = _normalise_vuln_type(finding.vulnerability_type)
     primary_fn = finding.primary_function or finding.sink_function
@@ -31,18 +31,16 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
     )
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
+    smap = SourceMap.for_file(codebase_path, primary_file) if primary_file else None
     return {
         "issue": issue,
         "line_number": line_number,
+        "anchor": dict(finding.primary_anchor) if finding.primary_anchor else None,
         "primary_file": primary_file,
         "primary_function": primary_fn,
         "analysis_type": finding.analysis_type,
         "path": list(finding.path or []),
-        "code_snippet": (
-            _read_line_context(codebase_path, primary_file, line_number, context=2)
-            if primary_file
-            else ""
-        ),
+        "code_snippet": (smap.context_slice(line_number, radius=2) if smap else ""),
         "cwe": str(getattr(finding, "cwe", "") or ""),
         "severity": _severity_title(finding.severity, "Medium"),
         "confidence": finding.confidence,
@@ -82,6 +80,9 @@ def review_item_to_finding(item, *, finding_id):
         primary_function=primary_function,
         primary_line=line_number,
         canonical_key=str(item.get("canonical_key") or ""),
+        primary_anchor=(
+            item.get("anchor") if isinstance(item.get("anchor"), dict) else None
+        ),
     )
 
 

@@ -8,8 +8,43 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.engine.source import SourceMap
+from metis.engine.source.anchor import KIND_CHUNK
 
 logger = logging.getLogger("metis")
+
+
+def annotate_chunk_anchors(doc, chunks):
+    """Attach a CodeAnchor-derived metadata block to each chunk of ``doc``."""
+    doc_text = getattr(doc, "text", None)
+    if doc_text is None and hasattr(doc, "get_content"):
+        doc_text = doc.get_content()
+    if not doc_text:
+        return chunks
+    smap = SourceMap.for_text(getattr(doc, "id_", "") or "", doc_text)
+    for node in chunks:
+        chunk_text = getattr(node, "text", None)
+        if chunk_text is None and hasattr(node, "get_content"):
+            chunk_text = node.get_content()
+        if not chunk_text:
+            continue
+        anchor = smap.resolve_snippet(chunk_text)
+        if anchor is None:
+            continue
+        meta = getattr(node, "metadata", None)
+        if meta is None:
+            meta = {}
+            try:
+                node.metadata = meta
+            except Exception:
+                continue
+        meta["start_line"] = anchor.start_line
+        meta["end_line"] = anchor.end_line
+        if anchor.symbol:
+            meta["symbol"] = anchor.symbol
+        meta["anchor_id"] = anchor.stable_id()
+        meta["anchor_kind"] = KIND_CHUNK
+    return chunks
 
 
 def summarize_changes(
@@ -61,6 +96,7 @@ def prepare_nodes_iter(
             try:
                 splitter = get_splitter_cached(plugin)
                 parsed_nodes = splitter.get_nodes_from_documents([d])
+                annotate_chunk_anchors(d, parsed_nodes)
                 nodes_code.extend(parsed_nodes)
             except Exception as e:
                 name = plugin.get_name() if hasattr(plugin, "get_name") else "unknown"

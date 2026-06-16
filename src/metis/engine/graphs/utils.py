@@ -58,6 +58,25 @@ _REQUIRED_REVIEW_STR_FIELDS = tuple(
     if _is_string_field(field.annotation)
 )
 
+_SEVERITY_TITLES = {
+    "LOW": "Low",
+    "MED": "Medium",
+    "MEDIUM": "Medium",
+    "MID": "Medium",
+    "HIGH": "High",
+    "CRIT": "Critical",
+    "CRITICAL": "Critical",
+}
+
+
+def normalize_review_fields(item: dict) -> dict:
+    if not item.get("cwe"):
+        item["cwe"] = "CWE-Unknown"
+    sev = item.get("severity")
+    if isinstance(sev, str) and sev.strip():
+        item["severity"] = _SEVERITY_TITLES.get(sev.strip().upper(), sev.strip())
+    return item
+
 
 def sanitize_review_payload(payload):
     """
@@ -109,7 +128,7 @@ def sanitize_review_payload(payload):
             if field not in normalized or normalized[field] is None:
                 normalized[field] = ""
 
-        sanitized.append(normalized)
+        sanitized.append(normalize_review_fields(normalized))
 
     return sanitized
 
