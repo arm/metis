@@ -22,6 +22,7 @@ class GeminiChatConfig(TypedDict, total=False):
     location: str
     vertexai: bool | None
     client_args: Mapping[str, object]
+    max_retries: int
 
 
 class GeminiProvider(ChatProvider):
@@ -54,6 +55,7 @@ class GeminiProvider(ChatProvider):
         self.location = config.get("location")
         self.vertexai = config.get("vertexai")
         self.client_args = dict(config.get("client_args", {}))
+        self.max_retries = int(config.get("max_retries", 5))
 
         if not self.api_key and not self.vertexai:
             raise ValueError(
@@ -103,6 +105,7 @@ class GeminiProvider(ChatProvider):
         response_format = kwargs.pop("response_format", None)
         params: dict[str, object] = {
             "model": model_name,
+            "max_retries": self.max_retries,
             **self._common_params(),
         }
         temperature = kwargs.get("temperature")

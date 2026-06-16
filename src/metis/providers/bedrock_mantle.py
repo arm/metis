@@ -88,6 +88,7 @@ class BedrockMantleProvider(ChatProvider):
         self.aws_profile = config.get("aws_profile")
         self.base_url = config.get("base_url")
         self.default_headers = dict(config.get("default_headers", {}))
+        self.max_retries = int(config.get("max_retries", 5))
 
     def get_chat_model(
         self,
@@ -110,6 +111,7 @@ class BedrockMantleProvider(ChatProvider):
             "model": model_name,
             "aws_region": self.aws_region,
             "aws_profile": self.aws_profile,
+            "max_retries": self.max_retries,
         }
         max_tokens = kwargs.get("max_tokens")
         if max_tokens is not None:

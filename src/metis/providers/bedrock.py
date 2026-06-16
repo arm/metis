@@ -43,6 +43,7 @@ class BedrockChatConfig(TypedDict, total=False):
     aws_secret_access_key: str
     aws_session_token: str
     endpoint_url: str
+    max_retries: int
 
 
 class BedrockEmbeddingConfig(TypedDict, total=False):
@@ -97,6 +98,7 @@ class BedrockProvider(ChatProvider):
         self.config = config
         self.default_model = config.get("model")
         self.supports_temperature = bool(config.get("supports_temperature", False))
+        self.max_retries = int(config.get("max_retries", 5))
         self._credentials = _credential_kwargs(config)
 
     def get_chat_model(
@@ -117,6 +119,7 @@ class BedrockProvider(ChatProvider):
 
         params: dict[str, object] = {
             "model": model_name,
+            "max_retries": self.max_retries,
             **self._credentials,
         }
         max_tokens = kwargs.get("max_tokens")

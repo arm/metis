@@ -27,6 +27,7 @@ class AzureOpenAIChatConfig(TypedDict, total=False):
     model: NotRequired[str]
     supports_temperature: NotRequired[bool]
     use_responses_api: NotRequired[bool]
+    max_retries: NotRequired[int]
 
 
 class AzureOpenAIEmbeddingConfig(TypedDict, total=False):
@@ -68,6 +69,7 @@ class AzureOpenAIProvider(ChatProvider):
         self.chat_deployment_model = config["chat_deployment_model"]
         self.supports_temperature = config.get("supports_temperature", False)
         self.use_responses_api = config.get("use_responses_api")
+        self.max_retries = int(config.get("max_retries", 5))
 
         if not self.engine:
             raise ValueError("Missing 'engine' (Azure deployment name).")
@@ -92,6 +94,7 @@ class AzureOpenAIProvider(ChatProvider):
             "api_version": self.api_version,
             "azure_deployment": deployment,
             "model": self.chat_deployment_model,
+            "max_retries": self.max_retries,
         }
         if self.use_responses_api is not None:
             params["use_responses_api"] = bool(self.use_responses_api)

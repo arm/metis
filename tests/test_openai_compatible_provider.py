@@ -42,6 +42,30 @@ def test_chat_model_forwards_supported_runtime_options() -> None:
     assert llm.use_responses_api is True
 
 
+def test_chat_model_applies_configured_max_retries() -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config(max_retries=7))
+
+    llm = provider.get_chat_model()
+
+    assert llm.max_retries == 7
+
+
+def test_chat_model_caller_can_override_max_retries() -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config(max_retries=7))
+
+    llm = provider.get_chat_model(max_retries=1)
+
+    assert llm.max_retries == 1
+
+
+def test_chat_model_default_max_retries() -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config())
+
+    llm = provider.get_chat_model()
+
+    assert llm.max_retries == 5
+
+
 def test_chat_model_uses_custom_base_and_headers() -> None:
     provider = OpenAICompatibleChatProvider(
         _chat_config(
