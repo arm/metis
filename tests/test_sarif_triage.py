@@ -116,7 +116,7 @@ def test_extract_findings_can_include_metis_triaged():
     assert len(findings) == 2
 
 
-def test_triage_payload_skips_failed_finding(engine, monkeypatch):
+def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     payload = {
         "version": "2.1.0",
         "runs": [
@@ -152,7 +152,12 @@ def test_triage_payload_skips_failed_finding(engine, monkeypatch):
 
     assert first["properties"]["metisTriaged"] is True
     assert first["properties"]["metisTriageStatus"] == "valid"
-    assert "properties" not in second
+    assert second["properties"]["metisTriaged"] is True
+    assert second["properties"]["metisTriageStatus"] == "inconclusive"
+    assert (
+        "Triage failed before a decision" in second["properties"]["metisTriageReason"]
+    )
+    assert second["properties"]["metisMissingEvidence"] == ["triage execution failed"]
 
 
 def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):

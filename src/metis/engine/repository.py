@@ -59,6 +59,17 @@ class EngineRepository:
             return None
         return str(getattr(plugin, "get_name", lambda: "")() or "").lower() or None
 
+    def has_language_file_role(self, path: str, role: str) -> bool:
+        registry = self._config.language_registry
+        if registry is None:
+            return False
+        manifest = registry.get_manifest_for_path(path)
+        if manifest is None:
+            return False
+        extension = os.path.splitext(str(path or ""))[1].lower()
+        role_extensions = getattr(manifest, f"{role}_extensions", ())
+        return extension in role_extensions
+
     def supports_reachability_file(self, path: str) -> bool:
         registry = self._config.language_registry
         if registry is not None:

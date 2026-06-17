@@ -101,12 +101,24 @@ class TriageServiceExecutionMixin:
             },
         )
 
-    def _record_triage_failure(self, finding, exc):
+    def _record_triage_failure(self, triaged_payload: dict, finding, exc):
         logger.warning(
-            "Skipping triage annotation for run=%s result=%s due to failure: %s",
+            "Marking triage inconclusive for run=%s result=%s due to failure: %s",
             finding.run_index,
             finding.result_index,
             exc,
+        )
+        apply_triage_result(
+            triaged_payload,
+            run_index=finding.run_index,
+            result_index=finding.result_index,
+            status="inconclusive",
+            reason=f"Triage failed before a decision could be produced: {exc}",
+            metadata={
+                "evidence_requirements": ["triage_execution"],
+                "evidence_coverage": {"triage_execution": 0},
+                "missing_evidence": ["triage execution failed"],
+            },
         )
 
     def _handle_finding_result(
@@ -123,7 +135,7 @@ class TriageServiceExecutionMixin:
         processed: int,
     ) -> int:
         if error is not None:
-            self._record_triage_failure(finding, error)
+            self._record_triage_failure(triaged_payload, finding, error)
             self._emit_triage_progress(
                 progress_callback,
                 total,
