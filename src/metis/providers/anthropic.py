@@ -26,6 +26,7 @@ class AnthropicProvider(ChatProvider):
         self.default_model = config.get("model")
         self.supports_temperature = bool(config.get("supports_temperature", False))
         self.base_url = config.get("base_url")
+        self.max_retries = int(config.get("max_retries", 5))
 
         if not self.api_key:
             raise ValueError(
@@ -54,6 +55,7 @@ class AnthropicProvider(ChatProvider):
         params: dict[str, Any] = {
             "model": model_name,
             "api_key": self.api_key,
+            "max_retries": self.max_retries,
         }
         max_tokens = kwargs.get("max_tokens")
         if max_tokens is not None:

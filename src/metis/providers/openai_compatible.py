@@ -22,6 +22,7 @@ class OpenAICompatibleChatConfig(TypedDict, total=False):
     base_url: str
     default_headers: Mapping[str, str]
     model: Required[str]
+    max_retries: int
 
 
 class OpenAICompatibleEmbeddingConfig(TypedDict, total=False):
@@ -44,6 +45,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
         self.base_url = config.get("base_url") or self.DEFAULT_BASE_URL
         self.default_headers = dict(config.get("default_headers") or {})
         self.default_model = config.get("model")
+        self.max_retries = int(config.get("max_retries", 5))
 
         if not self.default_model:
             raise ValueError("Missing chat model configuration")
@@ -62,6 +64,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
 
         params: dict[str, object] = {
             "model": model_name,
+            "max_retries": self.max_retries,
             "use_responses_api": True,
         }
         temperature = kwargs.get("temperature")

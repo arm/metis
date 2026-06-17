@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -39,9 +40,18 @@ class JsonPromptRequest:
 
 
 class JsonPromptRunner:
-    def __init__(self, llm_provider, usage_runtime=None):
+    def __init__(
+        self,
+        llm_provider,
+        usage_runtime=None,
+        *,
+        max_attempts: int = 2,
+        retry_backoff_seconds: float = 1.0,
+    ):
         self._llm_provider = llm_provider
         self._usage_runtime = usage_runtime
+        self._max_attempts = max(1, int(max_attempts))
+        self._retry_backoff_seconds = float(retry_backoff_seconds)
 
     def invoke(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
@@ -50,7 +60,7 @@ class JsonPromptRunner:
             if request.model_tools
             else None
         )
-        for attempt in range(2):
+        for attempt in range(self._max_attempts):
             try:
                 usage_chat_kwargs = (
                     self._usage_runtime.hooks.chat_model_kwargs()
@@ -118,13 +128,17 @@ class JsonPromptRunner:
                 if isinstance(exc, ModelToolConfigurationError):
                     raise
                 last_failure = str(exc)
-            if attempt == 0:
+            if attempt < self._max_attempts - 1:
                 request.logger.warning(
-                    "%s failed for %d candidates; retrying once: %s",
+                    "%s failed for %d candidates; retrying (attempt %d/%d): %s",
                     request.label,
                     request.batch_size,
+                    attempt + 1,
+                    self._max_attempts,
                     last_failure,
                 )
+                if self._retry_backoff_seconds > 0:
+                    time.sleep(min(self._retry_backoff_seconds * (2**attempt), 30.0))
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,

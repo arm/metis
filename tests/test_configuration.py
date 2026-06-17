@@ -62,7 +62,9 @@ query:
         "base_url": "https://example.test/openai/v1",
         "default_headers": {"X-Test-Header": "test"},
         "model": "gpt-test",
+        "max_retries": 5,
     }
+    assert runtime["llm_max_retries"] == 5
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
     assert runtime["model_tool_max_rounds"] == 9
     assert runtime["index_search_config"] == {}

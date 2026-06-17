@@ -12,6 +12,7 @@ metis_engine:
   max_workers: 5
   triage_checkpoint_every: 50
   triage_tool_timeout_seconds: 12
+  llm_max_retries: 5
   embed_dim: 3072
   hnsw_kwargs:
     hnsw_m: 16

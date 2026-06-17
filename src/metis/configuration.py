@@ -74,6 +74,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["triage_tool_timeout_seconds"] = engine_cfg.get(
         "triage_tool_timeout_seconds", 12
     )
+    runtime["llm_max_retries"] = int(engine_cfg.get("llm_max_retries", 5))
     runtime["hnsw_kwargs"] = engine_cfg.get(
         "hnsw_kwargs",
         {
@@ -124,6 +125,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     if runtime["llama_query_reasoning_effort"]:
         chat_model_kwargs["reasoning_effort"] = runtime["llama_query_reasoning_effort"]
     runtime["chat_model_kwargs"] = chat_model_kwargs
+    llm_provider_config["max_retries"] = runtime["llm_max_retries"]
     runtime["llm_provider"] = llm_provider_config
 
     embedding_provider_raw_config = dict(cfg.get("embedding_provider") or {})
