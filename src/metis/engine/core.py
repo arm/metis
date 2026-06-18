@@ -14,6 +14,7 @@ from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
 from .graphs import AskGraph, ReviewGraph
+from .memory_runtime import create_memory_service
 from .options import TriageOptions
 from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
@@ -77,6 +78,9 @@ class MetisEngine:
             fallback=6,
         )
         self.index_search_config = dict(kwargs.get("index_search_config") or {})
+        self.memory_config = dict(
+            kwargs.get("memory_config") or kwargs.get("memory") or {}
+        )
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -110,10 +114,12 @@ class MetisEngine:
             enabled_tools=self.enabled_tools,
             model_tool_max_rounds=self.model_tool_max_rounds,
             index_search_config=self.index_search_config,
+            memory_config=self.memory_config,
             language_registry=self.language_registry,
             code_exts=self.code_exts,
         )
         self._state = EngineState()
+        self._config.memory_service = create_memory_service(self._config)
         self.repository = EngineRepository(self._config, self._state)
         self.tools = build_engine_tools(
             self._config,

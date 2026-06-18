@@ -18,7 +18,7 @@ class EngineTools:
     navigation: NavigationTool
 
     def langchain_tools(self) -> tuple[object, ...]:
-        return (*self.index.langchain_tools(),)
+        return self.index.langchain_tools()
 
     def triage_langchain_tools(self) -> tuple[object, ...]:
         return (*self.navigation.langchain_tools(),)

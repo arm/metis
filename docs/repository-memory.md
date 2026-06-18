@@ -106,7 +106,16 @@ The backend comes from `metis.yaml`. The location is passed to that backend as
 plain backend data. Other backends can be added through the memory store
 registry without changing callers.
 
-## Tests
+## Engine Access
+
+Metis opens repository memory from `metis.yaml` and keeps access inside the
+engine. Workflows decide what to retrieve, then pass curated context to the
+model. The model does not receive a general memory search tool.
+
+This keeps retrieval policy in Metis code, keeps writes orchestration-owned, and
+keeps stored facts tied to explicit provenance and freshness metadata.
+
+## Testing
 
 Focused backend coverage is in `tests/test_memory_backend.py`.
 

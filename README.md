@@ -217,7 +217,7 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
 - `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--tools index,navigation|all|none` – configure engine tools. `navigation` is the default read-only source navigation umbrella for grep/sed-style evidence tools. `index` enables vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage) plus the model-callable `index_search` tool for review prompts, and remains opt-in. Use `--tools none` to disable the default tool set.
+- `--tools index,navigation|all|none` – configure engine tools. `navigation` is the default read-only source navigation umbrella for grep/sed-style evidence tools. `index` enables vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage) plus the model-callable `index_search` tool for review prompts, and remains opt-in. Repository memory is configured in `metis.yaml`. Use `--tools none` to disable the default tool set. See [docs/repository-memory.md](docs/repository-memory.md) for the memory model.
 - `--ignore-index` – compatibility no-op retained for existing scripts.
 - `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
 

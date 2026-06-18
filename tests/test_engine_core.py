@@ -242,6 +242,52 @@ def test_navigation_tool_omits_triage_model_tools_when_disabled(tmp_path):
     assert engine.tools.triage_model_tool_max_rounds() is None
 
 
+def test_memory_service_is_disabled_by_config(tmp_path):
+    backend = Mock()
+    backend.init = Mock()
+
+    engine = MetisEngine(
+        codebase_path=str(tmp_path),
+        vector_backend=backend,
+        llm_provider=Mock(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        memory_config={
+            "enabled": False,
+            "backend": "sqlite",
+            "location": "memory.sqlite3",
+        },
+    )
+
+    assert engine._config.memory_service is None
+
+
+def test_memory_service_is_enabled_by_config(tmp_path):
+    backend = Mock()
+    backend.init = Mock()
+
+    engine = MetisEngine(
+        codebase_path=str(tmp_path),
+        vector_backend=backend,
+        llm_provider=Mock(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        memory_config={
+            "enabled": True,
+            "backend": "sqlite",
+            "location": "memory.sqlite3",
+        },
+    )
+
+    service = engine._config.memory_service
+    assert service is not None
+    assert service.repo_root == str(tmp_path.resolve())
+
+
 def test_index_search_uses_manifest_tool_config(monkeypatch):
     class _Doc:
         def __init__(self, text):
