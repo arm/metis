@@ -84,6 +84,7 @@ def run_reachability_jobs(
     label: str,
     result_key: Callable[[JobT], Any] | None = None,
     on_complete: Callable[[Any, int, int], None] | None = None,
+    on_result: Callable[[Any, int, int, ResultT], None] | None = None,
     swallow_exceptions: bool = True,
 ) -> list[ResultT]:
     job_list = list(jobs)
@@ -109,6 +110,8 @@ def run_reachability_jobs(
             logger.warning("%s failed for %s: %s", label, key, exc)
         else:
             results.append(result)
+            if on_result:
+                on_result(key, completed, total, result)
         if on_complete:
             on_complete(key, completed, total)
 

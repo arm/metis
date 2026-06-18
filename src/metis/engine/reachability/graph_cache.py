@@ -109,9 +109,15 @@ class ReachabilityGraphCache:
         with self._lock:
             if path_key in self._paths:
                 return graph, list(self._paths[path_key])
-            paths = SourceRootedPathTracer(
-                graph, max_path_length=max_path_length
-            ).find_all_paths()
+        paths = SourceRootedPathTracer(
+            graph,
+            max_path_length=max_path_length,
+            max_workers=options.max_workers if options is not None else None,
+            progress_callback=progress_callback,
+        ).find_all_paths()
+        with self._lock:
+            if path_key in self._paths:
+                return graph, list(self._paths[path_key])
             self._paths[path_key] = list(paths)
             return graph, list(paths)
 
