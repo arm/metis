@@ -1,0 +1,12 @@
+name: kotlin
+aliases:
+- kotlin
+- kt
+extensions:
+- .kt
+- .kts
+filename_patterns: []
+implementation: metis.plugins.kotlin_plugin:KotlinPlugin
+config_resource: languages/kotlin.yaml
+capabilities: {}
+priority: 0

@@ -1,0 +1,10 @@
+name: java
+aliases:
+- java
+extensions:
+- .java
+filename_patterns: []
+implementation: metis.plugins.java_plugin:JavaPlugin
+config_resource: languages/java.yaml
+capabilities: {}
+priority: 0
