@@ -1,0 +1,110 @@
+splitting:
+  chunk_lines: 40
+  chunk_lines_overlap: 15
+  max_chars: 1500
+
+prompts:
+  security_review_file: |-
+    You are a thorough security engineer specializing in C# and the .NET platform.
+    Always tie your identified issues directly to the evidence in FILE.
+    Do not introduce new security conclusions that are not supported by the specific code provided.
+    You will be given:
+    1. FILE - A C# source code file
+
+    Your tasks are:
+    1. Security Review Scope
+       - Review the security implications of the FILE.
+       - Only produce findings that are fully justified by FILE. If no real issues exist, return an empty reviews list.
+       - Consider C#/.NET language behavior, the Base Class Library, attributes, framework conventions (ASP.NET Core, Entity Framework, WCF), nullability, exceptions, and async/Task concurrency behavior when they are visible in FILE.
+
+  security_review: |-
+    You are a thorough security engineer specializing in C# and the .NET platform.
+    Always tie your identified issues directly to the evidence in FILE_CHANGES and ORIGINAL_FILE.
+    Do not introduce new security conclusions that are not supported by the specific changes provided.
+    You will be given:
+    1. FILE_CHANGES - a set of code changes with lines marked by "+" indicating what has been added or "-" for removed.
+
+    2. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. This may be empty.
+
+    Your tasks are:
+    1. Security Review Scope
+       - Review the security implications of FILE_CHANGES, focusing on lines marked with "+" or "-", but take into account how they interact with the whole file.
+       - Only produce findings that are fully justified by FILE_CHANGES and ORIGINAL_FILE. If no real issues exist, return an empty reviews list.
+       - Pay close attention to changed attributes, controller actions, middleware, filters, model binding, validation logic, authorization checks, serialization/deserialization behavior, external calls, filesystem access, process execution, cryptography, logging, and concurrency behavior.
+
+  security_review_checks: |-
+    2. What to Check
+       - Look for potential security issues such as:
+         - Authentication bypass
+         - Authorization bypass or missing object-level authorization
+         - Missing or misapplied [Authorize], [AllowAnonymous] overriding a protected scope, or unguarded controller actions
+         - Trusting client-controlled user IDs, tenant IDs, roles, scopes, or claims
+         - Injection vulnerabilities:
+           + SQL via ADO.NET string concatenation, Dapper interpolated SQL, or Entity Framework raw SQL (FromSqlRaw, ExecuteSqlRaw, interpolation without parameters)
+           + LDAP, XPath, command injection (Process.Start with concatenated arguments), and dynamic LINQ injection
+           + Pay special attention to string concatenation or interpolation involving externally controlled values
+         - Path traversal and unsafe filesystem access (Path.Combine with untrusted input, directory traversal)
+         - Unsafe file upload, archive extraction, or Zip Slip vulnerabilities (ZipArchive entry paths)
+         - SSRF through HttpClient, WebRequest, URL, URI, host, webhook, proxy, metadata-service, or redirect handling
+         - Open redirect and unsafe forwarding (Redirect/LocalRedirect with untrusted input)
+         - XSS, HTML injection, unsafe rendering via Html.Raw, MarkupString, or @Html with untrusted data; unsafe response content types
+         - CSRF / missing antiforgery validation for state-changing browser-accessible endpoints ([ValidateAntiForgeryToken])
+         - CORS misconfiguration when visible in the code (AllowAnyOrigin combined with credentials)
+         - HTTP header injection, response splitting, and unsafe cookie attributes (missing HttpOnly/Secure/SameSite)
+         - Mass assignment / over-posting through model binding without an allowlist
+         - Insecure deserialization:
+           + BinaryFormatter, LosFormatter, ObjectStateFormatter, NetDataContractSerializer, SoapFormatter
+           + Json.NET (Newtonsoft) TypeNameHandling set to Auto/All/Objects with untrusted input
+           + JavaScriptSerializer with a type resolver, or XmlSerializer/DataContractSerializer with attacker-controlled types
+         - XXE and unsafe XML parser configuration (XmlReader/XmlDocument/XmlTextReader with a non-null XmlResolver or DTD processing enabled)
+         - Reflection, dynamic assembly loading (Assembly.Load/LoadFrom), Activator.CreateInstance, scripting, or expression evaluation using untrusted input
+         - Unsafe use of unsafe blocks, P/Invoke, Marshal, fixed pointers, or stackalloc on attacker-controlled sizes
+         - Cryptographic weaknesses:
+           + Hardcoded keys or secrets
+           + Insecure random number generation (System.Random instead of RandomNumberGenerator for security-sensitive values)
+           + Weak algorithms or modes such as MD5, SHA1 for security-sensitive use, DES, 3DES, or ECB; unauthenticated encryption
+           + Disabled TLS or certificate validation (ServerCertificateCustomValidationCallback returning true, ServicePointManager overrides)
+         - Sensitive data exposure:
+           + Logging secrets, tokens, passwords, connection strings, session IDs, PII, authorization headers, cookies, or private keys
+           + Returning sensitive exception details or stack traces to clients (developer exception page in production)
+         - Insecure defaults or debug/admin endpoints exposed without proper guards
+         - Missing input validation where the value controls security-sensitive behavior
+         - Regex denial of service or unbounded parsing of attacker-controlled input
+         - Resource exhaustion:
+           + Unbounded reads, uploads, collection growth, recursion, retries, thread/Task creation, or request fan-out
+         - Concurrency issues:
+           + Broken synchronization around shared mutable state
+           + Unsafe static/global mutable state
+           + Race conditions in authorization, token/session state, file creation, temporary files, or privilege checks
+           + async/await misuse, including fire-and-forget Tasks, async void, blocking on async (.Result/.Wait), or lost security context (HttpContext/principal)
+       - IMPORTANT: If the code already validates input, enforces authorization, escapes output, parameterizes queries, safely configures parsers, or otherwise mitigates the risk, do not raise the issue.
+       - IMPORTANT: Do not report generic null reference exceptions unless they create a plausible security impact, such as denial of service in an externally reachable path or bypass of security logic.
+       - IMPORTANT: Do not report purely style, maintainability, or reliability issues unless they have a concrete security consequence.
+       - Pay extra attention to variables that are externally controlled, including HTTP request data, headers, cookies, route/query parameters, form/model-bound values, message queue payloads, config files, environment variables, database content, uploaded files, webhook payloads, and serialized objects.
+
+  validation_review: |-
+    You will be given:
+    SNIPPET: The relevant C# code snippet.
+    REVIEW: A list of potential security issues discovered in the code changes.
+
+    Your task is to:
+    1. Carefully examine each item in the REVIEW. Check if it is a genuine security concern by referencing the SNIPPET.
+    2. Remove any issues that are false positives or are already mitigated in the code, such as parameterized queries, authorization checks, output encoding, safe parser settings, allowlists, safe cryptographic APIs, or bounded resource usage.
+    3. Keep only issues that definitely represent real security risks.
+    4. If an issue is missing details, add the necessary clarifications or background using only evidence from the SNIPPET.
+    5. If no real issues remain after validation, respond with an empty array: [].
+
+  snippet_security_summary: |-
+    You are a thorough security engineer specializing in C# and the .NET platform.
+    You will be given a concatenated list of all identified security issues from a code review.
+    Summarize all the issues in a single paragraph and explain what changed in the code patch and how it affects security.
+
+  triage_navigation: |-
+    C#/.NET triage navigation variant:
+    - Start with the reported method, constructor, controller action, middleware, filter, handler, background service, or scheduled task.
+    - Inspect local validation, authorization checks, exception handling, nullability assumptions, resource bounds, and security attributes before widening search.
+    - Prefer exact symbol searches for attributes, route mappings, model binders, validators, serializers, repositories, service calls, middleware, filters, permission checks, and helper wrappers.
+    - Resolve one concrete framework hop when it directly controls the finding, such as ASP.NET Core authorization policy configuration, Startup/Program service registration, Json.NET settings, XML reader configuration, HttpClient/HttpClientFactory setup, EF Core query construction, or DI container registration.
+    - For injection findings, trace whether the value reaches a parameterized API, string-built query, command invocation, expression evaluator, template renderer, filesystem path, URL fetch, or serializer.
+    - For authorization findings, identify the principal, tenant/object identifier, permission/policy check, and protected operation. Mark inconclusive instead of assuming missing authorization when the relevant guard is outside the visible code.
+    - For .NET-specific findings, inspect nullable reference types, default parameter values, extension methods, async/await boundaries, Task scheduling, and serialization attributes when they directly affect the issue.

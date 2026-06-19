@@ -7,6 +7,7 @@ import pytest
 from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
 from metis.plugins.c_plugin import CPlugin
 from metis.plugins.cpp_plugin import CppPlugin
+from metis.plugins.csharp_plugin import CSharpPlugin
 from metis.plugins.go_plugin import GoPlugin
 from metis.plugins.javascript_plugin import JavaScriptPlugin
 from metis.plugins.php_plugin import PHPPlugin
@@ -48,6 +49,7 @@ def test_aarch64_assembly_splitter_parses_source_text():
     [
         (CPlugin, "int main(void) { return 0; }\n"),
         (CppPlugin, "int main() { return 0; }\n"),
+        (CSharpPlugin, "class Program { static void Main() { } }\n"),
         (GoPlugin, "package main\nfunc main() {}\n"),
         (JavaScriptPlugin, "function main() { return 0; }\n"),
         (PHPPlugin, "<?php function main() { return 0; }\n"),

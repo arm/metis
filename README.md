@@ -42,6 +42,8 @@ Metis includes support for the following languages:
 |------------|------------------------------------------|------------------|
 | C          | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
 | C++        | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
+| Java       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| C#         | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
 | Python     | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
 | Rust       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
 | TypeScript | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
