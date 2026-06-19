@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+{
+  "name": "metis-dev",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "../",
+    "target": "dev",
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "configureZshAsDefaultShell": "true",
+      "username": "metisuser",
+      "userUid": "${localEnv:UID:1000}",
+      "userGid": "${localEnv:GID:1000}",
+    },
+  },
+  "updateContentCommand": ["uv", "sync", "--extra=dev", "--extra=postgres"],
+  "postCreateCommand": ["uv", "run", "pre-commit", "install"],
+  "updateRemoteUserUID": true,
+  "containerUser": "metisuser",
+  "remoteUser": "metisuser",
+}
