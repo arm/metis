@@ -334,6 +334,7 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
         "aarch64_assembly",
         "c",
         "cpp",
+        "csharp",
         "go",
         "java",
         "javascript",
