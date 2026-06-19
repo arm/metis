@@ -41,7 +41,7 @@ def test_configure_enabled_tools_prefers_cli_over_config():
 
 
 @pytest.mark.parametrize(
-    "cmd", ["review_file", "review_code", "review_patch", "triage"]
+    "cmd", ["review_dir", "review_file", "review_code", "review_patch", "triage"]
 )
 def test_prepare_command_runtime_disables_index_by_default_for_supported_command(cmd):
     args = SimpleNamespace(quiet=True)

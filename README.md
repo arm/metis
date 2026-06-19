@@ -230,6 +230,9 @@ Builds the legacy vector index used by `ask` and `update`.
 ### `review_code`
 Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.
 
+### `review_dir`
+Performs a targeted security review of a single directory. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
+
 ### `review_file <path>`
 Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
 

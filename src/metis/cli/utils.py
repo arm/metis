@@ -552,6 +552,13 @@ def check_file_exists(file_path, quiet=False):
     return True
 
 
+def check_dir_exists(dir_path, quiet=False):
+    if not Path(dir_path).is_dir():
+        print_console(f"[red]Directory not found:[/red] {escape(dir_path)}", quiet)
+        return False
+    return True
+
+
 def pretty_print_reviews(results, quiet=False):
     if not results or not results.get("reviews"):
         print_console("[bold green]No security issues found![/bold green]", quiet)

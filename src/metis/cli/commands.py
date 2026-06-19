@@ -16,6 +16,7 @@ from metis.sarif.writer import generate_sarif
 from metis.usage import usage_operation
 from .triage_cli import run_triage_action
 from .utils import (
+    check_dir_exists,
     check_file_exists,
     with_spinner,
     with_timer,
@@ -44,6 +45,7 @@ Type one of the following commands (with arguments):
 
 - [cyan]index[/cyan]
 - [cyan]review_patch mypatch.diff[/cyan]
+- [cyan]review_dir path_to_dir[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
 - [cyan]review_code[/cyan]
 - [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
@@ -100,6 +102,18 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     else:
         results = {"reviews": []}
 
+    _finalize_review_output(engine, results, args, runtime)
+
+
+def run_dir_review(engine, dir_path, args, runtime: CommandRuntime):
+    if not check_dir_exists(dir_path):
+        return
+    code_files = list(engine.review.get_code_files(dir_path=dir_path))
+    file_reviews = _collect_review_code_with_progress(
+        engine,
+        code_files,
+    )
+    results = {"reviews": file_reviews}
     _finalize_review_output(engine, results, args, runtime)
 
 
