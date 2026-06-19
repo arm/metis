@@ -1,7 +1,9 @@
 *.egg-info
-.venv
+.venv/
+.coverage
 .env
 build/
+chromadb/
 dist/
 **/__pycache__/
 *.DS_Store
@@ -12,5 +14,5 @@ dist/
 uv.lock
 results/
 /local-tests/
-/metis.local.yaml
-/metis.local.yml
+/metis*.yaml
+/metis*.yml
