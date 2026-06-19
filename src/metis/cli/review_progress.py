@@ -13,6 +13,8 @@ class ReviewCodeProgressReporter:
         "treesitter_graph_start": "_graph_start",
         "treesitter_graph_progress": "_graph_progress",
         "treesitter_graph_done": "_graph_done",
+        "treesitter_paths_start": "_paths_start",
+        "treesitter_paths_progress": "_paths_progress",
         "treesitter_paths_done": "_paths_done",
         "intra_audit_start": "_intra_audit_start",
         "intra_audit_progress": "_intra_audit_progress",
@@ -116,6 +118,33 @@ class ReviewCodeProgressReporter:
                 f"{event.get('paths', 0)} paths, "
                 f"{event.get('selected', 0)} selected[/cyan]"
             ),
+        )
+
+    def _paths_start(self, event: Mapping[str, Any]):
+        total = _positive_int(event.get("total"))
+        workers = event.get("workers", 0)
+        self._start_phase(
+            (
+                "[cyan]Finding reachability paths "
+                f"{total or 0} sources, {workers} workers[/cyan]"
+            ),
+            total=total,
+        )
+
+    def _paths_progress(self, event: Mapping[str, Any]):
+        total = _positive_int(event.get("total"))
+        completed = _non_negative_int(event.get("completed")) or 0
+        paths = event.get("paths", 0)
+        workers = event.get("workers", 0)
+        self._update_progress(
+            total=total,
+            completed=completed,
+            description=(
+                "[cyan]Finding reachability paths "
+                f"{completed}/{total or 0} sources, "
+                f"{paths} paths, {workers} workers[/cyan]"
+            ),
+            final_description="[cyan]Finalizing reachability paths...[/cyan]",
         )
 
     def _intra_audit_start(self, event: Mapping[str, Any]):

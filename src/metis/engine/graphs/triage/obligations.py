@@ -144,7 +144,6 @@ def missing_for_status(
     missing: list[str] = []
     for name in required:
         if name not in allowed:
-            missing.append(name)
             continue
         if int(coverage.get(name, 0) or 0) <= 0:
             missing.append(name)

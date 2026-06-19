@@ -4,6 +4,10 @@ aliases:
 extensions:
 - .c
 - .h
+source_extensions:
+- .c
+header_extensions:
+- .h
 filename_patterns: []
 implementation: metis.plugins.c_plugin:CPlugin
 config_resource: languages/c.yaml

@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from metis.reachability_settings import (
+    DEFAULT_REACHABILITY_EVIDENCE_RESOLUTION_ROUNDS,
     DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
     DEFAULT_REACHABILITY_MAX_PATHS,
     DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK,
@@ -29,12 +30,18 @@ class ReachabilityReviewOptions:
     domain_profiles: Any = None
     confirm_paths: bool = True
     lens_profile: str = "all"
+    evidence_resolution_rounds: int = DEFAULT_REACHABILITY_EVIDENCE_RESOLUTION_ROUNDS
 
     def __post_init__(self):
         if self.max_workers is not None:
             object.__setattr__(
                 self, "max_workers", coerce_worker_count(self.max_workers)
             )
+        object.__setattr__(
+            self,
+            "evidence_resolution_rounds",
+            max(0, int(self.evidence_resolution_rounds or 0)),
+        )
 
     @classmethod
     def from_kwargs(

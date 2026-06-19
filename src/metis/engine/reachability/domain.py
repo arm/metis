@@ -21,6 +21,9 @@ class FunctionNode:
     end_line: int = 0
     start_byte: int = 0
     end_byte: int = 0
+    is_public_entrypoint: bool = False
+    entrypoint_reason: str = ""
+    has_internal_linkage: bool = False
 
     @property
     def anchor(self):
