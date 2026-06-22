@@ -10,6 +10,7 @@ from langchain_core.callbacks import Callbacks
 from metis.providers.base import ChatProvider
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import anthropic_token_count
 
 
 class AnthropicProvider(ChatProvider):
@@ -32,6 +33,9 @@ class AnthropicProvider(ChatProvider):
             raise ValueError(
                 "ANTHROPIC_API_KEY environment variable is required for Anthropic provider but not set."
             )
+
+    def count_tokens(self, text: str) -> int:
+        return anthropic_token_count(text)
 
     def get_chat_model(
         self,

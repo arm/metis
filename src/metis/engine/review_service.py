@@ -316,7 +316,10 @@ class ReviewService:
             if not plugin:
                 continue
             snippet = process_diff_file(
-                self._config.codebase_path, file_diff, self._config.max_token_length
+                self._config.codebase_path,
+                file_diff,
+                self._config.max_token_length,
+                token_counter=self._config.llm_provider.count_tokens,
             )
             if not snippet:
                 continue
