@@ -73,6 +73,8 @@ class LanguagePluginManifest:
     name: str
     implementation: str
     extensions: tuple[str, ...] = ()
+    source_extensions: tuple[str, ...] = ()
+    header_extensions: tuple[str, ...] = ()
     filename_patterns: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     capabilities: dict[str, bool] = field(default_factory=dict)
@@ -89,6 +91,8 @@ class LanguagePluginManifest:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "implementation", str(self.implementation).strip())
         object.__setattr__(self, "extensions", _as_tuple(self.extensions))
+        object.__setattr__(self, "source_extensions", _as_tuple(self.source_extensions))
+        object.__setattr__(self, "header_extensions", _as_tuple(self.header_extensions))
         object.__setattr__(
             self,
             "filename_patterns",
@@ -120,6 +124,8 @@ class LanguagePluginManifest:
             name=str(data.get("name") or ""),
             implementation=str(data.get("implementation") or ""),
             extensions=tuple(data.get("extensions") or ()),
+            source_extensions=tuple(data.get("source_extensions") or ()),
+            header_extensions=tuple(data.get("header_extensions") or ()),
             filename_patterns=tuple(data.get("filename_patterns") or ()),
             aliases=tuple(data.get("aliases") or ()),
             capabilities=dict(data.get("capabilities") or {}),
@@ -133,6 +139,8 @@ class LanguagePluginManifest:
             "name": self.name,
             "implementation": self.implementation,
             "extensions": self.extensions,
+            "source_extensions": self.source_extensions,
+            "header_extensions": self.header_extensions,
             "filename_patterns": self.filename_patterns,
             "aliases": self.aliases,
             "capabilities": self.capabilities,

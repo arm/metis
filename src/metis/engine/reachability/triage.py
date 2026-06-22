@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+import json
 import logging
 import re
 from typing import Any
@@ -68,6 +69,12 @@ class ReachabilityTriageRunner:
             max_tool_rounds=self._max_tool_rounds,
             label="Reachability triage",
         )
+        if decision is not None:
+            decision = self._resolve_inconclusive_decision(
+                finding,
+                context,
+                decision,
+            )
         if decision is None and self._model_tools:
             decision = self._invoke_decision(
                 finding,
@@ -76,6 +83,12 @@ class ReachabilityTriageRunner:
                 max_tool_rounds=None,
                 label="Reachability triage structured fallback",
             )
+            if decision is not None:
+                decision = self._resolve_inconclusive_decision(
+                    finding,
+                    context,
+                    decision,
+                )
         if decision is None:
             decision = TriageDecisionModel(
                 status="inconclusive",
@@ -85,6 +98,54 @@ class ReachabilityTriageRunner:
                 unresolved_hops=["reachability triage response parsing failed"],
             )
         return _decision_dict(decision)
+
+    def _resolve_inconclusive_decision(
+        self,
+        finding: ReachabilityTriageRequest,
+        context: str,
+        decision: TriageDecisionModel,
+    ) -> TriageDecisionModel:
+        if decision.status != "inconclusive":
+            return decision
+        if not self._model_tools:
+            return decision
+        rounds = max(0, int(self._options.evidence_resolution_rounds or 0))
+        if rounds <= 0:
+            return decision
+
+        current = decision
+        for round_index in range(1, rounds + 1):
+            if not current.unresolved_hops:
+                break
+            logger.debug(
+                "Running reachability evidence resolution pass %d for %s:%s "
+                "with unresolved_hops=%s",
+                round_index,
+                finding.file_path,
+                finding.line,
+                list(current.unresolved_hops),
+            )
+            resolution_context = (
+                context + "\n\n" + _evidence_resolution_section(current, round_index)
+            )
+            resolved = self._invoke_decision(
+                finding,
+                resolution_context,
+                model_tools=self._model_tools,
+                max_tool_rounds=self._max_tool_rounds,
+                label=f"Reachability triage evidence resolution {round_index}",
+            )
+            if resolved is None:
+                logger.debug(
+                    "Reachability evidence resolution pass %d failed to parse; "
+                    "preserving previous inconclusive decision",
+                    round_index,
+                )
+                break
+            current = resolved
+            if current.status != "inconclusive":
+                break
+        return current
 
     def _invoke_decision(
         self,
@@ -131,19 +192,17 @@ class ReachabilityTriageRunner:
             else None,
         ).build(finding.file_path)
 
-        sections = [
-            "== REPORTED LINE CONTEXT ==\n"
-            + (
-                _read_line_context(
-                    self._codebase_path,
-                    finding.file_path,
-                    finding.line,
-                    context=6,
-                    max_chars=2400,
-                )
-                or "<unavailable>"
+        reported_context = (
+            _read_line_context(
+                self._codebase_path,
+                finding.file_path,
+                finding.line,
+                context=6,
+                max_chars=2400,
             )
-        ]
+            or "<unavailable>"
+        )
+        sections = ["== REPORTED LINE CONTEXT ==\n" + reported_context]
 
         if finding.snippet:
             sections.append(f"== FINDING SNIPPET ==\n{finding.snippet}")
@@ -192,7 +251,6 @@ class ReachabilityTriageRunner:
         globals_section = _globals_section(graph, finding.file_path)
         if globals_section:
             sections.append(globals_section)
-
         return _clip_sections(sections, max_chars=_MAX_CONTEXT_CHARS)
 
 
@@ -218,11 +276,21 @@ def _relationship_section(graph, target, reverse_edges: dict[str, list[str]]) ->
     parts = [
         "== GRAPH RELATIONSHIPS ==",
         f"target: {target.unique_name}",
+        _entrypoint_line(target),
         "direct_callers: " + (", ".join(callers[:12]) if callers else "<none>"),
         "direct_callees: " + (", ".join(callees[:12]) if callees else "<none>"),
         "unresolved_calls: " + (", ".join(unresolved[:12]) if unresolved else "<none>"),
     ]
     return "\n".join(parts)
+
+
+def _entrypoint_line(node) -> str:
+    if getattr(node, "is_public_entrypoint", False):
+        reason = str(getattr(node, "entrypoint_reason", "") or "").strip()
+        if reason:
+            return f"entrypoint: public_or_external_entrypoint ({reason})"
+        return "entrypoint: public_or_external_entrypoint"
+    return "entrypoint: internal_or_unknown"
 
 
 def _paths_for_target(focus, target_name: str):
@@ -318,6 +386,53 @@ def _globals_section(graph, file_path: str) -> str:
     if not entries:
         return ""
     return "== GLOBALS IN TARGET FILE ==\n" + "\n\n".join(entries)
+
+
+def _evidence_resolution_section(
+    decision: TriageDecisionModel,
+    round_index: int,
+) -> str:
+    previous = {
+        "status": decision.status,
+        "reason": decision.reason,
+        "evidence": list(decision.evidence or []),
+        "resolution_chain": list(decision.resolution_chain or []),
+        "unresolved_hops": list(decision.unresolved_hops or []),
+    }
+    resolution_plan = _resolution_plan_lines(previous["unresolved_hops"])
+    return "\n".join(
+        [
+            "== EVIDENCE RESOLUTION PASS ==",
+            f"pass: {round_index}",
+            "The previous triage decision was inconclusive. Resolve only the "
+            "listed unresolved hops with focused navigation calls. Do not "
+            "discover new findings.",
+            "",
+            "Previous decision JSON:",
+            json.dumps(previous, indent=2),
+            "",
+            "Resolution plan:",
+            "\n".join(resolution_plan),
+            "",
+            "Return a final triage JSON object. If a required hop remains "
+            "unresolved after focused navigation, keep status inconclusive and "
+            "list only the remaining unresolved hops.",
+        ]
+    )
+
+
+def _resolution_plan_lines(unresolved_hops: list[str]) -> list[str]:
+    if not unresolved_hops:
+        return ["- No unresolved hops were provided; reassess the shown evidence only."]
+    lines = []
+    for hop in unresolved_hops:
+        hop_text = str(hop or "").strip()
+        if not hop_text:
+            continue
+        lines.append(f"- Missing evidence: {hop_text}")
+    return lines or [
+        "- No concrete unresolved hop text was provided; reassess the shown evidence only."
+    ]
 
 
 def _clip_sections(sections: list[str], *, max_chars: int) -> str:
@@ -477,6 +592,14 @@ Use the reachability graph context as primary evidence:
 - direct callers, wrappers, callees, and unresolved calls
 - source-to-target or target-to-sink paths when available
 - globals, registration tables, callback tables, and initializers
+
+If the target is marked public_or_external_entrypoint, treat that as an
+API-surface entrypoint even when direct_callers is <none>. Do not require an
+internal caller for that classification, but still require concrete evidence for
+the reported bug's input provenance, guard behavior, data bounds, or API
+contract. If the target is internal_or_unknown and direct_callers is <none>, be
+conservative and mark inconclusive unless other cited evidence proves
+reachability.
 
 You may call navigation tools when the context is missing a concrete definition,
 macro, guard, caller, wrapper, table registration, build/config gate, or nearby line.

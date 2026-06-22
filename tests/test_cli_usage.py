@@ -98,7 +98,7 @@ def _setup_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(
         entry,
         "load_runtime_config",
-        lambda *, enable_psql=False: {
+        lambda *, config_path=None, enable_psql=False: {
             "llm_provider_name": "dummy",
             "llm_provider": {"model": "gpt-test"},
             "embedding_provider_raw_config": {

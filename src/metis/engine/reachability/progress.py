@@ -27,6 +27,8 @@ class ReachabilityProgress:
     TREESITTER_GRAPH_PROGRESS = "treesitter_graph_progress"
     TREESITTER_GRAPH_START = "treesitter_graph_start"
     TREESITTER_PATHS_DONE = "treesitter_paths_done"
+    TREESITTER_PATHS_PROGRESS = "treesitter_paths_progress"
+    TREESITTER_PATHS_START = "treesitter_paths_start"
 
 
 def emit_progress(callback, event, **payload):

@@ -256,7 +256,9 @@ class ReviewGraph:
             smap = SourceMap.for_text(rel_path, original_file)
         else:
             smap = None
-        chunks = split_snippet(snippet, self.max_token_length)
+        chunks = split_snippet(
+            snippet, self.max_token_length, self.llm_provider.count_tokens
+        )
         accumulated = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk, chunk_start in chunks:

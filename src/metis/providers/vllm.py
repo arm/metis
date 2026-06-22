@@ -7,6 +7,7 @@ from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import count_tokens as count_tokens_for_model
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ class VLLMProvider(OpenAICompatibleChatProvider):
 
         if not self.api_key:
             logger.debug("vLLM provider running without API key")
+
+    def count_tokens(self, text: str) -> int:
+        return count_tokens_for_model(text, self.default_model)
 
 
 class VLLMEmbeddingProvider(OpenAICompatibleEmbeddingProvider):

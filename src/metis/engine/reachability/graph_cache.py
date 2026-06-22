@@ -109,9 +109,15 @@ class ReachabilityGraphCache:
         with self._lock:
             if path_key in self._paths:
                 return graph, list(self._paths[path_key])
-            paths = SourceRootedPathTracer(
-                graph, max_path_length=max_path_length
-            ).find_all_paths()
+        paths = SourceRootedPathTracer(
+            graph,
+            max_path_length=max_path_length,
+            max_workers=options.max_workers if options is not None else None,
+            progress_callback=progress_callback,
+        ).find_all_paths()
+        with self._lock:
+            if path_key in self._paths:
+                return graph, list(self._paths[path_key])
             self._paths[path_key] = list(paths)
             return graph, list(paths)
 
@@ -248,6 +254,7 @@ class ReachabilityGraphCache:
                 graph.add_node(node)
             for global_construct in parsed.globals:
                 graph.add_global(global_construct)
+            graph.add_public_declarations(parsed.public_declarations)
             _emit_progress(
                 progress_callback,
                 Progress.TREESITTER_GRAPH_PROGRESS,
@@ -261,6 +268,7 @@ class ReachabilityGraphCache:
             )
 
         graph.resolve_all_calls()
+        graph.annotate_public_entrypoints()
         graph.annotate_automatic_sources()
         graph.annotate_external_call_sinks(external_sink_type)
         _emit_progress(

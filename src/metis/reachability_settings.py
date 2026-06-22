@@ -8,6 +8,9 @@ DEFAULT_REACHABILITY_MAX_PATHS = 0
 DEFAULT_REACHABILITY_MAX_PATHS_PER_SINK = 3
 DEFAULT_REACHABILITY_MAX_PATH_LENGTH = 25
 DEFAULT_REACHABILITY_DOMAIN_PROFILES = ("gpu",)
+# Bounded retry for inconclusive reachability triage. Keep this small: each
+# round can be another model/tool pass for every unresolved finding.
+DEFAULT_REACHABILITY_EVIDENCE_RESOLUTION_ROUNDS = 2
 
 REACHABILITY_CONFIG_KEYS = tuple(
     "reachability_confirmation_model reachability_max_paths "

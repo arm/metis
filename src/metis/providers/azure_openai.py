@@ -16,6 +16,7 @@ from metis.providers.base import EmbeddingProvider
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import tiktoken_token_count
 
 
 class AzureOpenAIChatConfig(TypedDict, total=False):
@@ -78,6 +79,9 @@ class AzureOpenAIProvider(ChatProvider):
                 "Missing 'chat_deployment_model' "
                 "Azure calls must specify a deployment model."
             )
+
+    def count_tokens(self, text: str) -> int:
+        return tiktoken_token_count(text, self.chat_deployment_model)
 
     def get_chat_model(
         self,

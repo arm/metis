@@ -8,6 +8,14 @@ extensions:
 - .hh
 - .hxx
 - .cxx
+source_extensions:
+- .cc
+- .cpp
+- .cxx
+header_extensions:
+- .hpp
+- .hh
+- .hxx
 filename_patterns: []
 implementation: metis.plugins.cpp_plugin:CppPlugin
 config_resource: languages/cpp.yaml

@@ -13,6 +13,7 @@ from metis.providers.base import ChatProvider
 from metis.providers.base import EmbeddingProvider
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import count_tokens as count_tokens_for_model
 
 
 AWS_CREDENTIAL_CONFIG = {
@@ -100,6 +101,9 @@ class BedrockProvider(ChatProvider):
         self.supports_temperature = bool(config.get("supports_temperature", False))
         self.max_retries = int(config.get("max_retries", 5))
         self._credentials = _credential_kwargs(config)
+
+    def count_tokens(self, text: str) -> int:
+        return count_tokens_for_model(text, self.default_model)
 
     def get_chat_model(
         self,

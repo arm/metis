@@ -232,6 +232,37 @@ def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     assert "Metis" in capsys.readouterr().out
 
 
+def test_main_passes_custom_config_path_to_runtime_loader(monkeypatch, tmp_path):
+    config_path = tmp_path / "custom.yaml"
+    captured = {}
+
+    def load_runtime_config(*, config_path, enable_psql):
+        captured["config_path"] = config_path
+        captured["enable_psql"] = enable_psql
+        return {}
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "metis",
+            "--config",
+            str(config_path),
+            "--non-interactive",
+            "--command",
+            "version",
+        ],
+    )
+    monkeypatch.setattr(entry, "load_runtime_config", load_runtime_config)
+    monkeypatch.setattr(entry, "build_engine", lambda *_args: (SimpleNamespace(), None))
+    monkeypatch.setattr(entry, "run_non_interactive", lambda *_args: (0, None))
+    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
+
+    entry.main()
+
+    assert captured == {"config_path": str(config_path), "enable_psql": False}
+
+
 def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path):
     class ChatProvider:
         def __init__(self, _runtime):

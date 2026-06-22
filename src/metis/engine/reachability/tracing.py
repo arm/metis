@@ -9,6 +9,9 @@ from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .domain import ReachabilityPath
 from .graph_utils import _dedupe_paths, _node_sort_key, _source_rooted_path_sort_key
+from .progress import ReachabilityProgress as Progress
+from .progress import emit_progress
+from .workers import bounded_worker_count, run_reachability_jobs
 
 
 class SourceRootedPathTracer:
@@ -18,10 +21,14 @@ class SourceRootedPathTracer:
         *,
         max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
         max_paths_per_source=200,
+        max_workers: int | str | None = None,
+        progress_callback=None,
     ):
         self._g = graph
         self._ml = max(1, int(max_path_length or 1))
         self._mp = max(1, int(max_paths_per_source or 1))
+        self._mw = max_workers
+        self._progress_callback = progress_callback
         self._node_sort_key = partial(_node_sort_key, self._g)
         self._path_sort_key = partial(_source_rooted_path_sort_key, self._g)
 
@@ -29,10 +36,57 @@ class SourceRootedPathTracer:
         sources = sorted(self._g.get_sources(), key=self._node_sort_key)
         if not sources:
             return []
+        worker_count = bounded_worker_count(self._mw, len(sources))
+        source_names = [source.unique_name for source in sources]
+        chunks = _round_robin_chunks(
+            source_names,
+            min(len(source_names), max(32, worker_count * 4)),
+        )
+        emit_progress(
+            self._progress_callback,
+            Progress.TREESITTER_PATHS_START,
+            total=len(source_names),
+            sources=len(source_names),
+            chunks=len(chunks),
+            workers=worker_count,
+            paths=0,
+        )
         paths = []
-        for source in sources:
-            paths.extend(self._terminal_paths_from_source(source.unique_name))
+        completed_sources = 0
+        found_paths = 0
+
+        def _path_progress(chunk_size, _completed, _total, chunk_paths):
+            nonlocal completed_sources, found_paths
+            completed_sources += int(chunk_size or 0)
+            found_paths += len(chunk_paths or [])
+            emit_progress(
+                self._progress_callback,
+                Progress.TREESITTER_PATHS_PROGRESS,
+                completed=min(completed_sources, len(source_names)),
+                total=len(source_names),
+                sources=len(source_names),
+                chunks=len(chunks),
+                workers=worker_count,
+                paths=found_paths,
+            )
+
+        for chunk_paths in run_reachability_jobs(
+            chunks,
+            self._terminal_paths_from_sources,
+            max_workers=worker_count,
+            label="Reachability path tracing",
+            result_key=len,
+            on_result=_path_progress,
+            swallow_exceptions=False,
+        ):
+            paths.extend(chunk_paths)
         return self._drop_strict_prefix_paths(_dedupe_paths(paths))
+
+    def _terminal_paths_from_sources(self, source_names):
+        paths = []
+        for source_name in source_names:
+            paths.extend(self._terminal_paths_from_source(source_name))
+        return paths
 
     def _terminal_paths_from_source(self, source_name):
         results, stack = [], [[source_name]]
@@ -84,3 +138,10 @@ class SourceRootedPathTracer:
                     continue
                 selected.append(path)
         return sorted(selected, key=self._path_sort_key)
+
+
+def _round_robin_chunks(items, chunk_count: int):
+    chunks = [[] for _ in range(max(1, int(chunk_count or 1)))]
+    for index, item in enumerate(items):
+        chunks[index % len(chunks)].append(item)
+    return [chunk for chunk in chunks if chunk]

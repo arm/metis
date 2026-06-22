@@ -38,18 +38,21 @@ Metis is an open-source, agentic AI security framework for deep security code re
 
 Metis includes support for the following languages:
 
-| Language   | Triage Analysis                          | Notes            |
-|------------|------------------------------------------|------------------|
-| C          | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
-| C++        | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
-| Python     | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Rust       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| TypeScript | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Terraform  | Tools                                    | Built-in plugin  |
-| Go         | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Solidity   | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| TableGen   | Tools                                    | Built-in plugin  |
-| Verilog    | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Language         | Triage Analysis                          | Notes            |
+|------------------|------------------------------------------|------------------|
+| C                | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
+| C++              | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
+| Java             | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| C#               | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Python           | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Rust             | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| TypeScript       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Terraform        | Tools                                    | Built-in plugin  |
+| Go               | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Solidity         | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| TableGen         | Tools                                    | Built-in plugin  |
+| Verilog          | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| AArch64 Assembly | Tools                                    | Built-in plugin  |
 
 For triage analysis details (`Flow Analysis` vs `Structural Analysis`), see [docs/triage-flow.md](docs/triage-flow.md).
 

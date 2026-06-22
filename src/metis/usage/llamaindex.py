@@ -129,10 +129,7 @@ class UsageLlamaIndexHandler(BaseCallbackHandler):
             text = str(chunk or "")
             if not text:
                 continue
-            try:
-                input_tokens += count_tokens(text, model=model_name)
-            except Exception:
-                input_tokens += count_tokens(text)
+            input_tokens += count_tokens(text, model=model_name)
         if input_tokens <= 0:
             return
         self._collector.record(
