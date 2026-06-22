@@ -10,6 +10,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.callbacks import CallbackManager
 
+from metis.utils import heuristic_token_count
+
 
 class EmbedModelKwargs(TypedDict, total=False):
     callback_manager: CallbackManager
@@ -36,6 +38,15 @@ class ChatProvider(ABC):
     ) -> BaseChatModel:
         """Return a LangChain chat model instance."""
         pass
+
+    def count_tokens(self, text: str) -> int:
+        """Estimate token count for ``text`` under this provider's tokenizer.
+
+        The base implementation is a chars-per-token heuristic suitable for
+        providers without a published offline tokenizer; override when an
+        exact encoder is available (e.g. tiktoken for OpenAI).
+        """
+        return heuristic_token_count(text)
 
 
 class EmbeddingProvider(ABC):

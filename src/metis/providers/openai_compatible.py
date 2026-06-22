@@ -15,6 +15,7 @@ from pydantic import SecretStr
 from metis.providers.base import ChatProvider
 from metis.providers.base import EmbeddingProvider
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
+from metis.utils import tiktoken_token_count
 
 
 class OpenAICompatibleChatConfig(TypedDict, total=False):
@@ -49,6 +50,9 @@ class OpenAICompatibleChatProvider(ChatProvider):
 
         if not self.default_model:
             raise ValueError("Missing chat model configuration")
+
+    def count_tokens(self, text: str) -> int:
+        return tiktoken_token_count(text, self.default_model)
 
     def get_chat_model(
         self,

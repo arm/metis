@@ -11,6 +11,7 @@ from pydantic import Field
 
 from metis.providers.base import ChatProvider
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import anthropic_token_count
 
 AnthropicBedrockMantle: Any
 AsyncAnthropicBedrockMantle: Any
@@ -89,6 +90,9 @@ class BedrockMantleProvider(ChatProvider):
         self.base_url = config.get("base_url")
         self.default_headers = dict(config.get("default_headers", {}))
         self.max_retries = int(config.get("max_retries", 5))
+
+    def count_tokens(self, text: str) -> int:
+        return anthropic_token_count(text)
 
     def get_chat_model(
         self,

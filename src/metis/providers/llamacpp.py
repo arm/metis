@@ -19,6 +19,7 @@ from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
+from metis.utils import count_tokens as count_tokens_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ class LlamaCppProvider(OpenAICompatibleChatProvider):
                 "llama.cpp base URL not configured, defaulting to %s",
                 self.DEFAULT_BASE_URL,
             )
+
+    def count_tokens(self, text: str) -> int:
+        return count_tokens_for_model(text, self.default_model)
 
 
 class LlamaCppEmbeddingProvider(OpenAICompatibleEmbeddingProvider):

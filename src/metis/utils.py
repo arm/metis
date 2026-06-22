@@ -3,10 +3,39 @@
 
 import codecs
 import json
+import math
 import os
 import sys
+from collections.abc import Callable
+from functools import lru_cache
 
 import tiktoken
+
+TokenCounter = Callable[[str], int]
+
+_ANTHROPIC_MODEL_MARKERS = ("claude", "anthropic")
+_ANTHROPIC_CHARS_PER_TOKEN = 3.5
+_HEURISTIC_CHARS_PER_TOKEN = 4.0
+_DEFAULT_TIKTOKEN_ENCODING = "cl100k_base"
+
+# Approximate chars-per-token for families without an offline tokenizer.
+# Order matters: more specific markers first. Sources: Meta Llama 3 paper
+# (arXiv:2407.21783), Mistral tokenization docs, Qwen2 tech report
+# (arXiv:2407.10671), Google Gemini token docs, HF tokenizer configs.
+_MODEL_FAMILY_CHARS_PER_TOKEN: tuple[tuple[tuple[str, ...], float], ...] = (
+    (("llama-3", "llama3", "meta.llama3"), 3.9),
+    (("llama-2", "llama2", "meta.llama2", "codellama"), 3.2),
+    (("llama",), 3.9),
+    (("mixtral", "mistral-7b", "mistral:7b"), 3.2),
+    (("mistral",), 3.9),
+    (("qwen",), 4.0),
+    (("deepseek",), 4.0),
+    (("gemma", "gemini"), 4.0),
+    (("phi-3", "phi3"), 3.5),
+    (("phi",), 4.0),
+    (("command", "cohere"), 4.0),
+    (("titan", "amazon."), 4.0),
+)
 
 
 def safe_decode_unicode(s):
@@ -15,13 +44,80 @@ def safe_decode_unicode(s):
     return s
 
 
-def count_tokens(text, model="gpt-4"):
-    encoding = tiktoken.encoding_for_model(model)
-    return len(encoding.encode(text))
+def _is_anthropic_model(model: str | None) -> bool:
+    if not model:
+        return False
+    lowered = model.lower()
+    return any(marker in lowered for marker in _ANTHROPIC_MODEL_MARKERS)
 
 
-def split_snippet(snippet, max_tokens, model="gpt-4"):
+@lru_cache(maxsize=None)
+def _tiktoken_encoding_for(model: str | None):
+    if model:
+        try:
+            return tiktoken.encoding_for_model(model)
+        except KeyError:
+            pass
+    return tiktoken.get_encoding(_DEFAULT_TIKTOKEN_ENCODING)
+
+
+def _chars_per_token_for(model: str | None) -> float:
+    if model:
+        lowered = model.lower()
+        for markers, ratio in _MODEL_FAMILY_CHARS_PER_TOKEN:
+            if any(m in lowered for m in markers):
+                return ratio
+    return _HEURISTIC_CHARS_PER_TOKEN
+
+
+def heuristic_token_count(
+    text: str,
+    chars_per_token: float | None = None,
+    *,
+    model: str | None = None,
+) -> int:
+    if not text:
+        return 0
+    ratio = (
+        chars_per_token if chars_per_token is not None else _chars_per_token_for(model)
+    )
+    return max(1, math.ceil(len(text) / ratio))
+
+
+def anthropic_token_count(text: str) -> int:
+    return heuristic_token_count(text, _ANTHROPIC_CHARS_PER_TOKEN)
+
+
+def tiktoken_token_count(text: str, model: str | None = None) -> int:
+    return len(_tiktoken_encoding_for(model).encode(text))
+
+
+def count_tokens(text: str, model: str | None = None) -> int:
+    """Estimate token count for ``text`` from ``model`` name alone.
+
+    Prefer :meth:`ChatProvider.count_tokens` when a provider instance is
+    available; this standalone form is for call sites (e.g. usage callbacks)
+    that only see a model id string. Anthropic/Claude ids and recognised
+    open-weight families use chars-per-token heuristics; OpenAI ids use their
+    native tiktoken encoding; unknown ids fall back to ``cl100k_base``.
+    """
+    if _is_anthropic_model(model):
+        return anthropic_token_count(text)
+    if model:
+        lowered = model.lower()
+        for markers, ratio in _MODEL_FAMILY_CHARS_PER_TOKEN:
+            if any(m in lowered for m in markers):
+                return heuristic_token_count(text, ratio)
+    return tiktoken_token_count(text, model)
+
+
+def split_snippet(
+    snippet: str,
+    max_tokens: int,
+    token_counter: TokenCounter | None = None,
+) -> list[tuple[str, int]]:
     """Split text into token-bounded chunks, returning (chunk, start_line) pairs."""
+    counter = token_counter or count_tokens
     lines = snippet.splitlines(keepends=True)
     chunks: list[tuple[str, int]] = []
     current_chunk = ""
@@ -30,7 +126,7 @@ def split_snippet(snippet, max_tokens, model="gpt-4"):
     current_token_count = 0
 
     for line in lines:
-        line_token_count = count_tokens(line, model)
+        line_token_count = counter(line)
         if current_token_count + line_token_count > max_tokens:
             if current_chunk:
                 chunks.append((current_chunk, current_start))
