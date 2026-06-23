@@ -231,8 +231,8 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     return result
 
 
-def collect_reviews(engine):
-    reviews = engine.review.review_code()
+def collect_reviews(engine, kwargs={}):
+    reviews = engine.review.review_code(**kwargs)
     return {"reviews": [r for r in reviews if r]}
 
 

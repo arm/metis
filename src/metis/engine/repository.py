@@ -153,9 +153,9 @@ class EngineRepository:
     def get_code_files(
         self, *, include_suffixed_sources: bool = False, dir_path: str | None = None
     ):
-        base_path = (
-            os.path.abspath(self._config.codebase_path) if not dir_path else dir_path
-        )
+        base_path = os.path.abspath(self._config.codebase_path)
+        if dir_path:
+            base_path = os.path.join(base_path, dir_path)
         metisignore_spec = self.load_metisignore()
         include_spec = None
         if self._config.review_code_include_paths:
