@@ -28,6 +28,7 @@ embedding_provider:
 
 metis_engine:
   embed_dim: 3072
+  pgvector_use_halfvec: auto
 
 query:
   max_tokens: 5000
@@ -41,6 +42,9 @@ query:
   the `index` tool.
 - `metis_engine.embed_dim` must match the configured embedding provider output
   dimension.
+- For the PostgreSQL backend, `metis_engine.pgvector_use_halfvec: auto` uses
+  pgvector `halfvec` storage for 3072-dimensional embeddings so HNSW indexing
+  remains available.
 - `query.reasoning_effort` values `minimal`, `low`, `medium`, and `high` are
   forwarded as Gemini `thinking_level`.
 

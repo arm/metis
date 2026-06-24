@@ -103,6 +103,87 @@ llm_provider:
     }
 
 
+def test_load_runtime_config_accepts_pgvector_halfvec_flag(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  pgvector_use_halfvec: true
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["pgvector_use_halfvec"] is True
+
+
+def test_load_runtime_config_auto_enables_pgvector_halfvec_for_large_embeddings(
+    tmp_path, monkeypatch
+):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  embed_dim: 3072
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["pgvector_use_halfvec"] is True
+
+
+def test_load_runtime_config_auto_keeps_pgvector_full_precision_for_small_embeddings(
+    tmp_path, monkeypatch
+):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  embed_dim: 1536
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["pgvector_use_halfvec"] is False
+
+
+def test_load_runtime_config_allows_forcing_pgvector_halfvec_off(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  embed_dim: 3072
+  pgvector_use_halfvec: false
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["pgvector_use_halfvec"] is False
+
+
 def test_build_embedding_provider_config_resolves_openai_embedding_provider(
     tmp_path, monkeypatch
 ):

@@ -289,6 +289,17 @@ metis \
   --backend postgres
 ```
 
+For embedding models above pgvector's normal-vector HNSW limit, such as
+3072-dimensional embeddings, Metis automatically enables pgvector `halfvec`
+storage for the PostgreSQL backend so HNSW indexes can still be created. You
+can override this in `metis.yaml`:
+
+```yaml
+metis_engine:
+  embed_dim: 3072
+  pgvector_use_halfvec: auto  # auto, true, or false
+```
+
 #### Example 3: Usage and output
 
 

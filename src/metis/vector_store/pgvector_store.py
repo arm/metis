@@ -20,6 +20,30 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+HALFVEC_HNSW_DIST_METHODS = {
+    "vector_l2_ops": "halfvec_l2_ops",
+    "vector_ip_ops": "halfvec_ip_ops",
+    "vector_cosine_ops": "halfvec_cosine_ops",
+}
+
+
+def normalize_hnsw_kwargs(hnsw_kwargs, *, use_halfvec):
+    if hnsw_kwargs is None:
+        return None
+    normalized = dict(hnsw_kwargs)
+    if use_halfvec:
+        dist_method = normalized.get("hnsw_dist_method")
+        if dist_method in HALFVEC_HNSW_DIST_METHODS:
+            normalized["hnsw_dist_method"] = HALFVEC_HNSW_DIST_METHODS[dist_method]
+    return normalized
+
+
+def copy_hnsw_kwargs(hnsw_kwargs):
+    if hnsw_kwargs is None:
+        return None
+    return hnsw_kwargs.copy()
+
+
 class PGVectorStoreImpl(BaseVectorStore):
     def __init__(
         self,
@@ -30,6 +54,7 @@ class PGVectorStoreImpl(BaseVectorStore):
         embed_dim,
         query_config=None,
         hnsw_kwargs=None,
+        use_halfvec=False,
     ):
         self.connection_string = connection_string
         self.project_schema = project_schema
@@ -37,7 +62,11 @@ class PGVectorStoreImpl(BaseVectorStore):
         self.embed_model_docs = embed_model_docs
         self.embed_dim = embed_dim
         self.query_config = query_config or {}
-        self.hnsw_kwargs = hnsw_kwargs or {}
+        self.use_halfvec = bool(use_halfvec)
+        self.hnsw_kwargs = normalize_hnsw_kwargs(
+            hnsw_kwargs,
+            use_halfvec=self.use_halfvec,
+        )
         self._initialized = False
 
     def init(self):
@@ -56,7 +85,8 @@ class PGVectorStoreImpl(BaseVectorStore):
                 table_name="code",
                 schema_name=self.project_schema,
                 embed_dim=self.embed_dim,
-                hnsw_kwargs=self.hnsw_kwargs.copy(),
+                hnsw_kwargs=copy_hnsw_kwargs(self.hnsw_kwargs),
+                use_halfvec=self.use_halfvec,
             )
             self.vector_store_docs = PGVectorStore.from_params(
                 database=db_name,
@@ -67,7 +97,8 @@ class PGVectorStoreImpl(BaseVectorStore):
                 table_name="docs",
                 schema_name=self.project_schema,
                 embed_dim=self.embed_dim,
-                hnsw_kwargs=self.hnsw_kwargs.copy(),
+                hnsw_kwargs=copy_hnsw_kwargs(self.hnsw_kwargs),
+                use_halfvec=self.use_halfvec,
             )
 
             self.storage_context_code = StorageContext.from_defaults(

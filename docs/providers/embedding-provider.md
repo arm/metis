@@ -24,6 +24,11 @@ metis_engine:
   tools: [index]
 ```
 
+For the PostgreSQL backend, `pgvector_use_halfvec` defaults to `auto`. This
+uses pgvector `halfvec` storage when `embed_dim` is above the normal-vector
+HNSW limit, for example 3072-dimensional embeddings. Set it to `true` or
+`false` to force a specific behavior.
+
 The `embedding_provider` block uses the embedding provider's own config keys.
 For OpenAI-compatible providers (`openai`, `ollama`, `llamacpp`, `vllm`) use
 `code_embedding_model` and `docs_embedding_model`. Azure OpenAI also requires

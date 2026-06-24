@@ -84,6 +84,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
             "hnsw_dist_method": "vector_cosine_ops",
         },
     )
+    runtime["pgvector_use_halfvec"] = pgvector_use_halfvec_setting(
+        engine_cfg.get("pgvector_use_halfvec", "auto"),
+        runtime["embed_dim"],
+    )
     runtime["metisignore_file"] = engine_cfg.get("metisignore_file", None)
     runtime["review_code_include_paths"] = engine_cfg.get(
         "review_code_include_paths", []
@@ -176,6 +180,26 @@ def _positive_int(value: object, *, fallback: int) -> int:
     if parsed <= 0:
         return fallback
     return parsed
+
+
+def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "off", "0"}:
+            return False
+        if normalized != "auto":
+            raise ValueError(
+                "metis_engine.pgvector_use_halfvec must be true, false, or auto."
+            )
+    try:
+        parsed_embed_dim = int(embed_dim)
+    except (TypeError, ValueError):
+        return False
+    return parsed_embed_dim > 2000
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):
