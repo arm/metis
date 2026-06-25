@@ -185,6 +185,8 @@ def _positive_int(value: object, *, fallback: int) -> int:
 def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
     if isinstance(value, bool):
         return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized in {"true", "yes", "on", "1"}:
