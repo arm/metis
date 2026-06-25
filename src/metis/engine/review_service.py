@@ -50,8 +50,10 @@ class ReviewService:
             else None
         )
 
-    def get_code_files(self):
-        return self._repository.get_code_files(include_suffixed_sources=True)
+    def get_code_files(self, dir_path: str | None = None):
+        return self._repository.get_code_files(
+            include_suffixed_sources=True, dir_path=dir_path
+        )
 
     def _get_reachability_reviews(self, *, files=None, progress_callback=None):
         if self._reachability_backend is None:

@@ -13,6 +13,7 @@ from metis.engine.tools.selection import INDEX_TOOL
 from .command_runtime import CommandRuntime
 from .commands import (
     run_ask,
+    run_dir_review,
     run_file_review,
     run_index,
     run_review,
@@ -69,7 +70,7 @@ class CommandSpec:
             and not self.supports_triage
         ):
             print_console(
-                "[red]Error:[/red] --triage can only be used with review_code, review_file, or review_patch.",
+                "[red]Error:[/red] --triage can only be used with review_code, review_dir, review_file, or review_patch.",
                 args.quiet,
             )
             return False
@@ -135,6 +136,15 @@ COMMANDS = {
     ),
     "review_file": CommandSpec(
         run_file_review,
+        tracked=True,
+        invocation_mode="path",
+        include_target_in_display_name=True,
+        prepares_output_file=True,
+        optional_tools=(INDEX_TOOL,),
+        supports_triage=True,
+    ),
+    "review_dir": CommandSpec(
+        run_dir_review,
         tracked=True,
         invocation_mode="path",
         include_target_in_display_name=True,

@@ -313,7 +313,7 @@ def run_interactive_loop(engine, args, vector_backend):
                     )
                     continue
                 if (
-                    cmd in {"ask", "review_code", "review_file"}
+                    cmd in {"ask", "review_code", "review_dir", "review_file"}
                     and _interactive_command_uses_index(cmd, cmd_args, args)
                     and not vector_backend.check_project_schema_exists()
                 ):
