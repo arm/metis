@@ -231,8 +231,8 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     return result
 
 
-def collect_reviews(engine):
-    reviews = engine.review.review_code()
+def collect_reviews(engine, kwargs={}):
+    reviews = engine.review.review_code(**kwargs)
     return {"reviews": [r for r in reviews if r]}
 
 
@@ -548,6 +548,13 @@ def _apply_triage_properties(issue: dict, properties: dict) -> None:
 def check_file_exists(file_path, quiet=False):
     if not Path(file_path).is_file():
         print_console(f"[red]File not found:[/red] {escape(file_path)}", quiet)
+        return False
+    return True
+
+
+def check_dir_exists(dir_path, quiet=False):
+    if not Path(dir_path).is_dir():
+        print_console(f"[red]Directory not found:[/red] {escape(dir_path)}", quiet)
         return False
     return True
 

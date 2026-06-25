@@ -5,6 +5,7 @@
 from importlib.metadata import version as package_version
 import inspect
 import json
+import os
 from pathlib import Path
 from rich.markup import escape
 
@@ -16,6 +17,7 @@ from metis.sarif.writer import generate_sarif
 from metis.usage import usage_operation
 from .triage_cli import run_triage_action
 from .utils import (
+    check_dir_exists,
     check_file_exists,
     with_spinner,
     with_timer,
@@ -44,6 +46,7 @@ Type one of the following commands (with arguments):
 
 - [cyan]index[/cyan]
 - [cyan]review_patch mypatch.diff[/cyan]
+- [cyan]review_dir path_to_dir[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
 - [cyan]review_code[/cyan]
 - [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
@@ -103,16 +106,26 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     _finalize_review_output(engine, results, args, runtime)
 
 
+def run_dir_review(engine, dir_path, args, runtime: CommandRuntime):
+    if not check_dir_exists(os.path.join(engine.codebase_path, dir_path)):
+        return
+    code_files = list(engine.review.get_code_files(dir_path=dir_path))
+    _review_code(engine, code_files, args, runtime)
+
+
 def run_review_code(engine, args, runtime: CommandRuntime):
+    code_files = list(engine.review.get_code_files())
+    _review_code(engine, code_files, args, runtime)
+
+
+def _review_code(engine, code_files, args, runtime: CommandRuntime):
     if not args.quiet:
-        code_files = list(engine.review.get_code_files())
         file_reviews = _collect_review_code_with_progress(
             engine,
             code_files,
         )
         results = {"reviews": file_reviews}
     elif args.verbose:
-        code_files = list(engine.review.get_code_files())
         file_reviews = iterate_with_progress(
             len(code_files),
             _review_code_iter(engine.review, code_files=code_files),
@@ -123,6 +136,9 @@ def run_review_code(engine, args, runtime: CommandRuntime):
             "Reviewing codebase...",
             collect_reviews,
             engine,
+            kwargs=_get_review_code_kargs(
+                engine.review.review_code, code_files=code_files
+            ),
             quiet=args.quiet,
         )
     _finalize_review_output(engine, results, args, runtime)
@@ -148,8 +164,9 @@ def _collect_review_code_with_progress(engine, code_files):
     return results
 
 
-def _review_code_iter(review_domain, progress_callback=None, code_files=None):
-    review_code = review_domain.review_code
+def _get_review_code_kargs(
+    review_code, progress_callback=None, code_files=None
+) -> dict:
     kwargs = {}
     try:
         signature = inspect.signature(review_code)
@@ -170,6 +187,12 @@ def _review_code_iter(review_domain, progress_callback=None, code_files=None):
             kwargs["get_code_files_func"] = lambda: code_files
     elif progress_callback is not None:
         kwargs["progress_callback"] = progress_callback
+    return kwargs
+
+
+def _review_code_iter(review_domain, progress_callback=None, code_files=None):
+    review_code = review_domain.review_code
+    kwargs = _get_review_code_kargs(review_code, progress_callback, code_files)
     return review_code(**kwargs)
 
 

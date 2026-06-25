@@ -22,7 +22,7 @@ dependencies = [
   "langchain-core==1.4.4",
   "langchain-openai==1.2.2",
   "langgraph==1.2.4",
-  "langsmith==0.8.0",
+  "langsmith==0.8.18",
   "llama-index>=0.14.22",
   "llama-index-vector-stores-chroma>=0.5.5",
   "pathspec>=1.1.1",
