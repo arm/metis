@@ -68,9 +68,39 @@ query:
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
     assert runtime["model_tool_max_rounds"] == 9
     assert runtime["index_search_config"] == {}
+    assert runtime["memory"] == {
+        "enabled": False,
+        "backend": "sqlite",
+        "location": ".metis/memory/metis_memory.sqlite3",
+    }
     assert "embedding_provider" not in runtime
     assert runtime["embedding_provider_raw_config"] is None
     assert "llm_api_key" not in runtime
+
+
+def test_load_runtime_config_accepts_memory_config(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+memory:
+  enabled: true
+  backend: sqlite
+  location: custom/memory.sqlite3
+llm_provider:
+  name: openai
+  model: gpt-test
+  base_url: https://example.test/openai/v1
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["memory"] == {
+        "enabled": True,
+        "backend": "sqlite",
+        "location": "custom/memory.sqlite3",
+    }
 
 
 def test_load_runtime_config_accepts_index_search_overrides(tmp_path, monkeypatch):

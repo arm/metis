@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from metis.memory.registry import parse_memory_store_spec
 from metis.providers.config import build_provider_config
 from metis.providers.registry import get_chat_provider
 from metis.providers.registry import get_embedding_provider
@@ -107,6 +108,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["index_search_config"] = (
         dict(index_search_cfg) if isinstance(index_search_cfg, dict) else {}
     )
+    memory_cfg = cfg.get("memory") or {}
+    runtime["memory"] = _memory_config(memory_cfg)
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     query_cfg = cfg.get("query", {})
@@ -202,6 +205,22 @@ def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
     except (TypeError, ValueError):
         return False
     return parsed_embed_dim > 2000
+
+
+def _memory_config(raw_config: object) -> dict[str, object]:
+    if not isinstance(raw_config, dict):
+        raw_config = {}
+    location = str(raw_config.get("location") or ".metis/memory/metis_memory.sqlite3")
+    backend = str(raw_config.get("backend") or "sqlite")
+    spec = parse_memory_store_spec(
+        location,
+        backend=backend,
+    )
+    return {
+        "enabled": bool(raw_config.get("enabled", False)),
+        "backend": spec.backend,
+        "location": spec.location,
+    }
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):
