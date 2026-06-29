@@ -119,6 +119,7 @@ embedding_provider:
 
 metis_engine:
   embed_dim: <embedding-dimension>  # must match embedding model output
+  pgvector_use_halfvec: auto        # PostgreSQL backend: auto, true, or false
 
 query:
   model: "<chat-model-id>"

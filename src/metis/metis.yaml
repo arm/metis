@@ -14,6 +14,9 @@ metis_engine:
   triage_tool_timeout_seconds: 12
   llm_max_retries: 5
   embed_dim: 3072
+  # For the PostgreSQL backend, use pgvector halfvec storage automatically when
+  # embed_dim exceeds normal vector HNSW limits. Set true or false to override.
+  pgvector_use_halfvec: auto
   hnsw_kwargs:
     hnsw_m: 16
     hnsw_ef_construction: 64

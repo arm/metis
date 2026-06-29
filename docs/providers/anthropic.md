@@ -28,6 +28,7 @@ embedding_provider:
 
 metis_engine:
   embed_dim: 3072
+  pgvector_use_halfvec: auto
 
 query:
   max_tokens: 5000
@@ -44,6 +45,9 @@ query:
   without retrieval.
 - `metis_engine.embed_dim` must match the configured embedding model output
   dimension.
+- For the PostgreSQL backend, `metis_engine.pgvector_use_halfvec: auto` uses
+  pgvector `halfvec` storage for 3072-dimensional embeddings so HNSW indexing
+  remains available.
 
 Run Metis normally after the service credentials are available:
 

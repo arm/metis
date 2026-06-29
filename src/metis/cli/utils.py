@@ -648,6 +648,7 @@ def build_pg_backend(args, runtime, embed_model_code, embed_model_docs, quiet=Fa
         embed_dim=runtime["embed_dim"],
         query_config=retriever_query_config(runtime),
         hnsw_kwargs=runtime.get("hnsw_kwargs", {}),
+        use_halfvec=bool(runtime.get("pgvector_use_halfvec", False)),
     )
 
 
