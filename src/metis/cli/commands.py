@@ -5,7 +5,6 @@
 from importlib.metadata import version as package_version
 import inspect
 import json
-import os
 from pathlib import Path
 from rich.markup import escape
 
@@ -107,9 +106,10 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 
 
 def run_dir_review(engine, dir_path, args, runtime: CommandRuntime):
-    if not check_dir_exists(os.path.join(engine.codebase_path, dir_path)):
+    review_dir_path = str(Path(engine.codebase_path) / dir_path)
+    if not check_dir_exists(review_dir_path):
         return
-    code_files = list(engine.review.get_code_files(dir_path=dir_path))
+    code_files = list(engine.review.get_code_files(dir_path=review_dir_path))
     _review_code(engine, code_files, args, runtime)
 
 

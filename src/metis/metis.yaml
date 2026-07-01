@@ -34,6 +34,11 @@ metis_engine:
   model_tools:
     max_rounds: 6
 
+memory:
+  enabled: false
+  backend: "sqlite"
+  location: ".metis/memory/metis_memory.sqlite3"
+
 llm_provider:
   name: "openai"
   model: "gpt-5.5"
