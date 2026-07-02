@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)
+
+
+### Features
+
+* **cli:** Add dir_review CLI Command ([#249](https://github.com/arm/metis/issues/249)) ([df85deb](https://github.com/arm/metis/commit/df85deb9e1e35dc5bbf90235549f82add1e137c6))
+* **cli:** make index-backed retrieval opt-in ([#220](https://github.com/arm/metis/issues/220)) ([b095e88](https://github.com/arm/metis/commit/b095e88be2b998937aaf02bb693a1b7675fe89a6))
+* **config:** add custom config file CLI option ([#246](https://github.com/arm/metis/issues/246)) ([224fb44](https://github.com/arm/metis/commit/224fb44ef525d8d5172bcc173962cbd53e03be05))
+* **csharp:** add C#/.NET support ([#245](https://github.com/arm/metis/issues/245)) ([c12b086](https://github.com/arm/metis/commit/c12b0869c3f6d6ed2defefbfd44a7db52bfd8a7c))
+* **devcontainer:** Add Devcontainer Support ([#248](https://github.com/arm/metis/issues/248)) ([6ec3235](https://github.com/arm/metis/commit/6ec323568cfc2f856c81eb57fb1fcb77ee3cd3e7))
+* **engine:** CodeAnchor/SourceMap for deterministic line attribution ([#230](https://github.com/arm/metis/issues/230)) ([469990c](https://github.com/arm/metis/commit/469990c79844be869805095428aaa38d3cc599b5))
+* **java:** Add Java/Kotlin support ([#241](https://github.com/arm/metis/issues/241)) ([a97d856](https://github.com/arm/metis/commit/a97d85613bd102ae9acbb4960ff3735e1b7c72d0))
+* **memory:** Add memory backend ([#260](https://github.com/arm/metis/issues/260)) ([c4e3cce](https://github.com/arm/metis/commit/c4e3cce1abd4d8eaf5e5aa864b49397e4aefbde0))
+* **pgvector:** support pgvector halfvec indexes ([#258](https://github.com/arm/metis/issues/258)) ([2437b51](https://github.com/arm/metis/commit/2437b51b22990be6fe44e316e2943d7ee9f2a143))
+* **providers:** add Anthropic, Gemini, Bedrock, Bedrock Mantle; decouple embedding provider ([#234](https://github.com/arm/metis/issues/234)) ([e0527b6](https://github.com/arm/metis/commit/e0527b65ecf0ea55f090d46f8ed472da527d2106))
+* **providers:** configurable LLM retries ([#239](https://github.com/arm/metis/issues/239)) ([dfa1578](https://github.com/arm/metis/commit/dfa15788100aabe4d09ba080f8337e24ba1fb5d4))
+* **rag:** use LangChain answer retrievers ([476bd8f](https://github.com/arm/metis/commit/476bd8f363d2c7bfac6d2e35517888542f0b2399))
+* **rag:** use LangChain retrievers for indexed answers ([#226](https://github.com/arm/metis/issues/226)) ([476bd8f](https://github.com/arm/metis/commit/476bd8f363d2c7bfac6d2e35517888542f0b2399))
+* **reachability:** Add tree-sitter C/C++ reachability review ([#199](https://github.com/arm/metis/issues/199)) ([2cfaa4c](https://github.com/arm/metis/commit/2cfaa4cf1f8a4007b869581c00f64dd6cb700fe4))
+* **tools:** add engine tool selection ([#223](https://github.com/arm/metis/issues/223)) ([b3ce47d](https://github.com/arm/metis/commit/b3ce47d36318ecac5292bdf6a3e4d95c008565a9))
+* **tools:** Expose index as a configurable model tool ([#236](https://github.com/arm/metis/issues/236)) ([8d4d7ef](https://github.com/arm/metis/commit/8d4d7ef3e2b9e2e8077cb82dedcb25303b9ffb1d))
+
+
+### Bug Fixes
+
+* **providers:** provider-aware token counting ([#255](https://github.com/arm/metis/issues/255)) ([9d7926a](https://github.com/arm/metis/commit/9d7926a7685bdb85acdd7169a81ec3e61497d0e4))
+
+
+### Documentation
+
+* add AArch64 Assembly to supported languages ([#254](https://github.com/arm/metis/issues/254)) ([d08ea10](https://github.com/arm/metis/commit/d08ea106beec07325388da0a17211446f953d1f9))
+
 ## [1.4.0](https://github.com/arm/metis/compare/metis-v1.3.0...metis-v1.4.0) (2026-06-03)
 
 
