@@ -3,7 +3,7 @@ aliases:
 - aarch64_assembly
 extensions:
 - .s
-- .s
+- .hs
 - .asm
 - .a64
 filename_patterns: []
