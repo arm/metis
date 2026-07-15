@@ -3,6 +3,7 @@
 .coverage
 .env
 build/
+chroma/
 chromadb/
 dist/
 **/__pycache__/
