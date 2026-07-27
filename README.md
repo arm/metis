@@ -228,8 +228,9 @@ planned tree-sitter, model-tool, MCP, and private-tool extension path.
 ### `init`
 Initializes Metis repository context. When repository memory is enabled, this
 loads threat-model memory first: configured
-`metis_engine.threat_model.source_paths`/`source_globs` and well-known files such
-as `SECURITY.md` or `THREAT_MODEL.md` are stored as authoritative project data.
+`metis_engine.threat_model.source_patterns` are stored as authoritative project
+data. The packaged configuration includes common `SECURITY.*` and threat-model
+filename patterns.
 Metis distills those files into repository memory with the configured LLM. If
 `--tools index` is enabled, `init` also runs vector indexing; otherwise indexing
 is skipped.

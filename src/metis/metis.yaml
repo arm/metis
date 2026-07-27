@@ -33,6 +33,17 @@ metis_engine:
   reachability_domain_hints: []
   model_tools:
     max_rounds: 6
+  threat_model:
+    source_patterns:
+      - "SECURITY.*"
+      - "THREAT_MODEL.*"
+      - "THREATMODEL.*"
+      - "threat_model.*"
+      - ".github/SECURITY.*"
+      - "docs/SECURITY.*"
+      - "docs/THREAT_MODEL.*"
+      - "docs/threat_model.*"
+      - "docs/**/*threat*model*.*"
 
 memory:
   enabled: false

@@ -285,6 +285,9 @@ def test_init_codebase_populates_memory(tmp_path, dummy_backend):
             "backend": "sqlite",
             "location": "memory.sqlite3",
         },
+        threat_model_config={
+            "source_patterns": ["SECURITY.*"],
+        },
     )
 
     result = engine.init_codebase(include_index=False)

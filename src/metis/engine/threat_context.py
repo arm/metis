@@ -31,17 +31,6 @@ logger = logging.getLogger("metis")
 
 THREAT_MODEL_NAMESPACE = ("repo", "threat_model")
 
-_COMMON_THREAT_MODEL_FILE_PATTERNS = (
-    "SECURITY.*",
-    "THREAT_MODEL.*",
-    "THREATMODEL.*",
-    "threat_model.*",
-    ".github/SECURITY.*",
-    "docs/SECURITY.*",
-    "docs/THREAT_MODEL.*",
-    "docs/threat_model.*",
-)
-
 
 @dataclass(frozen=True)
 class ThreatSource:
@@ -78,7 +67,10 @@ class _ThreatSourceClaimRecordModel(BaseModel):
     )
     applies_to: list[str] = Field(
         default_factory=list,
-        description="Short scopes or path globs.",
+        description=(
+            "Use repository for repository-wide claims, otherwise repository-relative "
+            "path globs."
+        ),
     )
     disposition: Literal["out_of_scope", "integration_risk", "advisory", "review"]
 
@@ -380,10 +372,8 @@ def _write_authoritative_contract_record(
     body = {
         "authority": "authoritative",
         "binding": True,
-        "repository_wide": True,
         "scope_clauses": clauses,
         "source_refs": source_refs,
-        "claim_summaries": claim_summaries,
     }
     summary = f"Authoritative threat-model contract: {'; '.join(claim_summaries)}"
     service.create_record(
@@ -401,7 +391,6 @@ def _write_authoritative_contract_record(
             "authority": "authoritative",
             "binding": True,
             "role": "compiled_contract",
-            "repository_wide": True,
             "scope_clauses": clauses,
             "sources": source_refs,
         },
@@ -467,12 +456,14 @@ def _model_distilled_source_claims(
                     "caller_contract|asset|attacker_capability|mitigation|"
                     'architecture_assumption|analysis_policy",'
                     '"statement":"one concise reusable statement",'
-                    '"applies_to":["short scopes or path globs"],'
+                    '"applies_to":["repository"],'
                     '"disposition":"out_of_scope|integration_risk|advisory|review"'
                     "}}]}}\n"
                     "Return one record for every distinct security-relevant claim "
                     "supported by this evidence batch. Merge equivalent claims and "
-                    "do not repeat them. Each statement must be plain text without "
+                    'do not repeat them. Use exactly "repository" for repository-wide '
+                    "claims; otherwise use repository-relative path globs. Each "
+                    "statement must be plain text without "
                     "Markdown, bullets, prefixes, or line breaks, and under 240 chars."
                 ),
                 variables={
@@ -541,15 +532,17 @@ def _model_reduce_source_claim_group(
                 "caller_contract|asset|attacker_capability|mitigation|"
                 'architecture_assumption|analysis_policy",'
                 '"statement":"one concise reusable statement",'
-                '"applies_to":["short scopes or path globs"],'
+                '"applies_to":["repository"],'
                 '"disposition":"out_of_scope|integration_risk|advisory|review",'
                 '"source_claim_indexes":[0,1]}}]}}\n'
                 "Return an empty records array if no candidate is useful. "
                 "Each statement must preserve the security or triage-scope meaning. "
                 "Return one consolidated record for every distinct claim supported "
                 "by the candidates. Merge equivalent claims and do not omit unique "
-                "claims. Each statement must be plain text without Markdown, bullets, "
-                "prefixes, or line breaks, and under 240 chars."
+                'claims. Use exactly "repository" for repository-wide claims; '
+                "otherwise use repository-relative path globs. Each statement must "
+                "be plain text without Markdown, bullets, prefixes, or line breaks, "
+                "and under 240 chars."
             ),
             variables={"evidence": evidence},
             parse=lambda raw: _parse_distilled_records(
@@ -625,21 +618,8 @@ def _find_threat_sources(
     supported_extensions: set[str],
     is_metisignored: Callable[[str], bool],
 ) -> list[ThreatSource]:
-    configured_paths: list[Path] = []
-    configured_glob_paths: list[Path] = []
-    well_known_paths: list[Path] = []
-    configured_source_requested = False
-
-    for raw_path in string_list(threat_config.get("source_paths")):
-        candidate = Path(raw_path)
-        if candidate.suffix.lower() not in supported_extensions:
-            continue
-        configured_source_requested = True
-        if not candidate.is_absolute():
-            candidate = repo_root / candidate
-        configured_paths.append(candidate)
-
-    for pattern in string_list(threat_config.get("source_globs")):
+    resolved_paths: set[Path] = set()
+    for pattern in string_list(threat_config.get("source_patterns")):
         pattern_path = Path(pattern)
         suffix = pattern_path.suffix.lower()
         if suffix and not has_magic(suffix) and suffix not in supported_extensions:
@@ -651,23 +631,7 @@ def _find_threat_sources(
                 continue
         if ".." in pattern_path.parts:
             continue
-        configured_source_requested = True
-        configured_glob_paths.extend(repo_root.glob(pattern_path.as_posix()))
-
-    if bool(threat_config.get("include_well_known", True)):
-        for pattern in _COMMON_THREAT_MODEL_FILE_PATTERNS:
-            well_known_paths.extend(repo_root.glob(pattern))
-
-    source_groups = (
-        ("configured_path", configured_paths),
-        ("configured_glob", configured_glob_paths),
-        ("well_known", well_known_paths),
-    )
-    sources: list[ThreatSource] = []
-    seen_paths: set[Path] = set()
-    for source, paths in source_groups:
-        resolved_paths: set[Path] = set()
-        for path in paths:
+        for path in repo_root.glob(pattern_path.as_posix()):
             resolved = _safe_repo_path(repo_root, path)
             if (
                 resolved is None
@@ -676,20 +640,14 @@ def _find_threat_sources(
             ):
                 continue
             resolved_paths.add(resolved)
-        for resolved in sorted(
-            resolved_paths - seen_paths,
-            key=lambda path: path.relative_to(repo_root).as_posix(),
-        ):
-            seen_paths.add(resolved)
-            sources.append(ThreatSource(path=resolved, source=source))
 
-    if configured_source_requested and not any(
-        source.source in {"configured_path", "configured_glob"} for source in sources
-    ):
-        raise ValueError(
-            "Configured threat-model sources did not match any supported files"
+    return [
+        ThreatSource(path=resolved, source="configured_pattern")
+        for resolved in sorted(
+            resolved_paths,
+            key=lambda path: path.relative_to(repo_root).as_posix(),
         )
-    return sources
+    ]
 
 
 def _claim_source_refs(claim: dict[str, Any]) -> list[dict[str, Any]]:

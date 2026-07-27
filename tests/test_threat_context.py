@@ -22,9 +22,7 @@ def _config(tmp_path):
     return SimpleNamespace(
         codebase_path=str(repo),
         threat_model_config={
-            "include_well_known": True,
-            "source_paths": [],
-            "source_globs": [],
+            "source_patterns": ["SECURITY.*"],
         },
         plugin_config={
             "docs": {"supported_extensions": [".md", ".html", ".txt", ".pdf", ".rst"]}
@@ -130,9 +128,10 @@ def test_initialize_threat_model_memory_preserves_snapshot_on_model_failure(
 def test_initialize_threat_model_memory_uses_configured_sources_only(tmp_path):
     config = _config(tmp_path)
     config.threat_model_config = {
-        "include_well_known": False,
-        "source_paths": ["docs/platform-risk-register.html"],
-        "source_globs": ["design/*.md"],
+        "source_patterns": [
+            "docs/platform-risk-register.html",
+            "design/*.md",
+        ],
     }
     repo = tmp_path / "repo"
     (repo / "SECURITY.md").write_text(
@@ -154,8 +153,8 @@ def test_initialize_threat_model_memory_uses_configured_sources_only(tmp_path):
     result = initialize_threat_model_memory(config)
 
     assert result["authoritative_sources"] == [
-        "docs/platform-risk-register.html",
         "design/boot-flow.md",
+        "docs/platform-risk-register.html",
     ]
     methods = {
         record.metadata["path"]: record.metadata["source"]["source_method"]
@@ -164,17 +163,15 @@ def test_initialize_threat_model_memory_uses_configured_sources_only(tmp_path):
         )
     }
     assert methods == {
-        "docs/platform-risk-register.html": "configured_path",
-        "design/boot-flow.md": "configured_glob",
+        "docs/platform-risk-register.html": "configured_pattern",
+        "design/boot-flow.md": "configured_pattern",
     }
 
 
 def test_initialize_threat_model_memory_ignores_unsupported_sources(tmp_path):
     config = _config(tmp_path)
     config.threat_model_config = {
-        "include_well_known": False,
-        "source_paths": ["docs/security.pdf"],
-        "source_globs": [],
+        "source_patterns": ["docs/security.pdf"],
     }
     repo = tmp_path / "repo"
     (repo / "docs").mkdir()

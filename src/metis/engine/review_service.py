@@ -21,6 +21,7 @@ from .repository import EngineRepository
 from .review_reachability import ReachabilityReviewBackend
 from .review_validation import ReviewFindingValidator
 from .runtime import EngineConfig
+from .threat_context_retrieval import get_threat_model_context
 
 logger = logging.getLogger("metis")
 
@@ -168,6 +169,7 @@ class ReviewService:
 
         language_prompts = plugin.get_prompts()
         relative_path = os.path.relpath(file_path, base_path)
+        threat_model_context = get_threat_model_context(self._config.memory_service)
 
         try:
             req: ReviewRequest = {
@@ -177,6 +179,7 @@ class ReviewService:
                 "default_prompt_key": "security_review_file",
                 "relative_file": relative_path,
                 "mode": "file",
+                "threat_model_context": threat_model_context,
             }
             return self._review_graph_factory().review(req)
         except Exception as e:
@@ -326,6 +329,7 @@ class ReviewService:
             if not snippet:
                 continue
             language_prompts = plugin.get_prompts()
+            threat_model_context = get_threat_model_context(self._config.memory_service)
             try:
                 original_content = read_file_content(abs_path)
                 req: ReviewRequest = {
@@ -336,6 +340,7 @@ class ReviewService:
                     "relative_file": relative_path,
                     "mode": "patch",
                     "original_file": original_content or "",
+                    "threat_model_context": threat_model_context,
                 }
                 review_dict = self._review_graph_factory().review(req)
             except Exception as e:

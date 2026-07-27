@@ -139,10 +139,8 @@ def test_load_runtime_config_accepts_threat_model_sources(tmp_path, monkeypatch)
         """
 metis_engine:
   threat_model:
-    include_well_known: false
-    source_paths:
+    source_patterns:
       - THREAT_MODEL.md
-    source_globs:
       - docs/threat-model/*.md
 llm_provider:
   name: openai
@@ -154,9 +152,10 @@ llm_provider:
     runtime = load_runtime_config(config_path)
 
     threat_model = runtime["threat_model_config"]
-    assert threat_model["include_well_known"] is False
-    assert threat_model["source_paths"] == ["THREAT_MODEL.md"]
-    assert threat_model["source_globs"] == ["docs/threat-model/*.md"]
+    assert threat_model["source_patterns"] == [
+        "THREAT_MODEL.md",
+        "docs/threat-model/*.md",
+    ]
 
 
 def test_load_runtime_config_accepts_pgvector_halfvec_flag(tmp_path, monkeypatch):

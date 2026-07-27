@@ -203,6 +203,7 @@ class MetisEngine:
             model_tool_max_rounds=self.tools.triage_model_tool_max_rounds(),
             reachability_service=self.reachability,
             reachability_settings=self.reachability_settings,
+            memory_service=self._config.memory_service,
         )
 
     @property

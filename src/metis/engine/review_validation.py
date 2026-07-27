@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from metis.engine.threat_context_retrieval import threat_model_scope_policy
 from metis.engine.review_finding_adapter import (
     safe_float as _safe_float,
     split_reachability_reasoning as _split_reachability_reasoning,
@@ -61,6 +62,18 @@ Return JSON only:
   ]
 }"""
 
+_THREAT_MODEL_VALIDATION_GUIDANCE = """
+
+Authoritative threat-model context is supplied with these candidates:
+- Treat it as binding. When a caller contract directly assigns input,
+  operation, buffer, or pointer validity to callers or integrators, keep=false
+  when the candidate depends on violating that prerequisite, regardless of the
+  resulting internal failure mode. Use
+  drop_reason=authoritative_threat_model_integration_risk.
+- Do not apply an unrelated caller contract. Keep an implementation defect only
+  when the evidence shows it remains reachable with contract-compliant inputs.
+"""
+
 
 class _ReviewValidationDecisionModel(BaseModel):
     index: int = Field(description="Candidate index from the input.")
@@ -97,7 +110,16 @@ class ReviewFindingValidator:
             or self._config.llama_query_model
         )
         reasoning_effort = self._reachability_settings.get("reasoning_effort")
-        batches = list(enumerate(_validation_batches(candidates)))
+        deterministic_decisions = []
+        remaining_candidates = []
+        for candidate in candidates:
+            decision = _review_validation_scope_decision(candidate)
+            if decision is not None:
+                deterministic_decisions.append(decision)
+            else:
+                remaining_candidates.append(candidate)
+
+        batches = list(enumerate(_validation_batches(remaining_candidates)))
         batch_results = run_reachability_jobs(
             batches,
             lambda item: (
@@ -115,7 +137,7 @@ class ReviewFindingValidator:
             result_key=lambda item: item[0],
             swallow_exceptions=False,
         )
-        decisions = []
+        decisions = deterministic_decisions
         for _index, parsed in sorted(batch_results, key=lambda item: item[0]):
             if not parsed:
                 continue
@@ -125,19 +147,46 @@ class ReviewFindingValidator:
         return _rescue_filtered_duplicate_cluster_representatives(candidates, decisions)
 
     def invoke_batch(self, batch, *, model, reasoning_effort=None):
+        system_prompt = _REVIEW_VALIDATION_SYSTEM_PROMPT
+        threat_model_context = next(
+            (
+                candidate["threat_model_context"]
+                for candidate in batch
+                if candidate.get("threat_model_context")
+            ),
+            [],
+        )
+        if threat_model_context:
+            system_prompt += _THREAT_MODEL_VALIDATION_GUIDANCE
+        validation_input: dict[str, Any] = {
+            "candidate_findings": [
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if key != "threat_model_context"
+                }
+                for candidate in batch
+            ]
+        }
+        if threat_model_context:
+            validation_input["threat_model_context"] = threat_model_context
+
         return self._runner.invoke(
             JsonPromptRequest(
                 model=model,
                 max_tokens=6000,
                 temperature=0.0,
-                system_prompt=_REVIEW_VALIDATION_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=(
-                    "Candidate findings JSON:\n{candidate_findings}\n\n"
+                    "Review validation input JSON:\n{validation_input}\n\n"
                     "Return exactly one JSON object with a top-level "
                     '"decisions" array. Do not return markdown or prose.'
                 ),
                 variables={
-                    "candidate_findings": json.dumps(batch, separators=(",", ":"))
+                    "validation_input": json.dumps(
+                        validation_input,
+                        separators=(",", ":"),
+                    )
                 },
                 parse=_parse_review_validation_response,
                 logger=logger,
@@ -187,7 +236,13 @@ def _review_validation_structured_payload(raw):
     return {"decisions": [dict(decision) for decision in decisions]}
 
 
-def _review_validation_payload(index, item, *, codebase_path=""):
+def _review_validation_payload(
+    index,
+    item,
+    *,
+    codebase_path="",
+    threat_model_context=None,
+):
     root_cause, evidence = _split_reachability_reasoning(item.get("reasoning"))
     payload = {
         "index": index,
@@ -207,7 +262,29 @@ def _review_validation_payload(index, item, *, codebase_path=""):
     code_context = _review_validation_code_context(codebase_path, item)
     if code_context:
         payload["code_context"] = code_context
+    if threat_model_context:
+        payload["threat_model_context"] = threat_model_context
     return payload
+
+
+def _review_validation_scope_decision(candidate):
+    policy = threat_model_scope_policy(
+        candidate.get("threat_model_context", []),
+        path=str(candidate.get("primary_file") or ""),
+    )
+    if policy is None:
+        return None
+    return {
+        "index": _safe_int(candidate.get("index"), -1),
+        "keep": False,
+        "confidence": 0.0,
+        "drop_reason": "authoritative_threat_model_out_of_scope",
+        "reason": (
+            "Dropped because authoritative project security scope marks this "
+            "finding as out of scope rather than a project vulnerability."
+        ),
+        "threat_model_scope_policy": policy,
+    }
 
 
 def _review_validation_code_context(codebase_path, item):

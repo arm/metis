@@ -174,6 +174,10 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
                 "evidence_obligations": ["local_context", "use_site"],
                 "evidence_coverage": {"local_context": 1, "use_site": 0},
                 "missing_evidence": ["use_site"],
+                "threat_model_policy": {
+                    "claim_type": "caller_contract",
+                    "disposition": "integration_risk",
+                },
             }
 
     monkeypatch.setattr(
@@ -188,6 +192,10 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
     assert props["metisEvidenceRequirements"] == ["local_context", "use_site"]
     assert props["metisEvidenceCoverage"] == {"local_context": 1, "use_site": 0}
     assert props["metisMissingEvidence"] == ["use_site"]
+    assert props["metisThreatModelPolicy"] == {
+        "claim_type": "caller_contract",
+        "disposition": "integration_risk",
+    }
 
 
 def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
