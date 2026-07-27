@@ -15,6 +15,7 @@ from .commands import (
     run_ask,
     run_dir_review,
     run_file_review,
+    run_init,
     run_index,
     run_review,
     run_review_code,
@@ -55,6 +56,12 @@ class CommandSpec:
         if self.invocation_mode == "path" and not cmd_args:
             print_console(
                 f"[red]Error:[/red] Command '{escape(cmd)}' requires a file path argument.",
+                args.quiet,
+            )
+            return False
+        if self.invocation_mode == "args" and cmd_args:
+            print_console(
+                f"[red]Error:[/red] Command '{escape(cmd)}' does not accept positional arguments.",
                 args.quiet,
             )
             return False
@@ -104,6 +111,13 @@ class CommandSpec:
 
 
 COMMANDS = {
+    "init": CommandSpec(
+        run_init,
+        tracked=True,
+        invocation_mode="args",
+        prepares_output_file=True,
+        optional_tools=(INDEX_TOOL,),
+    ),
     "index": CommandSpec(
         run_index,
         tracked=True,

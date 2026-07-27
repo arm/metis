@@ -11,6 +11,7 @@ import subprocess
 from typing import Sequence
 
 from metis.engine.source import SourceMap
+from metis.utils import resolve_path_within_root
 
 _PYTHON_REGEX_REWRITES = (
     ("[[:space:]]", r"\s"),
@@ -46,13 +47,7 @@ class StaticToolRunner:
         return {}
 
     def _resolve_path(self, raw_path: str) -> Path:
-        candidate = (self.codebase_path / raw_path).resolve()
-        if (
-            candidate != self.codebase_path
-            and self.codebase_path not in candidate.parents
-        ):
-            raise ValueError("Path escapes codebase")
-        return candidate
+        return resolve_path_within_root(self.codebase_path, raw_path)
 
     def _run(
         self,

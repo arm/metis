@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from collections.abc import Iterator
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+
+from langgraph.store.base import PutOp
 
 from metis.version import __version__ as METIS_VERSION
 
@@ -101,10 +104,27 @@ class MemoryService:
         self,
         namespace_prefix: Namespace = (),
     ) -> int:
-        records = list(self.iter_records(namespace_prefix))
-        for record in records:
-            self.invalidate(record.namespace, record.key)
-        return len(records)
+        return self.replace_records(namespace_prefix, [])
+
+    def replace_records(
+        self,
+        namespace_prefix: Namespace,
+        records: Iterable[MemoryRecord],
+    ) -> int:
+        replacement = list(records)
+        if any(
+            record.namespace[: len(namespace_prefix)] != namespace_prefix
+            for record in replacement
+        ):
+            raise ValueError("Replacement records must stay under namespace_prefix")
+        existing = list(self.iter_records(namespace_prefix))
+        operations = [PutOp(record.namespace, record.key, None) for record in existing]
+        operations.extend(
+            PutOp(record.namespace, record.key, record.to_store_value())
+            for record in replacement
+        )
+        self.store.batch(operations)
+        return len(existing)
 
     def delete_stale_records(
         self,

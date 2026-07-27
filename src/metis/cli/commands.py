@@ -9,6 +9,7 @@ from pathlib import Path
 from rich.markup import escape
 
 from metis.engine.options import TriageOptions
+from metis.engine.tools.selection import INDEX_TOOL, tool_enabled
 from .command_runtime import CommandRuntime
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
@@ -44,6 +45,7 @@ def show_help(args=None):
 Type one of the following commands (with arguments):
 
 - [cyan]index[/cyan]
+- [cyan]init[/cyan]
 - [cyan]review_patch mypatch.diff[/cyan]
 - [cyan]review_dir path_to_dir[/cyan]
 - [cyan]review_file path_to_file/myfile.c[/cyan]
@@ -142,6 +144,37 @@ def _review_code(engine, code_files, args, runtime: CommandRuntime):
             quiet=args.quiet,
         )
     _finalize_review_output(engine, results, args, runtime)
+
+
+def run_init(engine, args, runtime: CommandRuntime):
+    include_index = tool_enabled(args.enabled_tools, INDEX_TOOL)
+    results = with_spinner(
+        "Initializing codebase context...",
+        engine.init_codebase,
+        include_index=include_index,
+        quiet=args.quiet,
+    )
+    threat_model = results["threat_model"]
+    index_status = results["index"]
+    if threat_model["status"] == "disabled":
+        print_console(
+            "[yellow]Threat model memory disabled.[/yellow] "
+            "Enable repository memory in metis.yaml to populate it.",
+            args.quiet,
+        )
+    else:
+        source_text = ", ".join(threat_model["authoritative_sources"]) or "none"
+        print_console(
+            "[green]Threat model initialized.[/green] "
+            f"Records: {threat_model['records_written']}; "
+            f"authoritative sources: {escape(source_text)}",
+            args.quiet,
+        )
+    print_console(
+        f"[green]Index status:[/green] {escape(index_status['status'])}",
+        args.quiet,
+    )
+    save_output(args.output_file, results, args.quiet)
 
 
 def _collect_review_code_with_progress(engine, code_files):

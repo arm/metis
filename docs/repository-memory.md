@@ -4,7 +4,7 @@ Repository memory is the small persistence layer Metis uses for facts that are
 worth carrying across commands. It keeps structured records outside the model
 context window so later workflows can reload them when they are still fresh.
 
-The first backend is SQLite.
+Repository memory uses SQLite.
 
 ## What It Is For
 
@@ -21,9 +21,6 @@ The first backend is SQLite.
 - It does not replace current source evidence
 - SQLite memory is not a shared team service
 
-Use a separate backend with access control before memory is shared across users
-or machines.
-
 ## Record Shape
 
 Records use `MemoryRecord` in `src/metis/memory/schemas.py`.
@@ -39,8 +36,6 @@ text.
 - `summary_text` and `search_text` are the only text used for local recall
 - `body_json` and `body_markdown` hold the actual payload
 - `metadata` holds source specific attributes
-
-The lifecycle fields describe how a caller should treat a record.
 
 - `memory_type` groups records as semantic, episodic, or procedural
 - `authority` captures the trust level of the source
@@ -71,7 +66,7 @@ stores the record payload as JSON. The table keeps only the record identity and
 store timestamps outside that JSON payload.
 
 The `MemoryRecord` model owns the JSON shape. SQLite does not project freshness
-or lifecycle fields into separate columns in this first storage layer.
+fields into separate columns.
 
 Store timestamps live in SQLite metadata columns. They are not duplicated inside
 the JSON payload.
@@ -102,11 +97,132 @@ The packaged config keeps memory disabled until an engine workflow wires it in.
 It sets `enabled` to `false`, `backend` to `sqlite`, and `location` to
 `.metis/memory/metis_memory.sqlite3`.
 
-The backend comes from `metis.yaml`. The location is passed to that backend as
-plain backend data. Other backends can be added through the memory store
-registry without changing callers.
+The `memory.backend` and `memory.location` values come from `metis.yaml`.
+SQLite locations are resolved from the repository selected by
+`--codebase-path`, and must remain inside that repository.
 
-## Tests
+## Engine Access
+
+Metis opens repository memory from `metis.yaml` and keeps access inside the
+engine. Workflows decide what to retrieve, then pass curated context to the
+model. The model does not receive a general memory search tool.
+
+This keeps retrieval policy in Metis code, keeps writes orchestration-owned, and
+keeps stored facts tied to explicit provenance and freshness metadata.
+
+## Source Authority
+
+Threat-model collection is authority-aware. Configured threat-model sources and
+well-known project security documents such as `SECURITY.md` and
+`THREAT_MODEL.md` are stored as authoritative project data.
+
+Metis does not infer threat context from arbitrary repository prose, source-code
+shape, or git history in this path. If automation needs a large set of files,
+pass those files or globs explicitly so the source set is deterministic.
+
+Authority is not a confidence score. It tells Metis how strongly a record may
+affect analysis:
+
+- `authoritative`: explicit project policy from configured or well-known
+  threat-model/security files.
+
+Example records:
+
+```json
+{
+  "memory_type": "semantic",
+  "authority": "authoritative",
+  "source_kind": "repo_file",
+  "metadata": {"binding": true, "source": {"kind": "repo_file", "path": "SECURITY.md"}},
+  "summary_text": "Callers must validate micro-kernel buffers."
+}
+```
+
+## Source Metadata
+
+Threat-model sources must resolve to files inside the repository whose extension
+is listed under `docs.supported_extensions` in the plugin configuration. PDF
+remains supported by repository indexing but is excluded from threat-model
+initialization, which reads text sources directly. Configured sources with
+unsupported extensions are ignored.
+
+Use top-level `source_kind` for indexed coarse provenance and
+`metadata.source` for richer source details. Source envelopes use this shape:
+
+```json
+{
+  "kind": "repo_file",
+  "uri": "file:threat-models/firmware-threat-model.md",
+  "path": "threat-models/firmware-threat-model.md",
+  "display_name": "Firmware Threat Model",
+  "content_type": "text/plain",
+  "text_origin": "repo_file",
+  "input_fingerprint": "<sha256 hex digest>",
+  "source_method": "configured_path"
+}
+```
+
+Configured and well-known threat-model files are authoritative and binding in
+this initialization path.
+
+## Init Flow
+
+When repository memory is enabled, `init` gathers threat-model memory before
+other repository setup. The intended order is:
+
+1. Load configured authoritative threat-model sources from
+   `metis_engine.threat_model.source_paths` and `source_globs`.
+2. Load well-known security and threat-model documents when
+   `include_well_known` is enabled.
+3. Store source records with authoritative provenance.
+4. Ask the configured LLM to distill concise threat-model claims and compile
+   explicit policy and caller contracts from the source files.
+5. Build the vector index only when the user enables `--tools index`.
+
+Indexing is a subset of `init`; it is not required for repository memory.
+
+## Claim Distillation and Deduplication
+
+Metis splits each threat-model document into bounded evidence batches and asks
+the configured LLM for structured claims. LangChain validates a structured
+response when the provider supports it and falls back to parsing JSON text
+otherwise.
+
+Deduplication happens in two stages:
+
+1. Metis removes claims with the same statement after case and whitespace
+   normalization. This step is deterministic.
+2. The LLM merges semantically overlapping claims across authoritative sources.
+   Each merged claim must identify the input claim indexes that support it.
+   Metis uses those indexes to preserve source references and fingerprints.
+
+If semantic reduction fails validation, omits source indexes, or returns no
+usable claims, Metis keeps all deterministically deduplicated input claims.
+Source distillation failures abort initialization, so an incomplete snapshot
+does not replace existing repository memory.
+
+## Configuration
+
+Repository memory backend and location are configured under top-level `memory`.
+Threat-model collection is configured under `metis_engine.threat_model`.
+
+```yaml
+memory:
+  enabled: true
+  backend: sqlite
+  location: .metis/memory/metis_memory.sqlite3
+
+metis_engine:
+  threat_model:
+    include_well_known: true
+    source_paths: []
+    source_globs: []
+```
+
+Use `--config PATH` to select a configuration with a different threat-model
+source set.
+
+## Testing
 
 Focused backend coverage is in `tests/test_memory_backend.py`.
 
@@ -119,4 +235,3 @@ overwrite.
 - SQLite is the only implemented repository memory backend
 - SQLite FTS5 is required for text search
 - Vector retrieval is not part of the memory store
-- Shared service deployment needs a separate backend and access control model
