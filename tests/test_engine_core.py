@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import pytest
 import tempfile
 import threading
 from unittest.mock import Mock
+
+import pytest
 from metis.engine import MetisEngine
 from metis.exceptions import (
     PluginNotFoundError,
@@ -240,6 +241,63 @@ def test_navigation_tool_omits_triage_model_tools_when_disabled(tmp_path):
 
     assert engine.tools.triage_langchain_tools() == ()
     assert engine.tools.triage_model_tool_max_rounds() is None
+
+
+def test_memory_service_rejects_paths_outside_codebase(tmp_path, dummy_backend):
+    codebase = tmp_path / "repo"
+    codebase.mkdir()
+    outside = tmp_path / "outside.sqlite3"
+    with pytest.raises(ValueError, match="under codebase_path"):
+        MetisEngine(
+            codebase_path=str(codebase),
+            vector_backend=dummy_backend,
+            llm_provider=Mock(),
+            max_workers=2,
+            max_token_length=2048,
+            llama_query_model="gpt-test",
+            similarity_top_k=3,
+            memory_config={
+                "enabled": True,
+                "backend": "sqlite",
+                "location": str(outside),
+            },
+        )
+
+
+def test_init_codebase_populates_memory(tmp_path, dummy_backend):
+    codebase = tmp_path / "repo"
+    codebase.mkdir()
+    (codebase / "SECURITY.md").write_text(
+        "# Security\n\nFirmware images are untrusted inputs.\n",
+        encoding="utf-8",
+    )
+    engine = MetisEngine(
+        codebase_path=str(codebase),
+        vector_backend=dummy_backend,
+        llm_provider=None,
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        enabled_tools=set(),
+        memory_config={
+            "enabled": True,
+            "backend": "sqlite",
+            "location": "memory.sqlite3",
+        },
+    )
+
+    result = engine.init_codebase(include_index=False)
+    assert engine._config.memory_service is not None
+    context = engine._config.memory_service.search_records(
+        ("repo", "threat_model", "authoritative"),
+        query="firmware untrusted",
+        limit=3,
+    )
+
+    assert result["index"] == {"status": "skipped"}
+    assert context
+    assert context[0].metadata["binding"] is True
 
 
 def test_index_search_uses_manifest_tool_config(monkeypatch):

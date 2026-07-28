@@ -33,7 +33,10 @@ class EngineConfig:
     enabled_tools: set[str]
     model_tool_max_rounds: int
     index_search_config: dict[str, Any]
+    memory_config: dict[str, Any]
+    threat_model_config: dict[str, Any]
     language_registry: Any
+    memory_service: Any | None = None
     code_exts: set[str] = field(default_factory=set)
     ext_plugin_map: dict[str, Any] = field(default_factory=dict)
     ext_pattern_plugin_map: list[tuple[str, Any]] = field(default_factory=list)

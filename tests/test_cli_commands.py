@@ -111,6 +111,38 @@ def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):
     assert calls == ["count", "prepare", "finalize"]
 
 
+def test_run_init_enables_requested_index(monkeypatch):
+    calls = []
+
+    class _Engine:
+        def init_codebase(self, *, include_index=False):
+            calls.append(include_index)
+            return {
+                "threat_model": {
+                    "status": "ok",
+                    "records_written": 1,
+                    "authoritative_sources": ["SECURITY.md"],
+                },
+                "index": {"status": "indexed" if include_index else "skipped"},
+            }
+
+    monkeypatch.setattr(
+        commands,
+        "with_spinner",
+        lambda _message, func, **kwargs: func(include_index=kwargs["include_index"]),
+    )
+    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(commands, "save_output", lambda *_args, **_kwargs: None)
+
+    commands.run_init(
+        _Engine(),
+        SimpleNamespace(quiet=True, enabled_tools={"index"}, output_file=None),
+        CommandRuntime(command="init", command_args=[]),
+    )
+
+    assert calls == [True]
+
+
 def test_run_triage_passes_triage_options(tmp_path, monkeypatch):
     sarif_path = tmp_path / "input.sarif"
     sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
@@ -118,6 +150,7 @@ def test_run_triage_passes_triage_options(tmp_path, monkeypatch):
     class _DummyEngine:
         def triage_sarif_file(self, input_path, output_path=None, **kwargs):
             assert input_path == str(sarif_path)
+            assert "include_triaged" not in kwargs
             assert isinstance(kwargs["options"], TriageOptions)
             assert kwargs["options"].include_triaged is False
             return output_path or input_path

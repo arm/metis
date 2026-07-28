@@ -14,6 +14,7 @@ from metis.providers.config import build_provider_config
 from metis.providers.registry import get_chat_provider
 from metis.providers.registry import get_embedding_provider
 from metis.reachability_settings import collect_reachability_config
+from metis.utils import string_list
 
 logger = logging.getLogger("metis")
 
@@ -110,6 +111,9 @@ def load_runtime_config(config_path=None, enable_psql=False):
     )
     memory_cfg = cfg.get("memory") or {}
     runtime["memory"] = _memory_config(memory_cfg)
+    runtime["threat_model_config"] = _threat_model_config(
+        engine_cfg.get("threat_model")
+    )
     runtime.update(collect_reachability_config(cfg, engine_cfg))
 
     query_cfg = cfg.get("query", {})
@@ -220,6 +224,15 @@ def _memory_config(raw_config: object) -> dict[str, object]:
         "enabled": bool(raw_config.get("enabled", False)),
         "backend": spec.backend,
         "location": spec.location,
+    }
+
+
+def _threat_model_config(value: object) -> dict[str, object]:
+    config = value if isinstance(value, dict) else {}
+    return {
+        "include_well_known": bool(config.get("include_well_known", True)),
+        "source_paths": string_list(config.get("source_paths")),
+        "source_globs": string_list(config.get("source_globs")),
     }
 
 

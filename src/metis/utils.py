@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Callable
 from functools import lru_cache
+from pathlib import Path
 
 import tiktoken
 
@@ -36,6 +37,29 @@ _MODEL_FAMILY_CHARS_PER_TOKEN: tuple[tuple[tuple[str, ...], float], ...] = (
     (("command", "cohere"), 4.0),
     (("titan", "amazon."), 4.0),
 )
+
+
+def string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def resolve_path_within_root(
+    root: str | Path,
+    path: str | Path,
+) -> Path:
+    resolved_root = Path(root).expanduser().resolve()
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = resolved_root / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(resolved_root):
+        raise ValueError("Path escapes codebase")
+    return resolved
 
 
 def safe_decode_unicode(s):

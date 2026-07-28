@@ -41,7 +41,8 @@ def test_configure_enabled_tools_prefers_cli_over_config():
 
 
 @pytest.mark.parametrize(
-    "cmd", ["review_dir", "review_file", "review_code", "review_patch", "triage"]
+    "cmd",
+    ["init", "review_dir", "review_file", "review_code", "review_patch", "triage"],
 )
 def test_prepare_command_runtime_disables_index_by_default_for_supported_command(cmd):
     args = SimpleNamespace(quiet=True)
@@ -297,10 +298,10 @@ def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path)
         enabled_tools={"index"},
     )
     runtime = {
-        "llm_provider_name": "anthropic",
+        "llm_provider_name": "test-provider",
         "llm_provider": {
-            "api_key": "anthropic-key",
-            "model": "claude-opus-4-1-20250805",
+            "api_key": "test-api-key",
+            "model": "test-model",
         },
         "embedding_provider_raw_config": {
             "api_key_env": "OPENAI_EMBEDDING_KEY",
@@ -310,7 +311,7 @@ def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path)
         },
         "max_workers": 2,
         "max_token_length": 2048,
-        "llama_query_model": "claude-opus-4-1-20250805",
+        "llama_query_model": "test-model",
         "similarity_top_k": 3,
         "response_mode": "compact",
     }
@@ -362,10 +363,10 @@ def test_build_engine_skips_embedding_provider_when_index_tool_disabled(
         enabled_tools=set(),
     )
     runtime = {
-        "llm_provider_name": "anthropic",
+        "llm_provider_name": "test-provider",
         "llm_provider": {
-            "api_key": "anthropic-key",
-            "model": "claude-opus-4-1-20250805",
+            "api_key": "test-api-key",
+            "model": "test-model",
         },
         "embedding_provider_raw_config": {
             "name": "openai",
@@ -374,7 +375,7 @@ def test_build_engine_skips_embedding_provider_when_index_tool_disabled(
         },
         "max_workers": 2,
         "max_token_length": 2048,
-        "llama_query_model": "claude-opus-4-1-20250805",
+        "llama_query_model": "test-model",
         "similarity_top_k": 3,
         "response_mode": "compact",
     }
@@ -406,15 +407,15 @@ def test_build_engine_requires_embedding_config_when_index_tool_enabled(
         enabled_tools={"index"},
     )
     runtime = {
-        "llm_provider_name": "anthropic",
+        "llm_provider_name": "test-provider",
         "llm_provider": {
-            "api_key": "anthropic-key",
-            "model": "claude-opus-4-1-20250805",
+            "api_key": "test-api-key",
+            "model": "test-model",
         },
         "embedding_provider_raw_config": None,
         "max_workers": 2,
         "max_token_length": 2048,
-        "llama_query_model": "claude-opus-4-1-20250805",
+        "llama_query_model": "test-model",
         "similarity_top_k": 3,
         "response_mode": "compact",
     }

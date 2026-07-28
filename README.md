@@ -139,6 +139,7 @@ uv run metis --codebase-path <path_to_src>
 
 Run the security analysis across the codebase:
 ```
+init
 review_code
 ```
 
@@ -224,8 +225,21 @@ Metis provides an interactive CLI with several built-in commands. After launchin
 See [docs/tool-plugins.md](docs/tool-plugins.md) for the tool plugin contract and
 planned tree-sitter, model-tool, MCP, and private-tool extension path.
 
+### `init`
+Initializes Metis repository context. When repository memory is enabled, this
+loads threat-model memory first: configured
+`metis_engine.threat_model.source_paths`/`source_globs` and well-known files such
+as `SECURITY.md` or `THREAT_MODEL.md` are stored as authoritative project data.
+Metis distills those files into repository memory with the configured LLM. If
+`--tools index` is enabled, `init` also runs vector indexing; otherwise indexing
+is skipped.
+
+Use `--config PATH` to select a configuration with a different threat-model
+source set.
+
 ### `index`
-Builds the legacy vector index used by `ask` and `update`.
+Builds only the legacy vector index used by `ask` and `update`. `index` is a
+subset of `init` and remains opt-in through `--tools index`.
 
 ### `review_code`
 Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.

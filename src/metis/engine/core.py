@@ -14,11 +14,13 @@ from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
 from .graphs import AskGraph, ReviewGraph
+from .memory_runtime import create_memory_service
 from .options import TriageOptions
 from .reachability.service import TreeSitterReachabilityService
 from .repository import EngineRepository
 from .review_service import ReviewService
 from .runtime import EngineConfig, EngineState
+from .threat_context import initialize_threat_model_memory
 from .tools.engine import build_engine_tools
 from .tools.selection import parse_engine_tools
 from .triage_service import TriageService
@@ -77,6 +79,10 @@ class MetisEngine:
             fallback=6,
         )
         self.index_search_config = dict(kwargs.get("index_search_config") or {})
+        self.memory_config = dict(
+            kwargs.get("memory_config") or kwargs.get("memory") or {}
+        )
+        self.threat_model_config = dict(kwargs.get("threat_model_config") or {})
         self.reachability_settings = coerce_reachability_settings(
             kwargs, default_workers=self.max_workers
         )
@@ -110,10 +116,13 @@ class MetisEngine:
             enabled_tools=self.enabled_tools,
             model_tool_max_rounds=self.model_tool_max_rounds,
             index_search_config=self.index_search_config,
+            memory_config=self.memory_config,
+            threat_model_config=self.threat_model_config,
             language_registry=self.language_registry,
             code_exts=self.code_exts,
         )
         self._state = EngineState()
+        self._config.memory_service = create_memory_service(self._config)
         self.repository = EngineRepository(self._config, self._state)
         self.tools = build_engine_tools(
             self._config,
@@ -136,6 +145,19 @@ class MetisEngine:
             reachability_settings=self.reachability_settings,
         )
         self._triage_service = self._build_triage_service()
+
+    def init_codebase(self, *, include_index: bool = False) -> dict[str, object]:
+        result: dict[str, object] = {
+            "threat_model": initialize_threat_model_memory(
+                self._config,
+                self.repository,
+            ),
+            "index": {"status": "skipped"},
+        }
+        if include_index:
+            self.indexing.index_codebase()
+            result["index"] = {"status": "indexed"}
+        return result
 
     def _init_usage_runtime(self, kwargs) -> UsageRuntime:
         return kwargs.get("usage_runtime") or UsageRuntime(self.codebase_path)

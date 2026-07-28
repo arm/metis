@@ -396,7 +396,6 @@ def main():
         type=str,
         help="Comma-separated engine tools, e.g. index,navigation, all, or none. Defaults to navigation.",
     )
-
     args = parser.parse_args()
     try:
         if args.tools is not None:

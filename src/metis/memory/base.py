@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Literal, Protocol
 
 from langgraph.store.base import BaseStore
 from langgraph.store.base import Item
+from langgraph.store.base import Op
+from langgraph.store.base import Result
 from langgraph.store.base import SearchItem
 
 
@@ -15,6 +18,8 @@ JsonValue = dict[str, Any]
 
 
 class StoreLike(Protocol):
+    def batch(self, ops: Iterable[Op]) -> list[Result]: ...
+
     def put(
         self,
         namespace: Namespace,
