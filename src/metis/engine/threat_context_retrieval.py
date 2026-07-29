@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from glob import has_magic
 import json
 from pathlib import PurePosixPath
 from typing import Any
@@ -14,6 +15,8 @@ from .threat_context import THREAT_MODEL_NAMESPACE
 
 def get_threat_model_context(
     service: MemoryService | None,
+    *,
+    path: str = "",
 ) -> list[dict[str, Any]]:
     if service is None:
         return []
@@ -22,24 +25,42 @@ def get_threat_model_context(
         (*THREAT_MODEL_NAMESPACE, "contracts"),
         "authoritative",
     )
-    if contract is None:
-        return []
-    return [
-        {
-            "summary": contract.summary_text,
-            "metadata": {
-                "authority": contract.authority,
-                "scope_clauses": contract.metadata["scope_clauses"],
-            },
-        }
-    ]
+    records = []
+    if contract is not None:
+        records.append(
+            {
+                "summary": contract.summary_text,
+                "metadata": {
+                    "authority": contract.authority,
+                    "scope_clauses": contract.metadata["scope_clauses"],
+                },
+            }
+        )
+    normalized_path = path.replace("\\", "/")
+    for lesson in service.iter_records((*THREAT_MODEL_NAMESPACE, "history")):
+        applies_to = lesson.metadata["applies_to"]
+        if _history_lesson_applies(applies_to, normalized_path):
+            records.append(
+                {
+                    "summary": lesson.summary_text,
+                    "metadata": {
+                        "authority": lesson.authority,
+                        "scope_clauses": [],
+                    },
+                }
+            )
+    return records
 
 
 def format_threat_model_context(records: list[dict[str, Any]]) -> str:
     sections = []
     for record in records:
         metadata = record["metadata"]
-        sections.append(f"- [{metadata['authority']}] {record['summary']}")
+        authority = metadata["authority"]
+        label = (
+            f"{authority}, advisory" if authority == "history_derived" else authority
+        )
+        sections.append(f"- [{label}] {record['summary']}")
         clauses = metadata["scope_clauses"]
         if clauses:
             sections.append(
@@ -49,7 +70,9 @@ def format_threat_model_context(records: list[dict[str, Any]]) -> str:
 
 
 def threat_model_review_scope_guidance(records: list[dict[str, Any]]) -> str:
-    if not records:
+    if not any(
+        record["metadata"]["authority"] == "authoritative" for record in records
+    ):
         return ""
     return (
         "Treat applicable authoritative threat-model scope as binding. Apply "
@@ -133,3 +156,18 @@ def _is_global_exclusion(clause: dict[str, Any]) -> bool:
         and clause["disposition"] == "out_of_scope"
         and "repository" in clause["applies_to"]
     )
+
+
+def _history_lesson_applies(scopes: list[str], path: str) -> bool:
+    if not scopes or "repository" in scopes:
+        return True
+    if not path:
+        return False
+    for scope in scopes:
+        normalized_scope = scope.replace("\\", "/").rstrip("/")
+        if has_magic(normalized_scope):
+            if PurePosixPath(path).match(normalized_scope):
+                return True
+        elif path == normalized_scope or path.startswith(f"{normalized_scope}/"):
+            return True
+    return False

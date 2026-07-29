@@ -82,7 +82,10 @@ class TriageServiceExecutionMixin:
         *,
         debug_callback,
     ) -> dict:
-        threat_model_context = get_threat_model_context(self.memory_service)
+        threat_model_context = get_threat_model_context(
+            self.memory_service,
+            path=finding.file_path,
+        )
         policy = threat_model_scope_policy(
             threat_model_context,
             path=finding.file_path,

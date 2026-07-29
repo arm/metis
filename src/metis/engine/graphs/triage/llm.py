@@ -37,7 +37,7 @@ def _build_user_prompt(state: TriageState) -> str:
     if threat_model_context:
         sections.extend(
             [
-                "Authoritative Threat-Model Context:\n",
+                "Threat-Model Context:\n",
                 threat_model_context,
                 "\n\n",
             ]

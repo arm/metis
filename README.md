@@ -233,7 +233,8 @@ data. The packaged configuration includes common `SECURITY.*` and threat-model
 filename patterns.
 Metis distills those files into repository memory with the configured LLM. If
 `--tools index` is enabled, `init` also runs vector indexing; otherwise indexing
-is skipped.
+is skipped. Optional git-history memory can add advisory security-review lessons;
+it never defines binding project scope.
 
 Use `--config PATH` to select a configuration with a different threat-model
 source set.

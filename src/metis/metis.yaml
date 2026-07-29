@@ -44,6 +44,9 @@ metis_engine:
       - "docs/THREAT_MODEL.*"
       - "docs/threat_model.*"
       - "docs/**/*threat*model*.*"
+    history:
+      enabled: false
+      max_commits: 500
 
 memory:
   enabled: false

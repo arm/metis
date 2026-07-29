@@ -142,6 +142,9 @@ metis_engine:
     source_patterns:
       - THREAT_MODEL.md
       - docs/threat-model/*.md
+    history:
+      enabled: true
+      max_commits: 75
 llm_provider:
   name: openai
   model: test-model
@@ -156,6 +159,10 @@ llm_provider:
         "THREAT_MODEL.md",
         "docs/threat-model/*.md",
     ]
+    assert threat_model["history"] == {
+        "enabled": True,
+        "max_commits": 75,
+    }
 
 
 def test_load_runtime_config_accepts_pgvector_halfvec_flag(tmp_path, monkeypatch):

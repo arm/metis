@@ -163,8 +163,7 @@ class ReachabilityTriageRunner:
         threat_model_section = ""
         if finding.threat_model_context:
             threat_model_section = (
-                "\n\nAuthoritative threat-model context:\n"
-                + finding.threat_model_context
+                "\n\nThreat-model context:\n" + finding.threat_model_context
             )
         return self._runner.invoke(
             JsonPromptRequest(
@@ -645,6 +644,6 @@ Reachability context:
 
 _THREAT_MODEL_GUIDANCE = """
 
-When authoritative threat-model context is supplied, treat its applicable
-project scope and caller contracts as binding. Do not apply a contract whose
-scope does not match the reported file or call path."""
+Treat entries labelled authoritative as binding only when their scope applies
+to the reported file or call path. Treat history-derived entries as advisory
+review context."""

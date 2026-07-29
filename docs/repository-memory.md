@@ -222,10 +222,16 @@ metis_engine:
       - "docs/THREAT_MODEL.*"
       - "docs/threat_model.*"
       - "docs/**/*threat*model*.*"
+    history:
+      enabled: false
+      max_commits: 500
 ```
 
 Use `--config PATH` to select a configuration with a different threat-model
-source set.
+source set. Enabling `history` distills recent commit messages and changed paths
+into short advisory lessons. History-derived records cannot create binding scope
+or automatically invalidate findings. Metis stores every unique lesson with
+valid commit provenance rather than applying a fixed record-count cap.
 
 ## Review And Triage
 

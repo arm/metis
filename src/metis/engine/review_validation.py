@@ -156,7 +156,10 @@ class ReviewFindingValidator:
             ),
             [],
         )
-        if threat_model_context:
+        if any(
+            record["metadata"]["authority"] == "authoritative"
+            for record in threat_model_context
+        ):
             system_prompt += _THREAT_MODEL_VALIDATION_GUIDANCE
         validation_input: dict[str, Any] = {
             "candidate_findings": [
