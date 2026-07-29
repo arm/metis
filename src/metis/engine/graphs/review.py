@@ -11,6 +11,10 @@ from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.engine.source import SourceMap
+from metis.engine.threat_context_retrieval import (
+    format_threat_model_context,
+    threat_model_review_scope_guidance,
+)
 from metis.utils import split_snippet, parse_json_output
 from .schemas import ReviewResponseModel, review_schema_prompt
 from .utils import (
@@ -57,12 +61,21 @@ def _build_body_text(state: ReviewState) -> str:
     """
     snippet = state.get("snippet", "") or ""
     mode = state.get("mode", "file")
+    threat_records = state.get("threat_model_context", [])
+    threat_model_context = format_threat_model_context(threat_records)
+    scope_guidance = threat_model_review_scope_guidance(threat_records)
+    threat_sections = []
+    if threat_model_context:
+        threat_sections.extend(["THREAT_MODEL_CONTEXT:", threat_model_context, ""])
+    if scope_guidance:
+        threat_sections.extend(["THREAT_MODEL_SCOPE_GUIDANCE:", scope_guidance, ""])
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
         chunk_start = state.get("chunk_start") or 1
         sections = [
             f"FILE: {file_path}",
+            *threat_sections,
             "SNIPPET:",
             SourceMap.number_text(snippet, chunk_start),
             "",
@@ -73,6 +86,7 @@ def _build_body_text(state: ReviewState) -> str:
             "ORIGINAL_FILE:",
             SourceMap.number_text(original_file, 1) if original_file else "",
             "",
+            *threat_sections,
             "FILE_CHANGES:",
             snippet,
             "",
@@ -183,7 +197,7 @@ class ReviewGraph:
                 "Unable to create review runnable; LangChain chat provider required."
             )
         self._prompt_runner = JsonPromptRunner(self.llm_provider)
-        self._app_cache = {}
+        self._app_cache: dict[tuple[int, str], Any] = {}
 
     def _invoke_review_model(self, system_prompt, body_text):
         return self._prompt_runner.invoke(
@@ -248,6 +262,7 @@ class ReviewGraph:
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
+        threat_model_context = request.get("threat_model_context", [])
 
         rel_path = relative_file or file_path
         if mode == "file":
@@ -259,7 +274,7 @@ class ReviewGraph:
         chunks = split_snippet(
             snippet, self.max_token_length, self.llm_provider.count_tokens
         )
-        accumulated = []
+        accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk, chunk_start in chunks:
             chunk_end = chunk_start + chunk.count("\n")
@@ -272,6 +287,7 @@ class ReviewGraph:
                 "relative_file": relative_file,
                 "mode": mode,
                 "original_file": original_file,
+                "threat_model_context": threat_model_context,
             }
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []
@@ -280,7 +296,7 @@ class ReviewGraph:
 
         if not accumulated:
             file_display = relative_file if relative_file else file_path
-            result = {
+            result: dict[str, Any] = {
                 "file": file_display,
                 "file_path": file_path,
                 "reviews": [],

@@ -37,6 +37,7 @@ class ReachabilityTriageRequest:
     snippet: str = ""
     source_tool: str = ""
     explanation: str = ""
+    threat_model_context: str = ""
 
 
 class ReachabilityTriageRunner:
@@ -156,16 +157,26 @@ class ReachabilityTriageRunner:
         max_tool_rounds: int | None,
         label: str,
     ) -> TriageDecisionModel | None:
+        system_prompt = _SYSTEM_PROMPT
+        if finding.threat_model_context:
+            system_prompt += _THREAT_MODEL_GUIDANCE
+        threat_model_section = ""
+        if finding.threat_model_context:
+            threat_model_section = (
+                "\n\nAuthoritative threat-model context:\n"
+                + finding.threat_model_context
+            )
         return self._runner.invoke(
             JsonPromptRequest(
                 model=self._model,
                 max_tokens=5000,
                 temperature=0.1,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=_USER_PROMPT,
                 variables={
                     "finding": _finding_section(finding),
                     "reachability_context": context,
+                    "threat_model_section": threat_model_section,
                 },
                 parse=_parse_triage_decision,
                 logger=logger,
@@ -629,4 +640,11 @@ Reported finding:
 
 Reachability context:
 {reachability_context}
+{threat_model_section}
 """
+
+_THREAT_MODEL_GUIDANCE = """
+
+When authoritative threat-model context is supplied, treat its applicable
+project scope and caller contracts as binding. Do not apply a contract whose
+scope does not match the reported file or call path."""

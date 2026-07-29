@@ -229,11 +229,7 @@ def _memory_config(raw_config: object) -> dict[str, object]:
 
 def _threat_model_config(value: object) -> dict[str, object]:
     config = value if isinstance(value, dict) else {}
-    return {
-        "include_well_known": bool(config.get("include_well_known", True)),
-        "source_paths": string_list(config.get("source_paths")),
-        "source_globs": string_list(config.get("source_globs")),
-    }
+    return {"source_patterns": string_list(config.get("source_patterns"))}
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

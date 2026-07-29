@@ -84,3 +84,27 @@ def test_review_nodes_pipeline_parses():
 
     s3 = review_node_parse(s2)
     assert s3.get("parsed_reviews") and isinstance(s3["parsed_reviews"], list)
+
+
+def test_review_body_includes_threat_model_context():
+    from metis.engine.graphs.review import _build_body_text
+
+    body = _build_body_text(
+        {
+            "file_path": "src/main.c",
+            "snippet": "int main(void) { return 0; }",
+            "threat_model_context": [
+                {
+                    "summary": "Authoritative policy says images are untrusted.",
+                    "metadata": {
+                        "authority": "authoritative",
+                        "scope_clauses": [],
+                    },
+                }
+            ],
+        }
+    )
+
+    assert "THREAT_MODEL_CONTEXT:" in body
+    assert "Authoritative policy says images are untrusted." in body
+    assert body.index("THREAT_MODEL_CONTEXT:") < body.index("SNIPPET:")

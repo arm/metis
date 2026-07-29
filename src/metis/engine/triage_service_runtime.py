@@ -77,7 +77,12 @@ class TriageServiceRuntimeMixin:
             default_workers=self.max_workers,
         )
 
-    def _reachability_triage_request(self, finding) -> ReachabilityTriageRequest:
+    def _reachability_triage_request(
+        self,
+        finding,
+        *,
+        threat_model_context: str = "",
+    ) -> ReachabilityTriageRequest:
         return ReachabilityTriageRequest(
             message=finding.message,
             file_path=finding.file_path,
@@ -86,6 +91,7 @@ class TriageServiceRuntimeMixin:
             snippet=finding.snippet,
             source_tool=getattr(finding, "source_tool", ""),
             explanation=getattr(finding, "explanation", ""),
+            threat_model_context=threat_model_context,
         )
 
     def close(self):

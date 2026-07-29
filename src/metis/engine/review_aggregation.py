@@ -16,6 +16,7 @@ from .review_validation import (
     review_validation_final_keep,
     review_validation_payload,
 )
+from .threat_context_retrieval import get_threat_model_context
 
 logger = logging.getLogger("metis")
 
@@ -102,12 +103,16 @@ class ReviewResultAggregator:
 
         candidates = []
         candidate_refs = []
+        threat_model_context = get_threat_model_context(self._config.memory_service)
         for group_index, item_index, item in _iter_review_items(review_groups):
             if needs_reachability_validation(item):
                 candidate_refs.append((group_index, item_index))
                 candidates.append(
                     review_validation_payload(
-                        len(candidates), item, codebase_path=self._config.codebase_path
+                        len(candidates),
+                        item,
+                        codebase_path=self._config.codebase_path,
+                        threat_model_context=threat_model_context,
                     )
                 )
 
@@ -148,6 +153,9 @@ class ReviewResultAggregator:
             drop_reason = review_validation_drop_reason(decision)
             if drop_reason:
                 item_copy["review_validation_drop_reason"] = drop_reason
+            scope_policy = decision.get("threat_model_scope_policy")
+            if isinstance(scope_policy, dict):
+                item_copy["threat_model_scope_policy"] = dict(scope_policy)
             model_keep = bool(decision.get("keep", True))
             keep = review_validation_final_keep(candidates[candidate_index], decision)
             item_copy["review_validation_keep"] = keep

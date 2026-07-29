@@ -158,26 +158,24 @@ Use top-level `source_kind` for indexed coarse provenance and
   "content_type": "text/plain",
   "text_origin": "repo_file",
   "input_fingerprint": "<sha256 hex digest>",
-  "source_method": "configured_path"
+  "source_method": "configured_pattern"
 }
 ```
 
-Configured and well-known threat-model files are authoritative and binding in
-this initialization path.
+Configured threat-model files are authoritative and binding in this
+initialization path.
 
 ## Init Flow
 
 When repository memory is enabled, `init` gathers threat-model memory before
 other repository setup. The intended order is:
 
-1. Load configured authoritative threat-model sources from
-   `metis_engine.threat_model.source_paths` and `source_globs`.
-2. Load well-known security and threat-model documents when
-   `include_well_known` is enabled.
-3. Store source records with authoritative provenance.
-4. Ask the configured LLM to distill concise threat-model claims and compile
+1. Load authoritative threat-model sources from
+   `metis_engine.threat_model.source_patterns`.
+2. Store source records with authoritative provenance.
+3. Ask the configured LLM to distill concise threat-model claims and compile
    explicit policy and caller contracts from the source files.
-5. Build the vector index only when the user enables `--tools index`.
+4. Build the vector index only when the user enables `--tools index`.
 
 Indexing is a subset of `init`; it is not required for repository memory.
 
@@ -214,13 +212,32 @@ memory:
 
 metis_engine:
   threat_model:
-    include_well_known: true
-    source_paths: []
-    source_globs: []
+    source_patterns:
+      - "SECURITY.*"
+      - "THREAT_MODEL.*"
+      - "THREATMODEL.*"
+      - "threat_model.*"
+      - ".github/SECURITY.*"
+      - "docs/SECURITY.*"
+      - "docs/THREAT_MODEL.*"
+      - "docs/threat_model.*"
+      - "docs/**/*threat*model*.*"
 ```
 
 Use `--config PATH` to select a configuration with a different threat-model
 source set.
+
+## Review And Triage
+
+Review uses threat-model memory to calibrate project scope before asking for
+findings. Authoritative project policy can prevent out-of-scope issues from
+being reported as project vulnerabilities.
+
+Triage uses the same authoritative contract when it evaluates a SARIF finding.
+An explicit binding out-of-scope policy can mark a finding invalid and store the
+applied policy in the SARIF result. Caller contracts and integration-risk
+clauses guide semantic review and triage instead of automatically invalidating
+a finding.
 
 ## Testing
 

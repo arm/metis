@@ -140,6 +140,7 @@ class TriageGraph:
                 "finding_explanation": request.get("finding_explanation", ""),
                 "triage_language": request.get("triage_language", ""),
                 "triage_language_guidance": request.get("triage_language_guidance", ""),
+                "threat_model_context": request.get("threat_model_context", []),
                 "debug_callback": request.get("debug_callback"),
                 "triage_system_prompt": self.triage_system_prompt,
                 "triage_decision_prompt": self.triage_decision_prompt,

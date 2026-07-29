@@ -133,12 +133,23 @@ def test_triage_user_prompt_includes_language_navigation_guidance():
             "finding_snippet": "danger(x)",
             "triage_language": "python",
             "triage_language_guidance": "Inspect decorators and validators first.",
+            "threat_model_context": [
+                {
+                    "summary": "Callers validate input.",
+                    "metadata": {
+                        "authority": "authoritative",
+                        "scope_clauses": [],
+                    },
+                }
+            ],
         }
     )
 
     assert "Language Context:" in prompt
     assert "- language: python" in prompt
     assert "Inspect decorators and validators first." in prompt
+    assert "Authoritative Threat-Model Context:" in prompt
+    assert "Callers validate input." in prompt
 
 
 def test_triage_schema_rejects_inconclusive_without_unresolved_hops():

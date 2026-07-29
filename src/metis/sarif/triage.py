@@ -18,6 +18,7 @@ METIS_TRIAGE_TIMESTAMP_KEY = "metisTriageTimestamp"
 METIS_EVIDENCE_REQUIREMENTS_KEY = "metisEvidenceRequirements"
 METIS_EVIDENCE_COVERAGE_KEY = "metisEvidenceCoverage"
 METIS_MISSING_EVIDENCE_KEY = "metisMissingEvidence"
+METIS_THREAT_MODEL_POLICY_KEY = "metisThreatModelPolicy"
 
 
 @dataclass(frozen=True)
@@ -230,13 +231,25 @@ def _apply_triage_metadata(
         properties[METIS_EVIDENCE_REQUIREMENTS_KEY] = [
             str(item) for item in evidence_requirements if str(item or "").strip()
         ]
+    else:
+        properties.pop(METIS_EVIDENCE_REQUIREMENTS_KEY, None)
 
     evidence_coverage = metadata.get("evidence_coverage")
     if isinstance(evidence_coverage, dict):
         properties[METIS_EVIDENCE_COVERAGE_KEY] = dict(evidence_coverage)
+    else:
+        properties.pop(METIS_EVIDENCE_COVERAGE_KEY, None)
 
     missing_evidence = metadata.get("missing_evidence")
     if isinstance(missing_evidence, list):
         properties[METIS_MISSING_EVIDENCE_KEY] = [
             str(item) for item in missing_evidence if str(item or "").strip()
         ]
+    else:
+        properties.pop(METIS_MISSING_EVIDENCE_KEY, None)
+
+    threat_model_policy = metadata.get("threat_model_policy")
+    if isinstance(threat_model_policy, dict):
+        properties[METIS_THREAT_MODEL_POLICY_KEY] = dict(threat_model_policy)
+    else:
+        properties.pop(METIS_THREAT_MODEL_POLICY_KEY, None)

@@ -8,6 +8,14 @@ import logging
 
 from metis.engine.options import TriageOptions
 from metis.engine.graphs.types import TriageRequest
+from metis.memory import MemoryService
+
+from .threat_context_retrieval import (
+    format_threat_model_context,
+    get_threat_model_context,
+    threat_model_scope_policy,
+    threat_model_triage_override,
+)
 from metis.sarif.triage import (
     apply_triage_result,
     extract_findings,
@@ -20,6 +28,8 @@ logger = logging.getLogger("metis")
 
 
 class TriageServiceExecutionMixin:
+    memory_service: MemoryService | None
+
     def _invoke_callback(self, callback, *args, **kwargs) -> None:
         if not callable(callback):
             return
@@ -72,10 +82,23 @@ class TriageServiceExecutionMixin:
         *,
         debug_callback,
     ) -> dict:
+        threat_model_context = get_threat_model_context(self.memory_service)
+        policy = threat_model_scope_policy(
+            threat_model_context,
+            path=finding.file_path,
+        )
+        override = threat_model_triage_override(policy)
+        if override is not None:
+            return override
         if self._supports_reachability_triage(finding.file_path):
             del debug_callback
             return self.reachability_service.triage_finding(
-                self._reachability_triage_request(finding),
+                self._reachability_triage_request(
+                    finding,
+                    threat_model_context=format_threat_model_context(
+                        threat_model_context
+                    ),
+                ),
                 options=self._reachability_triage_options(),
                 model_tools=self.model_tools,
                 model_tool_max_rounds=self.model_tool_max_rounds,
@@ -85,6 +108,7 @@ class TriageServiceExecutionMixin:
             finding=finding,
             debug_callback=debug_callback,
         )
+        req["threat_model_context"] = threat_model_context
         return self._get_thread_triage_graph().triage(req)
 
     def _record_triage_success(self, triaged_payload: dict, finding, decision: dict):
@@ -98,6 +122,7 @@ class TriageServiceExecutionMixin:
                 "evidence_requirements": decision.get("evidence_obligations"),
                 "evidence_coverage": decision.get("evidence_coverage"),
                 "missing_evidence": decision.get("missing_evidence"),
+                "threat_model_policy": decision.get("threat_model_policy"),
             },
         )
 

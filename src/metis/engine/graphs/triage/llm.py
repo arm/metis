@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from metis.engine.threat_context_retrieval import format_threat_model_context
+
 from .debug import _emit_debug
 from ..types import TriageState
 
@@ -29,6 +31,17 @@ def _build_user_prompt(state: TriageState) -> str:
         if guidance:
             sections.append(f"- navigation guidance: {guidance}\n")
         sections.append("\n")
+    threat_model_context = format_threat_model_context(
+        state.get("threat_model_context", [])
+    )
+    if threat_model_context:
+        sections.extend(
+            [
+                "Authoritative Threat-Model Context:\n",
+                threat_model_context,
+                "\n\n",
+            ]
+        )
     return "".join(sections)
 
 

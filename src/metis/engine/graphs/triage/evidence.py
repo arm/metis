@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import re
+from typing import cast
+
 
 from . import constants as C
 from ..types import TriageState
@@ -121,7 +123,7 @@ def _finalize_evidence_pack_state(
     evidence_pack = "\n\n".join(sections)
     if len(evidence_pack) > C.EVIDENCE_PACK_MAX_CHARS:
         evidence_pack = evidence_pack[: C.EVIDENCE_PACK_MAX_CHARS] + "\n...[truncated]"
-    new_state: TriageState = dict(state)
+    new_state = cast(TriageState, dict(state))
     new_state["evidence_pack"] = evidence_pack
     return new_state
 

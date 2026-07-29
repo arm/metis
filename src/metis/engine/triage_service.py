@@ -6,6 +6,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable
 
+from metis.memory import MemoryService
 from metis.usage import UsageHooks
 
 from .triage_service_exec import TriageServiceExecutionMixin
@@ -34,6 +35,7 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         model_tool_max_rounds: int | None = None,
         reachability_service: Any = None,
         reachability_settings: dict[str, Any] | None = None,
+        memory_service: MemoryService | None = None,
     ):
         self.codebase_path = codebase_path
         self.llm_provider = llm_provider
@@ -50,5 +52,6 @@ class TriageService(TriageServiceRuntimeMixin, TriageServiceExecutionMixin):
         self.model_tool_max_rounds = model_tool_max_rounds
         self.reachability_service = reachability_service
         self.reachability_settings = dict(reachability_settings or {})
+        self.memory_service = memory_service
 
         self._triage_graph_local = threading.local()
