@@ -229,7 +229,19 @@ def _memory_config(raw_config: object) -> dict[str, object]:
 
 def _threat_model_config(value: object) -> dict[str, object]:
     config = value if isinstance(value, dict) else {}
-    return {"source_patterns": string_list(config.get("source_patterns"))}
+    history = config.get("history")
+    if not isinstance(history, dict):
+        history = {}
+    return {
+        "source_patterns": string_list(config.get("source_patterns")),
+        "history": {
+            "enabled": history.get("enabled") is True,
+            "max_commits": _positive_int(
+                history.get("max_commits"),
+                fallback=500,
+            ),
+        },
+    }
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

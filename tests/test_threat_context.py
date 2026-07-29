@@ -7,7 +7,9 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 import metis.engine.threat_context as threat_context
+import metis.engine.threat_context_history as threat_context_history
 from metis.engine.threat_context import initialize_threat_model_memory
+from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.memory import MemoryService
 
 
@@ -23,6 +25,7 @@ def _config(tmp_path):
         codebase_path=str(repo),
         threat_model_config={
             "source_patterns": ["SECURITY.*"],
+            "history": {"enabled": False},
         },
         plugin_config={
             "docs": {"supported_extensions": [".md", ".html", ".txt", ".pdf", ".rst"]}
@@ -123,6 +126,54 @@ def test_initialize_threat_model_memory_preserves_snapshot_on_model_failure(
     )
     assert preserved is not None
     assert preserved.summary_text == "Known-good threat-model contract."
+
+
+def test_history_memory_is_advisory_and_path_scoped(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    config.threat_model_config["history"] = {
+        "enabled": True,
+        "max_commits": 50,
+    }
+    config.llm_provider = SimpleNamespace(count_tokens=lambda text: len(text))
+    config.llama_query_model = "test-model"
+    commits = [
+        {
+            "commit": "abc123",
+            "date": "2026-07-29",
+            "message": "Harden image bounds validation",
+            "paths": ["src/image/parser.c"],
+        }
+    ]
+    monkeypatch.setattr(
+        threat_context_history,
+        "_git_history",
+        lambda *_args: commits,
+    )
+    monkeypatch.setattr(
+        threat_context_history,
+        "invoke_langchain_json_prompt_with_retry",
+        lambda *_args, **_kwargs: [
+            {
+                "statement": "Image parsing has required bounds hardening.",
+                "applies_to": ["src/image"],
+                "source_commit_indexes": [0],
+            }
+        ],
+    )
+
+    initialize_threat_model_memory(config)
+
+    matching = get_threat_model_context(
+        config.memory_service,
+        path="src/image/parser.c",
+    )
+    unrelated = get_threat_model_context(
+        config.memory_service,
+        path="src/network/socket.c",
+    )
+    assert matching[0]["metadata"]["authority"] == "history_derived"
+    assert matching[0]["metadata"]["scope_clauses"] == []
+    assert unrelated == []
 
 
 def test_initialize_threat_model_memory_uses_configured_sources_only(tmp_path):

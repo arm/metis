@@ -148,7 +148,7 @@ def test_triage_user_prompt_includes_language_navigation_guidance():
     assert "Language Context:" in prompt
     assert "- language: python" in prompt
     assert "Inspect decorators and validators first." in prompt
-    assert "Authoritative Threat-Model Context:" in prompt
+    assert "Threat-Model Context:" in prompt
     assert "Callers validate input." in prompt
 
 

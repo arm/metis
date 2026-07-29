@@ -169,7 +169,10 @@ class ReviewService:
 
         language_prompts = plugin.get_prompts()
         relative_path = os.path.relpath(file_path, base_path)
-        threat_model_context = get_threat_model_context(self._config.memory_service)
+        threat_model_context = get_threat_model_context(
+            self._config.memory_service,
+            path=relative_path,
+        )
 
         try:
             req: ReviewRequest = {
@@ -329,7 +332,10 @@ class ReviewService:
             if not snippet:
                 continue
             language_prompts = plugin.get_prompts()
-            threat_model_context = get_threat_model_context(self._config.memory_service)
+            threat_model_context = get_threat_model_context(
+                self._config.memory_service,
+                path=relative_path,
+            )
             try:
                 original_content = read_file_content(abs_path)
                 req: ReviewRequest = {

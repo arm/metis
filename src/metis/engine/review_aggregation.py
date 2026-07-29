@@ -103,9 +103,12 @@ class ReviewResultAggregator:
 
         candidates = []
         candidate_refs = []
-        threat_model_context = get_threat_model_context(self._config.memory_service)
         for group_index, item_index, item in _iter_review_items(review_groups):
             if needs_reachability_validation(item):
+                threat_model_context = get_threat_model_context(
+                    self._config.memory_service,
+                    path=str(item.get("primary_file") or ""),
+                )
                 candidate_refs.append((group_index, item_index))
                 candidates.append(
                     review_validation_payload(
