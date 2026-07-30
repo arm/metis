@@ -5,19 +5,22 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
-from metis.engine.threat_context_retrieval import threat_model_scope_policy
+from metis.engine.prompt_catalog import get_engine_prompts
+from metis.engine.review_finding_adapter import safe_float as _safe_float
 from metis.engine.review_finding_adapter import (
-    safe_float as _safe_float,
     split_reachability_reasoning as _split_reachability_reasoning,
 )
+from metis.engine.threat_context_retrieval import threat_model_scope_policy
 from metis.utils import parse_json_output
 
-from .llm_runner import JsonPromptRequest, JsonPromptRunner
+from .llm_runner import JsonPromptRequest
+from .llm_runner import JsonPromptRunner
 from .reachability.finding_values import _safe_int
-from .source import SourceMap
 from .reachability.workers import run_reachability_jobs
+from .source import SourceMap
 
 logger = logging.getLogger("metis")
 
@@ -25,54 +28,7 @@ _REVIEW_VALIDATION_BATCH_SIZE = 10
 _REVIEW_VALIDATION_SEVERITY_RANK = dict(
     zip("critical high medium low".split(), range(4), strict=True)
 )
-_REVIEW_VALIDATION_SYSTEM_PROMPT = """You validate reachability security review findings before the final report.
-
-You receive candidate findings from an automated review. Be conservative when
-dropping findings: this pass should reduce obvious fakes, weak speculation, and
-duplicates while preserving plausible security bug candidates.
-
-For each candidate:
-- keep=true when the finding describes a plausible security bug candidate
-  supported by the supplied evidence and code context.
-- Do not drop credible memory-safety, bounds, arithmetic, lifetime, race,
-  resource-exhaustion, cleanup, or accounting findings merely because practical
-  exploitability is not fully proven.
-- keep=false only for clear false positives, unsupported speculation, generic
-  style issues, missing-prerequisite reports, or duplicates already represented
-  by a stronger candidate in the same batch.
-- When keep=false, set drop_reason to a concise snake_case reason. Use
-  drop_reason=duplicate for duplicate drops. Leave drop_reason empty when
-  keep=true or when the only concern is that practical exploitability is not
-  fully proven.
-- Calibrate confidence as a number from 0.0 to 1.0 based on evidence quality,
-  source/sink specificity, exploitability prerequisites, and code support.
-- Do not add findings or rewrite the report. Only decide keep/drop and
-  confidence/drop_reason for the provided indexes.
-
-Return JSON only:
-{
-  "decisions": [
-    {
-      "index": 0,
-      "keep": true,
-      "confidence": 0.82,
-      "drop_reason": "",
-      "reason": "Concise validation reason."
-    }
-  ]
-}"""
-
-_THREAT_MODEL_VALIDATION_GUIDANCE = """
-
-Authoritative threat-model context is supplied with these candidates:
-- Treat it as binding. When a caller contract directly assigns input,
-  operation, buffer, or pointer validity to callers or integrators, keep=false
-  when the candidate depends on violating that prerequisite, regardless of the
-  resulting internal failure mode. Use
-  drop_reason=authoritative_threat_model_integration_risk.
-- Do not apply an unrelated caller contract. Keep an implementation defect only
-  when the evidence shows it remains reachable with contract-compliant inputs.
-"""
+_PROMPTS = get_engine_prompts("review_validation")
 
 
 class _ReviewValidationDecisionModel(BaseModel):
@@ -147,7 +103,7 @@ class ReviewFindingValidator:
         return _rescue_filtered_duplicate_cluster_representatives(candidates, decisions)
 
     def invoke_batch(self, batch, *, model, reasoning_effort=None):
-        system_prompt = _REVIEW_VALIDATION_SYSTEM_PROMPT
+        system_prompt = _PROMPTS["system"]
         threat_model_context = next(
             (
                 candidate["threat_model_context"]
@@ -160,7 +116,7 @@ class ReviewFindingValidator:
             record["metadata"]["authority"] == "authoritative"
             for record in threat_model_context
         ):
-            system_prompt += _THREAT_MODEL_VALIDATION_GUIDANCE
+            system_prompt += "\n\n" + _PROMPTS["threat_model_guidance"]
         validation_input: dict[str, Any] = {
             "candidate_findings": [
                 {
@@ -180,11 +136,7 @@ class ReviewFindingValidator:
                 max_tokens=6000,
                 temperature=0.0,
                 system_prompt=system_prompt,
-                user_prompt=(
-                    "Review validation input JSON:\n{validation_input}\n\n"
-                    "Return exactly one JSON object with a top-level "
-                    '"decisions" array. Do not return markdown or prose.'
-                ),
+                user_prompt=_PROMPTS["user"],
                 variables={
                     "validation_input": json.dumps(
                         validation_input,

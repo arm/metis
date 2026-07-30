@@ -3,21 +3,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import partial
 import json
 import logging
 import re
+from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from metis.engine.graphs.schemas import TriageDecisionModel
-from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.prompt_catalog import get_engine_prompts
 from metis.utils import parse_json_output
 
 from .file_focus import FileFocusBuilder
-from .graph_utils import _build_reverse_edges, _node_sort_key
+from .graph_utils import _build_reverse_edges
+from .graph_utils import _node_sort_key
 from .options import ReachabilityReviewOptions
-from .source_context import _read_function_body, _read_line_context
+from .source_context import _read_function_body
+from .source_context import _read_line_context
 
 logger = logging.getLogger("metis")
 
@@ -26,6 +30,7 @@ _MAX_RELATED_FUNCTIONS = 14
 _MAX_PATHS = 10
 _RELATED_FUNCTION_CHARS = 2600
 _TARGET_FUNCTION_CHARS = 7000
+_PROMPTS = get_engine_prompts("reachability_triage")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,9 +162,9 @@ class ReachabilityTriageRunner:
         max_tool_rounds: int | None,
         label: str,
     ) -> TriageDecisionModel | None:
-        system_prompt = _SYSTEM_PROMPT
+        system_prompt = _PROMPTS["system"]
         if finding.threat_model_context:
-            system_prompt += _THREAT_MODEL_GUIDANCE
+            system_prompt += "\n\n" + _PROMPTS["threat_model_guidance"]
         threat_model_section = ""
         if finding.threat_model_context:
             threat_model_section = (
@@ -171,7 +176,7 @@ class ReachabilityTriageRunner:
                 max_tokens=5000,
                 temperature=0.1,
                 system_prompt=system_prompt,
-                user_prompt=_USER_PROMPT,
+                user_prompt=_PROMPTS["user"],
                 variables={
                     "finding": _finding_section(finding),
                     "reachability_context": context,
@@ -590,60 +595,3 @@ def _decision_dict(decision: TriageDecisionModel) -> dict[str, Any]:
         if decision.status == "inconclusive"
         else [],
     }
-
-
-_SYSTEM_PROMPT = """\
-You triage one C/C++ static-analysis finding using tree-sitter reachability context.
-Do not discover new findings. Decide only whether the reported finding is valid,
-invalid, or inconclusive for the shown codebase.
-
-Use the reachability graph context as primary evidence:
-- reported line and enclosing function
-- direct callers, wrappers, callees, and unresolved calls
-- source-to-target or target-to-sink paths when available
-- globals, registration tables, callback tables, and initializers
-
-If the target is marked public_or_external_entrypoint, treat that as an
-API-surface entrypoint even when direct_callers is <none>. Do not require an
-internal caller for that classification, but still require concrete evidence for
-the reported bug's input provenance, guard behavior, data bounds, or API
-contract. If the target is internal_or_unknown and direct_callers is <none>, be
-conservative and mark inconclusive unless other cited evidence proves
-reachability.
-
-You may call navigation tools when the context is missing a concrete definition,
-macro, guard, caller, wrapper, table registration, build/config gate, or nearby line.
-Keep navigation calls narrow and cite file:line evidence.
-
-Verdict rules:
-- valid: the reported defect is present and reachable through the shown caller,
-  wrapper, table, or path context.
-- invalid: shown evidence directly contradicts the claim, proves a guarding
-  precondition, or shows the claimed path/use is not reachable.
-- inconclusive: a required caller, wrapper, entrypoint, macro, build gate, or
-  input-provenance hop remains unresolved.
-
-Return exactly one JSON object matching this schema:
-- status: exactly one of "valid", "invalid", or "inconclusive"
-- reason: non-empty concise justification
-- evidence: array of concrete file:line citations supporting the verdict
-- resolution_chain: array of static-analysis hops from the reported claim to evidence
-- unresolved_hops: array of missing callers, wrappers, aliases, macros, build gates,
-  entrypoints, or provenance gaps; non-empty when status is "inconclusive"
-
-Return JSON only. Do not wrap it in markdown."""
-
-_USER_PROMPT = """\
-Reported finding:
-{finding}
-
-Reachability context:
-{reachability_context}
-{threat_model_section}
-"""
-
-_THREAT_MODEL_GUIDANCE = """
-
-Treat entries labelled authoritative as binding only when their scope applies
-to the reported file or call path. Treat history-derived entries as advisory
-review context."""
