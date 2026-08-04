@@ -1,25 +1,27 @@
-# Index Tool Contract
+# Index Model-Tool Contract
 
-The `index` tool owns vector-index-backed retrieval over code and
-documentation. When `--tools index` is enabled, it exposes the model-callable
-LangChain tool `index_search`.
+The `index` capability owns vector-index-backed retrieval over code and
+documentation. This contract governs its model-callable `index_search` tool.
+Execution YAML decides which nodes receive the capability.
 
 Model-callable input:
 
 - `query`: short human-readable context question. State what you need to
   understand, include important symbols, APIs, files, or architecture terms as
   anchors, and do not submit a keyword-only search string.
-- `top_k`: optional nearest-neighbor count, capped by the index tool manifest.
-- `max_chars`: optional output budget, capped by the index tool manifest.
+- `top_k`: optional nearest-neighbor count, capped by the selected runtime
+  configuration.
+- `max_chars`: optional output budget, capped by the selected runtime
+  configuration.
 - `source`: optional retrieval source: `docs`, `code`, or `both`.
 
 Model usage rules:
 
 - When `index_search` is available during `review_code`, use it as an evidence
   calibration aid, not as a recall booster or finding filter.
-- Do not apply a numeric reporting threshold from this contract. The index tool
-  should improve confidence by supplying relevant project facts, not by changing
-  reporting thresholds.
+- Do not apply a numeric reporting threshold from this contract. The index
+  capability should improve confidence by supplying relevant project facts,
+  not by changing reporting thresholds.
 - Prefer fewer, better-supported findings. For each candidate, ask whether the
   security impact depends on a project-level trust boundary or caller
   responsibility not visible in the file.

@@ -2,18 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from dataclasses import replace
 import tempfile
 import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from metis.configuration import load_execution_config
 from metis.engine import MetisEngine
-from metis.exceptions import (
-    PluginNotFoundError,
-    RetrieverInitError,
-    ToolDisabledError,
-)
+from metis.engine.capabilities.engine import EngineCapabilities
+from metis.engine.nodes.reachability.review import ReachabilityReviewService
+from metis.engine.stages.review.models import ReviewCommand
+from metis.engine.stages.review.models import ReviewRun
+from metis.engine.stages.review.models import ReviewStatus
+from metis.engine.stages.review.models import StandardReviewResult
+from metis.engine.tools.index import index_model_tools
+from metis.exceptions import RetrieverInitError
 from metis.usage import UsageRuntime
+from metis.runtime_settings import CapabilityRuntimeSettings
 
 
 def _embedding_provider(code_embedding_model=None, docs_embedding_model=None):
@@ -23,25 +30,13 @@ def _embedding_provider(code_embedding_model=None, docs_embedding_model=None):
     return provider
 
 
-def test_supported_languages():
-    langs = MetisEngine.supported_languages()
-    assert "c" in langs
-    assert "python" in langs
-    assert "rust" in langs
-    assert "typescript" in langs
+def _execution_with_index() -> dict[str, object]:
+    execution = load_execution_config()
+    execution["stages"]["initialize"]["nodes"]["index"] = {"capabilities": ["index"]}
+    return execution
 
 
-def test_get_existing_plugin(engine):
-    plugin = engine.get_plugin_from_name("c")
-    assert plugin.get_name().lower() == "c"
-
-
-def test_get_missing_plugin_raises(engine):
-    with pytest.raises(PluginNotFoundError):
-        engine.get_plugin_from_name("nonexistent")
-
-
-def test_init_and_get_retrievers_raises_on_missing_backend():
+def test_index_capability_rejects_missing_retrievers(capability_settings):
     bad_backend = Mock()
     bad_backend.init = Mock()
     bad_backend.get_retrievers = Mock(return_value=(None, None))
@@ -53,13 +48,14 @@ def test_init_and_get_retrievers_raises_on_missing_backend():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
     with pytest.raises(RetrieverInitError):
-        engine._init_and_get_retrievers()
+        engine.capabilities["index"].get_retrievers()
 
 
-def test_init_and_get_default_unavailable_metisignore(caplog):
+def test_init_and_get_default_unavailable_metisignore(caplog, capability_settings):
     caplog.set_level(logging.INFO, logger="metis")
     bad_backend = Mock()
     bad_backend.init = Mock()
@@ -71,9 +67,9 @@ def test_init_and_get_default_unavailable_metisignore(caplog):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
+        capability_settings=capability_settings,
         metisignore_file=".metisignore_file",
     )
-    assert engine.metisignore_file == ".metisignore_file"
     assert engine.repository.load_metisignore() is None
     assert engine.repository.load_metisignore() is None
     assert not any(
@@ -82,7 +78,7 @@ def test_init_and_get_default_unavailable_metisignore(caplog):
     )
 
 
-def test_init_and_get_default_available_metisignore():
+def test_init_and_get_default_available_metisignore(capability_settings):
     bad_backend = Mock()
     bad_backend.init = Mock()
     bad_backend.get_retrievers = Mock(return_value=(None, None))
@@ -97,14 +93,16 @@ def test_init_and_get_default_available_metisignore():
             max_token_length=2048,
             llama_query_model="gpt-test",
             similarity_top_k=3,
+            capability_settings=capability_settings,
             metisignore_file=temp_file.name,
         )
         assert engine.repository.load_metisignore() is not None
-        assert engine.metisignore_file == temp_file.name
     assert engine is not None
 
 
-def test_init_and_get_retrievers_is_thread_safe():
+def test_index_capability_initializes_retrievers_once_across_threads(
+    capability_settings,
+):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -116,13 +114,15 @@ def test_init_and_get_retrievers_is_thread_safe():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
     results = []
+    index = engine.capabilities["index"]
 
     def _worker():
-        results.append(engine._init_and_get_retrievers())
+        results.append(index.get_retrievers())
 
     threads = [threading.Thread(target=_worker) for _ in range(8)]
     for thread in threads:
@@ -135,7 +135,9 @@ def test_init_and_get_retrievers_is_thread_safe():
     backend.get_retrievers.assert_called_once()
 
 
-def test_index_context_builds_embed_models_lazily_with_usage_callback_manager():
+def test_index_capability_builds_embed_models_lazily_with_usage_callback_manager(
+    capability_settings,
+):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -154,30 +156,88 @@ def test_index_context_builds_embed_models_lazily_with_usage_callback_manager():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
     embedding_provider.get_embed_model_code.assert_not_called()
     embedding_provider.get_embed_model_docs.assert_not_called()
 
-    assert engine.index_context.get_embedding_models() == (
+    assert engine.capabilities["index"].get_embedding_models() == (
         code_embed_model,
         docs_embed_model,
     )
     assert embedding_provider.get_embed_model_code.call_args.kwargs == {
-        "callback_manager": engine.usage_runtime.hooks.callback_manager
+        "callback_manager": engine._config.usage_runtime.hooks.callback_manager
     }
     assert embedding_provider.get_embed_model_docs.call_args.kwargs == {
-        "callback_manager": engine.usage_runtime.hooks.callback_manager
+        "callback_manager": engine._config.usage_runtime.hooks.callback_manager
     }
     assert backend.embed_model_code is code_embed_model
     assert backend.embed_model_docs is docs_embed_model
 
 
-def test_index_tool_exposes_langchain_search_tool(engine):
-    engine.vector_backend.get_retrievers.reset_mock()
+def test_direct_index_api_requests_capability_outside_graph(
+    capability_settings: CapabilityRuntimeSettings,
+) -> None:
+    engine = MetisEngine(
+        vector_backend=Mock(),
+        llm_provider=Mock(),
+        embedding_provider=_embedding_provider(),
+        max_workers=2,
+        max_token_length=2048,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        capability_settings=capability_settings,
+    )
 
-    tools = engine.tools.langchain_tools()
+    assert "index" not in engine.capabilities
+    assert engine.indexing is engine.capabilities.require("index").indexing
+
+
+def test_engine_closes_capability_after_graph_startup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capability_settings: CapabilityRuntimeSettings,
+) -> None:
+    backend = Mock()
+
+    def fail_after_index_construction(
+        *_args: object,
+        capabilities: EngineCapabilities,
+        **_kwargs: object,
+    ) -> None:
+        capabilities["index"]
+        raise RuntimeError("invalid graph")
+
+    monkeypatch.setattr(
+        "metis.engine.nodes.builtins.ExecutionGraphService",
+        fail_after_index_construction,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid graph"):
+        MetisEngine(
+            vector_backend=backend,
+            llm_provider=Mock(),
+            embedding_provider=_embedding_provider(),
+            max_workers=2,
+            max_token_length=2048,
+            llama_query_model="gpt-test",
+            similarity_top_k=3,
+            capability_settings=capability_settings,
+            execution_config=_execution_with_index(),
+        )
+
+    backend.close.assert_called_once_with()
+
+
+def test_index_tool_exposes_langchain_search_tool(engine, dummy_backend):
+    dummy_backend.get_retrievers.reset_mock()
+
+    tools = index_model_tools(
+        engine.capabilities["index"],
+        engine.capabilities.manifest("index"),
+        max_contract_chars=6000,
+    )
 
     assert [tool.name for tool in tools] == ["index_search"]
     assert "keyword-only" in tools[0].args_schema["properties"]["query"]["description"]
@@ -190,60 +250,14 @@ def test_index_tool_exposes_langchain_search_tool(engine):
     result = tools[0].invoke({"query": "allocator ownership"})
     assert "Code result" not in result
     assert "Docs result" in result
-    assert [
-        call.args[1] for call in engine.vector_backend.get_retrievers.call_args_list
-    ] == [
+    assert [call.args[1] for call in dummy_backend.get_retrievers.call_args_list] == [
         4,
     ]
 
 
-def test_navigation_tool_exposes_triage_model_tools_without_review_tools(tmp_path):
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    (tmp_path / "a.py").write_text("alpha\nbeta\n", encoding="utf-8")
-    engine = MetisEngine(
-        codebase_path=str(tmp_path),
-        vector_backend=backend,
-        llm_provider=Mock(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools={"navigation"},
-    )
-
-    review_tools = engine.tools.langchain_tools()
-    triage_tools = engine.tools.triage_langchain_tools()
-
-    assert review_tools == ()
-    assert [tool.name for tool in triage_tools] == ["grep", "find_name", "cat", "sed"]
-    assert triage_tools[0].metadata["metis_contract_max_chars"] == 6000
-    assert engine.tools.model_tool_max_rounds() is None
-    assert engine.tools.triage_model_tool_max_rounds() == 6
-    assert "a.py:2:beta" in triage_tools[0].invoke({"pattern": "beta", "path": "."})
-
-
-def test_navigation_tool_omits_triage_model_tools_when_disabled(tmp_path):
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    engine = MetisEngine(
-        codebase_path=str(tmp_path),
-        vector_backend=backend,
-        llm_provider=Mock(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools=set(),
-    )
-
-    assert engine.tools.triage_langchain_tools() == ()
-    assert engine.tools.triage_model_tool_max_rounds() is None
-
-
-def test_memory_service_rejects_paths_outside_codebase(tmp_path, dummy_backend):
+def test_memory_service_rejects_paths_outside_codebase(
+    tmp_path, dummy_backend, capability_settings
+):
     codebase = tmp_path / "repo"
     codebase.mkdir()
     outside = tmp_path / "outside.sqlite3"
@@ -256,15 +270,17 @@ def test_memory_service_rejects_paths_outside_codebase(tmp_path, dummy_backend):
             max_token_length=2048,
             llama_query_model="gpt-test",
             similarity_top_k=3,
+            capability_settings=capability_settings,
             memory_config={
-                "enabled": True,
                 "backend": "sqlite",
                 "location": str(outside),
             },
         )
 
 
-def test_init_codebase_populates_memory(tmp_path, dummy_backend):
+def test_init_codebase_populates_memory_without_index(
+    tmp_path, dummy_backend, capability_settings
+):
     codebase = tmp_path / "repo"
     codebase.mkdir()
     (codebase / "SECURITY.md").write_text(
@@ -279,9 +295,8 @@ def test_init_codebase_populates_memory(tmp_path, dummy_backend):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools=set(),
+        capability_settings=capability_settings,
         memory_config={
-            "enabled": True,
             "backend": "sqlite",
             "location": "memory.sqlite3",
         },
@@ -289,8 +304,7 @@ def test_init_codebase_populates_memory(tmp_path, dummy_backend):
             "source_patterns": ["SECURITY.*"],
         },
     )
-
-    result = engine.init_codebase(include_index=False)
+    result = engine.init_codebase()
     assert engine._config.memory_service is not None
     context = engine._config.memory_service.search_records(
         ("repo", "threat_model", "authoritative"),
@@ -298,12 +312,51 @@ def test_init_codebase_populates_memory(tmp_path, dummy_backend):
         limit=3,
     )
 
-    assert result["index"] == {"status": "skipped"}
+    assert "index" not in result
+    assert result["threat_model"]["authoritative_sources"] == ["SECURITY.md"]
     assert context
     assert context[0].metadata["binding"] is True
 
 
-def test_index_search_uses_manifest_tool_config(monkeypatch):
+@pytest.mark.parametrize("mode", ["code", "file"])
+def test_execute_review_routes_through_default_reachability_graph(
+    engine,
+    monkeypatch,
+    mode,
+):
+    review = {
+        "file": "test.c",
+        "reviews": [
+            {
+                "issue": "unchecked input",
+                "severity": "medium",
+                "line_number": 4,
+                "suggestion": "validate input",
+            }
+        ],
+    }
+    commands = []
+
+    def run_review(_service, command, **_kwargs):
+        commands.append(command)
+        return ReviewRun(
+            ReviewStatus.SUCCEEDED,
+            StandardReviewResult.model_validate({"reviews": [review]}),
+        )
+
+    monkeypatch.setattr(ReachabilityReviewService, "run_review", run_review)
+    target = str(Path(engine.codebase_path) / "test.c") if mode == "file" else None
+
+    outputs = engine.execute_review(mode, target=target)
+
+    assert outputs["findings"]["reviews"] == [review]
+    assert outputs["sarif"]["runs"][0]["results"][0]["message"]["text"] == (
+        "unchecked input"
+    )
+    assert commands == [ReviewCommand(mode=mode, target=target)]
+
+
+def test_index_search_uses_runtime_capability_config(capability_settings):
     class _Doc:
         def __init__(self, text):
             self.page_content = text
@@ -316,19 +369,18 @@ def test_index_search_uses_manifest_tool_config(monkeypatch):
             Mock(get_relevant_documents=Mock(return_value=[_Doc("D" * 100)])),
         )
     )
-    monkeypatch.setattr(
-        "metis.engine.tools.catalog.get_tool_config",
-        lambda _name: {
-            "search": {
-                "max_top_k": 3,
-                "code_top_k": 1,
-                "docs_top_k": 2,
-                "docs_char_ratio": 0.75,
-                "default_max_chars": 40,
-                "max_chars": 40,
-            }
-        },
-    )
+    configurations = dict(capability_settings.configurations)
+    configurations["index"] = {
+        "search": {
+            "max_top_k": 3,
+            "code_top_k": 1,
+            "docs_top_k": 2,
+            "docs_char_ratio": 0.75,
+            "default_max_chars": 40,
+            "max_chars": 40,
+        }
+    }
+    capability_settings = replace(capability_settings, configurations=configurations)
 
     engine = MetisEngine(
         vector_backend=backend,
@@ -338,16 +390,19 @@ def test_index_search_uses_manifest_tool_config(monkeypatch):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
-    result = engine.tools.index.search("allocator ownership", top_k=99, max_chars=99)
+    result = engine.capabilities["index"].search(
+        "allocator ownership", top_k=99, max_chars=99
+    )
 
     assert [call.args[1] for call in backend.get_retrievers.call_args_list] == [1, 2]
     assert result.count("[truncated]") == 2
 
 
-def test_index_search_can_retrieve_docs_only(monkeypatch):
+def test_index_search_can_retrieve_docs_only(capability_settings):
     class _Doc:
         def __init__(self, text):
             self.page_content = text
@@ -357,19 +412,18 @@ def test_index_search_can_retrieve_docs_only(monkeypatch):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=(code_retriever, docs_retriever))
-    monkeypatch.setattr(
-        "metis.engine.tools.catalog.get_tool_config",
-        lambda _name: {
-            "search": {
-                "max_top_k": 1,
-                "code_top_k": 1,
-                "docs_top_k": 1,
-                "docs_char_ratio": 0.7,
-                "default_max_chars": 5000,
-                "max_chars": 7000,
-            }
-        },
-    )
+    configurations = dict(capability_settings.configurations)
+    configurations["index"] = {
+        "search": {
+            "max_top_k": 1,
+            "code_top_k": 1,
+            "docs_top_k": 1,
+            "docs_char_ratio": 0.7,
+            "default_max_chars": 5000,
+            "max_chars": 7000,
+        }
+    }
+    capability_settings = replace(capability_settings, configurations=configurations)
 
     engine = MetisEngine(
         vector_backend=backend,
@@ -379,10 +433,11 @@ def test_index_search_can_retrieve_docs_only(monkeypatch):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
-    result = engine.tools.index.search("trust boundary", source="docs")
+    result = engine.capabilities["index"].search("trust boundary", source="docs")
 
     assert "[CODE_CONTEXT]" not in result
     assert "[DOC_CONTEXT]" in result
@@ -391,35 +446,28 @@ def test_index_search_can_retrieve_docs_only(monkeypatch):
     docs_retriever.get_relevant_documents.assert_called_once_with("trust boundary")
 
 
-def test_create_retrievers_passes_usage_callback_manager():
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-
+def test_navigation_uses_runtime_limits(tmp_path, capability_settings):
+    (tmp_path / "sample.txt").write_text("0123456789\n", encoding="utf-8")
+    configurations = dict(capability_settings.configurations)
+    configurations["navigation"] = {"timeout_seconds": 3, "max_chars": 5}
+    capability_settings = replace(capability_settings, configurations=configurations)
     engine = MetisEngine(
-        vector_backend=backend,
+        codebase_path=str(tmp_path),
+        vector_backend=Mock(),
         llm_provider=Mock(),
-        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
     )
 
-    engine._create_retrievers(5)
-
-    assert (
-        backend.get_retrievers.call_args.kwargs["callback_manager"]
-        is engine.usage_runtime.hooks.callback_manager
-    )
-    assert (
-        backend.get_retrievers.call_args.kwargs["callbacks"]
-        == engine.usage_runtime.hooks.callbacks
+    assert engine.capabilities["navigation"].cat("sample.txt") == (
+        "1: 01\n...[truncated]"
     )
 
 
-def test_review_graph_uses_usage_callbacks(monkeypatch):
+def test_review_graph_uses_usage_callbacks(monkeypatch, capability_settings):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -429,11 +477,13 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
     engine = MetisEngine(
         vector_backend=backend,
         llm_provider=llm_provider,
+        embedding_provider=_embedding_provider(),
         max_workers=2,
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
     captured = {}
@@ -448,50 +498,32 @@ def test_review_graph_uses_usage_callbacks(monkeypatch):
         "metis.engine.llm_runner.JsonPromptRunner.invoke",
         _fake_runner,
     )
-    graph = engine._get_review_graph()
+    graph = engine._get_review_graph(engine.capabilities["index"])
     graph._invoke_review_model("system", "body")
 
     assert (
         captured["chat_model_kwargs"]["callbacks"]
-        == engine.usage_runtime.hooks.callbacks
+        == engine._config.usage_runtime.hooks.callbacks
     )
     assert [tool.name for tool in captured["model_tools"]] == ["index_search"]
     assert captured["max_tool_rounds"] == 6
 
 
-def test_review_graph_omits_model_tools_when_index_disabled(monkeypatch):
-    llm_provider = Mock()
-    llm_provider.get_chat_model.return_value = Mock(with_structured_output=Mock())
+@pytest.mark.parametrize("index_first", (False, True))
+def test_review_graph_cache_is_scoped_to_the_index_grant(engine, index_first):
+    index = engine.capabilities["index"]
+    first = engine._get_review_graph(index if index_first else None)
+    second = engine._get_review_graph(None if index_first else index)
 
-    engine = MetisEngine(
-        vector_backend=Mock(),
-        llm_provider=llm_provider,
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools=set(),
-    )
-
-    captured = {}
-
-    def _fake_runner(_runner, request):
-        captured["model_tools"] = request.model_tools
-        captured["max_tool_rounds"] = request.max_tool_rounds
-        return []
-
-    monkeypatch.setattr(
-        "metis.engine.llm_runner.JsonPromptRunner.invoke",
-        _fake_runner,
-    )
-    graph = engine._get_review_graph()
-    graph._invoke_review_model("system", "body")
-
-    assert captured["model_tools"] == ()
-    assert captured["max_tool_rounds"] is None
+    graphs = {index_first: first, not index_first: second}
+    assert graphs[False].model_tools == ()
+    assert [tool.name for tool in graphs[True].model_tools] == ["index_search"]
+    assert first is not second
 
 
-def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
+def test_engine_reuses_injected_runtime_and_backend_embed_models(
+    tmp_path, capability_settings
+):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -509,53 +541,22 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(tmp_path):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
         usage_runtime=runtime,
-        enabled_tools={"index"},
     )
 
-    assert engine.usage_runtime is runtime
-    assert engine.index_context.get_embedding_models() == (
+    assert engine._config.usage_runtime is runtime
+    assert engine.capabilities["index"].get_embedding_models() == (
         backend.embed_model_code,
         backend.embed_model_docs,
     )
     llm_provider.get_chat_model.assert_not_called()
 
 
-def test_engine_exposes_focused_services_without_compat_aliases():
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        embedding_provider=_embedding_provider(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools={"index"},
-    )
-
-    engine.review.review_code = Mock(return_value=iter([{"file": "a.py"}]))
-    engine.indexing.update_index = Mock()
-
-    results = list(engine.review.review_code())
-
-    assert engine.repository is not None
-    assert engine.index_context is not None
-    assert engine.tools.index is engine.index_context
-    assert engine.review is not None
-    assert engine.indexing is not None
-    assert engine.indexing is engine.index_context.indexing
-    assert not hasattr(engine, "embedding_provider")
-    assert not hasattr(engine, "review_service")
-    assert not hasattr(engine, "indexing_service")
-    assert results == [{"file": "a.py"}]
-    engine.indexing.update_index("diff --git")
-    engine.indexing.update_index.assert_called_once_with("diff --git")
-
-
-def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
+def test_index_prepare_nodes_resets_backend_index_when_supported(
+    monkeypatch, capability_settings
+):
     backend = Mock()
     backend.init = Mock()
     backend.reset_index = Mock()
@@ -571,7 +572,7 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
     )
 
     class _Reader:
@@ -581,7 +582,9 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
         def load_data(self):
             return []
 
-    monkeypatch.setattr("metis.engine.indexing_service.SimpleDirectoryReader", _Reader)
+    monkeypatch.setattr(
+        "metis.engine.capabilities.indexing.SimpleDirectoryReader", _Reader
+    )
     engine.indexing.index_prepare_nodes()
 
     embedding_provider.get_embed_model_code.assert_called_once()
@@ -590,7 +593,9 @@ def test_index_prepare_nodes_resets_backend_index_when_supported(monkeypatch):
     backend.reset_index.assert_called_once()
 
 
-def test_index_finalize_embeddings_delegates_node_writes_to_backend():
+def test_index_finalize_embeddings_delegates_node_writes_to_backend(
+    capability_settings,
+):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -606,7 +611,7 @@ def test_index_finalize_embeddings_delegates_node_writes_to_backend():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
     )
     engine._state.pending_nodes = (["code-node"], ["docs-node"])
 
@@ -617,12 +622,12 @@ def test_index_finalize_embeddings_delegates_node_writes_to_backend():
         ["docs-node"],
         embed_model_code=code_embed_model,
         embed_model_docs=docs_embed_model,
-        callback_manager=engine.usage_runtime.hooks.callback_manager,
+        callback_manager=engine._config.usage_runtime.hooks.callback_manager,
     )
     assert engine._state.pending_nodes is None
 
 
-def test_close_clears_retriever_cache_and_closes_backend():
+def test_close_clears_retriever_cache_and_closes_backend(capability_settings):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -636,10 +641,12 @@ def test_close_clears_retriever_cache_and_closes_backend():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=_execution_with_index(),
     )
 
-    assert engine._init_and_get_retrievers() == ("code-retriever", "docs-retriever")
+    index = engine.capabilities["index"]
+    assert index.get_retrievers() == ("code-retriever", "docs-retriever")
     assert backend.get_retrievers.call_count == 1
 
     engine.close()
@@ -648,34 +655,5 @@ def test_close_clears_retriever_cache_and_closes_backend():
     assert engine._state.retriever_docs is None
     backend.close.assert_called_once()
 
-    assert engine._init_and_get_retrievers() == ("code-retriever", "docs-retriever")
+    assert index.get_retrievers() == ("code-retriever", "docs-retriever")
     assert backend.get_retrievers.call_count == 2
-
-
-def test_disabled_index_tool_blocks_required_index_access():
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    backend.close = Mock()
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        enabled_tools=set(),
-    )
-
-    assert engine.tools.index.enabled is False
-    with pytest.raises(ToolDisabledError):
-        engine._init_and_get_retrievers()
-    with pytest.raises(ToolDisabledError):
-        engine.indexing.count_index_items()
-
-    engine.close()
-
-    backend.init.assert_not_called()
-    backend.get_retrievers.assert_not_called()
-    backend.close.assert_not_called()

@@ -1,16 +1,35 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
-from metis.engine.review_validation import (
+from metis.engine import MetisEngine
+from metis.engine.codegraph import CodeGraph
+from metis.engine.nodes.reachability.aggregation import ReviewResultAggregator
+from metis.engine.nodes.reachability.validation import (
     parse_review_validation_response,
     rescue_filtered_duplicate_cluster_representatives,
     review_validation_final_keep,
 )
-from metis.engine.review_reachability import ReachabilityReviewBackend
+from metis.engine.nodes.reachability.review import ReachabilityReviewService
+from metis.engine.stages.review.models import ReviewCommand
+from metis.engine.stages.review.models import ReviewRun
+from metis.engine.stages.review.models import ReviewStatus
+from metis.engine.stages.review.models import StandardReviewResult
+from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
+from metis.engine.nodes.simple_llm_review.service import TraditionalReviewOutcome
+
+
+def _simple_llm_review(engine: MetisEngine) -> SimpleLlmReviewService:
+    return SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda index: engine._get_review_graph(index),
+    )
 
 
 def test_ask_question(engine):
@@ -19,135 +38,231 @@ def test_ask_question(engine):
     assert "docs" in result
 
 
-def test_review_code_runs(engine):
-    engine.review.review_file = Mock(
-        return_value={"file": "test.py", "reviews": ["Issue"]}
+def test_simple_llm_review_processes_the_selected_scope(engine):
+    service = _simple_llm_review(engine)
+    files = (
+        str(Path(engine.codebase_path) / "supported.c"),
+        str(Path(engine.codebase_path) / "baseline.py"),
     )
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.py"]))
-    assert len(results) >= 1
-    assert all("reviews" in r for r in results)
+    service._repository.get_code_files = Mock(return_value=list(files))
+    service.execute_standard_review_with_outcome = Mock(
+        return_value=TraditionalReviewOutcome(
+            result={"reviews": []},
+            failures=(),
+            completed_files=2,
+        )
+    )
+
+    run = service.run_review(ReviewCommand(mode="code"))
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.diagnostics == ()
+    assert service.execute_standard_review_with_outcome.call_args.args == (files,)
 
 
-def _reachability(engine, result=None):
-    reachability = Mock()
-    reachability.review_codebase.return_value = result or []
-    reachability.adjudicate_final_findings = None
-    engine.review._reachability_backend = ReachabilityReviewBackend(
-        engine.review._config,
-        engine.review._repository,
-        reachability,
+def test_patch_review_uses_simple_llm_review(engine):
+    service = _simple_llm_review(engine)
+    service.review_patch = Mock(
+        return_value={
+            "reviews": [],
+            "overall_changes": "No security-relevant change.",
+        }
+    )
+
+    run = service.run_review(
+        ReviewCommand(mode="patch", target="change.patch"),
+    )
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result is not None
+    assert run.result.overall_changes == "No security-relevant change."
+    service.review_patch.assert_called_once_with(
+        "change.patch",
+        memory_service=None,
+        review_graph=engine._get_review_graph(),
+    )
+
+
+def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
+    fallback = Mock(spec=SimpleLlmReviewService)
+    fallback.run_files.return_value = ReviewRun(
+        ReviewStatus.SUCCEEDED,
+        StandardReviewResult.model_validate(
+            {"reviews": [{"file": "baseline.py", "reviews": [{"issue": "fallback"}]}]}
+        ),
+    )
+    service = ReachabilityReviewService(
+        engine._config,
+        engine.repository,
+        Mock(),
+        fallback,
         {},
     )
-    return reachability
-
-
-def test_review_code_uses_reachability_for_c_cpp(engine):
-    reachability = _reachability(
-        engine,
-        [{"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}],
+    c_file = str(Path(engine.codebase_path) / "supported.c")
+    python_file = str(Path(engine.codebase_path) / "baseline.py")
+    service._repository.get_code_files = Mock(return_value=[c_file, python_file])
+    service.supports_file = Mock(side_effect=lambda path: path.endswith(".c"))
+    service.codebase_reviews = Mock(
+        return_value=[{"file": "supported.c", "reviews": [{"issue": "reachable"}]}]
     )
-    engine.review.review_file = Mock(
-        return_value={"file": "test.c", "reviews": ["legacy"]}
-    )
-
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
-
-    assert results == [
-        {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
-    ]
-    reachability.review_codebase.assert_called_once()
-    options = reachability.review_codebase.call_args.kwargs["options"]
-    assert options.lens_profile == "review"
-    assert options.confirm_paths is False
-    engine.review.review_file.assert_not_called()
-
-
-def test_review_file_uses_focused_reachability_when_global_cache_empty(engine):
-    expected = {"file": "test.c", "reviews": [{"issue": "focused"}]}
-    reachability = _reachability(engine)
-    reachability.review_file.return_value = expected
-    engine.review._review_file_standard = Mock(
-        return_value={"file": "test.c", "reviews": ["legacy"]}
+    service.aggregate_results = Mock(
+        return_value={
+            "reviews": [{"file": "supported.c", "reviews": [{"issue": "reachable"}]}]
+        }
     )
 
-    result = engine.review.review_file("./tests/data/test.c")
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="metis.engine.nodes.reachability.review",
+    ):
+        run = service.run_review(
+            ReviewCommand(mode="code"),
+            codegraph=CodeGraph(),
+        )
 
-    assert result == expected
-    reachability.review_file.assert_called_once()
-    reachability.review_codebase.assert_not_called()
-    engine.review._review_file_standard.assert_not_called()
-
-
-def test_review_code_uses_legacy_for_non_c_cpp(engine):
-    reachability = _reachability(
-        engine,
-        [{"file": "ignored.c", "reviews": [{"issue": "Issue"}]}],
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result is not None
+    assert [
+        finding.issue for group in run.result.reviews for finding in group.reviews
+    ] == ["reachable", "fallback"]
+    assert run.diagnostics == ()
+    assert service.codebase_reviews.call_args.kwargs["files"] == (c_file,)
+    assert service.aggregate_results.call_args.kwargs["deduplicate"] is False
+    fallback.run_files.assert_called_once_with(
+        (python_file,),
+        memory_service=None,
+        index=None,
+        progress_callback=None,
     )
-    engine.review.review_file = Mock(
-        return_value={"file": "test.py", "reviews": ["legacy"]}
+    assert "using simple LLM review fallback" in caplog.text
+
+
+def test_file_review_aggregation_consolidates_before_validation(engine):
+    duplicate = {
+        "issue": "unchecked chunk length",
+        "primary_file": "pngrutil.c",
+        "primary_function": "png_handle_chunk",
+        "line_number": 42,
+        "analysis_type": "reachability",
+        "severity": "High",
+        "confidence": 0.9,
+    }
+    adjudicator = Mock(
+        return_value={
+            "groups": [
+                {
+                    "relationship": "duplicate",
+                    "member_indexes": [0, 1],
+                    "representative_index": 0,
+                }
+            ]
+        }
     )
-
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.py"]))
-
-    assert results == [{"file": "test.py", "reviews": ["legacy"]}]
-    reachability.review_codebase.assert_not_called()
-    engine.review.review_file.assert_called_once()
-
-
-def test_review_code_validates_reachability_results_before_returning(engine):
-    _reachability(
-        engine,
-        [
-            {
-                "file": "test.c",
-                "reviews": [
-                    {
-                        "issue": "real",
-                        "primary_file": "test.c",
-                        "primary_function": "target",
-                        "line_number": 10,
-                        "analysis_type": "reachability",
-                        "severity": "High",
-                        "confidence": 0.7,
-                        "reasoning": "Root cause: concrete bug",
-                    },
-                    {
-                        "issue": "fake",
-                        "primary_file": "test.c",
-                        "primary_function": "target",
-                        "line_number": 11,
-                        "analysis_type": "reachability",
-                        "severity": "Medium",
-                        "confidence": 0.8,
-                        "reasoning": "Root cause: speculative concern",
-                    },
-                ],
-            }
-        ],
+    aggregator = ReviewResultAggregator(
+        engine._config,
+        {},
+        final_adjudicator=adjudicator,
     )
-    engine.review._validate_review_candidates = Mock(
+    aggregator._validator.validate_candidates = Mock(
         return_value=[
-            {"index": 0, "keep": True, "confidence": 0.91, "reason": "concrete"},
             {
-                "index": 1,
-                "keep": False,
-                "confidence": 0.21,
-                "drop_reason": "unsupported_speculation",
-                "reason": "speculative",
-            },
+                "index": 0,
+                "keep": True,
+                "confidence": 0.9,
+                "reason": "reachable from parsed input",
+            }
         ]
     )
 
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
+    result = aggregator.aggregate(
+        {
+            "reviews": [
+                {"file": "pngread.c", "reviews": [duplicate, {"issue": "general"}]},
+                {"file": "pngrutil.c", "reviews": [dict(duplicate)]},
+            ]
+        }
+    )
 
-    assert len(results) == 1
-    assert [item["issue"] for item in results[0]["reviews"]] == ["real"]
-    assert results[0]["reviews"][0]["confidence"] == 0.91
-    assert results[0]["reviews"][0]["review_validation_keep"] is True
-    filtered = results[0]["review_validation_filtered_reviews"]
-    assert [item["issue"] for item in filtered] == ["fake"]
-    assert filtered[0]["review_validation_drop_reason"] == "unsupported_speculation"
-    assert filtered[0]["review_validation_reason"] == "speculative"
+    review_items = [item for group in result["reviews"] for item in group["reviews"]]
+    assert [item["issue"] for item in review_items] == [
+        "unchecked chunk length",
+        "general",
+    ]
+    assert result["review_validation_summary"]["total_candidates"] == 1
+    aggregator._validator.validate_candidates.assert_called_once()
+    adjudicator.assert_called_once()
+
+
+def test_reachability_codebase_review_confirms_default_paths(engine):
+    service = ReachabilityReviewService(
+        engine._config,
+        engine.repository,
+        Mock(),
+        Mock(spec=SimpleLlmReviewService),
+        {"max_paths": 0},
+    )
+
+    options = service.review_options(settings={"max_paths": 0}, codebase=True)
+
+    assert options.confirm_paths is True
+
+
+def test_reachability_review_rejects_symlink_outside_codebase(engine, tmp_path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("secret = True\n", encoding="utf-8")
+    target = Path(engine.codebase_path) / "outside.py"
+    target.symlink_to(outside)
+    fallback = Mock(spec=SimpleLlmReviewService)
+    service = ReachabilityReviewService(
+        engine._config,
+        engine.repository,
+        Mock(),
+        fallback,
+        {},
+    )
+
+    run = service.run_review(
+        ReviewCommand(mode="file", target=str(target)),
+        codegraph=CodeGraph(),
+    )
+
+    assert run.status is ReviewStatus.INCONCLUSIVE
+    assert run.diagnostics[0].code == "review.target_outside_codebase"
+    fallback.run_files.assert_not_called()
+
+
+def test_reachability_defers_fallback_to_explicit_simple_review(engine):
+    service = ReachabilityReviewService(
+        engine._config,
+        engine.repository,
+        Mock(),
+        None,
+        {},
+    )
+    python_file = str(Path(engine.codebase_path) / "baseline.py")
+    service._repository.get_code_files = Mock(return_value=[python_file])
+    service.supports_file = Mock(return_value=False)
+
+    run = service.run_review(ReviewCommand(mode="code"), codegraph=CodeGraph())
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result is not None
+    assert run.result.reviews == []
+
+
+def test_reachability_empty_scope_is_inconclusive(engine):
+    service = ReachabilityReviewService(
+        engine._config,
+        engine.repository,
+        Mock(),
+        Mock(spec=SimpleLlmReviewService),
+        {},
+    )
+    service._repository.get_code_files = Mock(return_value=[])
+
+    run = service.run_review(ReviewCommand(mode="code"), codegraph=CodeGraph())
+
+    assert run.status is ReviewStatus.INCONCLUSIVE
 
 
 def test_review_validation_rescues_duplicate_cluster_representative():
@@ -282,16 +397,18 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     monkeypatch.setattr(
         engine,
         "_get_review_graph",
-        lambda: _DummyReviewGraph({"file": "test.py", "reviews": [{"issue": "Issue"}]}),
+        lambda _index=None: _DummyReviewGraph(
+            {"file": "test.py", "reviews": [{"issue": "Issue"}]}
+        ),
     )
 
-    import metis.engine.review_service as review_service_mod
+    import metis.engine.nodes.simple_llm_review.service as review_service_mod
 
     monkeypatch.setattr(
         review_service_mod, "summarize_changes", lambda *a, **k: "summary"
     )
 
-    result = engine.review.review_patch(str(patch_file))
+    result = _simple_llm_review(engine).review_patch(str(patch_file))
     assert "reviews" in result and isinstance(result["reviews"], list)
     assert any(r.get("file") == "test.py" for r in result["reviews"])
 
@@ -299,6 +416,6 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
 def test_review_patch_handles_parse_error(engine, tmp_path):
     bad_patch_file = tmp_path / "bad.diff"
     bad_patch_file.write_text("INVALID PATCH FORMAT")
-    result = engine.review.review_patch(str(bad_patch_file))
+    result = _simple_llm_review(engine).review_patch(str(bad_patch_file))
     assert "reviews" in result
     assert result["reviews"] == []

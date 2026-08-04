@@ -1,9 +1,9 @@
 # Embedding provider
 
-Indexing and index-backed retrieval are **off by default** (the `index`
-engine tool must be opted into via `--tools index` or
-`metis_engine.tools: [index]`). Embedding configuration is therefore
-optional unless you enable indexing.
+Embedding configuration is required when the selected execution graph contains
+the `index` node or a command uses the Index capability. Direct review and
+triage commands can run without embeddings when their selected nodes do not use
+that capability.
 
 Embeddings are configured explicitly under a top-level `embedding_provider`
 block. This keeps chat-only providers such as Anthropic, Gemini, and Bedrock
@@ -21,7 +21,6 @@ embedding_provider:
 
 metis_engine:
   embed_dim: 3072
-  tools: [index]
 ```
 
 For the PostgreSQL backend, `pgvector_use_halfvec` defaults to `auto`. This
@@ -35,10 +34,9 @@ For OpenAI-compatible providers (`openai`, `ollama`, `llamacpp`, `vllm`) use
 `code_deployment` and `docs_deployment`. Bedrock requires `region` and any
 AWS credential settings needed by your environment.
 
-When the `index` tool is enabled, Metis validates the embedding
-configuration at startup and fails fast if `code_embedding_model` / `docs_embedding_model`
-or any provider-specific keys are missing. When the tool is disabled, the
-check is skipped and chat/review/triage run without an embedding model.
+Index operations require `code_embedding_model`, `docs_embedding_model`, and
+the provider-specific connection settings. Review and triage nodes that do not
+use the Index capability do not require an embedding model.
 
 Keep live credentials out of committed config. For local smoke tests, put
 provider YAMLs and any `.env` file under ignored local paths such as

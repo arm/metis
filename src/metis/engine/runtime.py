@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 
 from metis.usage import UsageRuntime
+from metis.runtime_settings import CapabilityRuntimeSettings
 
 
 @dataclass(slots=True)
@@ -30,13 +31,11 @@ class EngineConfig:
     metisignore_file: str | None
     review_code_include_paths: list[str]
     review_code_exclude_paths: list[str]
-    enabled_tools: set[str]
-    model_tool_max_rounds: int
-    index_search_config: dict[str, Any]
+    capability_settings: CapabilityRuntimeSettings
     memory_config: dict[str, Any]
     threat_model_config: dict[str, Any]
     language_registry: Any
-    memory_service: Any | None = None
+    memory_service: Any = None
     code_exts: set[str] = field(default_factory=set)
     ext_plugin_map: dict[str, Any] = field(default_factory=dict)
     ext_pattern_plugin_map: list[tuple[str, Any]] = field(default_factory=list)
@@ -46,7 +45,7 @@ class EngineConfig:
 class EngineState:
     splitter_cache: dict[str, Any] = field(default_factory=dict)
     doc_splitter: Any | None = None
-    review_graph: Any | None = None
+    review_graphs: dict[bool, Any] = field(default_factory=dict)
     ask_graph: Any | None = None
     retriever_code: Any | None = None
     retriever_docs: Any | None = None

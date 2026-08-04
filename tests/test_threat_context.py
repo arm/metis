@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-import metis.engine.threat_context as threat_context
-import metis.engine.threat_context_history as threat_context_history
-from metis.engine.threat_context import initialize_threat_model_memory
+import metis.engine.nodes.threat_model.history as threat_context_history
+import metis.engine.nodes.threat_model.service as threat_context
+from metis.engine.nodes.threat_model.service import (
+    initialize_threat_model_memory,
+)
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.memory import MemoryService
 

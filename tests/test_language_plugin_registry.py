@@ -11,12 +11,11 @@ import types
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from llama_index.core.schema import Document
 import pytest
+from llama_index.core.schema import Document
 
 from metis.configuration import load_plugin_config
-from metis.engine.indexing_service import IndexingService
-
+from metis.engine.capabilities.indexing import IndexingService
 
 REQUIRED_PROMPT_KEYS = (
     "security_review",
@@ -61,7 +60,7 @@ def _make_manifest(registry_module, **overrides):
         "implementation": "tests.fake_plugins:FakePlugin",
         "config_resource": "metis.plugins.languages:c.yaml",
         "capabilities": {
-            "reachability_review": True,
+            "codegraph": True,
             "c_family_triage_evidence": True,
         },
         "prompt_profile": "c_family",
@@ -170,7 +169,7 @@ def test_supported_language_names_comes_from_manifests_without_importing_plugins
                 name="python",
                 aliases=["python", "py"],
                 extensions=[".py"],
-                capabilities={"reachability_review": False},
+                capabilities={"codegraph": False},
                 implementation="fake_registry_plugins.python_plugin:FakePlugin",
             ),
         ],
@@ -191,7 +190,7 @@ def test_get_manifest_for_path_matches_extensions_and_systemverilog_suffix_patte
                 aliases=["systemverilog", "sv"],
                 extensions=[".sv", ".svh"],
                 filename_patterns=[".sv.*", ".svh.*"],
-                capabilities={"reachability_review": False},
+                capabilities={"codegraph": False},
                 implementation="fake_registry_plugins.systemverilog_plugin:FakePlugin",
             )
         ],
@@ -208,7 +207,7 @@ def test_get_manifest_for_path_matches_extensions_and_systemverilog_suffix_patte
     assert registry.get_manifest_for_path("rtl/cache_ctrl.vp") is None
 
 
-def test_supports_reachability_file_uses_manifest_capabilities_without_loading_plugins(
+def test_codegraph_provider_uses_manifest_capabilities_without_loading_plugins(
     monkeypatch,
     caplog,
 ):
@@ -229,7 +228,7 @@ def test_supports_reachability_file_uses_manifest_capabilities_without_loading_p
                 registry_module,
                 name="c",
                 extensions=[".c", ".h"],
-                capabilities={"reachability_review": True},
+                capabilities={"codegraph": True},
                 implementation="fake_registry_plugins.c_plugin:FakePlugin",
             ),
             _make_manifest(
@@ -237,21 +236,31 @@ def test_supports_reachability_file_uses_manifest_capabilities_without_loading_p
                 name="python",
                 aliases=["python"],
                 extensions=[".py"],
-                capabilities={"reachability_review": False},
+                capabilities={"codegraph": False},
                 implementation="fake_registry_plugins.python_plugin:FakePlugin",
             ),
         ],
     )
 
     caplog.set_level(logging.DEBUG, logger="metis")
-    assert registry.supports_reachability_file("src/test.c")
-    assert not registry.supports_reachability_file("src/test.py")
+    assert registry.codegraph_registration_for_path("src/test.c") == "c"
+    assert registry.codegraph_registration_for_path("src/test.py") is None
     assert import_calls == []
     assert (
         "Matched language plugin manifest 'c' for path 'src/test.c'; "
         "module remains lazy until needed: fake_registry_plugins.c_plugin:FakePlugin"
         in caplog.text
     )
+
+
+def test_codegraph_capability_rejects_implementation_configuration():
+    registry_module = _import_registry_api()
+
+    with pytest.raises(ValueError, match="codegraph as a boolean"):
+        _make_manifest(
+            registry_module,
+            capabilities={"codegraph": {"provider": "private"}},
+        )
 
 
 def test_get_plugin_for_path_imports_and_instantiates_only_selected_plugin_once(
@@ -282,7 +291,7 @@ def test_get_plugin_for_path_imports_and_instantiates_only_selected_plugin_once(
                 name="python",
                 aliases=["python"],
                 extensions=[".py"],
-                capabilities={"reachability_review": False},
+                capabilities={"codegraph": False},
                 implementation="test_lazy_registry_plugin:FakePlugin",
             ),
         ],
@@ -318,6 +327,9 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
     registry_module = _import_registry_api()
     registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
 
+    assert registry.codegraph_registration_for_path("src/example.c") == "c"
+    assert registry.codegraph_registration_for_path("src/example.cpp") == "cpp"
+    assert registry.codegraph_registration_for_path("analysis.ipynb") is None
     missing_by_language = {
         language: missing
         for language in registry.supported_language_names()
@@ -388,6 +400,51 @@ def test_explicit_replacement_overrides_resolved_manifest_fields(monkeypatch):
     assert manifest.config_resource == "external_plugins:c.yaml"
 
 
+def test_entry_point_accepts_manifest_object(monkeypatch):
+    registry_module = _import_registry_api()
+    manifest = _make_manifest(
+        registry_module,
+        name="private",
+        aliases=["private"],
+        extensions=[".private"],
+    )
+    entry_point = SimpleNamespace(name="private", load=lambda: manifest)
+    monkeypatch.setattr(
+        registry_module.metadata,
+        "entry_points",
+        lambda: SimpleNamespace(select=lambda **_kwargs: (entry_point,)),
+    )
+
+    assert registry_module._load_entry_point_manifests() == [manifest]
+
+
+def test_plugin_constructor_type_error_is_not_retried_without_config(monkeypatch):
+    registry_module = _import_registry_api()
+    module = types.ModuleType("broken_language_plugin")
+    calls = []
+
+    class BrokenPlugin:
+        def __init__(self, _plugin_config):
+            calls.append("configured")
+            raise TypeError("invalid plugin configuration")
+
+    module.BrokenPlugin = BrokenPlugin
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    registry = _build_registry(
+        registry_module,
+        [
+            _make_manifest(
+                registry_module,
+                implementation="broken_language_plugin:BrokenPlugin",
+            )
+        ],
+    )
+
+    with pytest.raises(TypeError, match="invalid plugin configuration"):
+        registry.get_plugin("c")
+    assert calls == ["configured"]
+
+
 def test_index_prepare_nodes_includes_suffix_pattern_code_files(tmp_path, monkeypatch):
     source = tmp_path / "unit.sv.vp"
     source.write_text("module unit; endmodule\n", encoding="utf-8")
@@ -435,7 +492,9 @@ def test_index_prepare_nodes_includes_suffix_pattern_code_files(tmp_path, monkey
         vector_backend=vector_backend,
     )
     state = SimpleNamespace(pending_nodes=None)
-    monkeypatch.setattr("metis.engine.indexing_service.SimpleDirectoryReader", Reader)
+    monkeypatch.setattr(
+        "metis.engine.capabilities.indexing.SimpleDirectoryReader", Reader
+    )
 
     service = IndexingService(
         config,

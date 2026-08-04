@@ -1,8 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+import shutil
+
 import pytest
+from metis.configuration import load_execution_config
 from metis.engine import MetisEngine
+from metis.runtime_settings import ModelToolSettings
+from metis.runtime_settings import CapabilityRuntimeSettings
 from unittest.mock import Mock, MagicMock
 
 
@@ -65,9 +71,47 @@ def dummy_embedding_provider():
 
 
 @pytest.fixture
-def engine(dummy_backend, dummy_llm, dummy_embedding_provider):
+def capability_settings():
+    return CapabilityRuntimeSettings(
+        model_tools=ModelToolSettings(max_rounds=6, max_contract_chars=6000),
+        configurations={
+            "index": {
+                "search": {
+                    "max_top_k": 4,
+                    "code_top_k": 1,
+                    "docs_top_k": 4,
+                    "docs_char_ratio": 1.0,
+                    "default_max_chars": 5000,
+                    "max_chars": 7000,
+                }
+            },
+            "navigation": {"timeout_seconds": 8, "max_chars": 16000},
+        },
+    )
+
+
+@pytest.fixture
+def execution_with_index():
+    execution_config = load_execution_config()
+    execution_config["stages"]["initialize"]["nodes"]["index"] = {
+        "capabilities": ["index"]
+    }
+    return execution_config
+
+
+@pytest.fixture
+def engine(
+    dummy_backend,
+    dummy_llm,
+    dummy_embedding_provider,
+    capability_settings,
+    execution_with_index,
+    tmp_path,
+):
+    codebase_path = tmp_path / "data"
+    shutil.copytree(Path(__file__).parent / "data", codebase_path)
     return MetisEngine(
-        codebase_path="./tests/data",
+        codebase_path=str(codebase_path),
         vector_backend=dummy_backend,
         language_plugin="c",
         llm_provider=dummy_llm,
@@ -76,7 +120,8 @@ def engine(dummy_backend, dummy_llm, dummy_embedding_provider):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
+        execution_config=execution_with_index,
     )
 
 

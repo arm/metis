@@ -8,8 +8,6 @@ from typing import Callable, Literal
 from prompt_toolkit.completion import WordCompleter
 from rich.markup import escape
 
-from metis.engine.tools.selection import INDEX_TOOL
-
 from .command_runtime import CommandRuntime
 from .commands import (
     run_ask,
@@ -37,8 +35,6 @@ class CommandSpec:
     invocation_mode: InvocationMode = "none"
     include_target_in_display_name: bool = False
     prepares_output_file: bool = False
-    required_tools: tuple[str, ...] = ()
-    optional_tools: tuple[str, ...] = ()
     supports_triage: bool = False
 
     def usage_target(self, cmd_args: list[str]) -> str | None:
@@ -116,14 +112,12 @@ COMMANDS = {
         tracked=True,
         invocation_mode="args",
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
     ),
     "index": CommandSpec(
         run_index,
         tracked=True,
         invocation_mode="index",
         prepares_output_file=True,
-        required_tools=(INDEX_TOOL,),
     ),
     "review_patch": CommandSpec(
         run_review,
@@ -131,7 +125,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
         supports_triage=True,
     ),
     "review_code": CommandSpec(
@@ -139,14 +132,12 @@ COMMANDS = {
         tracked=True,
         invocation_mode="args",
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
         supports_triage=True,
     ),
     "update": CommandSpec(
         run_update,
         invocation_mode="path",
         prepares_output_file=True,
-        required_tools=(INDEX_TOOL,),
     ),
     "review_file": CommandSpec(
         run_file_review,
@@ -154,7 +145,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
         supports_triage=True,
     ),
     "review_dir": CommandSpec(
@@ -163,7 +153,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
         supports_triage=True,
     ),
     "ask": CommandSpec(
@@ -171,7 +160,6 @@ COMMANDS = {
         tracked=True,
         invocation_mode="question",
         prepares_output_file=True,
-        required_tools=(INDEX_TOOL,),
     ),
     "triage": CommandSpec(
         run_triage,
@@ -179,7 +167,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        optional_tools=(INDEX_TOOL,),
     ),
     "help": CommandSpec(show_help, invocation_mode="meta"),
     "version": CommandSpec(show_version, invocation_mode="meta"),

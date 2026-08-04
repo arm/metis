@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .core import MetisEngine
-from .options import TriageOptions
+from metis.runtime_settings import TriageOptions
 
 __all__ = ["MetisEngine", "TriageOptions"]

@@ -8,6 +8,22 @@ psql_database:
     database_name: "metis_db"
 
 metis_engine:
+  model_tools:
+    max_rounds: 6
+    max_contract_chars: 6000
+  capabilities:
+    index:
+      search:
+        max_top_k: 4
+        code_top_k: 1
+        docs_top_k: 4
+        docs_char_ratio: 1.0
+        default_max_chars: 5000
+        max_chars: 7000
+    navigation:
+      timeout_seconds: 8
+      max_chars: 16000
+
   max_token_length: 120000
   max_workers: 8
   embed_dim: 4096

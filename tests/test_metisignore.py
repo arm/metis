@@ -4,11 +4,17 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import metis.engine.indexing_service as indexing_service_mod
+import metis.engine.capabilities.indexing as indexing_service_mod
 from metis.engine import MetisEngine
+from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 
 
-def _build_engine(tmp_path, dummy_backend, dummy_llm):
+def _build_engine(
+    tmp_path,
+    dummy_backend,
+    dummy_llm,
+    capability_settings,
+):
     class _EmbeddingProvider:
         def get_embed_model_code(self, **_kwargs):
             return object()
@@ -25,19 +31,19 @@ def _build_engine(tmp_path, dummy_backend, dummy_llm):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
     )
 
 
 def test_get_code_files_supports_default_metisignore_allowlist(
-    tmp_path, dummy_backend, dummy_llm
+    tmp_path, dummy_backend, dummy_llm, capability_settings
 ):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "keep.py").write_text("print('keep')\n", encoding="utf-8")
     (tmp_path / "src" / "drop.py").write_text("print('drop')\n", encoding="utf-8")
     (tmp_path / ".metisignore").write_text("*\n!src/\n!src/keep.py\n", encoding="utf-8")
 
-    engine = _build_engine(tmp_path, dummy_backend, dummy_llm)
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
 
     files = sorted(
         Path(path).relative_to(tmp_path).as_posix()
@@ -47,7 +53,7 @@ def test_get_code_files_supports_default_metisignore_allowlist(
 
 
 def test_count_index_items_respects_metisignore_allowlist(
-    tmp_path, dummy_backend, dummy_llm
+    tmp_path, dummy_backend, dummy_llm, capability_settings
 ):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "keep.py").write_text("print('keep')\n", encoding="utf-8")
@@ -58,19 +64,23 @@ def test_count_index_items_respects_metisignore_allowlist(
         "*\n!src/\n!src/keep.py\n!README.md\n", encoding="utf-8"
     )
 
-    engine = _build_engine(tmp_path, dummy_backend, dummy_llm)
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
 
     assert engine.indexing.count_index_items() == 2
 
 
 def test_index_prepare_nodes_respects_nested_metisignore_allowlist(
-    tmp_path, dummy_backend, dummy_llm, monkeypatch
+    tmp_path,
+    dummy_backend,
+    dummy_llm,
+    monkeypatch,
+    capability_settings,
 ):
     (tmp_path / ".metisignore").write_text(
         "*\n!src/\n!src/keep.py\n!README.md\n", encoding="utf-8"
     )
 
-    engine = _build_engine(tmp_path, dummy_backend, dummy_llm)
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
 
     documents = [
         SimpleNamespace(
@@ -122,7 +132,7 @@ def test_index_prepare_nodes_respects_nested_metisignore_allowlist(
 
 
 def test_review_patch_respects_metisignore_allowlist(
-    tmp_path, dummy_backend, dummy_llm, monkeypatch
+    tmp_path, dummy_backend, dummy_llm, monkeypatch, capability_settings
 ):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "keep.py").write_text("print('keep')\n", encoding="utf-8")
@@ -143,7 +153,7 @@ def test_review_patch_respects_metisignore_allowlist(
     patch_file = tmp_path / "change.diff"
     patch_file.write_text(patch, encoding="utf-8")
 
-    engine = _build_engine(tmp_path, dummy_backend, dummy_llm)
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
     reviewed = []
 
     class _DummyReviewGraph:
@@ -154,14 +164,21 @@ def test_review_patch_respects_metisignore_allowlist(
                 "reviews": [{"issue": f"issue in {req['relative_file']}"}],
             }
 
-    import metis.engine.review_service as review_service_mod
+    import metis.engine.nodes.simple_llm_review.service as review_service_mod
 
-    monkeypatch.setattr(engine, "_get_review_graph", lambda: _DummyReviewGraph())
+    monkeypatch.setattr(
+        engine, "_get_review_graph", lambda _index=None: _DummyReviewGraph()
+    )
     monkeypatch.setattr(
         review_service_mod, "summarize_changes", lambda *args, **kwargs: "summary"
     )
 
-    result = engine.review.review_patch(str(patch_file))
+    service = SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda index: engine._get_review_graph(index),
+    )
+    result = service.review_patch(str(patch_file))
 
     assert reviewed == ["src/keep.py"]
     assert [review["file"] for review in result["reviews"]] == ["src/keep.py"]

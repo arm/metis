@@ -6,14 +6,17 @@ import os
 from importlib.resources import as_file
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-from metis.memory.registry import parse_memory_store_spec
+from metis.memory.configuration import MemoryCapabilityConfiguration
 from metis.providers.config import build_provider_config
 from metis.providers.registry import get_chat_provider
 from metis.providers.registry import get_embedding_provider
-from metis.reachability_settings import collect_reachability_config
+from metis.runtime_settings import ModelToolSettings
+from metis.runtime_settings import CapabilityRuntimeSettings
+from metis.runtime_settings import TriageOptions
 from metis.utils import string_list
 
 logger = logging.getLogger("metis")
@@ -73,9 +76,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
     runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
     runtime["triage_checkpoint_every"] = engine_cfg.get("triage_checkpoint_every", 50)
-    runtime["triage_tool_timeout_seconds"] = engine_cfg.get(
-        "triage_tool_timeout_seconds", 12
-    )
     runtime["llm_max_retries"] = int(engine_cfg.get("llm_max_retries", 5))
     runtime["hnsw_kwargs"] = engine_cfg.get(
         "hnsw_kwargs",
@@ -97,25 +97,31 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
-    runtime["enabled_tools"] = engine_cfg.get("tools")
-    model_tools_cfg = engine_cfg.get("model_tools") or {}
-    if not isinstance(model_tools_cfg, dict):
-        model_tools_cfg = {}
-    runtime["model_tool_max_rounds"] = _positive_int(
-        model_tools_cfg.get("max_rounds"),
-        fallback=6,
-    )
-    index_search_cfg = engine_cfg.get("index_search") or {}
-    runtime["index_search_config"] = (
-        dict(index_search_cfg) if isinstance(index_search_cfg, dict) else {}
-    )
+    runtime["capability_settings"] = _capability_runtime_settings(engine_cfg)
     memory_cfg = cfg.get("memory") or {}
     runtime["memory"] = _memory_config(memory_cfg)
     runtime["threat_model_config"] = _threat_model_config(
         engine_cfg.get("threat_model")
     )
-    runtime.update(collect_reachability_config(cfg, engine_cfg))
-
+    runtime["triage_options"] = _triage_options(engine_cfg.get("triage"))
+    runtime["execution_config"] = load_execution_config(engine_cfg.get("execution"))
+    codegraph_cfg = engine_cfg.get("codegraph") or {}
+    if not isinstance(codegraph_cfg, dict):
+        raise ValueError("metis_engine.codegraph must be a mapping")
+    runtime["codegraph_config"] = dict(codegraph_cfg)
+    reachability_cfg = engine_cfg.get("reachability") or {}
+    if not isinstance(reachability_cfg, dict):
+        raise ValueError("metis_engine.reachability must be a mapping")
+    runtime["reachability_config"] = dict(reachability_cfg)
+    language_plugins = cfg.get("language_plugins")
+    if language_plugins is None:
+        language_plugins = {}
+    if not isinstance(language_plugins, dict):
+        raise ValueError("language_plugins must be a mapping")
+    plugin_config = load_plugin_config()
+    if language_plugins:
+        plugin_config["language_plugins"] = dict(language_plugins)
+    runtime["plugin_config"] = plugin_config
     query_cfg = cfg.get("query", {})
     llama_query_model = query_cfg.get("model") or llm_provider_config.get("model", "")
     llama_query_model = str(llama_query_model or "")
@@ -189,6 +195,63 @@ def _positive_int(value: object, *, fallback: int) -> int:
     return parsed
 
 
+def _required_positive_int(values: dict[str, Any], key: str, *, section: str) -> int:
+    value = values.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{section}.{key} must be a positive integer")
+    return value
+
+
+def _required_mapping(value: object, *, section: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{section} must be a mapping")
+    return value
+
+
+def _triage_options(value: object) -> TriageOptions:
+    if value is None:
+        return TriageOptions()
+    configured = _required_mapping(value, section="metis_engine.triage")
+    include_triaged = configured.get("include_triaged", False)
+    if not isinstance(include_triaged, bool):
+        raise ValueError("metis_engine.triage.include_triaged must be a boolean")
+    return TriageOptions(include_triaged=include_triaged)
+
+
+def _capability_runtime_settings(
+    engine_config: object,
+) -> CapabilityRuntimeSettings:
+    engine = _required_mapping(engine_config, section="metis_engine")
+    model = _load_engine_mapping("model_tools", None)
+    configured_model = engine.get("model_tools")
+    if isinstance(configured_model, dict):
+        model.update(configured_model)
+    capabilities = _load_engine_mapping("capabilities", engine.get("capabilities"))
+    configurations: dict[str, dict[str, Any]] = {}
+    for name, value in capabilities.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            raise ValueError("metis_engine.capabilities keys must be valid names")
+        if name == "memory":
+            raise ValueError(
+                "Configure the memory capability in the top-level memory section"
+            )
+        configurations[name] = _required_mapping(
+            value,
+            section=f"metis_engine.capabilities.{name}",
+        )
+    return CapabilityRuntimeSettings(
+        model_tools=ModelToolSettings(
+            max_rounds=_required_positive_int(
+                model, "max_rounds", section="metis_engine.model_tools"
+            ),
+            max_contract_chars=_required_positive_int(
+                model, "max_contract_chars", section="metis_engine.model_tools"
+            ),
+        ),
+        configurations=configurations,
+    )
+
+
 def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -212,19 +275,7 @@ def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
 
 
 def _memory_config(raw_config: object) -> dict[str, object]:
-    if not isinstance(raw_config, dict):
-        raw_config = {}
-    location = str(raw_config.get("location") or ".metis/memory/metis_memory.sqlite3")
-    backend = str(raw_config.get("backend") or "sqlite")
-    spec = parse_memory_store_spec(
-        location,
-        backend=backend,
-    )
-    return {
-        "enabled": bool(raw_config.get("enabled", False)),
-        "backend": spec.backend,
-        "location": spec.location,
-    }
+    return MemoryCapabilityConfiguration.model_validate(raw_config).model_dump()
 
 
 def _threat_model_config(value: object) -> dict[str, object]:
@@ -242,6 +293,21 @@ def _threat_model_config(value: object) -> dict[str, object]:
             ),
         },
     }
+
+
+def load_execution_config(value: object = None) -> dict[str, Any]:
+    return _load_engine_mapping("execution", value)
+
+
+def _load_engine_mapping(name: str, value: object) -> dict[str, Any]:
+    if value is not None and not isinstance(value, dict):
+        raise ValueError(f"metis_engine.{name} must be a mapping")
+    if isinstance(value, dict):
+        return dict(value)
+    resource = files("metis") / "metis.yaml"
+    with as_file(resource) as real_path:
+        packaged = load_yaml(real_path)
+    return dict(packaged["metis_engine"][name])
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

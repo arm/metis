@@ -270,7 +270,7 @@ def test_resolve_issue_unresolved_when_no_match(smap):
 
 
 def test_review_node_parse_attaches_anchor():
-    from metis.engine.graphs.review import review_node_parse
+    from metis.engine.nodes.simple_llm_review.graph import review_node_parse
 
     smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
     state = {
@@ -294,7 +294,7 @@ def test_review_node_parse_attaches_anchor():
 
 
 def test_review_node_parse_no_source_map():
-    from metis.engine.graphs.review import review_node_parse
+    from metis.engine.nodes.simple_llm_review.graph import review_node_parse
 
     state = {"parsed_reviews": [{"issue": "x", "code_snippet": "y"}]}
     out = review_node_parse(state)
@@ -303,7 +303,7 @@ def test_review_node_parse_no_source_map():
 
 
 def test_review_node_parse_line_number_is_start():
-    from metis.engine.graphs.review import review_node_parse
+    from metis.engine.nodes.simple_llm_review.graph import review_node_parse
 
     smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
     state = {
@@ -326,7 +326,7 @@ def test_review_node_parse_line_number_is_start():
 
 
 def test_review_node_parse_patch_mode_resolves_against_original():
-    from metis.engine.graphs.review import review_node_parse
+    from metis.engine.nodes.simple_llm_review.graph import review_node_parse
 
     smap = SourceMap.for_text("src/foo.c", C_FIXTURE)
     state = {
@@ -351,7 +351,7 @@ def test_review_node_parse_patch_mode_resolves_against_original():
 
 
 def test_normalize_review_fields():
-    from metis.engine.graphs.utils import normalize_review_fields
+    from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
 
     assert normalize_review_fields({"severity": "med"})["severity"] == "Medium"
     assert normalize_review_fields({"severity": "CRITICAL"})["severity"] == "Critical"

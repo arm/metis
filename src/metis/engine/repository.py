@@ -70,13 +70,11 @@ class EngineRepository:
         role_extensions = getattr(manifest, f"{role}_extensions", ())
         return extension in role_extensions
 
-    def supports_reachability_file(self, path: str) -> bool:
+    def get_codegraph_registration(self, path: str) -> str | None:
         registry = self._config.language_registry
-        if registry is not None:
-            return registry.supports_reachability_file(path)
-        plugin = self.get_plugin_for_path(path)
-        supports = getattr(plugin, "supports_reachability_review", None)
-        return bool(callable(supports) and supports())
+        if registry is None:
+            return None
+        return registry.codegraph_registration_for_path(path)
 
     def get_all_supported_code_extensions(self):
         registry = self._config.language_registry

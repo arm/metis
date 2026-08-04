@@ -4,8 +4,11 @@
 import importlib.metadata
 import json
 import logging
+import os
 import re
+import tempfile
 import warnings
+from datetime import datetime
 from pathlib import Path
 from importlib.resources import files
 
@@ -231,11 +234,6 @@ def with_timer(task_description, fn, *args, quiet=False, **kwargs):
     return result
 
 
-def collect_reviews(engine, kwargs={}):
-    reviews = engine.review.review_code(**kwargs)
-    return {"reviews": [r for r in reviews if r]}
-
-
 def iterate_with_progress(total, iterable):
     results = []
     if total <= 0:
@@ -275,6 +273,57 @@ def count_index_items(engine):
     return engine.indexing.count_index_items()
 
 
+def output_format(output_file: str | Path) -> str:
+    suffix = Path(output_file).suffix.lower()
+    return suffix.removeprefix(".") if suffix in {".html", ".csv", ".sarif"} else "json"
+
+
+def output_files_for_formats(
+    output_files: list[str] | None,
+    formats: tuple[str, ...],
+    *,
+    command: str,
+    generated_output: bool = False,
+    reserved_paths: set[Path] | None = None,
+) -> list[str]:
+    configured = tuple(dict.fromkeys(formats))
+    provided = list(output_files or ())
+    if provided:
+        base = Path(provided[0]).with_suffix("")
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = Path("results") / f"{command}_{timestamp}"
+
+    selected = [] if generated_output else provided
+    selected_paths = {Path(path).resolve() for path in selected}
+    if len(selected_paths) != len(selected):
+        raise ValueError("Output paths must be unique")
+    reserved = {path.resolve() for path in reserved_paths or set()}
+    if selected_paths & reserved:
+        raise ValueError("Output paths for graph stages must be distinct")
+    for path in selected:
+        format_name = output_format(path)
+        if format_name not in configured:
+            raise ValueError(f"Execution graph did not request {format_name} output")
+
+    selected_formats = {output_format(path) for path in selected}
+    fallback_base: Path | None = None
+    for format_name in configured:
+        if format_name in selected_formats:
+            continue
+        candidate = base.with_suffix(f".{format_name}")
+        if candidate.resolve() in reserved:
+            if fallback_base is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                fallback_base = Path("results") / f"{command}_{timestamp}"
+            candidate = fallback_base.with_suffix(f".{format_name}")
+        if candidate.resolve() in reserved or candidate.resolve() in selected_paths:
+            raise ValueError("Output paths for graph stages must be distinct")
+        selected.append(str(candidate))
+        selected_paths.add(candidate.resolve())
+    return selected
+
+
 def save_output(output_files, data, quiet=False, sarif_payload=None):
     if not output_files:
         return
@@ -292,8 +341,26 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
 
     def _write_payload(path, payload, label):
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4)
+        serialized = json.dumps(payload, indent=4)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp.write(serialized)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = tmp.name
+            os.replace(tmp_path, path)
+        except Exception:
+            if tmp_path is not None:
+                Path(tmp_path).unlink(missing_ok=True)
+            raise
         print_console(
             f"[blue]{label} saved to {escape(str(path))}[/blue]",
             quiet,
@@ -304,49 +371,31 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
         suffix = output_path.suffix.lower()
 
         if suffix == ".html":
-            try:
-                html_path = export_html(
-                    json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
-                )
-                print_console(
-                    f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
-                    quiet,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Failed to generate HTML report: %s", exc)
-                print_console("[red]Failed to generate HTML report.[/red]", quiet)
+            html_path = export_html(
+                json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
+            )
+            print_console(
+                f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
+                quiet,
+            )
             continue
 
         if suffix == ".sarif":
-            try:
-                sarif_path, sarif_payload_local = export_sarif(
-                    data, output_path, sarif_payload_local
-                )
-                print_console(
-                    f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
-                    quiet,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Failed to generate SARIF report: %s", exc)
-                print_console(
-                    f"[red]Failed to generate SARIF report at {escape(str(output_path))}[/red]",
-                    quiet,
-                )
+            sarif_path, sarif_payload_local = export_sarif(
+                data, output_path, sarif_payload_local
+            )
+            print_console(
+                f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
+                quiet,
+            )
             continue
 
         if suffix == ".csv":
-            try:
-                csv_path = export_csv(json_payload, output_path)
-                print_console(
-                    f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
-                    quiet,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Failed to generate CSV report: %s", exc)
-                print_console(
-                    f"[red]Failed to generate CSV report at {escape(str(output_path))}[/red]",
-                    quiet,
-                )
+            csv_path = export_csv(json_payload, output_path)
+            print_console(
+                f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
+                quiet,
+            )
             continue
 
         # default to JSON

@@ -47,9 +47,6 @@ class BaseLanguagePlugin(ABC):
         """Return a list of file extensions supported by this language."""
         pass
 
-    def supports_reachability_review(self) -> bool:
-        return False
-
 
 class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
     NAME = ""

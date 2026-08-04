@@ -40,9 +40,9 @@ query:
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
 - Embeddings can be supplied via a separate `embedding_provider` block (any
   supported embedding provider).
-- Embedding configuration is only required when the `index` tool is enabled
-  (`--tools index`). It can be omitted entirely for chat/review/triage
-  without retrieval.
+- Embedding configuration is required when the selected graph or command uses
+  the Index capability. It can be omitted for review and triage nodes that do
+  not use indexed retrieval.
 - `metis_engine.embed_dim` must match the configured embedding model output
   dimension.
 - For the PostgreSQL backend, `metis_engine.pgvector_use_halfvec: auto` uses

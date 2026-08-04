@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.reachability.models import FunctionNode
-from metis.engine.reachability.supplementary_parsing import (
+from metis.engine.codegraph import FunctionNode
+from metis.engine.nodes.reachability.supplementary_parsing import (
     _parse_combined,
     _parse_intra,
     _parse_semantic,
@@ -15,8 +15,6 @@ def _fn(unique_name, *, file_path="driver.c", line_number=10):
         file_path=file_path,
         name=unique_name.rsplit("::", 1)[-1],
         line_number=line_number,
-        is_source=False,
-        is_sink=False,
     )
 
 

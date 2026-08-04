@@ -10,7 +10,7 @@ from typing import Any
 
 from metis.memory import MemoryService
 
-from .threat_context import THREAT_MODEL_NAMESPACE
+from .nodes.threat_model import THREAT_MODEL_NAMESPACE
 
 
 def get_threat_model_context(

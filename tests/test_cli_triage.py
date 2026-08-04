@@ -2,83 +2,84 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import json
+import pytest
 from metis.cli import triage_cli
 from metis.cli.command_runtime import CommandRuntime
-from metis.cli.commands import _build_triaged_sarif_payload, run_triage
+from metis.cli.commands import run_triage
 from metis.cli.utils import save_output
-from metis.engine.options import TriageOptions
 from metis.sarif.utils import create_fingerprint
 
 
-def test_build_triaged_sarif_payload_reuses_engine_path():
-    class _DummyEngine:
-        def __init__(self):
-            self.called = False
-
-        def triage_sarif_payload(self, payload, **kwargs):
-            self.called = True
-            assert isinstance(kwargs.get("options"), TriageOptions)
-            assert kwargs["options"].include_triaged is False
-            payload["runs"] = []
-            return payload
-
-    engine = _DummyEngine()
-    args = SimpleNamespace(triage=True, quiet=True, include_triaged=False)
-    runtime = CommandRuntime(
-        command="review_code",
-        command_args=[],
-    )
-    results = {"reviews": []}
-
-    payload = _build_triaged_sarif_payload(engine, results, args, runtime)
-    assert engine.called is True
-    assert isinstance(payload, dict)
-    assert payload["runs"] == []
-
-
-def test_run_triage_defaults_to_inplace(tmp_path):
-    sarif_path = tmp_path / "input.sarif"
-    sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
-
-    class _DummyEngine:
-        def triage_sarif_file(self, input_path, output_path=None, **kwargs):
-            assert input_path == str(sarif_path)
-            assert output_path is None
-            assert isinstance(kwargs.get("options"), TriageOptions)
-            assert kwargs["options"].include_triaged is False
-            return input_path
-
-    args = SimpleNamespace(quiet=True, output_file=None, include_triaged=False)
-    run_triage(
-        _DummyEngine(),
-        str(sarif_path),
-        args,
-        CommandRuntime(
-            command="triage",
-            command_args=[str(sarif_path)],
-        ),
+@pytest.mark.parametrize(
+    ("suffix", "exporter"),
+    [
+        (".html", "export_html"),
+        (".sarif", "export_sarif"),
+        (".csv", "export_csv"),
+    ],
+)
+def test_save_output_propagates_export_failure(
+    monkeypatch,
+    tmp_path,
+    suffix,
+    exporter,
+):
+    monkeypatch.setattr(
+        f"metis.cli.utils.{exporter}",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("write failed")),
     )
 
+    with pytest.raises(RuntimeError, match="write failed"):
+        save_output(tmp_path / f"report{suffix}", {"reviews": []}, quiet=True)
 
-def test_run_triage_uses_sarif_output_target(tmp_path):
+
+def test_save_output_replaces_json_only_after_serialization_succeeds(tmp_path):
+    output_path = tmp_path / "report.json"
+    output_path.write_text('{"original": true}', encoding="utf-8")
+
+    with pytest.raises(TypeError):
+        save_output(output_path, {"invalid": object()}, quiet=True)
+
+    assert output_path.read_text(encoding="utf-8") == '{"original": true}'
+
+
+@pytest.mark.parametrize(
+    ("formats", "expected_suffixes"),
+    [
+        (("sarif", "json"), {".sarif", ".json"}),
+        (("json",), {".json"}),
+        ((), set()),
+    ],
+)
+def test_run_triage_saves_every_configured_format(
+    tmp_path,
+    monkeypatch,
+    formats,
+    expected_suffixes,
+):
     sarif_path = tmp_path / "input.sarif"
-    expected_output_path = tmp_path / "output.sarif"
     sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
+    saved = []
 
     class _DummyEngine:
-        def triage_sarif_file(self, input_path, output_path=None, **kwargs):
-            assert input_path == str(sarif_path)
-            assert output_path == str(expected_output_path)
-            assert isinstance(kwargs.get("options"), TriageOptions)
-            assert kwargs["options"].include_triaged is True
-            return output_path
+        def execute_triage(self, payload, **kwargs):
+            assert payload["runs"] == []
+            assert kwargs.get("options") is None
+            assert kwargs["checkpoint_path"] == str(sarif_path)
+            return {"formats": formats, "sarif": payload}
+
+    monkeypatch.setattr(
+        "metis.cli.commands.save_output",
+        lambda output_files, *_args, **_kwargs: saved.extend(output_files),
+    )
 
     args = SimpleNamespace(
         quiet=True,
-        output_file=[str(expected_output_path), "x.json"],
-        include_triaged=True,
+        output_file=None,
+        include_triaged=False,
     )
     run_triage(
         _DummyEngine(),
@@ -88,6 +89,35 @@ def test_run_triage_uses_sarif_output_target(tmp_path):
             command="triage",
             command_args=[str(sarif_path)],
         ),
+    )
+
+    assert {Path(path).suffix for path in saved} == expected_suffixes
+
+
+def test_run_triage_checkpoints_next_to_explicit_json_output(tmp_path, monkeypatch):
+    sarif_path = tmp_path / "input.sarif"
+    output_path = tmp_path / "reports" / "custom.json"
+    sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
+
+    class _DummyEngine:
+        def execute_triage(self, payload, **kwargs):
+            assert kwargs["checkpoint_path"] == str(output_path.with_suffix(".sarif"))
+            return {"formats": ("sarif", "json"), "sarif": payload}
+
+    monkeypatch.setattr(
+        "metis.cli.commands.save_output", lambda *_args, **_kwargs: None
+    )
+    args = SimpleNamespace(
+        quiet=True,
+        output_file=[str(output_path)],
+        include_triaged=False,
+    )
+
+    run_triage(
+        _DummyEngine(),
+        str(sarif_path),
+        args,
+        CommandRuntime(command="triage", command_args=[str(sarif_path)]),
     )
 
 
@@ -108,16 +138,15 @@ def test_run_triage_accepts_metis_json_input(tmp_path):
     )
 
     class _DummyEngine:
-        def triage_sarif_payload(self, payload, **kwargs):
-            assert isinstance(kwargs.get("options"), TriageOptions)
-            assert kwargs["options"].include_triaged is False
+        def execute_triage(self, payload, **kwargs):
+            assert kwargs.get("options") is None
             payload["runs"][0]["results"][0]["properties"] = {
                 "metisTriaged": True,
                 "metisTriageStatus": "invalid",
                 "metisTriageReason": "Contradicted by source.",
                 "metisTriageTimestamp": "2026-01-01T00:00:00Z",
             }
-            return payload
+            return {"formats": ("json",), "sarif": payload}
 
     args = SimpleNamespace(quiet=True, output_file=None, include_triaged=False)
 
@@ -138,14 +167,34 @@ def test_run_triage_accepts_metis_json_input(tmp_path):
     assert issue["metisTriageReason"] == "Contradicted by source."
 
 
+def test_json_triage_rejects_format_not_declared_by_graph(tmp_path):
+    json_path = tmp_path / "results.json"
+    output_path = tmp_path / "results.sarif"
+    json_path.write_text('{"reviews":[]}', encoding="utf-8")
+
+    class _DummyEngine:
+        def execute_triage(self, payload, **_kwargs):
+            return {"formats": ("json",), "sarif": payload}
+
+    args = SimpleNamespace(
+        quiet=True,
+        output_file=[str(output_path)],
+        include_triaged=False,
+    )
+
+    with pytest.raises(ValueError, match="did not request sarif output"):
+        run_triage(
+            _DummyEngine(),
+            str(json_path),
+            args,
+            CommandRuntime(command="triage", command_args=[str(json_path)]),
+        )
+
+
 def test_run_triage_rejects_non_metis_json_input(tmp_path, monkeypatch):
     json_path = tmp_path / "input.json"
     json_path.write_text('{"runs":[]}', encoding="utf-8")
     messages = []
-
-    class _DummyEngine:
-        def triage_sarif_payload(self, payload, **kwargs):
-            raise AssertionError("should not triage non-Metis JSON")
 
     monkeypatch.setattr(
         "metis.cli.commands.print_console",
@@ -155,7 +204,7 @@ def test_run_triage_rejects_non_metis_json_input(tmp_path, monkeypatch):
     args = SimpleNamespace(quiet=False, output_file=None, include_triaged=False)
 
     run_triage(
-        _DummyEngine(),
+        object(),
         str(json_path),
         args,
         CommandRuntime(
