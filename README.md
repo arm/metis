@@ -53,6 +53,7 @@ Metis includes support for the following languages:
 | TableGen         | Tools                                    | Built-in plugin  |
 | Verilog          | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
 | AArch64 Assembly | Tools                                    | Built-in plugin  |
+| Jupyter NB       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
 
 For triage analysis details (`Flow Analysis` vs `Structural Analysis`), see [docs/triage-flow.md](docs/triage-flow.md).
 
