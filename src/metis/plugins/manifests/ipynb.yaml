@@ -1,0 +1,10 @@
+name: ipynb
+aliases:
+- ipynb
+extensions:
+- .ipynb
+filename_patterns: []
+implementation: metis.plugins.ipynb_plugin:IpynbPlugin
+config_resource: languages/ipynb.yaml
+capabilities: {}
+priority: 0
