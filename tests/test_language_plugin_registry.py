@@ -329,13 +329,13 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
             ]
         )
     }
-
     assert registry.supported_language_names() == [
         "aarch64_assembly",
         "c",
         "cpp",
         "csharp",
         "go",
+        "ipynb",
         "java",
         "javascript",
         "kotlin",
