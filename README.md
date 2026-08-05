@@ -38,24 +38,28 @@ Metis is an open-source, agentic AI security framework for deep security code re
 
 Metis includes support for the following languages:
 
-| Language         | Triage Analysis                          | Notes            |
-|------------------|------------------------------------------|------------------|
-| C                | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
-| C++              | Tree-sitter + Flow Analysis + tools      | Built-in plugin  |
-| Java             | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| C#               | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Python           | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Rust             | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| TypeScript       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Terraform        | Tools                                    | Built-in plugin  |
-| Go               | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| Solidity         | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| TableGen         | Tools                                    | Built-in plugin  |
-| Verilog          | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
-| AArch64 Assembly | Tools                                    | Built-in plugin  |
-| Jupyter NB       | Tree-sitter + Structural Analysis + tools| Built-in plugin  |
+| Language | Review | Triage | Notes |
+| --- | --- | --- | --- |
+| C | CodeGraph Reachability with simple LLM fallback | Reachability with simple LLM fallback | Tree-sitter-backed CodeGraph; navigation-assisted fallback |
+| C++ | CodeGraph Reachability with simple LLM fallback | Reachability with simple LLM fallback | Tree-sitter-backed CodeGraph; navigation-assisted fallback |
+| Java | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| C# | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Python | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Rust | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| TypeScript | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Terraform | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Go | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| TableGen | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Verilog | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| SystemVerilog | Language-plugin simple LLM review | Simple LLM triage | Verilog Tree-sitter code splitting; navigation-assisted triage |
+| JavaScript | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Kotlin | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| PHP | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| AArch64 Assembly | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
+| Jupyter Notebook | Language-plugin simple LLM review | Simple LLM triage | Python Tree-sitter code splitting; navigation-assisted triage |
 
-For triage analysis details (`Flow Analysis` vs `Structural Analysis`), see [docs/triage-flow.md](docs/triage-flow.md).
+For the current Reachability and simple LLM triage paths, see
+[docs/triage-flow.md](docs/triage-flow.md).
 
 Metis uses a plugin-based language system, making it easy to extend support to additional languages.
 
@@ -165,66 +169,54 @@ docker run --rm -it -v `pwd`:/metis metis --non-interactive --command 'review_co
 
 **Metis Configuration (`metis.yaml`)**
 
-Metis configuration can be over-ridden using a YAML configuration file (`metis.yaml`) in the working directory when running metis. The default configuration is in src/metis/metis.yaml. This file defines all runtime parameters including:
+Metis ships with `src/metis/metis.yaml`. A project may provide `metis.yaml` in
+the working directory or select another file with `--config PATH`. Metis uses
+the selected file as its configuration source; it does not merge that document
+with the packaged YAML. When a selected file omits `metis_engine.execution`,
+Metis uses the packaged execution graph. When it defines that section, the
+section is the complete graph.
 
-- **LLM provider:** OpenAI model names, embedding models, token limits
+Configuration covers:
+
+- **LLM provider:** chat model and provider connection settings
+- **Embedding provider:** models and connection settings used by Index
 - **Engine behavior:** max workers, max token length, similarity top-k
 - **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
 - **Index storage:** backend-specific storage parameters for commands that still use the index.
-- **Tool defaults:** tool manifests define per-tool runtime defaults such as
-  `index.search` result limits.
-- **Reachability:** tree-sitter reachability tuning, including review-file mode and path-confirmation limits.
+- **Capability settings:** index-search and navigation limits
+- **Reachability:** path selection, path length, sink limits, and domain hints.
 
-This file is **required** to run Metis and should be customized per deployment.
+Project configuration is optional when the packaged defaults are suitable.
 
-**Prompt Configuration (`plugins.yaml`)**
+**Language Configuration**
 
-Metis uses a `plugins.yaml` file to define language-specific behavior, including LLM prompt templates and document splitting logic.
-Each language plugin (e.g., C) references this file to load:
-
-### Prompt Templates
-You can customize a number of prompts like the following prompts:
-
-- `security_review`: Guides the LLM to perform a security audit of code or diffs.
-- `validation_review`: Asks the LLM to assess the correctness or quality of a generated review.
-- `security_review_checks`: A list of all the security issues the LLM will try to search for.
-
-These prompts provide natural language context for the LLM and can be tailored to your use case (e.g., stricter audits, privacy reviews, compliance).
-
-### Code Splitting Parameters
-You can also configure the chunking parameters for source code and documentation:
-
-- `chunk_lines`: Number of lines per chunk
-- `chunk_lines_overlap`: Overlap between chunks
-- `max_chars`: Max characters per chunk
-
-### Plugins
-Metis discovers language plugins using Setuptools entry points. Packages can expose plugins by declaring the group `metis.plugins` in their packaging metadata. Each entry should resolve to a class implementing `metis.plugins.base.BaseLanguagePlugin` and optionally accept `plugin_config` in the constructor.
-
-Example `pyproject.toml` for a third-party plugin:
-
-```
-[project.entry-points."metis.plugins"]
-my_lang = "my_pkg.my_module:MyLanguagePlugin"
-```
+Language manifests, prompt templates, and splitter settings are packaged under
+`src/metis/plugins/`. External language packages expose a lightweight manifest
+through the `metis.language_plugins` entry-point group. See the
+[language plugin guide](docs/language-plugins.md) for the file layout, manifest
+contract, and extension steps.
 
 ## Running Metis
 
-Metis provides an interactive CLI with several built-in commands. After launching, you can run the following:
+Metis also provides an interactive CLI with several built-in commands:
 
 ### Global CLI Flags
 
-- `--custom-prompt PATH` – optional `.md` or `.txt` file that contains additional guidance. When provided, Metis loads it once and weaves the text into every security-review prompt. If the flag is omitted, Metis looks for `.metis.md` in your project root and uses it when present. Use this to inject organization-specific policy or security requirements without editing `plugins.yaml`.
+- `--custom-prompt PATH` – optional `.md` or `.txt` file containing additional
+  security-review guidance. If omitted, Metis uses `.metis.md` from the project
+  root when that file exists.
 - `--backend chroma|postgres` – choose vector-store backend (default `chroma`).
 - `--project-schema` / `--chroma-dir` – backend-specific knobs.
-- `--triage` – after `review_code`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
+- `--triage` – after `review_code`, `review_dir`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
-- `--tools index,navigation|all|none` – configure engine tools. `navigation` is the default read-only source navigation umbrella for grep/sed-style evidence tools. `index` enables vector-index–backed retrieval (required for `ask`, `index`, `update`; optional context for review/triage) plus the model-callable `index_search` tool for review prompts, and remains opt-in. Use `--tools none` to disable the default tool set.
-- `--ignore-index` – compatibility no-op retained for existing scripts.
-- `--verbose`, `--quiet`, `--output-file`, `--output-files` – control logging and export formats.
+- `--verbose` – show the stages and nodes executed by the selected graph.
+- `--log-level` – configure Python logging independently of graph progress.
+- `--quiet`, `--output-file`, `--output-files` – control console and export output.
 
-See [docs/tool-plugins.md](docs/tool-plugins.md) for the tool plugin contract and
-planned tree-sitter, model-tool, MCP, and private-tool extension path.
+See the [execution graph guide](docs/execution-graph.md) for stage, node, and
+output configuration. See
+[adding a capability](docs/capabilities/adding-capability.md) for shared runtime
+services and model-tool adapters.
 
 ### `init`
 Initializes Metis repository context. When repository memory is enabled, this
@@ -232,29 +224,34 @@ loads threat-model memory first: configured
 `metis_engine.threat_model.source_patterns` are stored as authoritative project
 data. The packaged configuration includes common `SECURITY.*` and threat-model
 filename patterns.
-Metis distills those files into repository memory with the configured LLM. If
-`--tools index` is enabled, `init` also runs vector indexing; otherwise indexing
-is skipped. Optional git-history memory can add advisory security-review lessons;
-it never defines binding project scope.
+Metis distills those files into repository memory with the configured LLM. The
+packaged execution graph does not build the vector index. Add the `index` node
+to `initialize`, or run the `index` command, when retrieval is needed. Optional
+git-history memory can add advisory security-review lessons; it never defines
+binding project scope.
 
 Use `--config PATH` to select a configuration with a different threat-model
 source set.
 
 ### `index`
-Builds only the legacy vector index used by `ask` and `update`. `index` is a
-subset of `init` and remains opt-in through `--tools index`.
+Builds the vector index used by `ask`, `update`, and nodes that use the Index
+capability.
 
 ### `review_code`
-Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.
+Runs the configured Review stage over the codebase. The packaged graph uses the
+CodeGraph and Reachability nodes. Files without CodeGraph support are skipped
+by Reachability and reviewed by the simple LLM fallback.
 
 ### `review_dir`
-Performs a targeted security review of a single directory. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
+Runs the configured Review stage and limits findings to the selected directory.
 
 ### `review_file <path>`
-Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
+Runs the configured Review stage and limits findings to the selected file.
 
 ### `review_patch <patch.diff>`
-Reviews a diff/patch file and highlights potential security issues introduced by the change.
+Runs the configured Review stage for a diff. Patch analysis requires a graph
+that selects `simple_llm_review`; the packaged Reachability node reports patch
+requests as inconclusive.
 
 ### `update <patch.diff>`
 Incrementally updates the index using a diff. Avoids full reindexing.

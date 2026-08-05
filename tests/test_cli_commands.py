@@ -3,48 +3,83 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from metis.cli import commands
 from metis.cli.command_runtime import CommandRuntime
-from metis.engine.options import TriageOptions
 
 
-def test_run_review_code_uses_review_domain_surface(monkeypatch):
+@pytest.mark.parametrize(
+    ("command", "mode", "filename"),
+    [
+        ("review_code", "code", None),
+        ("review_patch", "patch", "change.diff"),
+        ("review_file", "file", "a.c"),
+    ],
+)
+def test_review_commands_route_through_graph(
+    monkeypatch,
+    tmp_path,
+    command,
+    mode,
+    filename,
+):
     calls = []
 
-    class _ReviewDomain:
-        def get_code_files(self):
-            calls.append("get_code_files")
-            return ["a.py"]
+    class _Engine:
+        def execute_review(self, mode, **kwargs):
+            calls.append((mode, kwargs))
+            return {
+                "formats": ("sarif", "json", "html", "csv"),
+                "findings": {"reviews": []},
+                "sarif": {"version": "2.1.0", "runs": []},
+            }
 
-        def review_code(self):
-            calls.append("review_code")
-            yield {"file": "a.py", "reviews": []}
-
-    engine = SimpleNamespace(review=_ReviewDomain())
     args = SimpleNamespace(
         verbose=True,
         quiet=True,
         triage=False,
         output_file=None,
     )
-    runtime = CommandRuntime(
-        command="review_code",
-        command_args=[],
-    )
-
-    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        commands, "iterate_with_progress", lambda _total, iterable: list(iterable)
+        commands,
+        "with_spinner",
+        lambda _message, func, *func_args, **func_kwargs: func(
+            *func_args,
+            **{k: v for k, v in func_kwargs.items() if k != "quiet"},
+        ),
     )
     monkeypatch.setattr(
         commands, "_finalize_review_output", lambda *_args, **_kwargs: None
     )
+    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
 
-    commands.run_review_code(engine, args, runtime)
+    target = None
+    if filename is not None:
+        target_path = tmp_path / filename
+        target_path.write_text("review input", encoding="utf-8")
+        target = str(target_path)
+    runtime = CommandRuntime(command=command, command_args=[target] if target else [])
 
-    assert calls == ["get_code_files", "review_code"]
+    if command == "review_code":
+        commands.run_review_code(_Engine(), args, runtime)
+    elif command == "review_patch":
+        commands.run_review(_Engine(), target, args, runtime)
+    else:
+        commands.run_file_review(_Engine(), target, args, runtime)
+
+    assert calls[0][0] == mode
+    assert calls[0][1]["target"] == target
+    assert callable(calls[0][1]["callbacks"]["diagnostic_callback"])
+    assert {path.rsplit(".", 1)[-1] for path in args.output_file} == {
+        "sarif",
+        "json",
+        "html",
+        "csv",
+    }
 
 
 def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):
@@ -111,122 +146,29 @@ def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):
     assert calls == ["count", "prepare", "finalize"]
 
 
-def test_run_init_enables_requested_index(monkeypatch):
-    calls = []
-
-    class _Engine:
-        def init_codebase(self, *, include_index=False):
-            calls.append(include_index)
-            return {
-                "threat_model": {
-                    "status": "ok",
-                    "records_written": 1,
-                    "authoritative_sources": ["SECURITY.md"],
-                },
-                "index": {"status": "indexed" if include_index else "skipped"},
-            }
-
-    monkeypatch.setattr(
-        commands,
-        "with_spinner",
-        lambda _message, func, **kwargs: func(include_index=kwargs["include_index"]),
-    )
-    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(commands, "save_output", lambda *_args, **_kwargs: None)
-
-    commands.run_init(
-        _Engine(),
-        SimpleNamespace(quiet=True, enabled_tools={"index"}, output_file=None),
-        CommandRuntime(command="init", command_args=[]),
-    )
-
-    assert calls == [True]
-
-
-def test_run_triage_passes_triage_options(tmp_path, monkeypatch):
-    sarif_path = tmp_path / "input.sarif"
-    sarif_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
-
-    class _DummyEngine:
-        def triage_sarif_file(self, input_path, output_path=None, **kwargs):
-            assert input_path == str(sarif_path)
-            assert "include_triaged" not in kwargs
-            assert isinstance(kwargs["options"], TriageOptions)
-            assert kwargs["options"].include_triaged is False
-            return output_path or input_path
-
-    args = SimpleNamespace(
-        quiet=False,
-        output_file=None,
-        include_triaged=False,
-    )
-    runtime = CommandRuntime(
-        command="triage",
-        command_args=[str(sarif_path)],
-    )
-    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
-
-    commands.run_triage(_DummyEngine(), str(sarif_path), args, runtime)
-
-
-def test_run_review_patch_uses_review_domain_surface(monkeypatch, tmp_path):
-    patch_path = tmp_path / "change.diff"
-    patch_path.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
-
-    class _ReviewDomain:
-        def review_patch(self, patch_file=None):
-            assert patch_file == str(patch_path)
-            return {"reviews": [], "overall_changes": ""}
-
-    engine = SimpleNamespace(review=_ReviewDomain())
-    args = SimpleNamespace(
-        quiet=False,
-        triage=False,
-        output_file=None,
-    )
-    runtime = CommandRuntime(
-        command="review_patch",
-        command_args=[str(patch_path)],
-    )
-
-    monkeypatch.setattr(
-        commands, "_finalize_review_output", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        commands,
-        "print_console",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        commands,
-        "with_spinner",
-        lambda _message, func, *func_args, **func_kwargs: func(
-            *func_args,
-            **{k: v for k, v in func_kwargs.items() if k != "quiet"},
-        ),
-    )
-
-    commands.run_review(engine, str(patch_path), args, runtime)
-
-
 def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     calls = []
-
-    class _ReviewDomain:
-        def get_code_files(self):
-            return ["a.py"]
-
-        def review_code(self):
-            yield {"file": "a.py", "reviews": []}
+    codegraph = object()
 
     class _Engine:
-        def __init__(self):
-            self.review = _ReviewDomain()
+        def execute_review(self, mode, **kwargs):
+            calls.append((mode, kwargs))
+            return {
+                "formats": ("sarif", "json", "html", "csv"),
+                "findings": {"reviews": []},
+                "sarif": {"version": "2.1.0", "runs": []},
+                "codegraph": codegraph,
+            }
 
-        def triage_sarif_payload(self, payload, **kwargs):
-            calls.append(kwargs["options"].include_triaged)
-            payload["runs"] = []
-            return payload
+        def execute_triage(self, payload, **kwargs):
+            calls.append(
+                (
+                    "triage",
+                    kwargs["options"],
+                    kwargs["codegraph"],
+                )
+            )
+            return {"formats": ("sarif",), "sarif": payload}
 
     engine = _Engine()
     args = SimpleNamespace(
@@ -257,4 +199,82 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
 
     commands.run_review_code(engine, args, runtime)
 
-    assert calls == [False]
+    assert calls[0][0] == "code"
+    assert calls[0][1]["target"] is None
+    assert callable(calls[0][1]["callbacks"]["diagnostic_callback"])
+    assert calls[1] == ("triage", None, codegraph)
+
+
+def test_review_command_honors_explicit_format_in_addition_to_graph_formats(
+    monkeypatch,
+):
+    class _Engine:
+        def execute_review(self, _mode, **_kwargs):
+            return {
+                "formats": ("sarif",),
+                "findings": {"reviews": []},
+                "sarif": {"version": "2.1.0", "runs": []},
+            }
+
+    args = SimpleNamespace(
+        quiet=True,
+        triage=False,
+        output_file=["report.json"],
+    )
+    saved: list[str] = []
+
+    def capture_output(_results, final_args, **_kwargs):
+        saved.extend(final_args.output_file)
+
+    monkeypatch.setattr(commands, "_finalize_review_output", capture_output)
+
+    commands.run_review_code(
+        _Engine(),
+        args,
+        CommandRuntime(command="review_code", command_args=[]),
+    )
+
+    assert {Path(path).suffix for path in saved} == {".json", ".sarif"}
+
+
+def test_run_review_code_preserves_review_output_when_triage_fails(monkeypatch):
+    saved = []
+
+    class _Engine:
+        def execute_review(self, _mode, **_kwargs):
+            return {
+                "formats": ("sarif", "json", "html", "csv"),
+                "findings": {"reviews": []},
+                "sarif": {"version": "2.1.0", "runs": [{"results": []}]},
+            }
+
+        def execute_triage(self, _payload, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+    args = SimpleNamespace(
+        verbose=False,
+        quiet=True,
+        triage=True,
+        include_triaged=False,
+        output_file=None,
+    )
+    runtime = CommandRuntime(command="review_code", command_args=[])
+    monkeypatch.setattr(
+        commands,
+        "with_spinner",
+        lambda _message, func, *func_args, **func_kwargs: func(
+            *func_args,
+            **{k: v for k, v in func_kwargs.items() if k != "quiet"},
+        ),
+    )
+    monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(commands, "pretty_print_reviews", lambda *_args: None)
+    monkeypatch.setattr(
+        commands,
+        "save_output",
+        lambda *_args, **kwargs: saved.append(kwargs["sarif_payload"]),
+    )
+
+    commands.run_review_code(_Engine(), args, runtime)
+
+    assert saved == [{"version": "2.1.0", "runs": [{"results": []}]}]

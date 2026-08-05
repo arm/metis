@@ -2,15 +2,53 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import yaml
+from copy import deepcopy
 
 from metis.configuration import build_embedding_provider_config
+from metis.configuration import load_execution_config
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
+from metis.runtime_settings import ModelToolSettings
+from metis.runtime_settings import CapabilityRuntimeSettings
+from metis.runtime_settings import TriageOptions
 
 
-def _write_config(tmp_path, content: str):
+_TOOL_CONFIG = {
+    "model_tools": {"max_rounds": 6, "max_contract_chars": 6000},
+    "capabilities": {
+        "index": {
+            "search": {
+                "max_top_k": 4,
+                "code_top_k": 1,
+                "docs_top_k": 4,
+                "docs_char_ratio": 1.0,
+                "default_max_chars": 5000,
+                "max_chars": 7000,
+            }
+        },
+        "navigation": {"timeout_seconds": 8, "max_chars": 16000},
+    },
+}
+
+
+def _write_config(tmp_path, content: str, *, complete_tool_config: bool = True):
     config_path = tmp_path / "metis.yaml"
-    config_path.write_text(content, encoding="utf-8")
+    config = yaml.safe_load(content)
+    if complete_tool_config:
+        engine = config.setdefault("metis_engine", {})
+        model_tools = engine.setdefault("model_tools", {})
+        for key, value in _TOOL_CONFIG["model_tools"].items():
+            model_tools.setdefault(key, value)
+        capabilities = engine.setdefault("capabilities", {})
+        index = capabilities.setdefault("index", {})
+        search = index.setdefault("search", {})
+        for key, value in _TOOL_CONFIG["capabilities"]["index"]["search"].items():
+            search.setdefault(key, value)
+        navigation = capabilities.setdefault("navigation", {})
+        for key, value in _TOOL_CONFIG["capabilities"]["navigation"].items():
+            navigation.setdefault(key, value)
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     return config_path
 
 
@@ -33,6 +71,95 @@ def test_load_metis_config_prefers_yaml_over_yml(tmp_path, monkeypatch):
     assert config == {"selected": "yaml"}
 
 
+def test_packaged_execution_graph_omits_index_initialization():
+    packaged = load_metis_config()
+    execution = load_execution_config()
+
+    initialize = execution["stages"]["initialize"]
+    review = execution["stages"]["review"]
+    triage = execution["stages"]["triage"]
+    assert "index" not in initialize["nodes"]
+    assert "index" not in initialize["outputs"]
+    assert "outputs" not in review
+    assert "inputs" not in review["nodes"]["reachability"]
+    assert "inputs" not in review["nodes"]["result"]
+    assert "outputs" not in triage
+    assert set(triage["nodes"]) == {"reachability_triage", "result"}
+    assert "inputs" not in triage["nodes"]["reachability_triage"]
+    assert "inputs" not in triage["nodes"]["result"]
+    assert review["nodes"]["result"]["formats"] == ["sarif"]
+    assert triage["nodes"]["result"]["formats"] == ["sarif"]
+    assert "triage" not in packaged["metis_engine"]
+
+
+def test_runtime_loads_codegraph_and_reachability_tuning_outside_execution(
+    tmp_path, monkeypatch
+):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  codegraph:
+    source_functions:
+      - name: public_api
+        reason: exported API
+  reachability:
+    max_paths: 4
+  triage:
+    include_triaged: true
+llm_provider:
+  name: openai
+  model: test-model
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["codegraph_config"] == {
+        "source_functions": [{"name": "public_api", "reason": "exported API"}]
+    }
+    assert runtime["reachability_config"] == {"max_paths": 4}
+    assert runtime["triage_options"] == TriageOptions(include_triaged=True)
+
+
+def test_runtime_passes_language_replacements_from_selected_yaml(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+language_plugins:
+  verilog:
+    implementation: vendor:VerilogPlugin
+llm_provider:
+  name: openai
+  model: test-model
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["plugin_config"]["language_plugins"] == {
+        "verilog": {"implementation": "vendor:VerilogPlugin"}
+    }
+
+
+def test_runtime_rejects_non_mapping_language_replacements(tmp_path, monkeypatch):
+    config_path = _write_config(
+        tmp_path,
+        """
+language_plugins: []
+llm_provider:
+  name: openai
+  model: test-model
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    with pytest.raises(ValueError, match="language_plugins must be a mapping"):
+        load_runtime_config(config_path)
+
+
 def test_load_runtime_config_accepts_chat_provider_without_embeddings(
     tmp_path, monkeypatch
 ):
@@ -42,6 +169,7 @@ def test_load_runtime_config_accepts_chat_provider_without_embeddings(
 metis_engine:
   model_tools:
     max_rounds: 9
+    max_contract_chars: 4200
 llm_provider:
   name: openai
   model: gpt-test
@@ -66,10 +194,11 @@ query:
     }
     assert runtime["llm_max_retries"] == 5
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
-    assert runtime["model_tool_max_rounds"] == 9
-    assert runtime["index_search_config"] == {}
+    assert runtime["capability_settings"] == CapabilityRuntimeSettings(
+        model_tools=ModelToolSettings(max_rounds=9, max_contract_chars=4200),
+        configurations=deepcopy(_TOOL_CONFIG["capabilities"]),
+    )
     assert runtime["memory"] == {
-        "enabled": False,
         "backend": "sqlite",
         "location": ".metis/memory/metis_memory.sqlite3",
     }
@@ -83,7 +212,6 @@ def test_load_runtime_config_accepts_memory_config(tmp_path, monkeypatch):
         tmp_path,
         """
 memory:
-  enabled: true
   backend: sqlite
   location: custom/memory.sqlite3
 llm_provider:
@@ -97,23 +225,50 @@ llm_provider:
     runtime = load_runtime_config(config_path)
 
     assert runtime["memory"] == {
-        "enabled": True,
         "backend": "sqlite",
         "location": "custom/memory.sqlite3",
     }
 
 
-def test_load_runtime_config_accepts_index_search_overrides(tmp_path, monkeypatch):
+def test_memory_capability_configuration_uses_top_level_section(tmp_path, monkeypatch):
     config_path = _write_config(
         tmp_path,
         """
 metis_engine:
-  index_search:
-    code_top_k: 1
-    docs_top_k: 3
-    docs_char_ratio: 0.8
-    default_max_chars: 2500
-    max_chars: 4000
+  capabilities:
+    memory:
+      backend: sqlite
+llm_provider:
+  name: openai
+  model: gpt-test
+""",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    with pytest.raises(ValueError, match="top-level memory section"):
+        load_runtime_config(config_path)
+
+
+def test_load_runtime_config_keeps_capability_config_outside_execution(
+    tmp_path, monkeypatch
+):
+    config_path = _write_config(
+        tmp_path,
+        """
+metis_engine:
+  capabilities:
+    index:
+      search:
+        code_top_k: 1
+        docs_top_k: 3
+        docs_char_ratio: 0.8
+        default_max_chars: 2500
+        max_chars: 4000
+    navigation:
+      timeout_seconds: 7
+      max_chars: 9000
+  execution:
+    stages: {}
 llm_provider:
   name: openai
   model: gpt-test
@@ -124,13 +279,53 @@ llm_provider:
 
     runtime = load_runtime_config(config_path)
 
-    assert runtime["index_search_config"] == {
-        "code_top_k": 1,
-        "docs_top_k": 3,
-        "docs_char_ratio": 0.8,
-        "default_max_chars": 2500,
-        "max_chars": 4000,
-    }
+    assert runtime["capability_settings"] == CapabilityRuntimeSettings(
+        model_tools=ModelToolSettings(max_rounds=6, max_contract_chars=6000),
+        configurations={
+            "index": {
+                "search": {
+                    "max_top_k": 4,
+                    "code_top_k": 1,
+                    "docs_top_k": 3,
+                    "docs_char_ratio": 0.8,
+                    "default_max_chars": 2500,
+                    "max_chars": 4000,
+                }
+            },
+            "navigation": {"timeout_seconds": 7, "max_chars": 9000},
+        },
+    )
+    assert runtime["execution_config"] == {"stages": {}}
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("model_tools", "max_contract_chars"), 0, "max_contract_chars"),
+    ],
+)
+def test_load_runtime_config_rejects_invalid_tool_limits(
+    tmp_path, monkeypatch, path, value, message
+):
+    engine_config = deepcopy(_TOOL_CONFIG)
+    target = engine_config
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    config_path = _write_config(
+        tmp_path,
+        yaml.safe_dump(
+            {
+                "metis_engine": engine_config,
+                "llm_provider": {"name": "openai", "model": "gpt-test"},
+            }
+        ),
+        complete_tool_config=False,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    with pytest.raises(ValueError, match=message):
+        load_runtime_config(config_path)
 
 
 def test_load_runtime_config_accepts_threat_model_sources(tmp_path, monkeypatch):

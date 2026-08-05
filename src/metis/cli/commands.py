@@ -3,38 +3,38 @@
 
 
 from importlib.metadata import version as package_version
-import inspect
 import json
 from pathlib import Path
 from rich.markup import escape
 
-from metis.engine.options import TriageOptions
-from metis.engine.tools.selection import INDEX_TOOL, tool_enabled
+from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
+from metis.sarif.triage import load_sarif_file
 from metis.usage import usage_operation
 from .triage_cli import run_triage_action
 from .utils import (
     check_dir_exists,
     check_file_exists,
+    build_standard_progress,
     with_spinner,
     with_timer,
-    collect_reviews,
     iterate_with_progress,
-    build_standard_progress,
     count_index_items,
     pretty_print_reviews,
     save_output,
     print_console,
+    output_format,
+    output_files_for_formats,
 )
 
 
-def _triage_options_for_runtime(args, runtime: CommandRuntime) -> TriageOptions:
-    return TriageOptions(
-        include_triaged=bool(getattr(args, "include_triaged", False)),
-    )
+def _triage_options(args) -> TriageOptions | None:
+    if not bool(getattr(args, "include_triaged", False)):
+        return None
+    return TriageOptions(include_triaged=True)
 
 
 def show_help(args=None):
@@ -62,8 +62,6 @@ Options:
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
-    --tools index,navigation|all|none
-                               Enable optional engine tools.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -80,89 +78,168 @@ def show_version(args=None):
 def run_review(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
-    results = with_spinner(
+    return _run_review_command(
+        engine,
+        "patch",
+        patch_file,
+        args,
         "Reviewing patch...",
-        engine.review.review_patch,
-        patch_file=patch_file,
-        quiet=args.quiet,
     )
-    _finalize_review_output(engine, results, args, runtime)
 
 
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
     if not check_file_exists(file_path):
         return
-    raw_result = with_spinner(
+    return _run_review_command(
+        engine,
+        "file",
+        file_path,
+        args,
         f"Reviewing file {file_path}...",
-        engine.review.review_file,
-        file_path=file_path,
-        quiet=args.quiet,
     )
-
-    if raw_result and isinstance(raw_result.get("reviews"), list):
-        results = {"reviews": [raw_result]}
-    else:
-        results = {"reviews": []}
-
-    _finalize_review_output(engine, results, args, runtime)
 
 
 def run_dir_review(engine, dir_path, args, runtime: CommandRuntime):
     review_dir_path = str(Path(engine.codebase_path) / dir_path)
     if not check_dir_exists(review_dir_path):
         return
-    code_files = list(engine.review.get_code_files(dir_path=review_dir_path))
-    _review_code(engine, code_files, args, runtime)
+    return _run_review_command(
+        engine,
+        "dir",
+        review_dir_path,
+        args,
+        "Reviewing directory...",
+    )
 
 
 def run_review_code(engine, args, runtime: CommandRuntime):
-    code_files = list(engine.review.get_code_files())
-    _review_code(engine, code_files, args, runtime)
+    return _run_review_command(
+        engine,
+        "code",
+        None,
+        args,
+        "Reviewing codebase...",
+    )
 
 
-def _review_code(engine, code_files, args, runtime: CommandRuntime):
-    if not args.quiet:
-        file_reviews = _collect_review_code_with_progress(
+def _run_review_command(engine, mode, target, args, spinner_text):
+    outputs = _execute_review(
+        engine,
+        mode,
+        target,
+        args,
+        spinner_text,
+    )
+    results = outputs["findings"]
+    sarif_output = outputs["sarif"]
+    formats = tuple(outputs["formats"])
+    if getattr(args, "triage", False):
+        triage = _triage_review_output(
             engine,
-            code_files,
+            sarif_output,
+            outputs.get("codegraph"),
+            args,
         )
-        results = {"reviews": file_reviews}
-    elif args.verbose:
-        file_reviews = iterate_with_progress(
-            len(code_files),
-            _review_code_iter(engine.review, code_files=code_files),
-        )
-        results = {"reviews": file_reviews}
-    else:
-        results = with_spinner(
-            "Reviewing codebase...",
-            collect_reviews,
-            engine,
-            kwargs=_get_review_code_kargs(
-                engine.review.review_code, code_files=code_files
-            ),
+        if triage is not None:
+            sarif_output = triage["sarif"]
+            formats = tuple(dict.fromkeys((*formats, *triage["formats"])))
+    generated_output = bool(getattr(args, "_metis_generated_output", False))
+    if not generated_output:
+        explicit_formats = tuple(output_format(path) for path in args.output_file or ())
+        formats = tuple(dict.fromkeys((*formats, *explicit_formats)))
+    args.output_file = output_files_for_formats(
+        args.output_file,
+        formats,
+        command=f"review_{mode}",
+        generated_output=generated_output,
+    )
+    _finalize_review_output(
+        results,
+        args,
+        sarif_payload=sarif_output,
+    )
+
+
+def _execute_review(engine, mode, target, args, spinner_text):
+    kwargs = {
+        "target": target,
+        "callbacks": {
+            "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
+                diagnostic,
+                args.quiet,
+            )
+        },
+    }
+    if mode not in {"code", "dir"} or args.quiet:
+        return with_spinner(
+            spinner_text,
+            engine.execute_review,
+            mode,
+            **kwargs,
             quiet=args.quiet,
         )
-    _finalize_review_output(engine, results, args, runtime)
+
+    with build_standard_progress(transient=True) as progress:
+        reporter = ReviewCodeProgressReporter(progress, total_files=0)
+        try:
+            return engine.execute_review(
+                mode,
+                target=target,
+                callbacks={
+                    "progress_callback": reporter,
+                    "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
+                        diagnostic, args.quiet
+                    ),
+                },
+            )
+        finally:
+            reporter.finish()
+
+
+def _print_review_diagnostic(diagnostic, quiet):
+    color = "yellow" if diagnostic.severity == "warning" else "red"
+    print_console(
+        f"[{color}]{escape(diagnostic.message)}[/{color}]",
+        quiet,
+    )
+
+
+def _triage_review_output(engine, sarif_payload, codegraph, args):
+    options = _triage_options(args)
+
+    def _invoke(debug_callback=None, progress_callback=None):
+        return engine.execute_triage(
+            sarif_payload,
+            codegraph=codegraph,
+            options=options,
+            debug_callback=debug_callback,
+            progress_callback=progress_callback,
+        )
+
+    try:
+        with usage_operation("triage"):
+            return run_triage_action(
+                args,
+                action=_invoke,
+                spinner_text="Triaging findings...",
+            )
+    except Exception as exc:
+        print_console(
+            f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",
+            args.quiet,
+        )
+        return None
 
 
 def run_init(engine, args, runtime: CommandRuntime):
-    include_index = tool_enabled(args.enabled_tools, INDEX_TOOL)
     results = with_spinner(
         "Initializing codebase context...",
         engine.init_codebase,
-        include_index=include_index,
         quiet=args.quiet,
     )
-    threat_model = results["threat_model"]
-    index_status = results["index"]
-    if threat_model["status"] == "disabled":
-        print_console(
-            "[yellow]Threat model memory disabled.[/yellow] "
-            "Enable repository memory in metis.yaml to populate it.",
-            args.quiet,
-        )
-    else:
+    threat_model = results.get("threat_model")
+    index_status = results.get("index")
+    if threat_model is not None:
         source_text = ", ".join(threat_model["authoritative_sources"]) or "none"
         print_console(
             "[green]Threat model initialized.[/green] "
@@ -170,63 +247,12 @@ def run_init(engine, args, runtime: CommandRuntime):
             f"authoritative sources: {escape(source_text)}",
             args.quiet,
         )
-    print_console(
-        f"[green]Index status:[/green] {escape(index_status['status'])}",
-        args.quiet,
-    )
+    if index_status is not None:
+        print_console(
+            f"[green]Index status:[/green] {escape(index_status['status'])}",
+            args.quiet,
+        )
     save_output(args.output_file, results, args.quiet)
-
-
-def _collect_review_code_with_progress(engine, code_files):
-    results = []
-    total = len(code_files)
-    with build_standard_progress(transient=True) as progress:
-        progress_reporter = ReviewCodeProgressReporter(
-            progress,
-            total_files=total,
-        )
-        for item in _review_code_iter(
-            engine.review,
-            progress_callback=progress_reporter,
-            code_files=code_files,
-        ):
-            if item is not None:
-                results.append(item)
-            progress_reporter.review_result()
-        progress_reporter.finish()
-    return results
-
-
-def _get_review_code_kargs(
-    review_code, progress_callback=None, code_files=None
-) -> dict:
-    kwargs = {}
-    try:
-        signature = inspect.signature(review_code)
-    except (TypeError, ValueError):
-        signature = None
-    if signature is not None:
-        params = signature.parameters
-        accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
-        )
-        if progress_callback is not None and (
-            "progress_callback" in params or accepts_kwargs
-        ):
-            kwargs["progress_callback"] = progress_callback
-        if code_files is not None and (
-            "get_code_files_func" in params or accepts_kwargs
-        ):
-            kwargs["get_code_files_func"] = lambda: code_files
-    elif progress_callback is not None:
-        kwargs["progress_callback"] = progress_callback
-    return kwargs
-
-
-def _review_code_iter(review_domain, progress_callback=None, code_files=None):
-    review_code = review_domain.review_code
-    kwargs = _get_review_code_kargs(review_code, progress_callback, code_files)
-    return review_code(**kwargs)
 
 
 def run_index(engine, verbose=False, quiet=False):
@@ -292,34 +318,43 @@ def run_triage(engine, findings_path, args, runtime: CommandRuntime):
         )
         return
     print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
-    options = _triage_options_for_runtime(args, runtime)
-
-    output_target = None
-    if args.output_file:
-        sarif_targets = [
-            p for p in args.output_file if str(p).lower().endswith(".sarif")
-        ]
-        if sarif_targets:
-            output_target = sarif_targets[0]
+    options = _triage_options(args)
+    sarif_payload = load_sarif_file(findings_path)
+    requested_outputs = list(args.output_file or ())
+    checkpoint_path = next(
+        (path for path in requested_outputs if Path(path).suffix.lower() == ".sarif"),
+        str(Path(requested_outputs[0]).with_suffix(".sarif"))
+        if requested_outputs
+        else findings_path,
+    )
 
     def _invoke(debug_callback=None, progress_callback=None):
-        return engine.triage_sarif_file(
-            findings_path,
-            output_target,
+        return engine.execute_triage(
+            sarif_payload,
             options=options,
             debug_callback=debug_callback,
             progress_callback=progress_callback,
+            checkpoint_path=checkpoint_path,
         )
 
-    saved_path = run_triage_action(
+    triage = run_triage_action(
         args,
         action=_invoke,
         spinner_text="Triaging SARIF findings...",
     )
-    print_console(
-        f"[green]Triage complete. SARIF saved to {escape(str(saved_path))}[/green]",
-        args.quiet,
+    output_files = output_files_for_formats(
+        args.output_file or [findings_path],
+        tuple(triage["formats"]),
+        command="triage",
+        generated_output=args.output_file is None,
     )
+    save_output(
+        output_files,
+        triage["sarif"],
+        args.quiet,
+        sarif_payload=triage["sarif"],
+    )
+    print_console("[green]Triage complete.[/green]", args.quiet)
 
 
 def _run_json_triage(engine, json_path, args, runtime: CommandRuntime):
@@ -333,58 +368,43 @@ def _run_json_triage(engine, json_path, args, runtime: CommandRuntime):
         )
         return
 
-    options = _triage_options_for_runtime(args, runtime)
+    options = _triage_options(args)
     sarif_payload = generate_sarif(results)
 
     def _invoke(debug_callback=None, progress_callback=None):
-        return engine.triage_sarif_payload(
+        return engine.execute_triage(
             sarif_payload,
             options=options,
             debug_callback=debug_callback,
             progress_callback=progress_callback,
         )
 
-    triaged_sarif = run_triage_action(
+    triage = run_triage_action(
         args,
         action=_invoke,
         spinner_text="Triaging JSON findings...",
     )
 
-    output_files = args.output_file or [json_path]
-    save_output(output_files, results, args.quiet, sarif_payload=triaged_sarif)
+    output_files = output_files_for_formats(
+        args.output_file or [json_path],
+        tuple(triage["formats"]),
+        command="triage",
+        generated_output=args.output_file is None,
+    )
+    save_output(
+        output_files,
+        results,
+        args.quiet,
+        sarif_payload=triage["sarif"],
+    )
     print_console("[green]Triage complete.[/green]", args.quiet)
 
 
-def _build_triaged_sarif_payload(engine, results, args, runtime: CommandRuntime):
-    if not getattr(args, "triage", False):
-        return None
-    try:
-        sarif_payload = generate_sarif(results)
-        options = _triage_options_for_runtime(args, runtime)
-
-        def _invoke(debug_callback=None, progress_callback=None):
-            return engine.triage_sarif_payload(
-                sarif_payload,
-                options=options,
-                debug_callback=debug_callback,
-                progress_callback=progress_callback,
-            )
-
-        with usage_operation("triage"):
-            return run_triage_action(
-                args,
-                action=_invoke,
-                spinner_text="Triaging findings...",
-            )
-    except Exception as exc:
-        print_console(
-            f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",
-            args.quiet,
-        )
-        return None
-
-
-def _finalize_review_output(engine, results, args, runtime: CommandRuntime):
+def _finalize_review_output(
+    results,
+    args,
+    *,
+    sarif_payload,
+):
     pretty_print_reviews(results, args.quiet)
-    sarif_payload = _build_triaged_sarif_payload(engine, results, args, runtime)
     save_output(args.output_file, results, args.quiet, sarif_payload=sarif_payload)

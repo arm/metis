@@ -4,7 +4,7 @@
 import pytest
 from pydantic import ValidationError
 
-from metis.engine.graphs.schemas import ReviewResponseModel
+from metis.engine.nodes.simple_llm_review.schema import ReviewResponseModel
 
 
 def _make_issue(**overrides):

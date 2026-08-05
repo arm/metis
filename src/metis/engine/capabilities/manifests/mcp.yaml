@@ -1,0 +1,20 @@
+name: mcp
+status: planned
+operations:
+  - id: mcp.import_tools
+    name: mcp.import_tools
+    description: >-
+      Discover and wrap MCP server tools as model-callable or orchestration
+      operations.
+    surfaces: [model_tool, orchestration]
+    status: planned
+  - id: mcp.import_resources
+    name: mcp.import_resources
+    description: Load MCP resources as Metis context providers.
+    surfaces: [context_provider, orchestration]
+    status: planned
+  - id: mcp.import_prompts
+    name: mcp.import_prompts
+    description: Load MCP prompts as model contracts or workflow prompts.
+    surfaces: [prompt_contract]
+    status: planned

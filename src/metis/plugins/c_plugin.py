@@ -6,6 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CPlugin(ConfigBackedLanguagePlugin):
     NAME = "c"
-
-    def supports_reachability_review(self) -> bool:
-        return True

@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.graphs.types import AskRequest
-from metis.engine.graphs.types import ReviewState
-from metis.engine.graphs.ask import AskGraph
-from metis.engine.graphs.review import (
+from metis.engine.ask import AskGraph
+from metis.engine.ask.models import AskRequest
+from metis.engine.nodes.simple_llm_review.graph import (
     review_node_build_prompt,
     review_node_llm,
     review_node_parse,
 )
+from metis.engine.stages.review.models import ReviewState
 
 
 class _Doc:
@@ -87,7 +87,7 @@ def test_review_nodes_pipeline_parses():
 
 
 def test_review_body_includes_threat_model_context():
-    from metis.engine.graphs.review import _build_body_text
+    from metis.engine.nodes.simple_llm_review.graph import _build_body_text
 
     body = _build_body_text(
         {

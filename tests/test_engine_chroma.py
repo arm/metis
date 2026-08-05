@@ -12,7 +12,7 @@ from llama_index.core.embeddings.mock_embed_model import MockEmbedding
 
 
 @pytest.mark.chroma
-def test_chroma_backend_indexing(tmp_path):
+def test_chroma_backend_indexing(tmp_path, capability_settings):
 
     Settings.embed_model = MockEmbedding(embed_dim=8)
 
@@ -24,7 +24,7 @@ def test_chroma_backend_indexing(tmp_path):
         "max_token_length": 2048,
         "llama_query_model": "gpt-test",
         "similarity_top_k": 5,
-        "enabled_tools": {"index"},
+        "capability_settings": capability_settings,
     }
 
     embed = MockEmbedding(embed_dim=8)

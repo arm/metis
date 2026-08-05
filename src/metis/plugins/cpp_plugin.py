@@ -6,6 +6,3 @@ from metis.plugins.base import ConfigBackedLanguagePlugin
 
 class CppPlugin(ConfigBackedLanguagePlugin):
     NAME = "cpp"
-
-    def supports_reachability_review(self) -> bool:
-        return True

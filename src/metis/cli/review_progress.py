@@ -10,12 +10,14 @@ from rich.progress import Progress
 
 class ReviewCodeProgressReporter:
     _EVENT_HANDLERS = {
-        "treesitter_graph_start": "_graph_start",
-        "treesitter_graph_progress": "_graph_progress",
-        "treesitter_graph_done": "_graph_done",
-        "treesitter_paths_start": "_paths_start",
-        "treesitter_paths_progress": "_paths_progress",
-        "treesitter_paths_done": "_paths_done",
+        "review_files_start": "_review_files_start",
+        "review_result": "_review_result",
+        "codegraph_start": "_graph_start",
+        "codegraph_progress": "_graph_progress",
+        "codegraph_done": "_graph_done",
+        "reachability_paths_start": "_paths_start",
+        "reachability_paths_progress": "_paths_progress",
+        "reachability_paths_done": "_paths_done",
         "intra_audit_start": "_intra_audit_start",
         "intra_audit_progress": "_intra_audit_progress",
         "confirmation_start": "_confirmation_start",
@@ -25,7 +27,7 @@ class ReviewCodeProgressReporter:
         "findings_finalization_start": "_findings_finalization_start",
         "findings_finalization_progress": "_findings_finalization_progress",
         "findings_finalization_done": "_findings_finalization_done",
-        "treesitter_code_review_done": "_code_review_done",
+        "reachability_code_review_done": "_code_review_done",
         "review_output_aggregation_start": "_review_output_aggregation_start",
         "review_output_aggregation_done": "_review_output_aggregation_done",
     }
@@ -47,7 +49,10 @@ class ReviewCodeProgressReporter:
     def __call__(self, event: Mapping[str, Any] | None):
         event = event or {}
         kind = str(event.get("event") or "")
-        if kind:
+        if kind.startswith("execution_"):
+            self._generic_event(kind)
+            return
+        if kind and kind not in {"review_files_start", "review_result"}:
             self._saw_reachability = True
 
         handler_name = self._EVENT_HANDLERS.get(kind)
@@ -55,6 +60,18 @@ class ReviewCodeProgressReporter:
             getattr(self, handler_name)(event)
             return
         self._generic_event(kind)
+
+    def _review_files_start(self, event: Mapping[str, Any]):
+        self._total_files = _non_negative_int(event.get("total")) or 0
+        self._progress.update(
+            self._task,
+            total=self._total_files or None,
+            completed=0,
+            description="[cyan]Reviewing codebase...[/cyan]",
+        )
+
+    def _review_result(self, _event: Mapping[str, Any]):
+        self.review_result()
 
     def review_result(self):
         self._review_completed += 1
@@ -86,7 +103,7 @@ class ReviewCodeProgressReporter:
 
     def _graph_start(self, event: Mapping[str, Any]):
         self._start_phase(
-            "[cyan]Building reachability graph...[/cyan]",
+            "[cyan]Building CodeGraph...[/cyan]",
             total=_positive_int(event.get("total")),
         )
 
@@ -94,8 +111,8 @@ class ReviewCodeProgressReporter:
         self._update_progress(
             total=_positive_int(event.get("total")),
             completed=_positive_int(event.get("completed")) or 0,
-            description="[cyan]Building reachability graph[/cyan]",
-            final_description="[cyan]Finalizing reachability graph...[/cyan]",
+            description="[cyan]Building CodeGraph[/cyan]",
+            final_description="[cyan]Finalizing CodeGraph...[/cyan]",
         )
 
     def _graph_done(self, event: Mapping[str, Any]):

@@ -10,6 +10,7 @@ from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.vector_stores import SimpleVectorStore
 
 from metis.engine import MetisEngine
+from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.usage.collector import UsageCollector
 from metis.usage.context import current_operation, current_scope
 from metis.usage.runtime import UsageRuntime
@@ -73,7 +74,7 @@ def test_usage_runtime_command_summary_and_persistence(tmp_path):
     assert fresh_runtime.snapshot_total()["total_tokens"] == 0
 
 
-def test_review_code_propagates_usage_context_into_worker_threads():
+def test_review_code_propagates_usage_context_into_worker_threads(capability_settings):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -86,12 +87,13 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
+        capability_settings=capability_settings,
     )
 
-    engine.review.get_code_files = lambda: ["a.py", "b.py"]
+    files = ["a.py", "b.py"]
 
-    def _review_file(path):
-        engine.usage_runtime.collector.record(
+    def _review_file(path, **_kwargs):
+        engine._config.usage_runtime.collector.record(
             scope_id=current_scope(),
             operation=current_operation(),
             model="gpt-4o-mini",
@@ -101,10 +103,15 @@ def test_review_code_propagates_usage_context_into_worker_threads():
         )
         return {"file": path}
 
-    engine.review.review_file = _review_file
+    service = SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda index: engine._get_review_graph(index),
+    )
+    service._review_file_standard = _review_file
 
     with engine.usage_command("review_code") as command:
-        results = list(engine.review.review_code())
+        results = service.execute_standard_review_with_outcome(files).result["reviews"]
 
     record = engine.finalize_usage_command(command)
 
@@ -194,7 +201,7 @@ class _DummyIndexBackend:
         return None
 
 
-def test_index_codebase_records_embedding_usage(tmp_path):
+def test_index_codebase_records_embedding_usage(tmp_path, capability_settings):
     codebase = tmp_path / "repo"
     codebase.mkdir()
     (codebase / "a.py").write_text('print("hello")\n', encoding="utf-8")
@@ -225,7 +232,7 @@ def test_index_codebase_records_embedding_usage(tmp_path):
         max_token_length=2048,
         llama_query_model="gpt-test",
         similarity_top_k=3,
-        enabled_tools={"index"},
+        capability_settings=capability_settings,
     )
 
     with engine.usage_command("index") as command:

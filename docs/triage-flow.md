@@ -1,64 +1,88 @@
-# Deterministic SARIF Triage Flow
+# SARIF Triage Flow
 
-Metis triage is deterministic orchestration, not an agent loop.
+The Triage stage is a fixed workflow boundary whose selected nodes come from
+YAML. During a run, model calls may use a bounded number of navigation-tool
+rounds, but the model cannot change those nodes or their ordering.
+
+The stage contract is SARIF in and SARIF out. In the packaged graph, Review
+publishes SARIF to the Triage stage. A standalone `triage` command supplies
+Metis or third-party SARIF directly, so Review does not run. File loading,
+checkpoint persistence, and output-path selection remain at the CLI boundary.
 
 ## End-to-end flow
 1. Read SARIF findings.
-2. Collect deterministic evidence around the reported location:
-   - Tree-sitter scope/symbol extraction (when supported for the file).
-   - Line-local file windows and symbol probes with local tools (`sed`, `grep`).
-   - C/C++ macro/include-aware expansion and definition lookup.
-3. Build a bounded evidence pack.
-4. Derive evidence obligations and coverage from collected sections/unresolved hops.
-5. Ask the model for a structured decision:
+2. Select Reachability triage when Reachability supports the reported file;
+   otherwise use the simple LLM triage fallback.
+3. Collect deterministic evidence around the reported location:
+   - CodeGraph reachability context includes the target function, callers,
+     callees, paths, related functions, and globals available from the graph.
+   - The simple LLM fallback starts with line-local file windows and follows
+     concrete symbols with `sed` and `grep`.
+4. Build a bounded evidence pack.
+5. Derive evidence obligations and coverage where the selected path provides
+   them.
+6. Ask the model for a structured decision:
    - `status`: `valid` | `invalid` | `inconclusive`
    - `reason`
    - `evidence` (`file:line`)
    - `resolution_chain`
    - `unresolved_hops`
-6. Apply deterministic gating and adjudication, then annotate SARIF:
+7. Apply the selected path's validation and fallback rules, then annotate SARIF:
    - `metisTriaged`
    - `metisTriageStatus`
    - `metisTriageReason`
    - `metisTriageTimestamp`
+   - conditional `metisEvidenceRequirements` (list),
+     `metisEvidenceCoverage` (mapping), `metisMissingEvidence` (list), and
+     `metisThreatModelPolicy` (mapping) when the selected triage path produces
+     them
 
 ```text
 SARIF finding
     |
     v
 Source-aware evidence collection
-(Tree-sitter + line-local sed/grep + macro/include resolution)
+(CodeGraph reachability or line-local sed/grep)
     |
     v
 Bounded evidence pack
     |
     v
-Evidence obligations + coverage gate
+Path-specific evidence validation
     |
     v
 LLM structured decision
     |
     v
-Deterministic adjudication rules
+Simple-LLM adjudication or Reachability decision
     |
     v
 SARIF annotations
 ```
 
-## Evidence collection (primary path)
-For supported languages, the analyzer parses the file and anchors analysis near the reported line.
+## Evidence collection
 
-Evidence is collected in this order:
-1. Analyzer summary/citations/resolution chain/flow chain (if available).
-2. File-local context via `sed`:
+For files supported by Reachability, Metis loads the language-neutral CodeGraph
+produced by the matching provider, applies the matching deterministic semantics,
+then anchors the finding to a nearby function. The evidence contains the
+reported line, target function, direct graph relationships, available incoming
+and outgoing paths, related functions, and relevant globals. The model can use
+the engine's model-callable tools to resolve concrete gaps.
+
+The simple LLM triage route, whether selected directly or used as the
+Reachability fallback, collects:
+
+1. File-local context via `sed`:
    - reported line
    - bounded nearby window
-3. Tree-sitter scope symbols near/above the reported line.
-4. Symbol definition probing with bounded `grep` in local/fallback paths.
-5. Context windows around located hits via `sed`.
-6. C/C++ only: macro definition/semantics collection and include-name resolution.
+2. Concrete symbol candidates from the finding, snippet, explanation, and
+   reported-line context.
+3. Symbol definition and use-site probes with bounded `grep`.
+4. Context windows around located hits via `sed`.
 
-If parser initialization/parsing fails, triage still runs with deterministic text-tool evidence.
+Language plugins can add navigation guidance to the simple LLM route, but it
+does not claim CodeGraph-backed analysis when Reachability is unavailable for
+the reported file. Metis uses this text-evidence fallback instead.
 
 ## Source-aware behavior (Metis SARIF vs external SARIF)
 Metis accepts SARIF from Metis itself and from external tools.
@@ -72,22 +96,14 @@ Metis accepts SARIF from Metis itself and from external tools.
 
 This keeps triage generic while allowing richer reuse of Metis-native hints when present.
 
-## C/C++ macro/include resolution
-For C/C++ files, triage adds macro-aware evidence:
-- detects macro-like calls from Tree-sitter scope near the finding.
-- resolves `#define` sites with bounded `grep`/`sed`.
-- resolves include names through local evidence collection when headers are available.
-- records semantic macro resolution in the evidence pack (for example mapping to `alloca`/assertion/assumption behavior).
-
-Resolved macro semantics can neutralize corresponding unresolved-hop noise during adjudication.
-
 ## Evidence obligations and gate
-Before the model decision is finalized, triage computes obligation coverage from evidence sections and unresolved hops.
+The simple LLM triage node computes obligation coverage from its collected
+sections and unresolved symbol hops before the model decision is finalized.
 
 If required obligations are missing, triage forces `inconclusive` via deterministic gate instead of accepting an overconfident status.
 
 ## Adjudication (deterministic guardrail)
-Model output is not accepted blindly.
+The simple LLM triage node does not accept model output blindly.
 
 Deterministic rules then decide the final status:
 - Contradiction signals can force `invalid`.
@@ -102,10 +118,13 @@ This prevents overconfident status flips while avoiding unnecessary `inconclusiv
 This flow is focused on static triage decisions for SARIF findings.
 
 ## Analyzer support
-- C/C++ triage uses a dedicated Tree-sitter analyzer with richer semantic evidence collection (flow hops, guards, macro/include resolution).
-- Python/JavaScript/TypeScript/Go/Rust/Ruby/PHP/Solidity triage uses a generic Tree-sitter analyzer (structural pass around the finding with lightweight flow hints), then deterministic tool probing.
-- If parser initialization/parsing fails, triage remains operational with deterministic text-tool evidence.
-
-Analysis terms:
-- `Flow Analysis`: follows source/guard/sink hops with stronger definition/reference/call resolution, including cross-file and macro/include-aware evidence chaining.
-- `Structural Analysis`: uses AST-local structure around the finding (enclosing blocks, call-like nodes, local checks) and relies more on deterministic tools for deeper cross-file evidence.
+- Reachability triage applies when a language has matching manifest, CodeGraph
+  provider, and deterministic semantics support.
+- Packaged Reachability support currently covers C and C++; their shared
+  CodeGraph provider uses Tree-sitter internally.
+- Unsupported files use the plugin-guided `simple_llm_triage` fallback and
+  deterministic text-tool evidence.
+- Macro expansion and concurrency semantics are not standalone triage stages.
+  A model may identify an unresolved macro, wrapper, or build gate and use
+  available navigation tools to inspect it, but Metis does not currently claim
+  a separate deterministic macro-expansion or concurrency-semantics analyzer.

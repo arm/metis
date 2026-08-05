@@ -1,38 +1,25 @@
-psql_database:
-  provider: "config"
-  credentials:
-    username: "metis_user"
-    password: "metis_password"
-    host: "localhost"
-    port: 5432
-    database_name: "metis_db"
-
 metis_engine:
   max_token_length: 250000
   max_workers: 5
   triage_checkpoint_every: 50
-  triage_tool_timeout_seconds: 12
   llm_max_retries: 5
   embed_dim: 3072
-  # For the PostgreSQL backend, use pgvector halfvec storage automatically when
-  # embed_dim exceeds normal vector HNSW limits. Set true or false to override.
-  pgvector_use_halfvec: auto
-  hnsw_kwargs:
-    hnsw_m: 16
-    hnsw_ef_construction: 64
-    hnsw_ef_search: 40
-    hnsw_dist_method: "vector_cosine_ops"
-  reachability_confirmation_model: "gpt-5.5"
-  reachability_reasoning_effort: "low"
-  reachability_max_paths: 0
-  reachability_max_paths_per_sink: 3
-  reachability_max_path_length: 25
-  reachability_source_functions: []
-  reachability_security_functions: []
-  reachability_domain_profiles: []
-  reachability_domain_hints: []
   model_tools:
     max_rounds: 6
+    max_contract_chars: 6000
+  # Capability settings
+  capabilities:
+    index:
+      search:
+        max_top_k: 4
+        code_top_k: 1
+        docs_top_k: 4
+        docs_char_ratio: 1.0
+        default_max_chars: 5000
+        max_chars: 7000
+    navigation:
+      timeout_seconds: 8
+      max_chars: 16000
   threat_model:
     source_patterns:
       - "SECURITY.*"
@@ -47,9 +34,52 @@ metis_engine:
     history:
       enabled: false
       max_commits: 500
+  execution:
+    inputs:
+      review_request:
+        mode: code
+    stages:
+      initialize:
+        outputs:
+          - threat_model
+        nodes:
+          threat_model:
+            capabilities:
+              - memory
+      review:
+        depends_on:
+          - initialize
+        nodes:
+          codegraph: {}
+          reachability:
+            capabilities:
+              - memory
+          result:
+            formats:
+              - sarif
+      triage:
+        inputs:
+          sarif: review.sarif
+          codegraph: review.codegraph
+        nodes:
+          reachability_triage:
+            capabilities:
+              - memory
+              - navigation
+          result:
+            formats:
+              - sarif
+  codegraph:
+    source_functions: []
+    security_functions: []
+  reachability:
+    max_paths: 0
+    max_paths_per_sink: 3
+    max_path_length: 25
+    domain_profiles: []
+    domain_hints: []
 
 memory:
-  enabled: false
   backend: "sqlite"
   location: ".metis/memory/metis_memory.sqlite3"
 
@@ -60,7 +90,7 @@ llm_provider:
   # configured provider/model. Can be overridden under query.
   # reasoning_effort: "medium"
 
-# Optional — only needed when the index tool is enabled.
+# Needed only when the selected execution path uses the index capability.
 embedding_provider:
   name: "openai"
   code_embedding_model: "text-embedding-3-large"

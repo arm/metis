@@ -3,11 +3,11 @@
 
 import pytest
 
-from metis.engine.graphs.utils import (
+from metis.engine.nodes.simple_llm_review.prompt import (
     build_review_system_prompt,
     sanitize_review_payload,
 )
-from metis.engine.graphs.review import review_node_llm
+from metis.engine.nodes.simple_llm_review.graph import review_node_llm
 
 
 def test_build_review_system_prompt_requires_placeholder():

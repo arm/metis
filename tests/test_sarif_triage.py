@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from metis.engine.execution import ExecutionStatus
 from metis.sarif.triage import extract_findings
 
 
@@ -95,27 +96,6 @@ def test_extract_findings_skips_metis_triaged_by_default():
     assert findings[0].rule_id == "R1"
 
 
-def test_extract_findings_can_include_metis_triaged():
-    payload = {
-        "version": "2.1.0",
-        "runs": [
-            {
-                "results": [
-                    {"ruleId": "R1", "message": {"text": "fresh"}},
-                    {
-                        "ruleId": "R2",
-                        "message": {"text": "already"},
-                        "properties": {"metisTriaged": True},
-                    },
-                ]
-            }
-        ],
-    }
-
-    findings = extract_findings(payload, include_triaged=True)
-    assert len(findings) == 2
-
-
 def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     payload = {
         "version": "2.1.0",
@@ -129,7 +109,7 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
         ],
     }
 
-    class _DummyGraph:
+    class _DummyWorkflow:
         def __init__(self):
             self.count = 0
 
@@ -139,14 +119,15 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
                 raise RuntimeError("boom")
             return {"status": "valid", "reason": "confirmed"}
 
-    engine.max_workers = 1
     engine._triage_service.max_workers = 1
-    dummy_graph = _DummyGraph()
+    dummy_workflow = _DummyWorkflow()
     monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: dummy_graph
+        engine._simple_llm_triage,
+        "_workflow",
+        lambda _navigation, _rounds: dummy_workflow,
     )
 
-    out = engine.triage_sarif_payload(payload)
+    out = engine.execute_triage(payload)["sarif"]
     first = out["runs"][0]["results"][0]
     second = out["runs"][0]["results"][1]
 
@@ -160,13 +141,36 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     assert second["properties"]["metisMissingEvidence"] == ["triage execution failed"]
 
 
+def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkeypatch):
+    payload = {
+        "version": "2.1.0",
+        "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
+    }
+
+    class _FailingWorkflow:
+        def triage(self, _request):
+            raise RuntimeError("boom")
+
+    engine._triage_service.max_workers = 1
+    monkeypatch.setattr(
+        engine._simple_llm_triage,
+        "_workflow",
+        lambda: _FailingWorkflow(),
+    )
+
+    result = engine.execution.execute_triage(payload)
+
+    assert result.status is ExecutionStatus.INCONCLUSIVE
+    assert result.diagnostics[-1].code == "triage.findings_inconclusive"
+
+
 def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
     payload = {
         "version": "2.1.0",
         "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
     }
 
-    class _DummyGraph:
+    class _DummyWorkflow:
         def triage(self, _request):
             return {
                 "status": "inconclusive",
@@ -181,12 +185,13 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
             }
 
     monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+        engine._simple_llm_triage,
+        "_workflow",
+        lambda _navigation, _rounds: _DummyWorkflow(),
     )
-    engine.max_workers = 1
     engine._triage_service.max_workers = 1
 
-    out = engine.triage_sarif_payload(payload)
+    out = engine.execute_triage(payload)["sarif"]
     props = out["runs"][0]["results"][0]["properties"]
 
     assert props["metisEvidenceRequirements"] == ["local_context", "use_site"]
@@ -198,89 +203,57 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
     }
 
 
-def test_triage_file_writes_checkpoints(engine, monkeypatch, tmp_path):
-    input_path = tmp_path / "findings.sarif"
-    input_path.write_text(
-        (
-            '{"version":"2.1.0","runs":[{"results":['
-            '{"message":{"text":"A"},"ruleId":"R1"},'
-            '{"message":{"text":"B"},"ruleId":"R2"},'
-            '{"message":{"text":"C"},"ruleId":"R3"},'
-            '{"message":{"text":"D"},"ruleId":"R4"},'
-            '{"message":{"text":"E"},"ruleId":"R5"}'
-            "]}]}"
-        ),
-        encoding="utf-8",
-    )
-
-    class _DummyGraph:
-        def triage(self, _request):
-            return {"status": "valid", "reason": "confirmed"}
-
-    writes = []
-
-    def _save(_path, payload):
-        triaged_count = 0
-        for result in payload.get("runs", [{}])[0].get("results", []):
-            props = result.get("properties", {})
-            if props.get("metisTriaged") is True:
-                triaged_count += 1
-        writes.append(triaged_count)
-
-    monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
-    )
-    monkeypatch.setattr("metis.engine.triage_service_exec.save_sarif_file", _save)
-    engine.max_workers = 1
-    engine._triage_service.max_workers = 1
-
-    out_path = engine.triage_sarif_file(str(input_path), checkpoint_every=2)
-
-    assert out_path == str(input_path)
-    assert writes == [2, 4, 5]
-
-
-def test_triage_request_propagates_source_metadata(engine, monkeypatch):
+def test_execute_triage_writes_checkpoints_at_configured_cadence(
+    engine, monkeypatch, tmp_path
+):
     payload = {
         "version": "2.1.0",
         "runs": [
             {
                 "results": [
-                    {
-                        "message": {"text": "A"},
-                        "ruleId": "R1",
-                        "locations": [
-                            {
-                                "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.py"},
-                                    "region": {"startLine": 12},
-                                }
-                            }
-                        ],
-                    }
+                    {"message": {"text": letter}, "ruleId": f"R{index}"}
+                    for index, letter in enumerate("ABCDE", start=1)
                 ]
             }
         ],
     }
 
-    captured = {}
+    class _DummyWorkflow:
+        def triage(self, _request):
+            return {"status": "valid", "reason": "confirmed"}
 
-    class _DummyGraph:
-        def triage(self, request):
-            captured["is_metis"] = request.get("finding_is_metis")
-            captured["source_tool"] = request.get("finding_source_tool")
-            return {"status": "valid", "reason": "ok"}
+    writes = []
+
+    def save_checkpoint(_path, checkpoint_payload):
+        writes.append(
+            sum(
+                result.get("properties", {}).get("metisTriaged") is True
+                for result in checkpoint_payload["runs"][0]["results"]
+            )
+        )
 
     monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+        engine._simple_llm_triage,
+        "_workflow",
+        lambda _navigation, _rounds: _DummyWorkflow(),
     )
-    engine.max_workers = 1
+    monkeypatch.setattr(
+        "metis.engine.stages.triage.service.save_sarif_file",
+        save_checkpoint,
+    )
     engine._triage_service.max_workers = 1
+    engine._triage_service.triage_checkpoint_every = 2
 
-    out = engine.triage_sarif_payload(payload)
-    assert out["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
-    assert captured["is_metis"] is False
-    assert captured["source_tool"] == ""
+    result = engine.execute_triage(
+        payload,
+        checkpoint_path=str(tmp_path / "checkpoint.sarif"),
+    )
+
+    assert writes == [2, 4]
+    assert all(
+        finding["properties"]["metisTriaged"] is True
+        for finding in result["sarif"]["runs"][0]["results"]
+    )
 
 
 def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
@@ -313,7 +286,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
 
     captured = {}
 
-    class _DummyGraph:
+    class _DummyWorkflow:
         def triage(self, request):
             captured["is_metis"] = request.get("finding_is_metis")
             captured["source_tool"] = request.get("finding_source_tool")
@@ -321,12 +294,13 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
             return {"status": "valid", "reason": "ok"}
 
     monkeypatch.setattr(
-        engine._triage_service, "_get_thread_triage_graph", lambda: _DummyGraph()
+        engine._simple_llm_triage,
+        "_workflow",
+        lambda _navigation, _rounds: _DummyWorkflow(),
     )
-    engine.max_workers = 1
     engine._triage_service.max_workers = 1
 
-    out = engine.triage_sarif_payload(payload)
+    out = engine.execute_triage(payload)["sarif"]
     assert out["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
     assert captured["is_metis"] is True
     assert captured["source_tool"] == "Metis"

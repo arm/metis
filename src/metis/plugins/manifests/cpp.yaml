@@ -20,7 +20,7 @@ filename_patterns: []
 implementation: metis.plugins.cpp_plugin:CppPlugin
 config_resource: languages/cpp.yaml
 capabilities:
-  reachability_review: true
+  codegraph: true
   c_family_triage_evidence: true
 priority: 0
 prompt_profile: c_family

@@ -3,16 +3,18 @@
 
 from unittest.mock import Mock
 
-from metis.engine.graphs.schemas import TriageDecisionModel
-from metis.engine.reachability.domain import FunctionNode
-from metis.engine.reachability.graph import ReachabilityGraph
-from metis.engine.reachability.options import ReachabilityReviewOptions
-from metis.engine.reachability.triage import (
+from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph import FunctionNode
+from metis.engine.capabilities.catalog import get_capability_manifest
+from metis.engine.stages.triage.models import TriageDecisionModel
+from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
+from metis.engine.nodes.reachability_triage.service import (
     ReachabilityTriageRequest,
     ReachabilityTriageRunner,
+    ReachabilityTriageService,
     _parse_triage_decision,
+    _target_node_for_finding,
 )
-from metis.engine.triage_service import TriageService
 from metis.sarif.triage import SarifFinding
 
 
@@ -48,16 +50,16 @@ class _FallbackPromptRunner:
         )
 
 
-def _graph() -> ReachabilityGraph:
-    graph = ReachabilityGraph()
+def _graph() -> CodeGraph:
+    graph = CodeGraph()
     graph.add_node(
         FunctionNode(
             "src/main.c::caller",
             "src/main.c",
             "caller",
             1,
-            True,
-            False,
+            end_line=3,
+            is_source=True,
             calls=["target"],
             source_reason="no internal callers",
         )
@@ -68,8 +70,7 @@ def _graph() -> ReachabilityGraph:
             "src/main.c",
             "target",
             5,
-            False,
-            False,
+            end_line=7,
             calls=["sink"],
         )
     )
@@ -79,14 +80,32 @@ def _graph() -> ReachabilityGraph:
             "src/main.c",
             "sink",
             9,
-            False,
-            True,
+            end_line=9,
+            is_sink=True,
             sink_type="memory_write",
             sink_reason="test sink",
         )
     )
     graph.resolve_all_calls()
     return graph
+
+
+def _triage_service(reachability: Mock) -> ReachabilityTriageService:
+    navigation_manifest = get_capability_manifest("navigation")
+    assert navigation_manifest is not None
+    return ReachabilityTriageService(
+        reachability_service=reachability,
+        settings={"reasoning_effort": "high"},
+        max_workers=1,
+        llm_provider=Mock(),
+        model="model",
+        usage_runtime=None,
+        codebase_path=".",
+        chat_model_kwargs={"reasoning_effort": "high"},
+        normalize_path=lambda path: path.removeprefix("/project/"),
+        model_tool_max_contract_chars=6000,
+        navigation_manifest=navigation_manifest,
+    )
 
 
 def test_reachability_triage_builds_focused_graph_context(tmp_path):
@@ -136,33 +155,17 @@ def test_reachability_triage_builds_focused_graph_context(tmp_path):
     assert "src/main.c::caller -> src/main.c::target" in context
 
 
-def test_triage_service_routes_supported_files_to_reachability():
+def test_reachability_triage_does_not_assign_between_function_finding():
+    graph = _graph()
+
+    assert _target_node_for_finding(graph, "src/main.c", 4) is None
+
+
+def test_reachability_triage_classifier_handles_supported_files():
     reachability = Mock()
     reachability.supports_file.return_value = True
-    reachability.triage_finding.return_value = {
-        "status": "invalid",
-        "reason": "wrapper validates the value",
-        "evidence": ["src/main.c:4"],
-        "resolution_chain": ["finding -> wrapper"],
-        "unresolved_hops": [],
-    }
-    service = TriageService(
-        codebase_path=".",
-        llm_provider=Mock(),
-        llama_query_model="model",
-        chat_model_kwargs={"reasoning_effort": "high"},
-        plugin_config={},
-        max_workers=1,
-        triage_checkpoint_every=50,
-        triage_tool_timeout_seconds=12,
-        get_plugin_for_path=lambda _path: None,
-        get_language_name_for_path=lambda _path: "c",
-        model_tools=("navigation",),
-        model_tool_max_rounds=6,
-        reachability_service=reachability,
-        reachability_settings={"reasoning_effort": "high"},
-    )
-    service._get_thread_triage_graph = Mock(side_effect=AssertionError("generic path"))
+    reachability.analysis_graph.return_value = CodeGraph()
+    service = _triage_service(reachability)
     finding = SarifFinding(
         run_index=0,
         result_index=0,
@@ -176,16 +179,36 @@ def test_triage_service_routes_supported_files_to_reachability():
         explanation="",
     )
 
-    decision = service._triage_one_finding(finding, debug_callback=None)
+    decision = service.classifier(CodeGraph())(finding, [], None)
 
-    assert decision["status"] == "invalid"
-    reachability.triage_finding.assert_called_once()
-    request = reachability.triage_finding.call_args.args[0]
-    assert request.file_path == "src/main.c"
-    assert request.message == "reported issue"
-    assert reachability.triage_finding.call_args.kwargs["model_tools"] == (
-        "navigation",
+    assert decision["status"] == "inconclusive"
+    assert decision["missing_evidence"] == ["reachability_context"]
+
+
+def test_reachability_triage_classifier_leaves_unsupported_files():
+    reachability = Mock()
+    reachability.supports_file.return_value = True
+    service = _triage_service(reachability)
+    reachability.analysis_graph.return_value = CodeGraph()
+    finding = SarifFinding(
+        run_index=0,
+        result_index=0,
+        message="reported issue",
+        rule_id="R1",
+        file_path="src/main.c",
+        line=10,
+        snippet="target();",
+        source_tool="tool",
+        is_metis_source=False,
+        explanation="",
     )
+
+    decision = service.classifier(
+        CodeGraph(),
+        unavailable_files=("src/main.c",),
+    )(finding, [], None)
+
+    assert decision is None
 
 
 def test_reachability_triage_parser_normalizes_common_payload_shapes():
@@ -222,15 +245,14 @@ def test_reachability_triage_uses_structured_fallback_after_tool_parse_failure(
     )
     fake_runner = _FallbackPromptRunner()
     runner._runner = fake_runner
-    graph = ReachabilityGraph()
+    graph = CodeGraph()
     graph.add_node(
         FunctionNode(
             "src/main.c::target",
             "src/main.c",
             "target",
             1,
-            True,
-            False,
+            is_source=True,
         )
     )
 

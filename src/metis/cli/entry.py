@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+from collections.abc import Mapping
 from datetime import datetime
 import logging
 from pathlib import Path
+import sys
 from typing import cast
 
 from rich.markup import escape
@@ -13,7 +15,7 @@ from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import build_embedding_provider_config, load_runtime_config
 from metis.engine import MetisEngine
-from metis.engine.tools.selection import INDEX_TOOL, parse_engine_tools, tool_enabled
+from metis.engine.execution import ExecutionResult
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_chat_provider
@@ -35,12 +37,104 @@ from .utils import (
     print_console,
     print_usage_summary,
     print_final_usage_summary,
+    check_dir_exists,
+    save_output,
+    output_format,
+    output_files_for_formats,
 )
 
 logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
 EXIT_REQUESTED = object()
+
+
+def _print_graph_diagnostic(diagnostic, quiet):
+    color = "yellow" if diagnostic.severity == "warning" else "red"
+    print_console(
+        f"[{color}]{escape(diagnostic.message)}[/{color}]",
+        quiet,
+    )
+
+
+def _print_graph_progress(event: Mapping[str, object], quiet: bool) -> None:
+    if event.get("event") == "execution_stage_start":
+        print_console(f"[cyan]Stage:[/cyan] {escape(str(event['stage']))}", quiet)
+    elif event.get("event") == "execution_node_start":
+        print_console(
+            "[cyan]Node:[/cyan] "
+            f"{escape(str(event['stage']))}.{escape(str(event['node']))}",
+            quiet,
+        )
+
+
+def _save_graph_outputs(
+    output_files,
+    result: ExecutionResult,
+    quiet,
+    *,
+    generated_output=False,
+):
+    outputs = result.outputs
+    review = outputs.get("review", {})
+    triage_result = outputs.get("triage", {})
+    findings = review.get("findings")
+    review_sarif = review.get("sarif")
+    triage_sarif = triage_result.get("sarif")
+    review_formats = tuple(review.get("formats", ()))
+    triage_formats = tuple(triage_result.get("formats", ()))
+    review_filename = review.get("filename")
+    triage_filename = triage_result.get("filename")
+    explicit_output = bool(output_files) and not generated_output
+    review_files: list[str] = []
+    triage_files: list[str] = []
+    explicit_files = (output_files or ()) if explicit_output else ()
+    for path in explicit_files:
+        format_name = output_format(path)
+        if format_name in triage_formats:
+            triage_files.append(path)
+        elif format_name in review_formats:
+            review_files.append(path)
+        else:
+            raise ValueError(f"Execution graph did not request {format_name} output")
+
+    if triage_formats:
+        if triage_sarif is None:
+            raise ValueError("Execution graph did not produce triage results")
+        triage_files = output_files_for_formats(
+            triage_files
+            if explicit_output or triage_filename is None
+            else [triage_filename],
+            triage_formats,
+            command="graph_triage",
+            generated_output=not explicit_output,
+            reserved_paths={Path(path) for path in review_files},
+        )
+    if review_formats:
+        if findings is None or review_sarif is None:
+            raise ValueError("Execution graph did not produce review results")
+        review_files = output_files_for_formats(
+            review_files
+            if explicit_output or review_filename is None
+            else [review_filename],
+            review_formats,
+            command="graph_review",
+            generated_output=not explicit_output,
+            reserved_paths={Path(path) for path in triage_files},
+        )
+        save_output(
+            review_files,
+            findings,
+            quiet,
+            sarif_payload=review_sarif,
+        )
+    if triage_formats:
+        save_output(
+            triage_files,
+            triage_sarif,
+            quiet,
+            sarif_payload=triage_sarif,
+        )
 
 
 def determine_output_file(cmd, args, cmd_args):
@@ -56,19 +150,23 @@ def determine_output_file(cmd, args, cmd_args):
 
     if overrides:
         args.output_file = overrides
+        args._metis_generated_output = False
         return
 
     if cmd == "triage":
         args.output_file = existing_outputs
+        args._metis_generated_output = False
         return
 
     if existing_outputs:
         args.output_file = existing_outputs
+        args._metis_generated_output = False
         return
 
     Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     args.output_file = [f"results/{cmd}_{timestamp}.json"]
+    args._metis_generated_output = True
 
 
 def resolve_custom_prompt(args):
@@ -91,9 +189,6 @@ def resolve_custom_prompt(args):
 
 def build_engine(args, runtime):
     runtime = dict(runtime)
-    if getattr(args, "enabled_tools", None) is None:
-        _configure_enabled_tools(args, runtime)
-    runtime["enabled_tools"] = _enabled_tools_for_args(args)
     engine_runtime = dict(runtime)
 
     llm_provider_name = runtime.get("llm_provider_name")
@@ -106,12 +201,10 @@ def build_engine(args, runtime):
     engine_runtime.pop("llm_provider", None)
 
     embedding_provider = None
-    if tool_enabled(runtime["enabled_tools"], INDEX_TOOL):
-        embedding_provider_config = build_embedding_provider_config(
-            cast(dict | None, runtime.get("embedding_provider_raw_config"))
-        )
-        if embedding_provider_config is None:
-            raise RuntimeError("Index tool requires embedding_provider configuration.")
+    embedding_provider_config = build_embedding_provider_config(
+        cast(dict | None, runtime.get("embedding_provider_raw_config"))
+    )
+    if embedding_provider_config is not None:
         embedding_provider_cls = get_embedding_provider(
             str(embedding_provider_config["name"])
         )
@@ -179,55 +272,15 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
-def _enabled_tools_for_args(args) -> set[str]:
-    enabled_tools = getattr(args, "enabled_tools", None)
-    if enabled_tools is not None:
-        return parse_engine_tools(enabled_tools)
-    return parse_engine_tools(getattr(args, "tools", None))
-
-
-def _configure_enabled_tools(args, runtime) -> None:
-    raw_tools = args.tools if getattr(args, "tools", None) is not None else None
-    if raw_tools is None:
-        raw_tools = runtime.get("enabled_tools")
-    args.enabled_tools = parse_engine_tools(raw_tools)
-
-
-def _format_tool_list(tools: list[str]) -> str:
-    return ", ".join(f"'{tool}'" for tool in tools)
-
-
 def _prepare_command_runtime(cmd, cmd_args, args):
     spec = COMMANDS[cmd]
     if not spec.validate_options(cmd, args):
-        return None
-
-    enabled_tools = _enabled_tools_for_args(args)
-    missing_tools = [
-        tool for tool in spec.required_tools if not tool_enabled(enabled_tools, tool)
-    ]
-    if missing_tools:
-        tool_label = "tool" if len(missing_tools) == 1 else "tools"
-        enable_value = ",".join(missing_tools)
-        print_console(
-            f"[red]Error:[/red] Command '{escape(cmd)}' requires {tool_label} {_format_tool_list(missing_tools)}. Enable with --tools {escape(enable_value)}.",
-            args.quiet,
-        )
         return None
 
     return CommandRuntime(
         command=cmd,
         command_args=cmd_args,
     )
-
-
-def _interactive_command_uses_index(cmd, cmd_args, args) -> bool:
-    spec = COMMANDS.get(cmd)
-    if spec is None:
-        return False
-    if not tool_enabled(_enabled_tools_for_args(args), INDEX_TOOL):
-        return False
-    return INDEX_TOOL in spec.required_tools or INDEX_TOOL in spec.optional_tools
 
 
 def execute_command(engine, cmd, cmd_args, args):
@@ -285,6 +338,7 @@ def run_non_interactive(engine, args):
     try:
         result = execute_command(engine, cmd, cmd_args, args)
     except Exception as e:
+        logger.exception("Non-interactive command failed: %s", e)
         print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
         return 1, None
     farewell = "[magenta]Goodbye![/magenta]" if result is EXIT_REQUESTED else None
@@ -314,7 +368,6 @@ def run_interactive_loop(engine, args, vector_backend):
                     continue
                 if (
                     cmd in {"ask", "review_code", "review_dir", "review_file"}
-                    and _interactive_command_uses_index(cmd, cmd_args, args)
                     and not vector_backend.check_project_schema_exists()
                 ):
                     print_console(
@@ -393,17 +446,12 @@ def main():
     )
     parser.add_argument(
         "--tools",
-        type=str,
-        help="Comma-separated engine tools, e.g. index,navigation, all, or none. Defaults to navigation.",
+        help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
-    try:
-        if args.tools is not None:
-            parse_engine_tools(args.tools)
-    except ValueError as exc:
-        print_console(f"[red]Error:[/red] {escape(str(exc))}", False)
-        raise SystemExit(1) from exc
-
+    graph_requested = len(sys.argv) == 1 or (
+        args.non_interactive and args.command is None
+    )
     if args.output_files:
         if args.output_file:
             args.output_file.extend(args.output_files)
@@ -428,26 +476,56 @@ def main():
             ),
         )
         return
+    if not check_dir_exists(args.codebase_path):
+        raise SystemExit(1)
 
     configure_logger(logger, args)
     runtime = load_runtime_config(
         config_path=args.config,
         enable_psql=(args.backend == "postgres"),
     )
-    try:
-        _configure_enabled_tools(args, runtime)
-    except ValueError as exc:
-        print_console(f"[red]Error:[/red] {escape(str(exc))}", False)
-        raise SystemExit(1) from exc
     engine, vector_backend = build_engine(args, runtime)
     exit_code = 0
     farewell = None
     try:
-        if args.non_interactive:
+        if graph_requested:
+            try:
+                determine_output_file("graph", args, [])
+                callbacks: dict[str, object] = {
+                    "diagnostic_callback": (
+                        lambda diagnostic: _print_graph_diagnostic(
+                            diagnostic, args.quiet
+                        )
+                    )
+                }
+                if args.verbose:
+                    callbacks["progress_callback"] = lambda event: (
+                        _print_graph_progress(event, args.quiet)
+                    )
+                result = engine.execute_graph(
+                    include_triaged=True if args.include_triaged else None,
+                    callbacks=callbacks,
+                )
+                _save_graph_outputs(
+                    args.output_file,
+                    result,
+                    args.quiet,
+                    generated_output=bool(
+                        getattr(args, "_metis_generated_output", False)
+                    ),
+                )
+            except Exception as exc:
+                print_console(
+                    f"[bold red]Error:[/bold red] {escape(str(exc))}",
+                    args.quiet,
+                )
+                exit_code = 1
+            else:
+                print_console("[green]Execution graph complete.[/green]", args.quiet)
+        elif args.non_interactive:
             exit_code, farewell = run_non_interactive(engine, args)
-            return
-
-        farewell = run_interactive_loop(engine, args, vector_backend)
+        else:
+            farewell = run_interactive_loop(engine, args, vector_backend)
     finally:
         finalize_cli_session_and_close(engine, args, farewell)
     if exit_code:

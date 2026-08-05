@@ -20,7 +20,6 @@ class _DummyEngine:
         self.codebase_path = codebase_path
         self.usage_runtime = UsageRuntime(codebase_path)
         self.closed = False
-        self.review = self
         self.indexing = self
 
     def usage_command(self, command_name, target=None, display_name=None):
@@ -53,10 +52,8 @@ class _DummyEngine:
         )
         return {"code": "ctx", "docs": "docs"}
 
-    def get_code_files(self):
-        return ["src/example.py"]
-
-    def review_code(self, progress_callback=None):
+    def execute_review(self, mode, **_kwargs):
+        assert mode == "code"
         self.usage_runtime.collector.record(
             scope_id=current_scope(),
             operation=current_operation(),
@@ -65,19 +62,28 @@ class _DummyEngine:
             output_tokens=6,
             total_tokens=18,
         )
-        yield {
-            "file": "src/example.py",
+        report = {
             "reviews": [
                 {
-                    "issue": "Example issue",
-                    "severity": "medium",
-                    "line_number": 10,
-                    "suggestion": "Fix it",
+                    "file": "src/example.py",
+                    "reviews": [
+                        {
+                            "issue": "Example issue",
+                            "severity": "medium",
+                            "line_number": 10,
+                            "suggestion": "Fix it",
+                        }
+                    ],
                 }
-            ],
+            ]
+        }
+        return {
+            "formats": ("sarif", "json", "html", "csv"),
+            "findings": report,
+            "sarif": {"version": "2.1.0", "runs": []},
         }
 
-    def triage_sarif_payload(self, payload, **_kwargs):
+    def execute_triage(self, payload, **_kwargs):
         self.usage_runtime.collector.record(
             scope_id=current_scope(),
             operation=current_operation(),
@@ -87,7 +93,7 @@ class _DummyEngine:
             total_tokens=8,
         )
         payload.setdefault("runs", [])
-        return payload
+        return {"formats": ("sarif", "json"), "sarif": payload}
 
     def close(self):
         self.closed = True
@@ -135,8 +141,6 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
             "metis",
             "--non-interactive",
             "--verbose",
-            "--tools",
-            "index",
             "--command",
             "ask explain",
             "--codebase-path",
@@ -165,8 +169,6 @@ def test_noninteractive_default_quiet_prints_answer_but_not_usage(
         [
             "metis",
             "--non-interactive",
-            "--tools",
-            "index",
             "--command",
             "ask explain",
             "--codebase-path",
@@ -227,7 +229,7 @@ def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
     monkeypatch.setattr(entry, "prompt", _fake_prompt)
     monkeypatch.setattr(
         "sys.argv",
-        ["metis", "--tools", "index", "--codebase-path", str(tmp_path)],
+        ["metis", "--codebase-path", str(tmp_path)],
     )
 
     entry.main()

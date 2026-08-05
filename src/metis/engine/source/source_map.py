@@ -408,7 +408,7 @@ class SourceMap:
         if tree is None:
             return []
         try:
-            from metis.engine.reachability.c_family_nodes import (
+            from metis.engine.source.tree_sitter_nodes import (
                 _identifier_from_node,
                 _node_child_by_field_name,
                 _node_children,

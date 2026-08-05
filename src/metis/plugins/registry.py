@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fnmatch
 import importlib
+import inspect
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -72,13 +73,13 @@ def _matches_suffix_pattern(name: str, pattern: str) -> bool:
 class LanguagePluginManifest:
     name: str
     implementation: str
+    config_resource: str
     extensions: tuple[str, ...] = ()
     source_extensions: tuple[str, ...] = ()
     header_extensions: tuple[str, ...] = ()
     filename_patterns: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
-    capabilities: dict[str, bool] = field(default_factory=dict)
-    config_resource: str | None = None
+    capabilities: dict[str, Any] = field(default_factory=dict)
     prompt_profile: str | None = None
     priority: int = 0
 
@@ -103,13 +104,16 @@ class LanguagePluginManifest:
         object.__setattr__(
             self,
             "capabilities",
-            {str(k): bool(v) for k, v in dict(self.capabilities or {}).items()},
+            {
+                str(key): dict(value) if isinstance(value, Mapping) else bool(value)
+                for key, value in dict(self.capabilities or {}).items()
+            },
         )
-        object.__setattr__(
-            self,
-            "config_resource",
-            _normalise_resource(self.config_resource),
-        )
+        self.codegraph_registration_name()
+        config_resource = _normalise_resource(self.config_resource)
+        if config_resource is None:
+            raise ValueError(f"Language plugin manifest {name!r} needs config_resource")
+        object.__setattr__(self, "config_resource", config_resource)
         if self.prompt_profile is not None:
             object.__setattr__(
                 self,
@@ -129,7 +133,7 @@ class LanguagePluginManifest:
             filename_patterns=tuple(data.get("filename_patterns") or ()),
             aliases=tuple(data.get("aliases") or ()),
             capabilities=dict(data.get("capabilities") or {}),
-            config_resource=data.get("config_resource") or data.get("config"),
+            config_resource=data.get("config_resource"),
             prompt_profile=data.get("prompt_profile"),
             priority=int(data.get("priority") or 0),
         )
@@ -152,6 +156,17 @@ class LanguagePluginManifest:
         merged["name"] = str(merged.get("name") or self.name)
         return LanguagePluginManifest.from_mapping(merged)
 
+    def codegraph_registration_name(self) -> str | None:
+        capability = self.capabilities.get("codegraph", False)
+        if not isinstance(capability, bool):
+            raise ValueError(
+                f"Language plugin manifest {self.name!r} must configure "
+                "codegraph as a boolean"
+            )
+        if not capability:
+            return None
+        return self.name
+
 
 class LanguagePluginHandle:
     def __init__(
@@ -170,8 +185,7 @@ class LanguagePluginHandle:
         return _load_yaml_resource(f"profiles/{profile_name}.yaml")
 
     def _load_language_config(self) -> dict[str, Any]:
-        resource = self.manifest.config_resource
-        loaded = _load_yaml_resource(resource) if resource else {}
+        loaded = _load_yaml_resource(self.manifest.config_resource)
         profile_name = str(
             loaded.pop("inherits", None) or self.manifest.prompt_profile or ""
         ).strip()
@@ -205,9 +219,18 @@ class LanguagePluginHandle:
                     module = importlib.import_module(module_path)
                     target = getattr(module, class_name)
                     try:
+                        signature = inspect.signature(target)
+                    except (TypeError, ValueError):
                         self._plugin = target(self.plugin_config())
-                    except TypeError:
-                        self._plugin = target()
+                    else:
+                        plugin_config = self.plugin_config()
+                        try:
+                            signature.bind(plugin_config)
+                        except TypeError:
+                            signature.bind()
+                            self._plugin = target()
+                        else:
+                            self._plugin = target(plugin_config)
                     logger.debug(
                         "Loaded language plugin module '%s' for '%s' using '%s'",
                         module_path,
@@ -371,14 +394,14 @@ class LanguagePluginRegistry:
         manifest = self.get_manifest_for_path(path)
         return manifest.name if manifest is not None else None
 
-    def supports_reachability_file(self, path: str) -> bool:
+    def codegraph_registration_for_path(self, path: str) -> str | None:
         manifest = self.get_manifest_for_path(path)
         if manifest is None:
-            return False
-        supported = bool(manifest.capabilities.get("reachability_review", False))
-        if supported:
+            return None
+        registration = manifest.codegraph_registration_name()
+        if registration is not None:
             self._log_manifest_match(manifest, path)
-        return supported
+        return registration
 
 
 def _select_manifest(
@@ -431,7 +454,11 @@ def _load_entry_point_manifests() -> list[LanguagePluginManifest]:
         try:
             target = ep.load()
             loaded = target() if callable(target) else target
-            manifests.append(LanguagePluginManifest.from_mapping(loaded))
+            manifests.append(
+                loaded
+                if isinstance(loaded, LanguagePluginManifest)
+                else LanguagePluginManifest.from_mapping(loaded)
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to load language plugin manifest '%s': %s",

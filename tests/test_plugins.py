@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from llama_index.core.schema import Document
+import json
+
 import pytest
+from llama_index.core.schema import Document
 
 from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
 from metis.plugins.c_plugin import CPlugin
 from metis.plugins.cpp_plugin import CppPlugin
 from metis.plugins.csharp_plugin import CSharpPlugin
 from metis.plugins.go_plugin import GoPlugin
+from metis.plugins.ipynb_plugin import IpynbPlugin
 from metis.plugins.javascript_plugin import JavaScriptPlugin
 from metis.plugins.php_plugin import PHPPlugin
 from metis.plugins.python_plugin import PythonPlugin
@@ -22,16 +25,6 @@ from metis.plugins.typescript_plugin import TypeScriptPlugin
 from metis.plugins.verilog_plugin import VerilogPlugin
 
 
-def test_reachability_capabilities_are_plugin_declared():
-    c_plugin = CPlugin(plugin_config={"plugins": {}})
-    cpp_plugin = CppPlugin(plugin_config={"plugins": {}})
-    python_plugin = PythonPlugin(plugin_config={"plugins": {}})
-
-    assert c_plugin.supports_reachability_review()
-    assert cpp_plugin.supports_reachability_review()
-    assert not python_plugin.supports_reachability_review()
-
-
 def test_aarch64_assembly_splitter_parses_source_text():
     plugin = AArch64AssemblyPlugin(plugin_config={"plugins": {}})
     splitter = plugin.get_splitter()
@@ -42,6 +35,43 @@ def test_aarch64_assembly_splitter_parses_source_text():
 
     assert nodes
     assert "mov x0, x0" in nodes[0].text
+
+
+def test_ipynb_splitter_extracts_code_cells_without_console_output(capsys):
+    plugin = IpynbPlugin(
+        plugin_config={
+            "plugins": {
+                "ipynb": {
+                    "supported_extensions": [".ipynb"],
+                    "splitting": {
+                        "chunk_lines": 40,
+                        "chunk_lines_overlap": 15,
+                        "max_chars": 1500,
+                    },
+                }
+            }
+        }
+    )
+    notebook = json.dumps(
+        {
+            "cells": [
+                {"cell_type": "markdown", "source": ["Ignore me"]},
+                {"cell_type": "code", "source": ["value = 1\n"]},
+                {"cell_type": "code", "source": ["print(value)\n"]},
+            ]
+        }
+    )
+
+    nodes = plugin.get_splitter().get_nodes_from_documents(
+        [Document(text=notebook, metadata={"project": "demo"}, id_="demo.ipynb")]
+    )
+
+    assert nodes
+    extracted = "\n".join(node.text for node in nodes)
+    assert "value = 1" in extracted
+    assert "print(value)" in extracted
+    assert all(node.metadata["project"] == "demo" for node in nodes)
+    assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize(

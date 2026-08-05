@@ -5,37 +5,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from metis.engine.capabilities.contracts import CapabilityContext
 from metis.memory import MemoryService
+from metis.memory.configuration import MemoryCapabilityConfiguration
 from metis.memory.registry import build_memory_store
 from metis.utils import resolve_path_within_root
 
-from .runtime import EngineConfig
 
-
-def create_memory_service(config: EngineConfig) -> MemoryService | None:
-    if not config.memory_config.get("enabled", False):
-        return None
-    backend = str(config.memory_config.get("backend") or "sqlite").strip().lower()
+def create_memory_service(
+    context: CapabilityContext,
+    configuration: MemoryCapabilityConfiguration,
+) -> MemoryService:
+    backend = configuration.backend.strip().lower()
+    root = context.codebase_path
     return MemoryService(
-        build_memory_store(_memory_path(config), backend=backend),
-        repo_root=str(_codebase_root(config)),
+        build_memory_store(_memory_path(root, configuration.location), backend=backend),
+        repo_root=str(root),
     )
 
 
-def _memory_path(config: EngineConfig) -> Path:
-    path = Path(
-        str(
-            config.memory_config.get("location") or ".metis/memory/metis_memory.sqlite3"
-        )
-    )
-    root = _codebase_root(config)
+def _memory_path(root: Path, configured_path: str) -> Path:
+    path = Path(configured_path)
     try:
         return resolve_path_within_root(root, path)
     except ValueError as exc:
         raise ValueError(
             "Repository memory path must stay under codebase_path"
         ) from exc
-
-
-def _codebase_root(config: EngineConfig) -> Path:
-    return Path(config.codebase_path).expanduser().resolve()

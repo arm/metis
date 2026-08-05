@@ -28,8 +28,7 @@ filename_patterns:
 - .vh.*
 implementation: metis.plugins.verilog_plugin:VerilogPlugin
 config_resource: languages/verilog.yaml
-capabilities:
-  reachability_review: false
+capabilities: {}
 priority: 0
 ```
 
@@ -39,10 +38,12 @@ Fields:
 | --- | --- | --- |
 | `name` | yes | Stable language id. |
 | `aliases` | no | Alternate lookup names. |
-| `extensions` | yes | Exact final file extensions, such as `.py` or `.v`. |
+| `extensions` | no | Exact final file extensions used for path matching, such as `.py` or `.v`. |
+| `source_extensions` | no | Extensions treated as source files by language-aware providers. Also list them in `extensions` for path matching. |
+| `header_extensions` | no | Extensions treated as headers by language-aware providers. Also list them in `extensions` for path matching. |
 | `filename_patterns` | no | Basename patterns for generated files, such as `.v.*`. |
 | `implementation` | yes | `module:ClassOrFactory` import path for the plugin. |
-| `config_resource` | yes | Per-language YAML resource. |
+| `config_resource` | yes | Per-language YAML resource that defines or inherits prompts and splitter settings. |
 | `capabilities` | no | Feature flags Metis can check without importing the plugin. |
 | `prompt_profile` | no | Shared profile to merge before language-specific config. |
 | `priority` | no | Tie-breaker for overlapping matches. Higher wins. |
@@ -59,9 +60,10 @@ Use `filename_patterns` when the language marker appears before another suffix:
 - `top.v.pp` matches `.v.*`
 - `defs.vh.generated` matches `.vh.*`
 
-Keep both lists separate. Exact extensions are simple language ownership. Filename
-patterns are only for generated or transformed files whose final extension is not
-the language.
+Keep exact extensions and filename patterns separate. A discoverable manifest
+needs at least one entry across those matching fields. `source_extensions` and
+`header_extensions` add file-role metadata; they do not replace `extensions`
+for matching.
 
 ## Language YAML
 
@@ -109,8 +111,12 @@ Required prompt keys:
 1. Add `src/metis/plugins/manifests/<language>.yaml`.
 2. Add `src/metis/plugins/languages/<language>.yaml`.
 3. Add a plugin class under `src/metis/plugins/`.
-4. Add the YAML resources to `pyproject.toml` package data if needed.
-5. Add tests that cover manifest matching, lazy import, and prompt loading.
+4. If the language supports CodeGraph analysis, implement its provider and
+   deterministic semantics, then register both in the `MetisEngine`
+   composition root under the manifest's language name.
+5. Add the YAML resources to `pyproject.toml` package data if needed.
+6. Add tests for manifest matching, lazy import, prompt loading, exact
+   CodeGraph file coverage, persisted semantics, and unsupported-file fallback.
 
 The plugin class can usually subclass `ConfigBackedLanguagePlugin`:
 
@@ -146,10 +152,58 @@ def manifest():
         "filename_patterns": [],
         "implementation": "metis_java_plugin:JavaPlugin",
         "config_resource": "metis_java_plugin:java.yaml",
-        "capabilities": {},
+        "capabilities": {"codegraph": True},
         "priority": 0,
     }
 ```
+
+When the manifest enables CodeGraph construction, expose the matching provider factory in
+the same distribution. The entry-point name must match the language manifest name:
+
+```toml
+[project.entry-points."metis.codegraph_providers"]
+java = "metis_java_plugin:create_codegraph_provider"
+```
+
+```python
+from metis.execution_nodes import CodeGraphProvider
+from metis.execution_nodes import CodeGraphProviderContext
+
+
+def create_codegraph_provider(
+    context: CodeGraphProviderContext,
+) -> CodeGraphProvider:
+    return JavaCodeGraphProvider(context)
+```
+
+`CodeGraphProviderContext` provides
+`get_language_name_for_path(path)` and
+`has_language_file_role(path, role)`. The provider must return an internally
+resolved `CodeGraphResult` for exactly the requested files. The reachability
+algorithm consumes this language-neutral graph; the provider may use any
+language-appropriate parser or analysis engine.
+
+Languages that support advanced review also expose deterministic CodeGraph
+semantics under the same language name:
+
+```toml
+[project.entry-points."metis.codegraph_semantics"]
+java = "metis_java_plugin.semantics:JavaSemantics"
+```
+
+The semantics provider receives immutable symbol and call facts and returns
+source/sink annotations. Metis persists those annotations in the canonical
+CodeGraph under the scanned project's `.metis/` directory. Reachability is a
+consumer of that contract and does not require a particular parser such as
+tree-sitter.
+
+The manifest only declares the capability. Provider and semantics implementation
+details belong to the plugin package and are discovered through entry points,
+not configured in YAML.
+
+See the [CodeGraph provider and semantics contracts](execution-graph.md#codegraph-provider-contract)
+for the validation and persistence requirements shared by built-in and external
+languages.
 
 ## Replace A Language
 

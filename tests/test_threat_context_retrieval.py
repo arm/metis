@@ -3,7 +3,7 @@
 
 from langgraph.store.memory import InMemoryStore
 
-from metis.engine.threat_context import THREAT_MODEL_NAMESPACE
+from metis.engine.nodes.threat_model import THREAT_MODEL_NAMESPACE
 from metis.engine.threat_context_retrieval import format_threat_model_context
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_scope_policy

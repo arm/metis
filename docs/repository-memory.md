@@ -89,32 +89,26 @@ for recall.
 
 Raw store level `search()` has no side effects.
 
-## Configuration
-
-Repository memory is configured in `metis.yaml` under `memory`.
-
-The packaged config keeps memory disabled until an engine workflow wires it in.
-It sets `enabled` to `false`, `backend` to `sqlite`, and `location` to
-`.metis/memory/metis_memory.sqlite3`.
-
-The `memory.backend` and `memory.location` values come from `metis.yaml`.
-SQLite locations are resolved from the repository selected by
-`--codebase-path`, and must remain inside that repository.
-
 ## Engine Access
 
-Metis opens repository memory from `metis.yaml` and keeps access inside the
-engine. Workflows decide what to retrieve, then pass curated context to the
-model. The model does not receive a general memory search tool.
+Metis opens repository memory from the top-level `memory` configuration and
+keeps access inside the engine. The engine registers a `MemoryService`
+capability; a node receives it only when its execution-YAML `capabilities`
+allowlist includes `memory`. Workflows decide what to retrieve, then pass
+curated context to the model. The model does not receive a general memory
+search tool.
 
 This keeps retrieval policy in Metis code, keeps writes orchestration-owned, and
 keeps stored facts tied to explicit provenance and freshness metadata.
 
 ## Source Authority
 
-Threat-model collection is authority-aware. Configured threat-model sources and
-well-known project security documents such as `SECURITY.md` and
-`THREAT_MODEL.md` are stored as authoritative project data.
+Threat-model collection is authority-aware. Only files matched by the selected
+configuration's `metis_engine.threat_model.source_patterns` are collected and
+stored as authoritative project data. The packaged configuration includes
+generic patterns that match names such as `SECURITY.md` and `THREAT_MODEL.md`;
+those names are configuration defaults, not an additional implicit discovery
+path.
 
 Metis does not infer threat context from arbitrary repository prose, source-code
 shape, or git history in this path. If automation needs a large set of files,
@@ -123,7 +117,7 @@ pass those files or globs explicitly so the source set is deterministic.
 Authority is not a confidence score. It tells Metis how strongly a record may
 affect analysis:
 
-- `authoritative`: explicit project policy from configured or well-known
+- `authoritative`: explicit project policy from configured
   threat-model/security files.
 
 Example records:
@@ -167,17 +161,21 @@ initialization path.
 
 ## Init Flow
 
-When repository memory is enabled, `init` gathers threat-model memory before
-other repository setup. The intended order is:
+When the configured execution graph includes the `threat_model` node in the
+Initialize stage, Metis gathers threat-model memory and prepares other
+repository context:
 
 1. Load authoritative threat-model sources from
    `metis_engine.threat_model.source_patterns`.
 2. Store source records with authoritative provenance.
 3. Ask the configured LLM to distill concise threat-model claims and compile
    explicit policy and caller contracts from the source files.
-4. Build the vector index only when the user enables `--tools index`.
+4. Build the vector index when `initialize.nodes` contains `index`.
 
-Indexing is a subset of `init`; it is not required for repository memory.
+Memory is a capability rather than a mandatory edge between every node. A node
+uses it only when its contract declares or its existing service owns that
+dependency. Indexing is a separate initialization child and is not required
+for repository memory.
 
 ## Claim Distillation and Deduplication
 
@@ -203,10 +201,11 @@ does not replace existing repository memory.
 
 Repository memory backend and location are configured under top-level `memory`.
 Threat-model collection is configured under `metis_engine.threat_model`.
+SQLite locations are resolved from the repository selected by
+`--codebase-path` and must remain inside that repository.
 
 ```yaml
 memory:
-  enabled: true
   backend: sqlite
   location: .metis/memory/metis_memory.sqlite3
 
