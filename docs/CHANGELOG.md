@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v1.6.0) (2026-08-05)
+
+
+### Features
+
+* **engine:** add execution node foundation ([#285](https://github.com/arm/metis/issues/285)) ([c2bfb29](https://github.com/arm/metis/commit/c2bfb29769812b093e769283113d9c41bc550519))
+* **execution:** modularize execution graph ([#290](https://github.com/arm/metis/issues/290)) ([cafa73f](https://github.com/arm/metis/commit/cafa73feacd892be62044e7c008a2e92d0fc5b75))
+* **memory:** add advisory git-history context ([#283](https://github.com/arm/metis/issues/283)) ([5925e4d](https://github.com/arm/metis/commit/5925e4dafd5473ee092d96840f298e2bf3242324))
+* **memory:** apply threat-model context to review and triage ([#282](https://github.com/arm/metis/issues/282)) ([6153ea0](https://github.com/arm/metis/commit/6153ea0beb2301be6ccd92f8bb683fcd9e7abfd1))
+* **memory:** initialize threat-model repository memory ([#281](https://github.com/arm/metis/issues/281)) ([49d6f5a](https://github.com/arm/metis/commit/49d6f5a6730a9df118c3b9f341e8f32668b4df8c))
+* **plugins:** add AArch64 assembly .hs extension ([#266](https://github.com/arm/metis/issues/266)) ([e5320d7](https://github.com/arm/metis/commit/e5320d77ea02db3e9a078c24f4e67b25f0948640))
+* **prompts:** externalize engine prompt resources ([#284](https://github.com/arm/metis/issues/284)) ([4d52b9d](https://github.com/arm/metis/commit/4d52b9da17decb25e0a61ce9a9dfb8eb6108adf9))
+
 ## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)
 
 
