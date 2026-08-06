@@ -63,11 +63,11 @@ For the current Reachability and simple LLM triage paths, see
 
 Metis uses a plugin-based language system, making it easy to extend support to additional languages.
 
-It also supports multiple vector store backends, including PostgreSQL with pgvector and ChromaDB.
+It supports ChromaDB, PostgreSQL with pgvector, and Qdrant vector-store backends.
 
 ## Getting Started
 
-By default, Metis uses **ChromaDB** for local, no-setup usage. You can also use **PostgreSQL (with pgvector)** for scalable indexing and multi-project support.
+By default, Metis uses **ChromaDB** for local, no-setup usage. PostgreSQL with pgvector and Qdrant are available as optional backends.
 
 ### 1. **Installation**
 
@@ -90,6 +90,12 @@ To install with **PostgreSQL (pgvector)** backend support:
 
 ```bash
 uv pip install '.[postgres]'
+```
+
+To install with Qdrant backend support:
+
+```bash
+uv pip install '.[qdrant]'
 ```
 
 ### 1.1 **Docker**
@@ -205,8 +211,9 @@ Metis also provides an interactive CLI with several built-in commands:
 - `--custom-prompt PATH` – optional `.md` or `.txt` file containing additional
   security-review guidance. If omitted, Metis uses `.metis.md` from the project
   root when that file exists.
-- `--backend chroma|postgres` – choose vector-store backend (default `chroma`).
-- `--project-schema` / `--chroma-dir` – backend-specific knobs.
+- `--backend chroma|postgres|qdrant` – choose a vector-store backend (default `chroma`).
+- `--project-schema` namespaces PostgreSQL schemas and Qdrant collections.
+- `--chroma-dir` and `--qdrant-url` configure backend storage.
 - `--triage` – after `review_code`, `review_dir`, `review_file`, or `review_patch`, triage findings and annotate SARIF output.
 - `--include-triaged` – include findings already triaged by Metis when running triage.
 - `--verbose` – show the stages and nodes executed by the selected graph.
@@ -314,7 +321,23 @@ metis_engine:
   pgvector_use_halfvec: auto  # auto, true, or false
 ```
 
-#### Example 3: Usage and output
+#### Example 3: Qdrant
+
+Qdrant must be running as a server. See the [Qdrant quickstart](https://qdrant.tech/documentation/quickstart/) for setup details, or start a local server with Docker:
+
+```bash
+docker run -p 6333:6333 qdrant/qdrant
+```
+
+Metis connects to localhost by default:
+
+```bash
+metis --backend qdrant --project-schema myproject
+```
+
+For another Qdrant Server or Qdrant Cloud endpoint, pass `--qdrant-url` or set `QDRANT_URL`. Set `QDRANT_API_KEY` when authentication is required. Metis creates `<project-schema>_code` and `<project-schema>_docs` collections.
+
+#### Example 4: Usage and output
 
 
 ```bash
