@@ -55,6 +55,7 @@ optional-dependencies.bedrock-mantle = [
 optional-dependencies.dev = [
   "metis[all-providers]",
   "metis[lint]",
+  "metis[qdrant]",
   "metis[test]",
 ]
 optional-dependencies.gemini = [
@@ -68,6 +69,10 @@ optional-dependencies.lint = [
 ]
 optional-dependencies.postgres = [
   "llama-index-vector-stores-postgres>=0.8.1",
+]
+optional-dependencies.qdrant = [
+  "llama-index-vector-stores-qdrant>=0.10.2",
+  "qdrant-client<1.19",
 ]
 optional-dependencies.test = [
   "pytest>=9.0.3",

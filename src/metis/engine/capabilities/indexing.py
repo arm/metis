@@ -155,6 +155,24 @@ class IndexingService:
         )
         self._state.pending_nodes = None
 
+    def _split_updated_document(self, doc, language_name, doc_splitter):
+        if language_name is None:
+            return doc_splitter.get_nodes_from_documents([doc])
+        plugin = self._repository.get_plugin_for_path(doc.id_)
+        if not plugin:
+            return None
+        splitter = self._repository.get_splitter_cached(plugin)
+        try:
+            return splitter.get_nodes_from_documents([doc])
+        except Exception as exc:
+            logger.warning(
+                "Could not parse code with language %s for file %s: %s",
+                plugin.get_name(),
+                doc.id_,
+                exc,
+            )
+            return None
+
     def update_index(self, patch_text):
         embed_model_code, embed_model_docs = self._get_embedding_models()
         try:
@@ -198,26 +216,26 @@ class IndexingService:
                     id_=doc_id,
                 )
 
+                nodes = self._split_updated_document(
+                    doc,
+                    language_name,
+                    doc_splitter,
+                )
+                if nodes is None:
+                    continue
                 if diff_file.is_added_file:
-                    if language_name is not None:
-                        plugin = self._repository.get_plugin_for_path(doc_id)
-                        if not plugin:
-                            continue
-                        splitter = self._repository.get_splitter_cached(plugin)
-                        try:
-                            nodes = splitter.get_nodes_from_documents([doc])
-                        except Exception as e:
-                            logger.warning(
-                                "Could not parse code with language %s for file %s: %s",
-                                plugin.get_name(),
-                                doc.id_,
-                                e,
-                            )
-                            continue
-                    else:
-                        nodes = doc_splitter.get_nodes_from_documents([doc])
                     target_index.insert_nodes(nodes)
                 else:
-                    target_index.refresh_ref_docs([doc])
+                    embed_model = (
+                        embed_model_code
+                        if language_name is not None
+                        else embed_model_docs
+                    )
+                    self._config.vector_backend.replace_ref_doc(
+                        target_index,
+                        doc_id,
+                        nodes,
+                        embed_model=embed_model,
+                    )
                 target_index.docstore.set_document_hash(doc.id_, doc.hash)
         logger.info("Index update complete based on the provided patch diff.")
