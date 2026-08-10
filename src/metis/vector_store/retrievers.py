@@ -11,6 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis import runlog
 
 
 def retriever_query_config(runtime: dict[str, Any]) -> dict[str, Any]:
@@ -80,10 +81,21 @@ class QueryAnswerRetriever:
         )
 
     def _retrieve_context(self, query: str) -> str:
-        documents = retrieve_documents(self._retriever, query)
-        return "\n\n".join(
-            text for document in (documents or []) if (text := document_text(document))
-        )
+        with runlog.span(
+            "retrieval",
+            type(self._retriever).__name__,
+            {"query": query},
+        ) as retrieval_span:
+            documents = retrieve_documents(self._retriever, query)
+            texts = [
+                text
+                for document in (documents or [])
+                if (text := document_text(document))
+            ]
+            retrieval_span.end(
+                attributes={"hit_count": len(texts), "documents": documents}
+            )
+            return "\n\n".join(texts)
 
 
 class ChromaCollectionRetriever:

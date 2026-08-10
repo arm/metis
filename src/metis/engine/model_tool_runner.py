@@ -6,6 +6,8 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
+from metis import runlog
+
 
 logger = logging.getLogger("metis")
 
@@ -61,56 +63,106 @@ def invoke_model_with_tools(
     *,
     max_tool_rounds: int,
 ) -> str:
-    bind_tools = getattr(chat, "bind_tools", None)
-    if not callable(bind_tools):
-        raise ModelToolConfigurationError(
-            "model_tools require a LangChain chat model with bind_tools support"
-        )
-
-    tool_chat = bind_tools(list(tools))
-    tool_by_name = {getattr(tool, "name", ""): tool for tool in tools}
-    messages = prompt.invoke(variables).to_messages()
-    last_response = None
-    for _ in range(max_tool_rounds):
-        last_response = tool_chat.invoke(messages)
-        tool_calls = list(getattr(last_response, "tool_calls", None) or [])
-        if not tool_calls:
-            return _message_content_text(last_response)
-        messages.append(last_response)
-        for index, tool_call in enumerate(tool_calls):
-            name = str(tool_call.get("name") or "")
-            args = tool_call.get("args") or {}
-            tool_call_id = str(tool_call.get("id") or f"{name}-{index}")
-            status = "success"
-            try:
-                tool = tool_by_name[name]
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Invoking model tool %s with args=%s",
-                        name,
-                        _debug_tool_args(args),
-                    )
-                content = tool.invoke(args)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Model tool %s completed with %d output chars",
-                        name,
-                        len(str(content)),
-                    )
-            except Exception as exc:
-                status = "error"
-                content = f"Tool {name!r} failed: {exc}"
-                logger.debug("Model tool %s failed: %s", name, exc)
-            messages.append(
-                ToolMessage(
-                    content=str(content),
-                    name=name,
-                    tool_call_id=tool_call_id,
-                    status=status,
-                )
+    with runlog.span(
+        "model_loop",
+        "tool_loop",
+        {
+            "tools": [getattr(tool, "name", type(tool).__name__) for tool in tools],
+            "max_tool_rounds": max_tool_rounds,
+        },
+    ) as loop_span:
+        bind_tools = getattr(chat, "bind_tools", None)
+        if not callable(bind_tools):
+            raise ModelToolConfigurationError(
+                "model_tools require a LangChain chat model with bind_tools support"
             )
-    last_response = tool_chat.invoke(messages)
-    return _message_content_text(last_response)
+
+        tool_chat = bind_tools(list(tools))
+        tool_by_name = {getattr(tool, "name", ""): tool for tool in tools}
+        messages = prompt.invoke(variables).to_messages()
+        last_response = None
+        for round_index in range(1, max_tool_rounds + 1):
+            last_response = tool_chat.invoke(messages)
+            tool_calls = list(getattr(last_response, "tool_calls", None) or [])
+            loop_span.event(
+                "model.round",
+                {
+                    "round": round_index,
+                    "response": last_response,
+                    "tool_calls": tool_calls,
+                },
+            )
+            if not tool_calls:
+                content = _message_content_text(last_response)
+                loop_span.end(attributes={"response": content, "rounds": round_index})
+                return content
+            messages.append(last_response)
+            for index, tool_call in enumerate(tool_calls):
+                name = str(tool_call.get("name") or "")
+                args = tool_call.get("args") or {}
+                tool_call_id = str(tool_call.get("id") or f"{name}-{index}")
+                status = "success"
+                with runlog.span(
+                    "tool",
+                    name or "unknown",
+                    {
+                        "round": round_index,
+                        "tool_call_id": tool_call_id,
+                        "arguments": args,
+                    },
+                ) as tool_span:
+                    try:
+                        tool = tool_by_name[name]
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Invoking model tool %s with args=%s",
+                                name,
+                                _debug_tool_args(args),
+                            )
+                        content = tool.invoke(args)
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Model tool %s completed with %d output chars",
+                                name,
+                                len(str(content)),
+                            )
+                        tool_span.end(
+                            attributes={
+                                "output": str(content),
+                                "output_bytes": len(str(content).encode("utf-8")),
+                            }
+                        )
+                    except Exception as exc:
+                        status = "error"
+                        content = f"Tool {name!r} failed: {exc}"
+                        logger.debug("Model tool %s failed: %s", name, exc)
+                        tool_span.end(
+                            status="error",
+                            attributes={"output": content},
+                            exc=exc,
+                        )
+                runlog.bump("tool_calls")
+                messages.append(
+                    ToolMessage(
+                        content=str(content),
+                        name=name,
+                        tool_call_id=tool_call_id,
+                        status=status,
+                    )
+                )
+        last_response = tool_chat.invoke(messages)
+        content = _message_content_text(last_response)
+        loop_span.event(
+            "model.round",
+            {
+                "round": max_tool_rounds + 1,
+                "response": last_response,
+                "tool_calls": [],
+                "final": True,
+            },
+        )
+        loop_span.end(attributes={"response": content, "rounds": max_tool_rounds + 1})
+        return content
 
 
 def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:

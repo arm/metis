@@ -6,6 +6,7 @@ from pathlib import Path
 
 import json
 import pytest
+from metis import runlog
 from metis.cli import triage_cli
 from metis.cli.command_runtime import CommandRuntime
 from metis.cli.commands import run_triage
@@ -44,6 +45,24 @@ def test_save_output_replaces_json_only_after_serialization_succeeds(tmp_path):
         save_output(output_path, {"invalid": object()}, quiet=True)
 
     assert output_path.read_text(encoding="utf-8") == '{"original": true}'
+
+
+def test_save_output_records_written_artifact(tmp_path):
+    trace_path = tmp_path / "trace.ndjson"
+    output_path = tmp_path / "report.json"
+    with runlog.open_runlog(runlog.RunLogConfig(path=trace_path)):
+        save_output(output_path, {"reviews": []}, quiet=True)
+
+    records = [
+        json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    artifact = next(
+        record for record in records if record["name"] == "artifact.written"
+    )
+    assert artifact["attributes"]["path"] == str(output_path.resolve())
+    assert artifact["attributes"]["format"] == "json"
+    assert artifact["attributes"]["bytes"] == output_path.stat().st_size
+    assert len(artifact["attributes"]["sha256"]) == 64
 
 
 @pytest.mark.parametrize(

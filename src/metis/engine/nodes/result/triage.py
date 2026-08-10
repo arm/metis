@@ -13,6 +13,7 @@ from metis.engine.execution.contracts import ResultFormat
 from metis.engine.stages.triage.models import TriageRun
 from metis.sarif.models import SarifPayload
 from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
+from metis import runlog
 
 
 def execute(invocation: NodeInvocation) -> NodeResult:
@@ -46,7 +47,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
                 "warning",
             ),
         )
-    return NodeResult(
+    output = NodeResult(
         {
             "formats": invocation.formats or (),
             "filename": invocation.filename,
@@ -55,6 +56,15 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         status=status,
         diagnostics=diagnostics,
     )
+    runlog.event(
+        "artifact",
+        {
+            "kind": "triage_result",
+            "formats": invocation.formats or (),
+            "payload": output.outputs,
+        },
+    )
+    return output
 
 
 registration = NodeRegistration(

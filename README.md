@@ -219,9 +219,14 @@ Metis also provides an interactive CLI with several built-in commands:
 - `--verbose` – show the stages and nodes executed by the selected graph.
 - `--log-level` – configure Python logging independently of graph progress.
 - `--quiet`, `--output-file`, `--output-files` – control console and export output.
+- `--log-workflow-debug` – write a full local workflow trace containing prompts,
+  model responses, tool calls, decisions, usage, and execution lifecycle data.
+- `--log-workflow-debug-path PATH` – choose the trace directory or a new exact
+  `.ndjson` path; this also enables workflow tracing.
 
 See the [execution graph guide](docs/execution-graph.md) for stage, node, and
-output configuration. See
+output configuration, the [workflow run-log format](docs/workflow-log-format.md)
+for local trace capture, and
 [adding a capability](docs/capabilities/adding-capability.md) for shared runtime
 services and model-tool adapters.
 

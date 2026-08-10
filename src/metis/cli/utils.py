@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import hashlib
 import importlib.metadata
 import json
 import logging
@@ -10,10 +12,15 @@ import tempfile
 import warnings
 from datetime import datetime
 from pathlib import Path
+import sys
 from importlib.resources import files
 
 from rich.console import Console
 from rich.errors import MarkupError
+from metis.runlog import RunLogConfig
+from metis.runlog import build_run_metadata
+from metis.runlog import open_runlog
+from metis import runlog
 from rich.markup import escape
 from rich.progress import (
     Progress,
@@ -97,6 +104,28 @@ def configure_logger(logger, args):
     warnings_logger = logging.getLogger("py.warnings")
     warnings_logger.setLevel(level)
     warnings_logger.propagate = True
+
+
+def workflow_debug_context(args):
+    path_override = getattr(args, "log_workflow_debug_path", None)
+    if not getattr(args, "log_workflow_debug", False) and not path_override:
+        return contextlib.nullcontext(None)
+    metadata = build_run_metadata(
+        argv=list(sys.argv),
+        metis_version=METIS_VERSION,
+        codebase_path=getattr(args, "codebase_path", None),
+        config={
+            "backend": getattr(args, "backend", None),
+            "config_path": getattr(args, "config", None),
+            "log_level": getattr(args, "log_level", None),
+            "non_interactive": getattr(args, "non_interactive", None),
+            "command": getattr(args, "command", None),
+        },
+    )
+    return open_runlog(
+        RunLogConfig(path=path_override, content="full"),
+        metadata=metadata,
+    )
 
 
 def print_console(message, quiet=False, **kwargs):
@@ -324,6 +353,22 @@ def output_files_for_formats(
     return selected
 
 
+def _record_output_artifact(path: str | Path, format_name: str) -> None:
+    output_path = Path(path).resolve()
+    with output_path.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    runlog.event(
+        "artifact.written",
+        {
+            "kind": "output_file",
+            "format": format_name,
+            "path": str(output_path),
+            "bytes": output_path.stat().st_size,
+            "sha256": digest,
+        },
+    )
+
+
 def save_output(output_files, data, quiet=False, sarif_payload=None):
     if not output_files:
         return
@@ -361,6 +406,7 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
             if tmp_path is not None:
                 Path(tmp_path).unlink(missing_ok=True)
             raise
+        _record_output_artifact(path, output_format(path))
         print_console(
             f"[blue]{label} saved to {escape(str(path))}[/blue]",
             quiet,
@@ -378,6 +424,7 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
                 f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
                 quiet,
             )
+            _record_output_artifact(html_path, "html")
             continue
 
         if suffix == ".sarif":
@@ -388,6 +435,7 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
                 f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
                 quiet,
             )
+            _record_output_artifact(sarif_path, "sarif")
             continue
 
         if suffix == ".csv":
@@ -396,6 +444,7 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
                 f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
                 quiet,
             )
+            _record_output_artifact(csv_path, "csv")
             continue
 
         # default to JSON

@@ -16,6 +16,7 @@ from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.sarif.models import SarifPayload
 from metis.sarif.writer import generate_sarif
+from metis import runlog
 
 
 def execute(invocation: NodeInvocation) -> NodeResult:
@@ -28,7 +29,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
     sarif = SarifPayload.model_validate(
         generate_sarif(findings.model_dump(mode="python"))
     )
-    return NodeResult(
+    result = NodeResult(
         {
             "formats": invocation.formats or (),
             "filename": invocation.filename,
@@ -38,6 +39,15 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         },
         status=_execution_status(combined.status),
     )
+    runlog.event(
+        "artifact",
+        {
+            "kind": "review_result",
+            "formats": invocation.formats or (),
+            "payload": result.outputs,
+        },
+    )
+    return result
 
 
 registration = NodeRegistration(

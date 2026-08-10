@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import logging
 from typing import cast
 
@@ -19,6 +20,8 @@ from metis.sarif.triage import (
     save_sarif_file,
 )
 from metis.usage import submit_with_current_context
+from metis import runlog
+
 
 from .contracts import TriageClassifier
 from .contracts import TriageDecision
@@ -68,18 +71,93 @@ class TriageService:
         debug_callback,
         memory_service: MemoryService | None,
     ) -> TriageDecision | None:
-        threat_model_context = get_threat_model_context(
-            memory_service,
-            path=finding.file_path,
+        fingerprint = hashlib.sha256(
+            "\0".join(
+                (
+                    str(finding.rule_id),
+                    str(finding.file_path),
+                    str(finding.line),
+                    str(finding.message),
+                    str(finding.snippet),
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        finding_id = (
+            f"sarif:{finding.run_index}:{finding.result_index}:{fingerprint[:12]}"
         )
-        policy = threat_model_scope_policy(
-            threat_model_context,
-            path=finding.file_path,
-        )
-        override = threat_model_triage_override(policy)
-        if override is not None:
-            return cast(TriageDecision, override)
-        return classifier(finding, threat_model_context, debug_callback)
+        with runlog.span(
+            "task",
+            "triage_finding",
+            {
+                "kind": "triage_finding",
+                "finding_id": finding_id,
+                "sarif": {
+                    "run_index": finding.run_index,
+                    "result_index": finding.result_index,
+                },
+                "fingerprint": fingerprint,
+                "file_path": finding.file_path,
+                "line": finding.line,
+                "rule_id": finding.rule_id,
+                "message": finding.message,
+            },
+        ) as task_span:
+            runlog.bump("tasks")
+            with runlog.span(
+                "threat_context",
+                "scope_policy",
+                {"path": finding.file_path},
+            ) as context_span:
+                threat_model_context = get_threat_model_context(
+                    memory_service,
+                    path=finding.file_path,
+                )
+                policy = threat_model_scope_policy(
+                    threat_model_context,
+                    path=finding.file_path,
+                )
+                override = threat_model_triage_override(policy)
+                context_span.end(
+                    attributes={
+                        "records": threat_model_context,
+                        "policy": policy,
+                        "override": override,
+                    }
+                )
+            if override is not None:
+                runlog.event(
+                    "decision",
+                    {
+                        "kind": "threat_model_override",
+                        "finding_id": finding_id,
+                        "decision": override,
+                    },
+                )
+                decision = cast(TriageDecision, override)
+            else:
+                decision = classifier(
+                    finding,
+                    threat_model_context,
+                    debug_callback,
+                )
+            if decision is not None:
+                runlog.event(
+                    "artifact",
+                    {
+                        "kind": "triage_decision",
+                        "finding_id": finding_id,
+                        "payload": decision,
+                    },
+                )
+            task_span.end(
+                status=(
+                    "inconclusive"
+                    if decision is None or decision.get("status") == "inconclusive"
+                    else "ok"
+                ),
+                attributes={"decision": decision},
+            )
+            return decision
 
     def _record_triage_success(self, triaged_payload: dict, finding, decision: dict):
         apply_triage_result(

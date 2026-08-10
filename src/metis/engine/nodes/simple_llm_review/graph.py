@@ -11,6 +11,8 @@ from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.engine.source import SourceMap
+from metis import runlog
+from metis.runlog.workflow import traced_step
 from metis.engine.threat_context_retrieval import (
     format_threat_model_context,
     threat_model_review_scope_guidance,
@@ -242,9 +244,12 @@ class ReviewGraph:
         )
         parse = review_node_parse
 
-        graph.add_node("build_prompt", build_prompt)
-        graph.add_node("review", review)
-        graph.add_node("parse", parse)
+        graph.add_node(
+            "build_prompt",
+            traced_step("simple_llm_review", "build_prompt", build_prompt),
+        )
+        graph.add_node("review", traced_step("simple_llm_review", "review", review))
+        graph.add_node("parse", traced_step("simple_llm_review", "parse", parse))
 
         graph.set_entry_point("build_prompt")
         graph.add_edge("build_prompt", "review")
@@ -290,25 +295,44 @@ class ReviewGraph:
                 "original_file": original_file,
                 "threat_model_context": threat_model_context,
             }
-            out = app.invoke(state)
+            with runlog.span(
+                "workflow",
+                "simple_llm_review",
+                {
+                    "nodes": ["build_prompt", "review", "parse"],
+                    "edges": [
+                        ["__start__", "build_prompt"],
+                        ["build_prompt", "review"],
+                        ["review", "parse"],
+                        ["parse", "__end__"],
+                    ],
+                    "chunk": {
+                        "file_path": file_path,
+                        "start_line": chunk_start,
+                        "end_line": chunk_end,
+                    },
+                    "initial_state": state,
+                },
+            ) as workflow_span:
+                runlog.bump("workflow_runs")
+                out = app.invoke(state)
+                workflow_span.end(attributes={"final_state": out})
             chunk_reviews = out.get("parsed_reviews", []) or []
             if chunk_reviews:
                 accumulated.extend(chunk_reviews)
 
-        if not accumulated:
-            file_display = relative_file if relative_file else file_path
-            result: dict[str, Any] = {
-                "file": file_display,
-                "file_path": file_path,
-                "reviews": [],
-            }
-            return result
-
         file_display = relative_file if relative_file else file_path
-        result = {
+        result: dict[str, Any] = {
             "file": file_display,
             "file_path": file_path,
             "reviews": accumulated,
         }
-
+        runlog.event(
+            "artifact",
+            {
+                "kind": "review_findings",
+                "file_path": file_display,
+                "payload": result,
+            },
+        )
         return result

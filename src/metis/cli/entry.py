@@ -20,6 +20,7 @@ from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_chat_provider
 from metis.providers.registry import get_embedding_provider
+from metis import runlog
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -42,6 +43,7 @@ from .utils import (
     save_output,
     output_format,
     output_files_for_formats,
+    workflow_debug_context,
 )
 
 logging.captureWarnings(True)
@@ -230,6 +232,7 @@ def build_engine(args, runtime):
         vector_backend=vector_backend,
         custom_prompt_text=resolve_custom_prompt(args),
         usage_runtime=usage_runtime,
+        runlog=getattr(args, "_metis_runlog", None),
         **engine_runtime,
     )
     return engine, vector_backend
@@ -287,6 +290,18 @@ def _prepare_command_runtime(cmd, cmd_args, args):
 
 
 def execute_command(engine, cmd, cmd_args, args):
+    with runlog.span(
+        "command",
+        cmd,
+        lambda: {
+            "arguments": list(cmd_args),
+            "interactive": not bool(getattr(args, "non_interactive", False)),
+        },
+    ):
+        return _execute_command(engine, cmd, cmd_args, args)
+
+
+def _execute_command(engine, cmd, cmd_args, args):
     if cmd not in COMMANDS:
         print_console(f"[red]Unknown command:[/red] {escape(cmd)}", args.quiet)
         return
@@ -416,6 +431,16 @@ def main():
     parser.add_argument("--log-file", type=str)
     parser.add_argument("--log-level", type=str, default="ERROR")
     parser.add_argument(
+        "--log-workflow-debug",
+        action="store_true",
+        help="Emit a full local NDJSON workflow trace.",
+    )
+    parser.add_argument(
+        "--log-workflow-debug-path",
+        type=str,
+        help="Directory or new .ndjson path for the workflow trace.",
+    )
+    parser.add_argument(
         "--custom-prompt",
         type=str,
         help="Path to a custom prompt file (.md or .txt) used to guide analysis",
@@ -491,53 +516,73 @@ def main():
         raise SystemExit(1)
 
     configure_logger(logger, args)
-    runtime = load_runtime_config(
-        config_path=args.config,
-        enable_psql=(args.backend == "postgres"),
-    )
-    engine, vector_backend = build_engine(args, runtime)
-    exit_code = 0
-    farewell = None
-    try:
-        if graph_requested:
-            try:
-                determine_output_file("graph", args, [])
-                callbacks: dict[str, object] = {
-                    "diagnostic_callback": (
-                        lambda diagnostic: _print_graph_diagnostic(
-                            diagnostic, args.quiet
+    with workflow_debug_context(args) as runlog_session:
+        if runlog_session is not None:
+            args._metis_runlog = runlog_session
+            print_console(
+                f"[blue]Workflow debug log:[/blue] {runlog_session.ndjson_path}",
+                args.quiet,
+            )
+        engine = None
+        vector_backend = None
+        exit_code = 0
+        farewell = None
+        try:
+            runtime = load_runtime_config(
+                config_path=args.config,
+                enable_psql=(args.backend == "postgres"),
+            )
+            engine, vector_backend = build_engine(args, runtime)
+            if graph_requested:
+                with runlog.span(
+                    "command",
+                    "execution_graph",
+                    {"include_triaged": bool(args.include_triaged)},
+                ) as command_span:
+                    try:
+                        determine_output_file("graph", args, [])
+                        callbacks: dict[str, object] = {
+                            "diagnostic_callback": (
+                                lambda diagnostic: _print_graph_diagnostic(
+                                    diagnostic, args.quiet
+                                )
+                            )
+                        }
+                        if args.verbose:
+                            callbacks["progress_callback"] = lambda event: (
+                                _print_graph_progress(event, args.quiet)
+                            )
+                        result = engine.execute_graph(
+                            include_triaged=True if args.include_triaged else None,
+                            callbacks=callbacks,
                         )
-                    )
-                }
-                if args.verbose:
-                    callbacks["progress_callback"] = lambda event: (
-                        _print_graph_progress(event, args.quiet)
-                    )
-                result = engine.execute_graph(
-                    include_triaged=True if args.include_triaged else None,
-                    callbacks=callbacks,
-                )
-                _save_graph_outputs(
-                    args.output_file,
-                    result,
-                    args.quiet,
-                    generated_output=bool(
-                        getattr(args, "_metis_generated_output", False)
-                    ),
-                )
-            except Exception as exc:
-                print_console(
-                    f"[bold red]Error:[/bold red] {escape(str(exc))}",
-                    args.quiet,
-                )
-                exit_code = 1
+                        _save_graph_outputs(
+                            args.output_file,
+                            result,
+                            args.quiet,
+                            generated_output=bool(
+                                getattr(args, "_metis_generated_output", False)
+                            ),
+                        )
+                    except Exception as exc:
+                        command_span.end(status="error", exc=exc)
+                        print_console(
+                            f"[bold red]Error:[/bold red] {escape(str(exc))}",
+                            args.quiet,
+                        )
+                        exit_code = 1
+                    else:
+                        print_console(
+                            "[green]Execution graph complete.[/green]", args.quiet
+                        )
+            elif args.non_interactive:
+                exit_code, farewell = run_non_interactive(engine, args)
             else:
-                print_console("[green]Execution graph complete.[/green]", args.quiet)
-        elif args.non_interactive:
-            exit_code, farewell = run_non_interactive(engine, args)
-        else:
-            farewell = run_interactive_loop(engine, args, vector_backend)
-    finally:
-        finalize_cli_session_and_close(engine, args, farewell)
-    if exit_code:
-        raise SystemExit(exit_code)
+                farewell = run_interactive_loop(engine, args, vector_backend)
+        finally:
+            if engine is not None:
+                finalize_cli_session_and_close(engine, args, farewell)
+        if exit_code:
+            if runlog_session is not None:
+                runlog_session.set_outcome("error")
+            raise SystemExit(exit_code)

@@ -14,6 +14,8 @@ from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.codegraph import CodeGraphReference
 from metis.sarif.models import SarifPayload
 
+from metis import runlog
+
 from ..execution.catalog import NodeCatalog
 from ..execution.compiler import StagePlan
 from ..execution.compiler import _annotations_compatible
@@ -149,6 +151,13 @@ class ExecutionGraphService:
         include_triaged: bool | None = None,
         callbacks: Mapping[str, object] | None = None,
     ) -> ExecutionResult:
+        runlog.event(
+            "execution.topology",
+            {
+                "stage_order": self.configuration.stage_order(),
+                "configuration": self.configuration,
+            },
+        )
         outputs: dict[str, Any] = {}
         diagnostics: list[ExecutionDiagnostic] = []
         status = ExecutionStatus.OK
@@ -307,11 +316,54 @@ def _resolve_stage_input(
 def _node_callbacks(callbacks: Mapping[str, object] | None) -> NodeCallbacks:
     values = callbacks or {}
     return NodeCallbacks(
-        progress=cast(Any, values.get("progress_callback")),
-        debug=cast(Any, values.get("debug_callback")),
-        checkpoint=cast(Any, values.get("checkpoint_callback")),
-        diagnostic=cast(Any, values.get("diagnostic_callback")),
+        progress=_mapping_callback(
+            "progress", cast(Any, values.get("progress_callback"))
+        ),
+        debug=_mapping_callback("debug", cast(Any, values.get("debug_callback"))),
+        checkpoint=_checkpoint_callback(cast(Any, values.get("checkpoint_callback"))),
+        diagnostic=_diagnostic_callback(cast(Any, values.get("diagnostic_callback"))),
     )
+
+
+def _mapping_callback(name: str, callback):
+    if not runlog.is_enabled():
+        return callback
+
+    def invoke(payload):
+        runlog.event(
+            name, payload if isinstance(payload, Mapping) else {"value": payload}
+        )
+        if callable(callback):
+            callback(payload)
+
+    return invoke
+
+
+def _checkpoint_callback(callback):
+    if not runlog.is_enabled():
+        return callback
+
+    def invoke(payload, processed, total):
+        runlog.event(
+            "checkpoint",
+            {"processed": processed, "total": total, "payload": payload},
+        )
+        if callable(callback):
+            callback(payload, processed, total)
+
+    return invoke
+
+
+def _diagnostic_callback(callback):
+    if not runlog.is_enabled():
+        return callback
+
+    def invoke(diagnostic):
+        runlog.event("diagnostic", {"diagnostic": diagnostic})
+        if callable(callback):
+            callback(diagnostic)
+
+    return invoke
 
 
 def _unavailable_stage(stage: str) -> ExecutionResult:
@@ -332,7 +384,7 @@ def _notify_diagnostics(
     diagnostics: tuple[ExecutionDiagnostic, ...],
 ) -> None:
     callback = (callbacks or {}).get("diagnostic_callback")
-    if not callable(callback):
-        return
     for diagnostic in diagnostics:
-        callback(diagnostic)
+        runlog.event("diagnostic", {"diagnostic": diagnostic})
+        if callable(callback):
+            callback(diagnostic)

@@ -15,6 +15,8 @@ from .collector import UsageCollector
 from .context import usage_operation, usage_scope
 from .langchain import UsageCallbackHandler
 from .llamaindex import UsageLlamaIndexHandler
+from metis.runlog.langchain import RUNLOG_CALLBACK_HANDLER
+
 from metis.providers.base import (
     EmbedModelKwargs,
     ProviderChatModelKwargs,
@@ -65,7 +67,7 @@ class UsageRuntime:
         self.langchain_handler = UsageCallbackHandler(self.collector)
         self.hooks = UsageHooks(
             callback_manager=CallbackManager([UsageLlamaIndexHandler(self.collector)]),
-            callbacks=[self.langchain_handler],
+            callbacks=[self.langchain_handler, RUNLOG_CALLBACK_HANDLER],
         )
         self._lock = Lock()
         self._command_sequence = 0

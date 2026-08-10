@@ -17,6 +17,8 @@ from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
+from metis import runlog
+
 
 if TYPE_CHECKING:
     from metis.engine.repository import EngineRepository
@@ -47,6 +49,10 @@ def create_node(
                 repository,
                 memory_service,
             )
+        )
+        runlog.event(
+            "artifact",
+            {"kind": "threat_model_snapshot", "payload": result},
         )
         return NodeResult({"threat_model": result})
 

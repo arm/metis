@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import unidiff
 
 from metis.usage import submit_with_current_context
+from metis import runlog
 from metis.utils import read_file_content
 
 from metis.engine.diff_utils import process_diff_file
@@ -212,6 +213,17 @@ class SimpleLlmReviewService:
         }
         return (review_graph or self._review_graph_factory(None)).review(req)
 
+    def _review_file_task(self, review_fn, path):
+        with runlog.span(
+            "task",
+            "review_file",
+            {"kind": "review_file", "file_path": str(path)},
+        ) as task_span:
+            runlog.bump("tasks")
+            result = review_fn(path)
+            task_span.end(attributes={"result": result})
+            return result
+
     def _review_files(
         self,
         files,
@@ -219,7 +231,9 @@ class SimpleLlmReviewService:
     ):
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
-                submit_with_current_context(executor, review_fn, path): path
+                submit_with_current_context(
+                    executor, self._review_file_task, review_fn, path
+                ): path
                 for path in files
             }
             for future in as_completed(future_to_path):

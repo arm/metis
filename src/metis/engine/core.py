@@ -16,6 +16,9 @@ from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
 from metis.plugins.registry import LanguagePluginRegistry
 from metis.usage import UsageRuntime
+from metis.runlog import RunLogSession
+from metis.runlog import bind_runlog
+from metis import runlog
 from metis.vector_store.base import BaseVectorStore
 
 from .ask import AskGraph
@@ -53,9 +56,11 @@ class MetisEngine:
         vector_backend: Any = BaseVectorStore,
         llm_provider: Any = None,
         embedding_provider: Any = None,
+        runlog: RunLogSession | None = None,
         **kwargs: Any,
     ) -> None:
         self.codebase_path = codebase_path
+        self._runlog = runlog
 
         required_keys = [
             "max_workers",
@@ -195,9 +200,20 @@ class MetisEngine:
         self._config.memory_service = self.capabilities.get("memory")
 
     def init_codebase(self) -> dict[str, object]:
-        result = self.execution.execute_initialize()
-        initialization = _require_execution_outputs(result)["initialize"]
-        return _execution_value(initialization)
+        with (
+            bind_runlog(self._runlog),
+            runlog.span("execution", "initialize") as execution_span,
+        ):
+            result = self.execution.execute_initialize()
+            initialization = _require_execution_outputs(result)["initialize"]
+            execution_span.end(
+                status=result.status.value,
+                attributes={
+                    "outputs": initialization,
+                    "diagnostics": result.diagnostics,
+                },
+            )
+            return _execution_value(initialization)
 
     def execute_review(
         self,
@@ -206,12 +222,24 @@ class MetisEngine:
         target: str | None = None,
         callbacks: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        result = self.execution.execute_review(
-            ReviewCommand(mode=mode, target=target),
-            callbacks=callbacks,
-        )
-        review = _require_execution_outputs(result)["review"]
-        return _execution_value(review)
+        with (
+            bind_runlog(self._runlog),
+            runlog.span(
+                "execution",
+                "review",
+                {"mode": mode, "target": target},
+            ) as execution_span,
+        ):
+            result = self.execution.execute_review(
+                ReviewCommand(mode=mode, target=target),
+                callbacks=callbacks,
+            )
+            review = _require_execution_outputs(result)["review"]
+            execution_span.end(
+                status=result.status.value,
+                attributes={"outputs": review, "diagnostics": result.diagnostics},
+            )
+            return _execution_value(review)
 
     def execute_graph(
         self,
@@ -219,16 +247,30 @@ class MetisEngine:
         include_triaged: bool | None = None,
         callbacks: dict[str, object] | None = None,
     ) -> ExecutionResult:
-        result = self.execution.execute_graph(
-            include_triaged=include_triaged,
-            callbacks=callbacks,
-        )
-        outputs = _require_execution_outputs(result)
-        return ExecutionResult(
-            status=result.status,
-            outputs={name: _execution_value(value) for name, value in outputs.items()},
-            diagnostics=result.diagnostics,
-        )
+        with (
+            bind_runlog(self._runlog),
+            runlog.span(
+                "execution",
+                "configured_graph",
+                {"include_triaged": include_triaged},
+            ) as execution_span,
+        ):
+            result = self.execution.execute_graph(
+                include_triaged=include_triaged,
+                callbacks=callbacks,
+            )
+            outputs = _require_execution_outputs(result)
+            execution_span.end(
+                status=result.status.value,
+                attributes={"outputs": outputs, "diagnostics": result.diagnostics},
+            )
+            return ExecutionResult(
+                status=result.status,
+                outputs={
+                    name: _execution_value(value) for name, value in outputs.items()
+                },
+                diagnostics=result.diagnostics,
+            )
 
     def usage_command(
         self,
@@ -307,14 +349,20 @@ class MetisEngine:
         return self._state.ask_graph
 
     def ask_question(self, question):
-        retriever_code, retriever_docs = self._index_capability().get_retrievers()
-        logger.info("Querying codebase for your question...")
-        req = {
-            "question": question,
-            "retriever_code": retriever_code,
-            "retriever_docs": retriever_docs,
-        }
-        return self._get_ask_graph().ask(req)
+        with (
+            bind_runlog(self._runlog),
+            runlog.span("execution", "ask", {"question": question}) as execution_span,
+        ):
+            retriever_code, retriever_docs = self._index_capability().get_retrievers()
+            logger.info("Querying codebase for your question...")
+            req = {
+                "question": question,
+                "retriever_code": retriever_code,
+                "retriever_docs": retriever_docs,
+            }
+            result = self._get_ask_graph().ask(req)
+            execution_span.end(attributes={"outputs": result})
+            return result
 
     def execute_triage(
         self,
@@ -326,25 +374,37 @@ class MetisEngine:
         checkpoint_path: str | None = None,
         options: TriageOptions | None = None,
     ) -> dict:
-        options = options or self._triage_options
-        if checkpoint_callback is None and checkpoint_path is not None:
-            if self._triage_service is None:
-                raise RuntimeError("Triage stage is not configured")
-            checkpoint_callback = self._triage_service.checkpoint_callback(
-                checkpoint_path
+        with (
+            bind_runlog(self._runlog),
+            runlog.span(
+                "execution",
+                "triage",
+                {"include_triaged": bool(options and options.include_triaged)},
+            ) as execution_span,
+        ):
+            options = options or self._triage_options
+            if checkpoint_callback is None and checkpoint_path is not None:
+                if self._triage_service is None:
+                    raise RuntimeError("Triage stage is not configured")
+                checkpoint_callback = self._triage_service.checkpoint_callback(
+                    checkpoint_path
+                )
+            result = self.execution.execute_triage(
+                payload,
+                codegraph=codegraph,
+                include_triaged=options.include_triaged,
+                callbacks={
+                    "progress_callback": progress_callback,
+                    "debug_callback": debug_callback,
+                    "checkpoint_callback": checkpoint_callback,
+                },
             )
-        result = self.execution.execute_triage(
-            payload,
-            codegraph=codegraph,
-            include_triaged=options.include_triaged,
-            callbacks={
-                "progress_callback": progress_callback,
-                "debug_callback": debug_callback,
-                "checkpoint_callback": checkpoint_callback,
-            },
-        )
-        triage = _require_execution_outputs(result)["triage"]
-        return _execution_value(triage)
+            triage = _require_execution_outputs(result)["triage"]
+            execution_span.end(
+                status=result.status.value,
+                attributes={"outputs": triage, "diagnostics": result.diagnostics},
+            )
+            return _execution_value(triage)
 
     def close(self):
         if self._simple_llm_triage is not None:

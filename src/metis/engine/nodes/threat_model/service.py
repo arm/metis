@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from metis import runlog
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.repository import EngineRepository
@@ -191,22 +192,39 @@ def _build_threat_model_snapshot(
     )
     prepared_sources: list[PreparedThreatSource] = []
     for source in threat_sources:
-        prepared = _prepare_threat_source(
-            config,
-            repo_root,
-            source,
-        )
-        if prepared is None:
-            raise RuntimeError(
-                f"Threat-model source could not be read: "
-                f"{source.path.relative_to(repo_root).as_posix()}"
+        relative_path = source.path.relative_to(repo_root).as_posix()
+        with runlog.span(
+            "task",
+            "threat_source",
+            {
+                "kind": "threat_source",
+                "path": relative_path,
+                "source_method": source.source,
+            },
+        ) as task_span:
+            runlog.bump("tasks")
+            prepared = _prepare_threat_source(
+                config,
+                repo_root,
+                source,
             )
-        prepared_sources.append(prepared)
-        _write_threat_source_record(
-            candidate_service,
-            repo_fp,
-            prepared,
-        )
+            if prepared is None:
+                raise RuntimeError(
+                    f"Threat-model source could not be read: {relative_path}"
+                )
+            prepared_sources.append(prepared)
+            _write_threat_source_record(
+                candidate_service,
+                repo_fp,
+                prepared,
+            )
+            task_span.end(
+                attributes={
+                    "source_fingerprint": prepared.source_fp,
+                    "claims": prepared.distilled_claims,
+                    "summary": prepared.summary,
+                }
+            )
 
     claims: list[dict[str, Any]] = []
     for prepared in prepared_sources:

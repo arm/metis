@@ -1,0 +1,582 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import json
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.callbacks import CallbackManager
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+
+from metis.engine import MetisEngine
+from metis.engine.execution import ExecutionResult
+from metis.engine.execution import ExecutionStatus
+from metis.engine.execution.catalog import NodeCatalog
+from metis.engine.execution.compiler import compile_stage
+from metis.engine.execution.contracts import NodeCallbacks
+from metis.engine.execution.contracts import NodeContext
+from metis.engine.execution.contracts import NodeRegistration
+from metis.engine.execution.contracts import NodeResult
+from metis.engine.execution.contracts import NodeRuntime
+from metis.engine.execution.graph import StageConfiguration
+from metis.engine.execution.runner import run_stage
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.model_tool_runner import invoke_model_with_tools
+from metis.execution_nodes import EmptyNodeConfiguration
+from metis.runlog.langchain import RUNLOG_CALLBACK_HANDLER
+from metis.runlog.langchain import RunLogCallbackHandler
+from metis.runlog.langchain import ensure_runlog_callback
+
+from metis import runlog
+
+
+def _records(session: runlog.RunLogSession) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in session.ndjson_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _exact_config(tmp_path: Path, **kwargs) -> runlog.RunLogConfig:
+    return runlog.RunLogConfig(path=tmp_path / "trace.ndjson", **kwargs)
+
+
+def test_disabled_helpers_do_not_evaluate_lazy_attributes(tmp_path):
+    evaluated = False
+
+    def attributes():
+        nonlocal evaluated
+        evaluated = True
+        return {"path": tmp_path}
+
+    with runlog.span("task", attributes=attributes):
+        runlog.event("progress", attributes)
+
+    assert evaluated is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_session_writes_v1_root_lifecycle_and_meta(tmp_path):
+    session = runlog.open_runlog(
+        _exact_config(tmp_path),
+        metadata={"command": "review", "api_key": "secret-value"},
+    )
+    with session:
+        assert runlog.current_runlog() is session
+        runlog.event("ready", {"value": 1})
+
+    records = _records(session)
+    assert [record["seq"] for record in records] == list(range(len(records)))
+    assert records[0]["record"] == "span.start"
+    assert records[0]["kind"] == "run"
+    assert records[0]["parent_span_id"] is None
+    assert records[-1]["record"] == "span.end"
+    assert records[-1]["span_id"] == records[0]["span_id"]
+    assert records[-1]["status"] == "ok"
+    assert runlog.SCHEMA_VERSION == 1
+    assert all(record["v"] == runlog.SCHEMA_VERSION for record in records)
+    assert len({record["record_id"] for record in records}) == len(records)
+    assert all(record["explanation"].strip() for record in records)
+    assert records[0]["explanation"] == records[-1]["explanation"]
+
+    meta = json.loads(session.meta_path.read_text(encoding="utf-8"))
+    assert meta["complete"] is True
+    assert meta["status"] == "ok"
+    assert meta["metadata"]["api_key"]["$redacted"] is True
+    assert runlog.current_runlog() is None
+
+
+def test_span_hierarchy_and_point_event_identity(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        with runlog.span(
+            "command",
+            "review",
+            explanation="The review of one user-selected target.",
+        ) as command:
+            with runlog.span("stage", "review") as stage:
+                with runlog.span("task", "Global lifecycle chunk") as lifecycle:
+                    lifecycle.event(
+                        "progress",
+                        {
+                            "event": "global_lifecycle_start",
+                            "globals": 224,
+                            "functions": 59,
+                        },
+                    )
+
+    records = _records(session)
+    command_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "command"
+    )
+    stage_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "stage"
+    )
+    lifecycle_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start"
+        and record.get("name") == "Global lifecycle chunk"
+    )
+    progress = next(record for record in records if record["record"] == "event")
+
+    assert command_start["parent_span_id"] == session.root_span_id
+    assert stage_start["parent_span_id"] == command_start["span_id"]
+    assert lifecycle_start["parent_span_id"] == stage_start["span_id"]
+    assert progress["span_id"] == lifecycle_start["span_id"]
+    assert "parent_span_id" not in progress
+    assert progress["record_id"] != progress["span_id"]
+    assert command_start["explanation"] == "The review of one user-selected target."
+    assert stage_start["explanation"] == (
+        "One configured initialize, review, or triage stage executed as part of "
+        "the workflow."
+    )
+    assert lifecycle_start["explanation"] == (
+        "A size-bounded batch of functions checked for lifecycle asymmetry "
+        "involving global callbacks, timers, work items, operation tables, or "
+        "shared references."
+    )
+    assert progress["explanation"] == (
+        "Global-lifecycle analysis began after global constructs and related "
+        "functions were selected; work was split into size-bounded chunks."
+    )
+    assert command.span_id != stage.span_id != lifecycle.span_id
+
+
+def test_exception_closes_span_and_run_as_error(tmp_path):
+    session = runlog.open_runlog(_exact_config(tmp_path))
+    with pytest.raises(ValueError, match="boom"):
+        with session:
+            with runlog.span("task", "failing"):
+                raise ValueError("boom")
+
+    records = _records(session)
+    task_end = next(
+        record
+        for record in records
+        if record["record"] == "span.end" and record.get("kind") == "task"
+    )
+    assert task_end["status"] == "error"
+    assert task_end["error"]["type"] == "ValueError"
+    assert task_end["error"]["message"] == "boom"
+    assert records[-1]["kind"] == "run"
+    assert records[-1]["status"] == "error"
+
+
+def test_large_text_and_structured_payloads_use_atomic_blobs(tmp_path):
+    config = _exact_config(tmp_path, blob_threshold=48)
+    with runlog.open_runlog(config) as session:
+        runlog.event(
+            "payload",
+            {
+                "prompt": "A" * 100,
+                "state": {"items": [f"item-{index}" for index in range(20)]},
+                "config": {
+                    "model": "test",
+                    "access_token": "top-secret",
+                    "client_secret": "client-secret",
+                    "private_key": "private-key",
+                    "headers": {"cookie": "session=secret"},
+                },
+            },
+        )
+        runlog.event("duplicate", {"prompt": "A" * 100})
+
+    records = _records(session)
+    payload = next(record for record in records if record["name"] == "payload")
+    duplicate = next(record for record in records if record["name"] == "duplicate")
+    prompt_ref = payload["attributes"]["prompt"]
+    state_ref = payload["attributes"]["state"]
+    config_value = payload["attributes"]["config"]
+
+    assert prompt_ref["$ref"] == duplicate["attributes"]["prompt"]["$ref"]
+    assert (session.output_dir / prompt_ref["$ref"]).read_text() == "A" * 100
+    assert json.loads((session.output_dir / state_ref["$ref"]).read_text())["items"]
+    if "$ref" in config_value:
+        config_value = json.loads(
+            (session.output_dir / config_value["$ref"]).read_text(encoding="utf-8")
+        )
+    assert config_value["access_token"]["$redacted"] is True
+    assert config_value["client_secret"]["$redacted"] is True
+    assert config_value["private_key"]["$redacted"] is True
+    headers_value = config_value["headers"]
+    if "$ref" in headers_value:
+        headers_value = json.loads(
+            (session.output_dir / headers_value["$ref"]).read_text(encoding="utf-8")
+        )
+    assert headers_value["cookie"]["$redacted"] is True
+    assert (
+        sum(
+            path.name == Path(prompt_ref["$ref"]).name
+            for path in session.blobs_dir.iterdir()
+        )
+        == 1
+    )
+
+
+def test_metadata_mode_hashes_but_does_not_write_content(tmp_path):
+    config = _exact_config(tmp_path, content="metadata", blob_threshold=16)
+    with runlog.open_runlog(config) as session:
+        runlog.event("payload", {"prompt": "sensitive source text" * 4})
+
+    payload = next(
+        record for record in _records(session) if record["name"] == "payload"
+    )
+    reference = payload["attributes"]["prompt"]
+    assert reference["$omitted"] is True
+    assert "$ref" not in reference
+    assert not session.blobs_dir.exists()
+
+
+def test_concurrent_writes_preserve_authoritative_line_order(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+
+        def worker(worker_id: int):
+            for index in range(100):
+                session.event("tick", {"worker": worker_id, "index": index})
+
+        threads = [
+            threading.Thread(target=worker, args=(worker_id,)) for worker_id in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    records = _records(session)
+    ticks = [record for record in records if record["name"] == "tick"]
+    assert len(ticks) == 800
+    assert [record["seq"] for record in records] == list(range(len(records)))
+    assert len({record["record_id"] for record in records}) == len(records)
+
+
+def test_explicit_ndjson_path_is_never_appended(tmp_path):
+    config = _exact_config(tmp_path)
+    with runlog.open_runlog(config):
+        pass
+    original = config.path.read_bytes()
+
+    with pytest.raises(FileExistsError):
+        with runlog.open_runlog(config):
+            pass
+    assert config.path.read_bytes() == original
+
+
+def test_execution_runner_nests_node_activity_under_stage(tmp_path):
+    def execute(_invocation):
+        runlog.event("node.custom", {"value": "inside"})
+        return NodeResult({"value": "done"})
+
+    registration = NodeRegistration(
+        "sample",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"value": str},
+        execute,
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"sample": {}}})
+    plan = compile_stage(
+        NodeCatalog((registration,), ()),
+        "initialize",
+        stage,
+        {},
+        {},
+    )
+    context = NodeContext(
+        stage="initialize",
+        codebase_path=".",
+        repository=object(),
+        capabilities={},
+        prompts=object(),
+        codegraphs=object(),
+        runtime=NodeRuntime("test", 1, 1000, {}, 1),
+        callbacks=NodeCallbacks(),
+    )
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        result = run_stage("initialize", plan, context, {})
+
+    assert result.outputs == {"sample": "done"}
+    records = _records(session)
+    stage_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "stage"
+    )
+    node_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "node"
+    )
+    custom = next(record for record in records if record["name"] == "node.custom")
+    assert node_start["parent_span_id"] == stage_start["span_id"]
+    assert custom["span_id"] == node_start["span_id"]
+    runlog.validate_runlog(session.ndjson_path)
+
+
+def test_prompt_retry_records_logical_attempts(tmp_path):
+    class Provider:
+        def get_chat_model(self, **_kwargs):
+            return RunnableLambda(lambda _messages: AIMessage(content="not-json"))
+
+    request = JsonPromptRequest(
+        model="test-model",
+        system_prompt="system",
+        user_prompt="user {value}",
+        variables={"value": "input"},
+        parse=lambda _raw: None,
+        logger=__import__("logging").getLogger("metis.test.runlog"),
+        label="Retry prompt",
+        batch_size=1,
+        invalid_message="invalid",
+        final_keep_message="giving up",
+    )
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        result = JsonPromptRunner(
+            Provider(), max_attempts=2, retry_backoff_seconds=0
+        ).invoke(request)
+
+    assert result is None
+    records = _records(session)
+    prompts = [
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "prompt"
+    ]
+    attempts = [
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "attempt"
+    ]
+    retries = [record for record in records if record["name"] == "retry"]
+    assert len(prompts) == 1
+    assert len(attempts) == 2
+    assert len(retries) == 1
+    assert all(
+        attempt["parent_span_id"] == prompts[0]["span_id"] for attempt in attempts
+    )
+
+
+def test_langchain_callback_records_physical_call_and_usage(tmp_path):
+    handler = RunLogCallbackHandler()
+    response = type(
+        "Response",
+        (),
+        {
+            "llm_output": {
+                "model_name": "fake-model",
+                "token_usage": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 3,
+                    "total_tokens": 10,
+                },
+            },
+            "generations": [],
+        },
+    )()
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        handler.on_chat_model_start(
+            {"name": "fake-chat"},
+            [[AIMessage(content="request")]],
+            run_id="call-1",
+            invocation_params={"model": "fake-model"},
+        )
+        handler.on_llm_end(response, run_id="call-1")
+
+    records = _records(session)
+    call_start = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "llm.call"
+    )
+    usage = next(record for record in records if record["name"] == "usage")
+    assert usage["span_id"] == call_start["span_id"]
+    assert usage["attributes"]["total_tokens"] == 10
+    assert session.counters["llm_calls"] == 1
+    assert session.counters["total_tokens"] == 10
+
+
+def test_callback_manager_receives_runlog_handler_once():
+    manager = CallbackManager([])
+
+    assert ensure_runlog_callback(manager) is manager
+    assert ensure_runlog_callback(manager) is manager
+    assert manager.handlers.count(RUNLOG_CALLBACK_HANDLER) == 1
+    assert manager.inheritable_handlers.count(RUNLOG_CALLBACK_HANDLER) == 1
+
+
+def test_model_tool_loop_records_tool_span(tmp_path):
+    class Tool:
+        name = "lookup"
+
+        def invoke(self, args):
+            return f"result:{args['query']}"
+
+    class ToolChat:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "lookup",
+                            "args": {"query": "needle"},
+                            "id": "tool-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            return AIMessage(content="final")
+
+    class Chat:
+        def __init__(self):
+            self.tool_chat = ToolChat()
+
+        def bind_tools(self, _tools):
+            return self.tool_chat
+
+    prompt = ChatPromptTemplate.from_messages([("user", "{question}")])
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        result = invoke_model_with_tools(
+            Chat(),
+            prompt,
+            {"question": "find it"},
+            (Tool(),),
+            max_tool_rounds=2,
+        )
+
+    assert result == "final"
+    records = _records(session)
+    loop = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "model_loop"
+    )
+    tool = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "tool"
+    )
+    assert tool["parent_span_id"] == loop["span_id"]
+    assert session.counters["tool_calls"] == 1
+
+
+def test_engine_api_preserves_command_parentage(tmp_path):
+    engine = object.__new__(MetisEngine)
+    engine.execution = SimpleNamespace(
+        execute_graph=lambda **_kwargs: ExecutionResult(
+            ExecutionStatus.OK,
+            {"review": {"value": "done"}},
+            (),
+        )
+    )
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        engine._runlog = session
+        with runlog.span("command", "programmatic") as command:
+            result = engine.execute_graph()
+
+    assert result.outputs == {"review": {"value": "done"}}
+    execution = next(
+        record
+        for record in _records(session)
+        if record["record"] == "span.start" and record.get("kind") == "execution"
+    )
+    assert execution["parent_span_id"] == command.span_id
+
+
+def test_validator_accepts_complete_trace_and_blobs(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path, blob_threshold=16)) as session:
+        runlog.event("payload", {"text": "large content" * 20})
+
+    summary = runlog.validate_runlog(session.ndjson_path)
+    assert summary.run_id == session.run_id
+    assert summary.records == len(_records(session))
+    assert summary.spans == 1
+    assert summary.events == 1
+    assert summary.blobs >= 1
+    assert summary.status == "ok"
+
+
+def test_ended_span_rejects_new_activity(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)):
+        task = runlog.span("task", "finished")
+        task.end()
+        with pytest.raises(RuntimeError, match="ended run-log span"):
+            task.event("late")
+        with pytest.raises(RuntimeError, match="ended run-log span"):
+            with task.activate():
+                pass
+
+
+def test_validator_rejects_event_after_containing_span_ended(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        task = session.span("task", "finished")
+        task.end()
+        session.event("late", span_id=task.span_id)
+
+    with pytest.raises(runlog.TraceValidationError, match="open containing span"):
+        runlog.validate_runlog(session.ndjson_path)
+
+
+def test_validator_rejects_parent_ending_before_child(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        parent = session.span("task", "parent")
+        child = session.span("task", "child", parent_span_id=parent.span_id)
+        parent.end()
+        child.end()
+
+    with pytest.raises(runlog.TraceValidationError, match="child spans ended first"):
+        runlog.validate_runlog(session.ndjson_path)
+
+
+def test_validator_rejects_incomplete_metadata(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        pass
+    metadata = json.loads(session.meta_path.read_text(encoding="utf-8"))
+    metadata["complete"] = False
+    session.meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(runlog.TraceValidationError, match="complete metadata"):
+        runlog.validate_runlog(session.ndjson_path)
+
+
+def test_runtime_write_failure_disables_logging_without_failing_run(tmp_path):
+    class BrokenFile:
+        def __init__(self, delegate):
+            self.delegate = delegate
+
+        def write(self, _value):
+            raise OSError("disk unavailable")
+
+        def flush(self):
+            raise OSError("disk unavailable")
+
+        def close(self):
+            self.delegate.close()
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        session._file = BrokenFile(session._file)
+        runlog.event("unwritable", {"value": 1})
+        assert session.enabled is False
+
+    meta = json.loads(session.meta_path.read_text(encoding="utf-8"))
+    assert meta["complete"] is False
