@@ -1,21 +1,17 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from llama_index.core import StorageContext, VectorStoreIndex
-from sqlalchemy import create_engine, text
-from metis.exceptions import (
-    VectorStoreInitError,
-    RetrieverInitError,
-    VectorSchemaError,
-)
-from metis.vector_store.base import BaseVectorStore
-from metis.vector_store.retrievers import LlamaIndexNodeRetriever, QueryAnswerRetriever
-from metis.vector_store.retrievers import query_chat_model_kwargs
+import logging
+
+from llama_index.core import StorageContext
 from llama_index.vector_stores.postgres import PGVectorStore
+from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
-
-import logging
+from metis.exceptions import VectorSchemaError
+from metis.exceptions import VectorStoreInitError
+from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +40,7 @@ def copy_hnsw_kwargs(hnsw_kwargs):
     return hnsw_kwargs.copy()
 
 
-class PGVectorStoreImpl(BaseVectorStore):
+class PGVectorStoreImpl(LlamaIndexVectorBackend):
     def __init__(
         self,
         connection_string,
@@ -114,95 +110,6 @@ class PGVectorStoreImpl(BaseVectorStore):
         except Exception as e:
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
-
-    def get_retrievers(
-        self,
-        llm_provider,
-        similarity_top_k,
-        callback_manager=None,
-        callbacks=None,
-    ):
-        try:
-            index_code = VectorStoreIndex.from_vector_store(
-                self.vector_store_code,
-                storage_context=self.storage_context_code,
-                embed_model=self.embed_model_code,
-                callback_manager=callback_manager,
-            )
-            index_docs = VectorStoreIndex.from_vector_store(
-                self.vector_store_docs,
-                storage_context=self.storage_context_docs,
-                embed_model=self.embed_model_docs,
-                callback_manager=callback_manager,
-            )
-            chat_model_kwargs = query_chat_model_kwargs(
-                self.query_config,
-                callbacks=callbacks,
-            )
-            retriever_code = QueryAnswerRetriever(
-                LlamaIndexNodeRetriever(
-                    index_code.as_retriever(similarity_top_k=similarity_top_k)
-                ),
-                llm_provider,
-                chat_model_kwargs=chat_model_kwargs,
-            )
-            retriever_docs = QueryAnswerRetriever(
-                LlamaIndexNodeRetriever(
-                    index_docs.as_retriever(similarity_top_k=similarity_top_k)
-                ),
-                llm_provider,
-                chat_model_kwargs=chat_model_kwargs,
-            )
-            return (retriever_code, retriever_docs)
-        except Exception as e:
-            logger.error(f"Error creating PG retrievers: {e}")
-            raise RetrieverInitError()
-
-    def index_nodes(
-        self,
-        nodes_code,
-        nodes_docs,
-        *,
-        embed_model_code,
-        embed_model_docs,
-        **embed_model_kwargs,
-    ):
-        VectorStoreIndex(
-            nodes_code,
-            storage_context=self.storage_context_code,
-            embed_model=embed_model_code,
-            **embed_model_kwargs,
-        )
-        VectorStoreIndex(
-            nodes_docs,
-            storage_context=self.storage_context_docs,
-            embed_model=embed_model_docs,
-            **embed_model_kwargs,
-        )
-
-    def get_index_handles(
-        self,
-        *,
-        embed_model_code,
-        embed_model_docs,
-        **embed_model_kwargs,
-    ):
-        index_code = VectorStoreIndex.from_vector_store(
-            self.vector_store_code,
-            storage_context=self.storage_context_code,
-            embed_model=embed_model_code,
-            **embed_model_kwargs,
-        )
-        index_docs = VectorStoreIndex.from_vector_store(
-            self.vector_store_docs,
-            storage_context=self.storage_context_docs,
-            embed_model=embed_model_docs,
-            **embed_model_kwargs,
-        )
-        return index_code, index_docs
-
-    def get_storage_contexts(self):
-        return self.storage_context_code, self.storage_context_docs
 
     def check_project_schema_exists(self):
         engine = None

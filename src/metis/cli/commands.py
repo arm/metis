@@ -57,13 +57,14 @@ Type one of the following commands (with arguments):
 - [magenta]help[/magenta]   (show this message)
 
 Options:
-    --backend chroma|postgres  Vector backend to use (default: chroma).
+    --backend chroma|postgres|qdrant  Vector backend to use (default: chroma).
     --output-file PATH         Save analysis results to this file.
     --custom-prompt PATH       Custom prompt file (.md or .txt) to guide analysis.
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
+    --qdrant-url URL           (Optional) Qdrant server URL (default: http://localhost:6333).
     --verbose                  (Optional) Shows detailed output in the terminal window.
     --version                  (Optional) Show program version
 """

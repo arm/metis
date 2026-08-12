@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
+from abc import ABC
+from abc import abstractmethod
 
 
 class BaseVectorStore(ABC):
     @abstractmethod
     def init(self):
         """Initialize vector storage components (e.g., vector store and storage context)."""
-        pass
 
     @abstractmethod
     def get_retrievers(
@@ -19,7 +19,6 @@ class BaseVectorStore(ABC):
         callbacks=None,
     ):
         """Return tuple of LangChain-style retrievers (code, docs)."""
-        pass
 
     @abstractmethod
     def index_nodes(
@@ -32,7 +31,6 @@ class BaseVectorStore(ABC):
         **embed_model_kwargs,
     ):
         """Write prepared code and docs nodes to the vector backend."""
-        pass
 
     @abstractmethod
     def get_index_handles(
@@ -43,8 +41,7 @@ class BaseVectorStore(ABC):
         **embed_model_kwargs,
     ):
         """Return mutable index handles (code, docs) for patch updates."""
-        pass
 
     def close(self):
         """Best-effort resource cleanup hook for vector backends."""
-        return None
+        return

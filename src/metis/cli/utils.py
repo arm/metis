@@ -710,3 +710,27 @@ def build_chroma_backend(args, runtime, embed_model_code, embed_model_docs):
         embed_model_docs=embed_model_docs,
         query_config=retriever_query_config(runtime),
     )
+
+
+def build_qdrant_backend(
+    args, runtime, embed_model_code, embed_model_docs, quiet=False
+):
+    try:
+        from metis.vector_store.qdrant_store import QdrantStore
+    except ImportError as exc:
+        print_console(
+            "[bold red]Qdrant backend requested but not installed. Install it with:[/bold red]",
+            quiet,
+        )
+        print_console("  uv pip install '.[qdrant]'", quiet, markup=False)
+        raise SystemExit(1) from exc
+
+    return QdrantStore(
+        url=args.qdrant_url or os.environ.get("QDRANT_URL") or "http://localhost:6333",
+        api_key=os.environ.get("QDRANT_API_KEY"),
+        collection_prefix=args.project_schema,
+        embed_dim=runtime["embed_dim"],
+        embed_model_code=embed_model_code,
+        embed_model_docs=embed_model_docs,
+        query_config=retriever_query_config(runtime),
+    )
