@@ -3,22 +3,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
 import unidiff
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 
-from metis.exceptions import ParsingError
-from metis.utils import read_file_content
-
 from metis.engine.diff_utils import extract_content_from_diff
 from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
-from metis.engine.runtime import EngineConfig, EngineState
+from metis.engine.runtime import EngineConfig
+from metis.engine.runtime import EngineState
+from metis.exceptions import ParsingError
+from metis.utils import read_file_content
 
 logger = logging.getLogger("metis")
 
@@ -134,7 +134,6 @@ class IndexingService:
         )
 
         self._state.pending_nodes = (nodes_code, nodes_docs)
-        return
 
     def index_prepare_nodes(self):
         for _ in self.index_prepare_nodes_iter():

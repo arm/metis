@@ -34,6 +34,7 @@ from .utils import (
     PG_SUPPORTED,
     build_pg_backend,
     build_chroma_backend,
+    build_qdrant_backend,
     print_console,
     print_usage_summary,
     print_final_usage_summary,
@@ -217,6 +218,8 @@ def build_engine(args, runtime):
 
     if args.backend == "postgres":
         vector_backend = build_pg_backend(args, runtime, None, None)
+    elif args.backend == "qdrant":
+        vector_backend = build_qdrant_backend(args, runtime, None, None)
     else:
         vector_backend = build_chroma_backend(args, runtime, None, None)
 
@@ -398,9 +401,17 @@ def main():
         help="Path to a custom Metis config file.",
     )
     parser.add_argument("--chroma-dir", type=str, default="./chromadb")
+    parser.add_argument(
+        "--qdrant-url",
+        type=str,
+        help="Qdrant server URL (default: http://localhost:6333).",
+    )
     parser.add_argument("--codebase-path", type=str, default=".")
     parser.add_argument(
-        "--backend", type=str, default="chroma", choices=["chroma", "postgres"]
+        "--backend",
+        type=str,
+        default="chroma",
+        choices=["chroma", "postgres", "qdrant"],
     )
     parser.add_argument("--log-file", type=str)
     parser.add_argument("--log-level", type=str, default="ERROR")

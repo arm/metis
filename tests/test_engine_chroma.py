@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import os
 from unittest.mock import patch
-from metis.engine import MetisEngine
-from metis.cli.utils import build_chroma_backend
-from metis.vector_store.chroma_store import ChromaStore
-from llama_index.core.settings import Settings
+
+import pytest
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
+from llama_index.core.settings import Settings
+
+from metis.cli.utils import build_chroma_backend
+from metis.engine import MetisEngine
+from metis.vector_store.chroma_store import ChromaStore
 
 
 @pytest.mark.chroma

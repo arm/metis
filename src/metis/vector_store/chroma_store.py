@@ -6,16 +6,16 @@ from threading import RLock
 
 from chromadb import PersistentClient
 from chromadb.config import Settings
-from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core import StorageContext
+from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from metis.exceptions import RetrieverInitError, VectorStoreInitError
+from metis.exceptions import RetrieverInitError
+from metis.exceptions import VectorStoreInitError
 from metis.vector_store.base import BaseVectorStore
-from metis.vector_store.retrievers import (
-    ChromaCollectionRetriever,
-    QueryAnswerRetriever,
-    query_chat_model_kwargs,
-)
+from metis.vector_store.retrievers import ChromaCollectionRetriever
+from metis.vector_store.retrievers import QueryAnswerRetriever
+from metis.vector_store.retrievers import query_chat_model_kwargs
 
 logger = logging.getLogger(__name__)
 
