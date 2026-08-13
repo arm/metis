@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import hashlib
 import logging
 from typing import cast
 
@@ -19,6 +18,7 @@ from metis.sarif.triage import (
     apply_triage_result,
     save_sarif_file,
 )
+from metis.sarif.utils import create_fingerprint
 from metis.usage import submit_with_current_context
 from metis import runlog
 
@@ -71,17 +71,9 @@ class TriageService:
         debug_callback,
         memory_service: MemoryService | None,
     ) -> TriageDecision | None:
-        fingerprint = hashlib.sha256(
-            "\0".join(
-                (
-                    str(finding.rule_id),
-                    str(finding.file_path),
-                    str(finding.line),
-                    str(finding.message),
-                    str(finding.snippet),
-                )
-            ).encode("utf-8")
-        ).hexdigest()
+        fingerprint = create_fingerprint(
+            finding.file_path, finding.line, finding.rule_id
+        )
         finding_id = (
             f"sarif:{finding.run_index}:{finding.result_index}:{fingerprint[:12]}"
         )
