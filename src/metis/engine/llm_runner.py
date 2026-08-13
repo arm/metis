@@ -3,21 +3,20 @@
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
+from typing import Callable
 
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis import runlog
-from metis.runlog.langchain import ensure_runlog_callback
 from metis.chat_model_options import merge_chat_model_kwargs
-from metis.engine.model_tool_runner import (
-    ModelToolConfigurationError,
-    invoke_model_with_tools,
-    model_tool_system_prompt,
-    require_max_tool_rounds,
-)
+from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import invoke_model_with_tools
+from metis.engine.model_tool_runner import model_tool_system_prompt
+from metis.engine.model_tool_runner import require_max_tool_rounds
+from metis.runlog.langchain import ensure_runlog_callback
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +38,41 @@ class JsonPromptRequest:
     chat_model_kwargs: dict[str, Any] | None = None
     model_tools: tuple[Any, ...] = ()
     max_tool_rounds: int | None = None
+    on_output_limit: Callable[[], None] | None = None
+
+
+def rendered_prompt_token_count(
+    token_counter: Callable[[str], int],
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    variables: dict[str, Any],
+    model_tools: tuple[Any, ...] = (),
+) -> int:
+    prompt = _json_chat_prompt(system_prompt, user_prompt, model_tools)
+    messages = prompt.invoke(variables).to_messages()
+    return sum(
+        token_counter(
+            message.content
+            if isinstance(message.content, str)
+            else str(message.content)
+        )
+        for message in messages
+    )
+
+
+def _json_chat_prompt(
+    system_prompt: str,
+    user_prompt: str,
+    model_tools: tuple[Any, ...] = (),
+) -> ChatPromptTemplate:
+    rendered_system_prompt = model_tool_system_prompt(system_prompt, model_tools)
+    return ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(content=rendered_system_prompt),
+            ("user", user_prompt),
+        ]
+    )
 
 
 class JsonPromptRunner:
@@ -87,6 +121,7 @@ class JsonPromptRunner:
 
     def _invoke_attempts(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
+        confirmed_output_limit = False
         max_tool_rounds = (
             require_max_tool_rounds(request.max_tool_rounds)
             if request.model_tools
@@ -96,6 +131,7 @@ class JsonPromptRunner:
             response_text: Any = None
             parsed: Any = None
             attempt_error: Exception | None = None
+            attempt_failure = request.invalid_message
             with runlog.span(
                 "attempt",
                 f"{request.label}:{attempt + 1}",
@@ -124,36 +160,50 @@ class JsonPromptRunner:
                     if request.temperature is not None:
                         params["temperature"] = request.temperature
                     chat = self._llm_provider.get_chat_model(**params)
-                    system_prompt = model_tool_system_prompt(
+                    prompt = _json_chat_prompt(
                         request.system_prompt,
+                        request.user_prompt,
                         request.model_tools,
                     )
-                    prompt = ChatPromptTemplate.from_messages(
-                        [
-                            SystemMessage(content=system_prompt),
-                            ("user", request.user_prompt),
-                        ]
-                    )
+                    used_structured_output = False
                     structured_output = getattr(chat, "with_structured_output", None)
                     if (
                         not request.model_tools
                         and request.response_model is not None
                         and callable(structured_output)
                     ):
-                        try:
-                            parsed = request.parse(
-                                (
-                                    prompt
-                                    | structured_output(
-                                        request.response_model,
-                                        method="function_calling",
-                                    )
-                                ).invoke(request.variables)
+                        used_structured_output = True
+                        structured_result = (
+                            prompt
+                            | structured_output(
+                                request.response_model,
+                                method="function_calling",
+                                include_raw=True,
                             )
-                        except Exception as exc:
-                            last_failure = f"structured validation failed: {exc}"
-                    if parsed is None:
+                        ).invoke(request.variables)
+                        if not isinstance(structured_result, dict):
+                            raise TypeError(
+                                "Structured model response did not include raw output"
+                            )
+                        raw_response = structured_result.get("raw")
+                        response_text = getattr(raw_response, "content", None)
+                        parsing_error = structured_result.get("parsing_error")
+                        if parsing_error is not None:
+                            attempt_failure = (
+                                f"structured validation failed: {parsing_error}"
+                            )
+                        else:
+                            try:
+                                parsed = request.parse(structured_result.get("parsed"))
+                            except Exception as exc:
+                                attempt_failure = f"structured validation failed: {exc}"
+                        if parsed is None and _response_reached_output_limit(
+                            raw_response
+                        ):
+                            confirmed_output_limit = True
+                    if parsed is None and not used_structured_output:
                         if request.model_tools:
+                            assert max_tool_rounds is not None
                             response_text = invoke_model_with_tools(
                                 chat,
                                 prompt,
@@ -161,11 +211,17 @@ class JsonPromptRunner:
                                 request.model_tools,
                                 max_tool_rounds=max_tool_rounds,
                             )
+                            parsed = request.parse(response_text)
                         else:
-                            response_text = (prompt | chat | StrOutputParser()).invoke(
-                                request.variables
-                            )
-                        parsed = request.parse(response_text)
+                            response = (prompt | chat).invoke(request.variables)
+                            response_text = StrOutputParser().invoke(response)
+                            try:
+                                parsed = request.parse(response_text)
+                            finally:
+                                if parsed is None and _response_reached_output_limit(
+                                    response
+                                ):
+                                    confirmed_output_limit = True
                     if parsed is not None:
                         attempt_span.end(
                             attributes={
@@ -174,12 +230,12 @@ class JsonPromptRunner:
                             }
                         )
                         return parsed
-                    last_failure = request.invalid_message
                 except Exception as exc:
                     if isinstance(exc, ModelToolConfigurationError):
                         raise
                     attempt_error = exc
-                    last_failure = str(exc)
+                    attempt_failure = str(exc)
+                last_failure = attempt_failure
                 attempt_span.end(
                     status="error" if attempt_error is not None else "inconclusive",
                     attributes={
@@ -215,6 +271,8 @@ class JsonPromptRunner:
                 )
                 if backoff_seconds > 0:
                     time.sleep(backoff_seconds)
+        if confirmed_output_limit and request.on_output_limit is not None:
+            request.on_output_limit()
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,
@@ -223,6 +281,29 @@ class JsonPromptRunner:
             last_failure,
         )
         return None
+
+
+def _response_reached_output_limit(response: object) -> bool:
+    for attribute in ("response_metadata", "additional_kwargs"):
+        metadata = getattr(response, attribute, None)
+        if not isinstance(metadata, dict):
+            continue
+        incomplete_details = metadata.get("incomplete_details")
+        if (
+            str(metadata.get("status", "")).strip().lower() == "incomplete"
+            and isinstance(incomplete_details, dict)
+            and str(incomplete_details.get("reason", "")).strip().lower()
+            == "max_output_tokens"
+        ):
+            return True
+        for key in ("finish_reason", "stop_reason", "stopReason"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip().lower() in {
+                "length",
+                "max_tokens",
+            }:
+                return True
+    return False
 
 
 def invoke_langchain_json_prompt_with_retry(

@@ -1,30 +1,28 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from functools import partial
 import logging
+from functools import partial
 from typing import Any
 from typing import cast
 
 from langgraph.cache.memory import InMemoryCache
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END
+from langgraph.graph import StateGraph
 
-from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
-from metis.utils import parse_json_output
 from metis import runlog
-from metis.runlog.workflow import traced_step
-
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.stages.triage.models import TriageDecisionModel
 from metis.engine.stages.triage.models import TriageRequest
 from metis.engine.stages.triage.models import TriageState
-from .adjudication import (
-    adjudicate_status_deterministic,
-    compose_final_reason,
-)
-from .nodes import (
-    triage_node_collect_evidence,
-    triage_node_llm,
-)
+from metis.runlog.workflow import traced_step
+from metis.utils import parse_json_output
+
+from .adjudication import adjudicate_status_deterministic
+from .adjudication import compose_final_reason
+from .nodes import triage_node_collect_evidence
+from .nodes import triage_node_llm
 
 logger = logging.getLogger("metis")
 
@@ -116,7 +114,7 @@ class TriageWorkflow:
         graph.add_node(
             "collect_evidence",
             traced_step(
-                "simple_llm_triage",
+                "triage",
                 "collect_evidence",
                 partial(triage_node_collect_evidence, toolbox=self.toolbox),
             ),
@@ -124,7 +122,7 @@ class TriageWorkflow:
         graph.add_node(
             "triage",
             traced_step(
-                "simple_llm_triage",
+                "triage",
                 "triage",
                 partial(
                     triage_node_llm,
@@ -150,6 +148,7 @@ class TriageWorkflow:
             "finding_explanation": request.get("finding_explanation", ""),
             "triage_language": request.get("triage_language", ""),
             "triage_language_guidance": request.get("triage_language_guidance", ""),
+            "codegraph_context": request.get("codegraph_context", ""),
             "threat_model_context": request.get("threat_model_context", []),
             "debug_callback": request.get("debug_callback"),
             "triage_system_prompt": self.triage_system_prompt,
@@ -157,7 +156,7 @@ class TriageWorkflow:
         }
         with runlog.span(
             "workflow",
-            "simple_llm_triage",
+            "triage",
             {
                 "nodes": ["collect_evidence", "triage"],
                 "edges": [

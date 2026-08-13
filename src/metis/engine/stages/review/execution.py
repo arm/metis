@@ -10,7 +10,6 @@ from .models import ReviewGroup
 from .models import ReviewResult
 from .models import ReviewRun
 from .models import ReviewStatus
-from .models import ReviewValidationSummary
 from .models import StandardReviewResult
 
 
@@ -70,39 +69,9 @@ def combine_review_results(results: tuple[ReviewResult, ...]) -> ReviewResult:
         return patch_results[0]
 
     groups: list[ReviewGroup] = []
-    seen: set[tuple[object, ...]] = set()
     for result in standard_results:
         for group in result.reviews:
-            group_data = group.model_dump(mode="python")
-            unique = []
-            for finding in group.reviews:
-                finding_data = finding.model_dump(mode="python")
-                identity = (
-                    group_data.get("file") or group_data.get("file_path"),
-                    finding_data.get("canonical_key"),
-                    finding_data.get("line_number"),
-                    finding.issue,
-                )
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                unique.append(finding)
-            if unique:
-                group_data["reviews"] = [
-                    item.model_dump(mode="python") for item in unique
-                ]
-                groups.append(ReviewGroup.model_validate(group_data))
+            if group.reviews:
+                groups.append(group)
 
-    summaries = tuple(
-        result.review_validation_summary
-        for result in standard_results
-        if result.review_validation_summary is not None
-    )
-    summary = None
-    if summaries:
-        summary = ReviewValidationSummary(
-            total_candidates=sum(item.total_candidates for item in summaries),
-            kept=sum(item.kept for item in summaries),
-            filtered=sum(item.filtered for item in summaries),
-        )
-    return StandardReviewResult(reviews=groups, review_validation_summary=summary)
+    return StandardReviewResult(reviews=groups)

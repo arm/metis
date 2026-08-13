@@ -8,18 +8,25 @@ from threading import Condition
 from threading import Event
 from types import SimpleNamespace
 
-import metis.engine.nodes.codegraph.provider as providers
 import pytest
+
+import metis.engine.nodes.codegraph.provider as providers
+from metis.engine.codegraph import CallSite
+from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphAnnotations
 from metis.engine.codegraph import CodeGraphProviderContext
 from metis.engine.codegraph import CodeGraphResult
+from metis.engine.codegraph import ControlCondition
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph import FunctionParameter
+from metis.engine.codegraph import GlobalConstruct
+from metis.engine.codegraph import LoopStructure
+from metis.engine.codegraph import SymbolReference
 from metis.engine.codegraph import Tag
+from metis.engine.codegraph import ValueAssignment
 from metis.engine.nodes.codegraph import CodeGraphSemanticsCatalog
 from metis.engine.nodes.codegraph import CodeGraphService
-from metis.engine.nodes.reachability.context import ReachabilityContext
-from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
 
 
@@ -106,7 +113,15 @@ def test_materialize_persists_and_reuses_codegraph(tmp_path):
     source.write_text("def entry(): pass\n", encoding="utf-8")
     built = []
     graph = CodeGraph()
-    graph.add_node(FunctionNode("module.py::entry", "module.py", "entry", 1))
+    graph.add_node(
+        FunctionNode(
+            "module.py::entry",
+            "module.py",
+            "entry",
+            1,
+            parameter_count=2,
+        )
+    )
 
     def factory(context):
         assert isinstance(context, CodeGraphProviderContext)
@@ -133,6 +148,102 @@ def test_materialize_persists_and_reuses_codegraph(tmp_path):
     assert built == [("module.py",)]
     assert (tmp_path / ".metis" / "codegraph.sqlite3").is_file()
     assert service.load(second).get_node("new") is None
+    assert service.load(second).nodes["module.py::entry"].parameter_count == 2
+    with sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3") as connection:
+        metadata_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(canonical_codegraph)")
+        }
+        stored_nodes = connection.execute(
+            "SELECT COUNT(*) FROM codegraph_records WHERE kind = 'node'"
+        ).fetchone()[0]
+
+    assert "graph" not in metadata_columns
+    assert stored_nodes == 1
+
+
+def test_materialize_persists_semantic_codegraph_evidence(tmp_path):
+    source = tmp_path / "module.c"
+    source.write_text("void entry(int value) {}\n", encoding="utf-8")
+    expression = CodeExpression(
+        "state->value",
+        1,
+        12,
+        24,
+        identifiers=("state", "value"),
+        field_paths=("state.value",),
+        direct_field_path="state.value",
+    )
+    condition = ControlCondition(expression, True)
+    call = CallSite(
+        symbol="sink",
+        line=1,
+        argument_count=1,
+        start_byte=30,
+        end_byte=40,
+        target_ids=("module.c::sink",),
+        arguments=(expression,),
+        conditions=(condition,),
+        result=expression,
+    )
+    assignment = ValueAssignment(
+        target=expression,
+        value=expression,
+        operator="=",
+        line=1,
+        start_byte=12,
+        end_byte=24,
+        conditions=(condition,),
+    )
+    loop = LoopStructure(
+        condition=expression,
+        line=1,
+        start_byte=10,
+        end_byte=45,
+        written_identifiers=("value",),
+        addressed_identifiers=("state",),
+    )
+    graph = CodeGraph()
+    graph.add_node(
+        FunctionNode(
+            "module.c::entry",
+            "module.c",
+            "entry",
+            1,
+            parameters=(FunctionParameter("state", ""),),
+            call_sites=[call],
+            assignments=[assignment],
+            loops=[loop],
+        )
+    )
+    graph.add_node(FunctionNode("module.c::sink", "module.c", "sink", 1))
+    global_reference = SymbolReference("sink", 1, target_ids=("module.c::sink",))
+    global_construct = GlobalConstruct(
+        "module.c::callback",
+        "module.c",
+        "callback",
+        1,
+        initializer="sink",
+        referenced_functions=["sink"],
+        references=[global_reference],
+    )
+    graph.add_global(global_construct)
+    graph.add_public_declarations({"entry": ["module.h:1"]})
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("module.c",), lambda _path: "c"),
+        {"c": lambda _context: _provider(graph)},
+    )
+
+    loaded_graph = service.load(service.materialize())
+    loaded = loaded_graph.nodes["module.c::entry"]
+
+    assert loaded.call_sites == [call]
+    assert loaded.parameters == (FunctionParameter("state", ""),)
+    assert loaded.assignments == [assignment]
+    assert loaded.loops == [loop]
+    assert loaded_graph.globals["module.c::callback"] == global_construct
+    assert loaded_graph.public_declarations == {"entry": ["module.h:1"]}
 
 
 def test_materialize_rebuilds_when_source_changes(tmp_path):
@@ -169,13 +280,12 @@ def test_materialize_rebuilds_when_source_changes(tmp_path):
     assert len(calls) == 2
     assert second.revision > first.revision
     assert second.fingerprint != first.fingerprint
-    with pytest.raises(ValueError, match="not the current canonical graph"):
-        service.load(first)
+    assert service.load(first).get_node("module.py::entry_1") is not None
     assert service.load(second).get_node("module.py::entry_2") is not None
     assert service.load(second).get_node("module.py::entry_1") is None
 
 
-def test_load_rejects_corrupt_stored_codegraph(tmp_path):
+def test_load_rejects_incomplete_stored_codegraph(tmp_path):
     graph = CodeGraph()
     graph.add_node(FunctionNode("module.py::entry", "module.py", "entry", 1))
     service = CodeGraphService(
@@ -186,8 +296,8 @@ def test_load_rejects_corrupt_stored_codegraph(tmp_path):
     reference = service.materialize()
     with sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3") as connection:
         connection.execute(
-            "UPDATE canonical_codegraph SET graph = ? WHERE revision = ?",
-            ("not-json", reference.revision),
+            "DELETE FROM codegraph_records WHERE kind = 'node' AND identity = ?",
+            ("module.py::entry",),
         )
 
     with pytest.raises(RuntimeError, match="Stored CodeGraph.*is invalid"):
@@ -199,6 +309,99 @@ def test_load_rejects_corrupt_stored_codegraph(tmp_path):
     assert service.load(rebuilt).get_node("module.py::entry") is not None
 
 
+def test_materialize_replaces_main_branch_store_schema(tmp_path):
+    store_path = tmp_path / ".metis" / "codegraph.sqlite3"
+    store_path.parent.mkdir()
+    with sqlite3.connect(store_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE canonical_codegraph (
+                revision INTEGER PRIMARY KEY AUTOINCREMENT,
+                fingerprint TEXT NOT NULL UNIQUE,
+                producer_version TEXT NOT NULL,
+                content_hash TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("PRAGMA user_version = 1")
+
+    graph = CodeGraph()
+    graph.add_node(FunctionNode("module.py::entry", "module.py", "entry", 1))
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("module.py",), lambda _path: "python"),
+        {"python": lambda _context: _provider(graph)},
+    )
+
+    loaded = service.load(service.materialize())
+    with sqlite3.connect(store_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(canonical_codegraph)")
+        }
+        schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+    assert loaded.get_node("module.py::entry") is not None
+    assert columns == {
+        "revision",
+        "fingerprint",
+        "producer_version",
+        "content_hash",
+    }
+    assert schema_version == 2
+
+
+def test_failed_persistence_keeps_previous_graph(tmp_path):
+    source = tmp_path / "module.py"
+    source.write_text("first", encoding="utf-8")
+    builds = 0
+
+    def build_graph(**kwargs):
+        nonlocal builds
+        builds += 1
+        graph = CodeGraph()
+        name = "first" if builds == 1 else "blocked"
+        graph.add_node(FunctionNode(f"module.py::{name}", "module.py", name, 1))
+        return CodeGraphResult(graph, kwargs["files"])
+
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("module.py",), lambda _path: "python"),
+        {"python": lambda _context: SimpleNamespace(build_graph=build_graph)},
+    )
+    first = service.materialize()
+    store_path = tmp_path / ".metis" / "codegraph.sqlite3"
+    with sqlite3.connect(store_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_blocked_node
+            BEFORE INSERT ON codegraph_records
+            WHEN NEW.kind = 'node' AND NEW.identity = 'module.py::blocked'
+            BEGIN
+                SELECT RAISE(ABORT, 'blocked');
+            END
+            """
+        )
+    source.write_text("second", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Unable to persist CodeGraph store"):
+        service.materialize()
+
+    with sqlite3.connect(store_path) as connection:
+        stored_names = tuple(
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT identity FROM codegraph_records
+                WHERE kind = 'node' ORDER BY position
+                """
+            )
+        )
+
+    assert stored_names == ("module.py::first",)
+    assert service.load(first).get_node("module.py::first") is not None
+
+
 def test_load_rejects_tampered_reference_metadata(tmp_path):
     service = CodeGraphService(
         SimpleNamespace(codebase_path=str(tmp_path)),
@@ -208,7 +411,7 @@ def test_load_rejects_tampered_reference_metadata(tmp_path):
     reference = service.materialize()
     tampered = reference.model_copy(update={"failed_files": ("module.py",)})
 
-    with pytest.raises(ValueError, match="not the current canonical graph"):
+    with pytest.raises(ValueError, match="reference does not exist"):
         service.load(tampered)
 
 
@@ -270,6 +473,37 @@ def test_concurrent_materialize_serializes_canonical_builds(tmp_path):
 
     assert first_reference == second_reference
     assert builds == ["build"]
+
+
+def test_concurrent_different_file_seeds_keep_both_graphs(tmp_path):
+    for name in ("first.py", "second.py"):
+        (tmp_path / name).write_text(f"def {name[:-3]}(): pass\n", encoding="utf-8")
+
+    def build_graph(**kwargs):
+        graph = CodeGraph()
+        path = os.path.basename(kwargs["files"][0])
+        name = path[:-3]
+        graph.add_node(FunctionNode(f"{path}::{name}", path, name, 1))
+        return CodeGraphResult(graph, kwargs["files"])
+
+    repository = _repository((), lambda _path: "python")
+    repository.is_code_file_selected = lambda path, **_kwargs: (
+        tmp_path / path
+    ).is_file()
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        repository,
+        {"python": lambda _context: SimpleNamespace(build_graph=build_graph)},
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(service.materialize, seed_file="first.py")
+        second_future = executor.submit(service.materialize, seed_file="second.py")
+        first = first_future.result()
+        second = second_future.result()
+
+    assert service.load(first).get_node("first.py::first") is not None
+    assert service.load(second).get_node("second.py::second") is not None
 
 
 def test_concurrent_materialize_shares_an_incomplete_attempt(tmp_path):
@@ -343,15 +577,62 @@ def test_reachability_reads_deterministic_annotations_from_codegraph(tmp_path):
         ),
     )
 
-    reference = service.materialize()
-    loaded, paths = ReachabilityContext(service).graph_and_paths(
-        codegraph=service.load(reference),
-        options=ReachabilityReviewOptions(),
-    )
+    loaded = service.load(service.materialize())
 
     assert loaded.get_node("main.c::main").is_source is True
     assert loaded.get_node("main.c::copy").sink_type == "buffer_overflow"
-    assert [path.path for path in paths] == [["main.c::main", "main.c::copy"]]
+
+
+def test_semantics_receives_structured_relationship_facts(tmp_path):
+    source = tmp_path / "main.c"
+    source.write_text("void target(void) {}\n", encoding="utf-8")
+    graph = CodeGraph()
+    target = FunctionNode("main.c::target", "main.c", "target", 1)
+    caller = FunctionNode(
+        "main.c::caller",
+        "main.c",
+        "caller",
+        2,
+        calls=["target"],
+        call_sites=[
+            CallSite(
+                "target",
+                2,
+                0,
+                target_ids=(target.unique_name,),
+            )
+        ],
+        references=[
+            SymbolReference(
+                "target",
+                2,
+                target_ids=(target.unique_name,),
+            )
+        ],
+    )
+    graph.add_node(caller)
+    graph.add_node(target)
+    graph.resolve_all_calls()
+    captured = {}
+
+    class CapturingSemantics:
+        def analyze_node(self, facts):
+            captured[facts.name] = facts
+            return CodeGraphAnnotations()
+
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("main.c",), lambda _path: "c_family"),
+        {"c_family": lambda _context: _provider(graph)},
+        semantics=CodeGraphSemanticsCatalog(
+            providers={"c_family": CapturingSemantics()},
+        ),
+    )
+
+    service.materialize()
+
+    assert captured["caller"].call_sites == tuple(caller.call_sites)
+    assert captured["caller"].references == tuple(caller.references)
 
 
 def test_file_without_codegraph_semantics_is_not_supported(tmp_path):
@@ -363,7 +644,6 @@ def test_file_without_codegraph_semantics_is_not_supported(tmp_path):
 
     assert service.supports_file("module.py") is True
     assert service.supports_semantics("module.py") is False
-    assert ReachabilityContext(service).supports_file("module.py") is False
 
 
 def test_failed_codegraph_semantics_falls_back_and_retries(tmp_path):

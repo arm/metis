@@ -3,6 +3,7 @@
 
 from typing import cast
 
+from metis import runlog
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import ExecutionStatus
@@ -10,19 +11,17 @@ from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.contracts import ResultFormat
-from metis.engine.stages.review.execution import combine_review_runs
+from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import ReviewResult
-from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.sarif.models import SarifPayload
 from metis.sarif.writer import generate_sarif
-from metis import runlog
 
 
 def execute(invocation: NodeInvocation) -> NodeResult:
-    reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
+    finalized = cast(FinalReviewRun, invocation.inputs["review"])
     codegraph = cast(CodeGraphReference | None, invocation.inputs["codegraph"])
-    combined = combine_review_runs(reviews)
+    combined = finalized.review
     if combined.result is None:
         raise ValueError("Review produced no result")
     findings = combined.result
@@ -37,7 +36,11 @@ def execute(invocation: NodeInvocation) -> NodeResult:
             "sarif": sarif,
             "codegraph": codegraph,
         },
-        status=_execution_status(combined.status),
+        status=(
+            ExecutionStatus.INCONCLUSIVE
+            if combined.status is ReviewStatus.INCONCLUSIVE
+            else ExecutionStatus.OK
+        ),
     )
     runlog.event(
         "artifact",
@@ -54,7 +57,7 @@ registration = NodeRegistration(
     name="result",
     stage="review",
     configuration=EmptyNodeConfiguration,
-    inputs={"reviews": tuple[ReviewRun, ...], "codegraph": CodeGraphReference | None},
+    inputs={"review": FinalReviewRun, "codegraph": CodeGraphReference | None},
     outputs={
         "formats": tuple[ResultFormat, ...],
         "filename": str | None,
@@ -64,9 +67,3 @@ registration = NodeRegistration(
     },
     execute=execute,
 )
-
-
-def _execution_status(status: ReviewStatus) -> ExecutionStatus:
-    if status is ReviewStatus.INCONCLUSIVE:
-        return ExecutionStatus.INCONCLUSIVE
-    return ExecutionStatus.OK

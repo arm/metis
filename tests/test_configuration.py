@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from copy import deepcopy
+
 import pytest
 import yaml
-from copy import deepcopy
 
 from metis.configuration import build_embedding_provider_config
 from metis.configuration import load_execution_config
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
-from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import CapabilityRuntimeSettings
+from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import TriageOptions
-
 
 _TOOL_CONFIG = {
     "model_tools": {"max_rounds": 6, "max_contract_chars": 6000},
@@ -81,11 +81,12 @@ def test_packaged_execution_graph_omits_index_initialization():
     assert "index" not in initialize["nodes"]
     assert "index" not in initialize["outputs"]
     assert "outputs" not in review
-    assert "inputs" not in review["nodes"]["reachability"]
+    assert "inputs" not in review["nodes"]["simple_llm_review"]
+    assert "inputs" not in review["nodes"]["finding_dedup"]
     assert "inputs" not in review["nodes"]["result"]
     assert "outputs" not in triage
-    assert set(triage["nodes"]) == {"reachability_triage", "result"}
-    assert "inputs" not in triage["nodes"]["reachability_triage"]
+    assert set(triage["nodes"]) == {"triage", "result"}
+    assert "inputs" not in triage["nodes"]["triage"]
     assert "inputs" not in triage["nodes"]["result"]
     assert review["nodes"]["result"]["formats"] == ["sarif"]
     assert triage["nodes"]["result"]["formats"] == ["sarif"]
@@ -104,7 +105,7 @@ metis_engine:
       - name: public_api
         reason: exported API
   reachability:
-    max_paths: 4
+    max_path_length: 17
   triage:
     include_triaged: true
 llm_provider:
@@ -119,7 +120,7 @@ llm_provider:
     assert runtime["codegraph_config"] == {
         "source_functions": [{"name": "public_api", "reason": "exported API"}]
     }
-    assert runtime["reachability_config"] == {"max_paths": 4}
+    assert runtime["reachability_config"] == {"max_path_length": 17}
     assert runtime["triage_options"] == TriageOptions(include_triaged=True)
 
 

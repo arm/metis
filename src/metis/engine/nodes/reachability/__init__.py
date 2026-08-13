@@ -2,10 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from .dedup import (
-    Deduplicator as Deduplicator,
-    FindingConsolidator as FindingConsolidator,
-)
 from .domain import ReachabilityPath as ReachabilityPath
 from .domain import VulnerabilityFinding as VulnerabilityFinding
-from .tracing import SourceRootedPathTracer as SourceRootedPathTracer

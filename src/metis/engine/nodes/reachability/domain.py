@@ -3,11 +3,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from dataclasses import field
+from typing import Literal
 
-if TYPE_CHECKING:
-    from metis.engine.codegraph import CodeGraph
+FrontierReviewFailureKind = Literal[
+    "missing_source",
+    "context_overflow",
+    "invalid_output",
+    "provider_error",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class FrontierReviewFailure:
+    function_id: str
+    kind: FrontierReviewFailureKind
 
 
 @dataclass
@@ -43,7 +54,7 @@ class VulnerabilityFinding:
     canonical_key: str = ""
     primary_anchor: dict | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.primary_file:
             self.primary_file = self.sink_file or self.source_file
         if not self.primary_function:
@@ -56,7 +67,8 @@ class VulnerabilityFinding:
 
 @dataclass(frozen=True, slots=True)
 class ReachabilityAnalysis:
-    graph: CodeGraph
     findings: tuple[VulnerabilityFinding, ...]
     target_file: str | None = None
     target_path: str | None = None
+    codegraph_failures: tuple[str, ...] = ()
+    review_failures: tuple[FrontierReviewFailure, ...] = ()

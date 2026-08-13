@@ -7,14 +7,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 from typing import Literal
+from typing import NotRequired
+from typing import Required
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import NonNegativeInt
 from pydantic import model_validator
-from typing_extensions import NotRequired
-from typing_extensions import Required
 from typing_extensions import TypedDict
 
 
@@ -52,20 +51,12 @@ class ReviewCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     @model_validator(mode="after")
-    def validate_target(self) -> "ReviewCommand":
+    def validate_target(self) -> ReviewCommand:
         if self.mode == "code" and self.target is not None:
             raise ValueError("Review mode 'code' does not accept a target")
         if self.mode != "code" and not self.target:
             raise ValueError(f"Review mode {self.mode!r} requires a target")
         return self
-
-
-class ReviewValidationSummary(BaseModel):
-    total_candidates: NonNegativeInt
-    kept: NonNegativeInt
-    filtered: NonNegativeInt
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class ReviewFinding(BaseModel):
@@ -82,7 +73,6 @@ class ReviewGroup(BaseModel):
 
 class StandardReviewResult(BaseModel):
     reviews: list[ReviewGroup]
-    review_validation_summary: ReviewValidationSummary | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -115,3 +105,8 @@ class ReviewRun:
     status: ReviewStatus
     result: ReviewResult | None
     diagnostics: tuple[ReviewDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FinalReviewRun:
+    review: ReviewRun

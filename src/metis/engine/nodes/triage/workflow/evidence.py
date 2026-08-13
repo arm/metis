@@ -140,6 +140,7 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
         C.MAX_SYMBOL_TERMS_METIS if is_metis_source else C.MAX_SYMBOL_TERMS_EXTERNAL
     )
 
+    codegraph_context = str(state.get("codegraph_context", "") or "").strip()
     sections: list[str] = []
     max_sections = C.MAX_SECTIONS
     pre_use_site_max_sections = _pre_use_site_section_limit(max_sections)
@@ -233,6 +234,8 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     state["evidence_obligations"] = obligations
     state["obligation_coverage"] = obligation_coverage
     state["evidence_gate_missing"] = evidence_gate_missing
+    if codegraph_context:
+        sections.append(f"[CODEGRAPH_CONTEXT]\n{codegraph_context}")
     _emit_debug(
         state,
         "evidence_gate",

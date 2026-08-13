@@ -11,50 +11,43 @@ checkpoint persistence, and output-path selection remain at the CLI boundary.
 
 ## End-to-end flow
 1. Read SARIF findings.
-2. Select Reachability triage when Reachability supports the reported file;
-   otherwise use the simple LLM triage fallback.
-3. Collect deterministic evidence around the reported location:
-   - CodeGraph reachability context includes the target function, callers,
-     callees, paths, related functions, and globals available from the graph.
-   - The simple LLM fallback starts with line-local file windows and follows
-     concrete symbols with `sed` and `grep`.
+2. Attach compact CodeGraph context when the optional graph covers the reported
+   file.
+3. Collect evidence around the reported location with navigation tools,
+   starting with line-local context and following concrete symbol definitions
+   and use sites.
 4. Build a bounded evidence pack.
-5. Derive evidence obligations and coverage where the selected path provides
-   them.
+5. Derive evidence obligations and coverage from the collected sections.
 6. Ask the model for a structured decision:
    - `status`: `valid` | `invalid` | `inconclusive`
    - `reason`
    - `evidence` (`file:line`)
    - `resolution_chain`
    - `unresolved_hops`
-7. Apply the selected path's validation and fallback rules, then annotate SARIF:
+7. Apply deterministic validation rules, then annotate SARIF:
    - `metisTriaged`
    - `metisTriageStatus`
    - `metisTriageReason`
    - `metisTriageTimestamp`
    - conditional `metisEvidenceRequirements` (list),
      `metisEvidenceCoverage` (mapping), `metisMissingEvidence` (list), and
-     `metisThreatModelPolicy` (mapping) when the selected triage path produces
-     them
+     `metisThreatModelPolicy` (mapping) when available
 
 ```text
 SARIF finding
     |
     v
 Source-aware evidence collection
-(CodeGraph reachability or line-local sed/grep)
+(optional CodeGraph context plus navigation evidence)
     |
     v
 Bounded evidence pack
     |
     v
-Path-specific evidence validation
-    |
-    v
 LLM structured decision
     |
     v
-Simple-LLM adjudication or Reachability decision
+Deterministic validation and triage adjudication
     |
     v
 SARIF annotations
@@ -62,15 +55,7 @@ SARIF annotations
 
 ## Evidence collection
 
-For files supported by Reachability, Metis loads the language-neutral CodeGraph
-produced by the matching provider, applies the matching deterministic semantics,
-then anchors the finding to a nearby function. The evidence contains the
-reported line, target function, direct graph relationships, available incoming
-and outgoing paths, related functions, and relevant globals. The model can use
-the engine's model-callable tools to resolve concrete gaps.
-
-The simple LLM triage route, whether selected directly or used as the
-Reachability fallback, collects:
+The triage workflow collects:
 
 1. File-local context via `sed`:
    - reported line
@@ -80,9 +65,11 @@ Reachability fallback, collects:
 3. Symbol definition and use-site probes with bounded `grep`.
 4. Context windows around located hits via `sed`.
 
-Language plugins can add navigation guidance to the simple LLM route, but it
-does not claim CodeGraph-backed analysis when Reachability is unavailable for
-the reported file. Metis uses this text-evidence fallback instead.
+Language plugins can add navigation guidance. When the optional CodeGraph
+covers the finding, the evidence pack also includes the containing function,
+its direct callers and callees, unresolved calls, and available entrypoint,
+source, and sink annotations. The same workflow runs without that section when
+the graph does not cover the file.
 
 ## Source-aware behavior (Metis SARIF vs external SARIF)
 Metis accepts SARIF from Metis itself and from external tools.
@@ -97,13 +84,13 @@ Metis accepts SARIF from Metis itself and from external tools.
 This keeps triage generic while allowing richer reuse of Metis-native hints when present.
 
 ## Evidence obligations and gate
-The simple LLM triage node computes obligation coverage from its collected
+The triage node computes obligation coverage from its collected
 sections and unresolved symbol hops before the model decision is finalized.
 
 If required obligations are missing, triage forces `inconclusive` via deterministic gate instead of accepting an overconfident status.
 
 ## Adjudication (deterministic guardrail)
-The simple LLM triage node does not accept model output blindly.
+The triage node does not accept model output blindly.
 
 Deterministic rules then decide the final status:
 - Contradiction signals can force `invalid`.
@@ -118,12 +105,12 @@ This prevents overconfident status flips while avoiding unnecessary `inconclusiv
 This flow is focused on static triage decisions for SARIF findings.
 
 ## Analyzer support
-- Reachability triage applies when a language has matching manifest, CodeGraph
-  provider, and deterministic semantics support.
-- Packaged Reachability support currently covers C and C++; their shared
-  CodeGraph provider uses Tree-sitter internally.
-- Unsupported files use the plugin-guided `simple_llm_triage` fallback and
-  deterministic text-tool evidence.
+- Triage always uses plugin-guided navigation evidence.
+- When the optional CodeGraph covers a finding, triage also receives its
+  deterministic function and call relationships.
+- Packaged CodeGraph support currently covers C and C++ through their shared
+  Tree-sitter provider. Other files follow the same triage workflow without
+  graph evidence.
 - Macro expansion and concurrency semantics are not standalone triage stages.
   A model may identify an unresolved macro, wrapper, or build gate and use
   available navigation tools to inspect it, but Metis does not currently claim

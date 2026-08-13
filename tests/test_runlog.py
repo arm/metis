@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 
 from metis.engine import MetisEngine
+from metis.engine.concurrency import run_jobs
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
 from metis.engine.execution.catalog import NodeCatalog
@@ -102,13 +103,12 @@ def test_span_hierarchy_and_point_event_identity(tmp_path):
             explanation="The review of one user-selected target.",
         ) as command:
             with runlog.span("stage", "review") as stage:
-                with runlog.span("task", "Global lifecycle chunk") as lifecycle:
-                    lifecycle.event(
+                with runlog.span("task", "Reachability security review") as review:
+                    review.event(
                         "progress",
                         {
-                            "event": "global_lifecycle_start",
-                            "globals": 224,
-                            "functions": 59,
+                            "event": "reachability_frontier_review_start",
+                            "nodes": 59,
                         },
                     )
 
@@ -123,18 +123,18 @@ def test_span_hierarchy_and_point_event_identity(tmp_path):
         for record in records
         if record["record"] == "span.start" and record.get("kind") == "stage"
     )
-    lifecycle_start = next(
+    review_start = next(
         record
         for record in records
         if record["record"] == "span.start"
-        and record.get("name") == "Global lifecycle chunk"
+        and record.get("name") == "Reachability security review"
     )
     progress = next(record for record in records if record["record"] == "event")
 
     assert command_start["parent_span_id"] == session.root_span_id
     assert stage_start["parent_span_id"] == command_start["span_id"]
-    assert lifecycle_start["parent_span_id"] == stage_start["span_id"]
-    assert progress["span_id"] == lifecycle_start["span_id"]
+    assert review_start["parent_span_id"] == stage_start["span_id"]
+    assert progress["span_id"] == review_start["span_id"]
     assert "parent_span_id" not in progress
     assert progress["record_id"] != progress["span_id"]
     assert command_start["explanation"] == "The review of one user-selected target."
@@ -142,16 +142,14 @@ def test_span_hierarchy_and_point_event_identity(tmp_path):
         "One configured initialize, review, or triage stage executed as part of "
         "the workflow."
     )
-    assert lifecycle_start["explanation"] == (
-        "A size-bounded batch of functions checked for lifecycle asymmetry "
-        "involving global callbacks, timers, work items, operation tables, or "
-        "shared references."
+    assert review_start["explanation"] == (
+        "One batch of functions reviewed with deterministic CodeGraph evidence."
     )
     assert progress["explanation"] == (
-        "Global-lifecycle analysis began after global constructs and related "
-        "functions were selected; work was split into size-bounded chunks."
+        "Reachability security review began for the selected functions and "
+        "deterministic CodeGraph evidence."
     )
-    assert command.span_id != stage.span_id != lifecycle.span_id
+    assert command.span_id != stage.span_id != review.span_id
 
 
 def test_exception_closes_span_and_run_as_error(tmp_path):
@@ -273,27 +271,42 @@ def test_explicit_ndjson_path_is_never_appended(tmp_path):
     assert config.path.read_bytes() == original
 
 
-def test_execution_runner_nests_node_activity_under_stage(tmp_path):
-    def execute(_invocation):
+def test_execution_runner_traces_tolerated_failure_under_stage(tmp_path):
+    def fail(_invocation):
         runlog.event("node.custom", {"value": "inside"})
-        return NodeResult({"value": "done"})
+        raise RuntimeError("failed")
 
-    registration = NodeRegistration(
-        "sample",
-        "initialize",
-        EmptyNodeConfiguration,
-        {},
-        {"value": str},
-        execute,
+    registrations = (
+        NodeRegistration(
+            "failure",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            fail,
+        ),
+        NodeRegistration(
+            "success",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            lambda _invocation: NodeResult({"value": "available"}),
+        ),
+        NodeRegistration(
+            "collector",
+            "initialize",
+            EmptyNodeConfiguration,
+            {"values": tuple[str, ...]},
+            {"values": tuple[str, ...]},
+            lambda invocation: NodeResult({"values": invocation.inputs["values"]}),
+        ),
     )
-    stage = StageConfiguration.model_validate({"nodes": {"sample": {}}})
-    plan = compile_stage(
-        NodeCatalog((registration,), ()),
-        "initialize",
-        stage,
-        {},
-        {},
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"failure": {}, "success": {}, "collector": {}}}
     )
+    plan = compile_stage(NodeCatalog(registrations, ()), "initialize", stage, {}, {})
+    progress: list[dict[str, object]] = []
     context = NodeContext(
         stage="initialize",
         codebase_path=".",
@@ -302,27 +315,73 @@ def test_execution_runner_nests_node_activity_under_stage(tmp_path):
         prompts=object(),
         codegraphs=object(),
         runtime=NodeRuntime("test", 1, 1000, {}, 1),
-        callbacks=NodeCallbacks(),
+        callbacks=NodeCallbacks(progress=progress.append),
     )
 
     with runlog.open_runlog(_exact_config(tmp_path)) as session:
         result = run_stage("initialize", plan, context, {})
 
-    assert result.outputs == {"sample": "done"}
     records = _records(session)
     stage_start = next(
         record
         for record in records
         if record["record"] == "span.start" and record.get("kind") == "stage"
     )
-    node_start = next(
+    failure_start = next(
         record
         for record in records
-        if record["record"] == "span.start" and record.get("kind") == "node"
+        if record["record"] == "span.start"
+        and record.get("name") == "initialize.failure"
     )
     custom = next(record for record in records if record["name"] == "node.custom")
-    assert node_start["parent_span_id"] == stage_start["span_id"]
-    assert custom["span_id"] == node_start["span_id"]
+    node_statuses = {
+        record["name"]: record["status"]
+        for record in records
+        if record["record"] == "span.end" and record.get("kind") == "node"
+    }
+    stage_end = next(
+        record
+        for record in records
+        if record["record"] == "span.end" and record.get("kind") == "stage"
+    )
+    assert result.status is ExecutionStatus.INCONCLUSIVE
+    assert result.outputs["collector"] == ("available",)
+    assert stage_end["status"] == "inconclusive"
+    assert node_statuses == {
+        "initialize.failure": "error",
+        "initialize.success": "ok",
+        "initialize.collector": "ok",
+    }
+    assert (
+        next(event for event in progress if event["event"] == "execution_stage_end")[
+            "status"
+        ]
+        == "inconclusive"
+    )
+    assert failure_start["parent_span_id"] == stage_start["span_id"]
+    assert custom["span_id"] == failure_start["span_id"]
+    runlog.validate_runlog(session.ndjson_path)
+
+
+def test_parallel_jobs_are_traced_with_compact_keys(tmp_path):
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        results = run_jobs(
+            [2, 3],
+            lambda value: value * value,
+            max_workers=2,
+            label="Reachability security review",
+            result_key=lambda value: value,
+        )
+
+    assert sorted(results) == [4, 9]
+    tasks = [
+        record
+        for record in _records(session)
+        if record["record"] == "span.start" and record.get("kind") == "task"
+    ]
+    assert {record["name"] for record in tasks} == {"Reachability security review"}
+    assert {record["attributes"]["key"] for record in tasks} == {2, 3}
+    assert all(record["parent_span_id"] == session.root_span_id for record in tasks)
     runlog.validate_runlog(session.ndjson_path)
 
 

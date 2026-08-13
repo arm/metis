@@ -104,24 +104,32 @@ def _annotate_automatic_sources(graph: CodeGraph) -> None:
         for callee in caller.resolved_calls:
             if callee in incoming and callee != caller.unique_name:
                 incoming[callee].add(caller.unique_name)
-    global_entries = {
-        (construct.file_path, reference)
+    structured_global_entries = {
+        target
         for construct in graph.globals.values()
-        for reference in construct.referenced_functions
+        for reference in construct.references
+        for target in reference.target_ids
     }
     for name, node in graph.nodes.items():
-        global_entry = (node.file_path, node.name) in global_entries or (
-            node.language == "c"
-            and node.entrypoint_reason == GLOBAL_INITIALIZER_ENTRYPOINT_REASON
+        global_entry = name in structured_global_entries
+        public_entry = (
+            node.is_public_entrypoint
+            and not node.has_internal_linkage
+            and (
+                node.language not in {"c", "cpp"}
+                or node.name in graph.public_declarations
+            )
         )
-        if node.is_source or (incoming[name] and not global_entry):
+        if node.is_source or (incoming[name] and not global_entry and not public_entry):
+            continue
+        if node.has_internal_linkage and not global_entry:
             continue
         node.is_source = True
         if global_entry:
             node.source_reason = (
                 f"public_or_external_entrypoint: {GLOBAL_INITIALIZER_ENTRYPOINT_REASON}"
             )
-        elif node.is_public_entrypoint:
+        elif public_entry:
             reason = node.entrypoint_reason or "public or external entrypoint"
             node.source_reason = f"public_or_external_entrypoint: {reason}"
         elif node.language == "c":
@@ -160,6 +168,8 @@ def _annotate_language_semantics(
                         language=node.language,
                         calls=tuple(node.calls),
                         unresolved_calls=tuple(graph.unresolved_calls_for(node)),
+                        call_sites=tuple(node.call_sites),
+                        references=tuple(node.references),
                     )
                 )
             if not isinstance(annotations, CodeGraphAnnotations):

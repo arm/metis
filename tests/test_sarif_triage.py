@@ -122,7 +122,7 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     engine._triage_service.max_workers = 1
     dummy_workflow = _DummyWorkflow()
     monkeypatch.setattr(
-        engine._simple_llm_triage,
+        engine._triage_classifier,
         "_workflow",
         lambda _navigation, _rounds: dummy_workflow,
     )
@@ -153,7 +153,7 @@ def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkey
 
     engine._triage_service.max_workers = 1
     monkeypatch.setattr(
-        engine._simple_llm_triage,
+        engine._triage_classifier,
         "_workflow",
         lambda: _FailingWorkflow(),
     )
@@ -185,7 +185,7 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
             }
 
     monkeypatch.setattr(
-        engine._simple_llm_triage,
+        engine._triage_classifier,
         "_workflow",
         lambda _navigation, _rounds: _DummyWorkflow(),
     )
@@ -233,7 +233,7 @@ def test_execute_triage_writes_checkpoints_at_configured_cadence(
         )
 
     monkeypatch.setattr(
-        engine._simple_llm_triage,
+        engine._triage_classifier,
         "_workflow",
         lambda _navigation, _rounds: _DummyWorkflow(),
     )
@@ -294,7 +294,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
             return {"status": "valid", "reason": "ok"}
 
     monkeypatch.setattr(
-        engine._simple_llm_triage,
+        engine._triage_classifier,
         "_workflow",
         lambda _navigation, _rounds: _DummyWorkflow(),
     )

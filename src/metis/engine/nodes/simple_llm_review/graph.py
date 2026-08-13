@@ -6,26 +6,28 @@ from functools import partial
 from typing import Any
 from typing import cast
 
-from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
+from langgraph.graph import END
+from langgraph.graph import StateGraph
 
-from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
-from metis.engine.source import SourceMap
 from metis import runlog
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.nodes.simple_llm_review.prompt import build_review_system_prompt
+from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
+from metis.engine.nodes.simple_llm_review.prompt import sanitize_review_payload
+from metis.engine.source import SourceMap
+from metis.engine.stages.review.models import ReviewRequest
+from metis.engine.stages.review.models import ReviewState
+from metis.engine.threat_context_retrieval import format_threat_model_context
+from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
 from metis.runlog.workflow import traced_step
-from metis.engine.threat_context_retrieval import (
-    format_threat_model_context,
-    threat_model_review_scope_guidance,
-)
-from metis.utils import split_snippet, parse_json_output
-from metis.engine.nodes.simple_llm_review.prompt import (
-    build_review_system_prompt,
-    normalize_review_fields,
-    sanitize_review_payload,
-)
+from metis.usage import usage_operation
+from metis.utils import parse_json_output
+from metis.utils import split_snippet
 
-from metis.engine.stages.review.models import ReviewRequest, ReviewState
-from .schema import ReviewResponseModel, review_schema_prompt
+from .schema import ReviewResponseModel
+from .schema import review_schema_prompt
 
 logger = logging.getLogger("metis")
 
@@ -203,24 +205,25 @@ class ReviewGraph:
         self._app_cache: dict[tuple[int, str], Any] = {}
 
     def _invoke_review_model(self, system_prompt, body_text):
-        return self._prompt_runner.invoke(
-            JsonPromptRequest(
-                model=self.llama_query_model,
-                system_prompt=system_prompt,
-                user_prompt="{body_text}",
-                variables={"body_text": body_text},
-                parse=_normalize_reviews,
-                logger=logger,
-                label="Review graph",
-                batch_size=1,
-                invalid_message="expected review JSON object",
-                final_keep_message="returning no findings for this chunk",
-                response_model=ReviewResponseModel,
-                chat_model_kwargs=self.chat_model_kwargs,
-                model_tools=self.model_tools,
-                max_tool_rounds=self.model_tool_max_rounds,
+        with usage_operation("review_discovery"):
+            return self._prompt_runner.invoke(
+                JsonPromptRequest(
+                    model=self.llama_query_model,
+                    system_prompt=system_prompt,
+                    user_prompt="{body_text}",
+                    variables={"body_text": body_text},
+                    parse=_normalize_reviews,
+                    logger=logger,
+                    label="Review graph",
+                    batch_size=1,
+                    invalid_message="expected review JSON object",
+                    final_keep_message="returning no findings for this chunk",
+                    response_model=ReviewResponseModel,
+                    chat_model_kwargs=self.chat_model_kwargs,
+                    model_tools=self.model_tools,
+                    max_tool_rounds=self.model_tool_max_rounds,
+                )
             )
-        )
 
     def _build_app(self, language_prompts, default_prompt_key):
         cache_key = (id(language_prompts), default_prompt_key)
@@ -283,7 +286,7 @@ class ReviewGraph:
         accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk, chunk_start in chunks:
-            chunk_end = chunk_start + chunk.count("\n")
+            chunk_end = chunk_start + len(chunk.splitlines()) - 1
             state = {
                 "file_path": file_path,
                 "snippet": chunk,

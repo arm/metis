@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.nodes.simple_llm_triage.workflow import triage_node_collect_evidence
+from metis.engine.nodes.triage.workflow import triage_node_collect_evidence
 
 
 class _NavigationEvidenceRunner:
@@ -75,6 +75,7 @@ def test_triage_collect_evidence_retries_use_sites_with_grep():
         "finding_line": 1,
         "finding_rule_id": "R1",
         "finding_snippet": "helper(user)",
+        "codegraph_context": "x" * 20_000,
     }
 
     out = triage_node_collect_evidence(state, toolbox=runner)

@@ -54,6 +54,7 @@ class TriageRequest(TypedDict):
     debug_callback: NotRequired[Any]
     triage_language: NotRequired[str]
     triage_language_guidance: NotRequired[str]
+    codegraph_context: NotRequired[str]
     threat_model_context: NotRequired[list[dict[str, Any]]]
 
 
@@ -69,6 +70,7 @@ class TriageState(TypedDict, total=False):
     debug_callback: Any
     triage_language: str
     triage_language_guidance: str
+    codegraph_context: str
     threat_model_context: list[dict[str, Any]]
     triage_system_prompt: str
     triage_decision_prompt: str

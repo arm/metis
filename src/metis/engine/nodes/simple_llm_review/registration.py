@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast
 from typing import TYPE_CHECKING
+from typing import cast
 
-from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import CapabilityRequirement
+from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
+from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
-from metis.engine.stages.review.execution import review_node_result
 
 from .service import SimpleLlmReviewService
 

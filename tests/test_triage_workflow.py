@@ -4,8 +4,8 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from metis.engine.nodes.simple_llm_triage.workflow import TriageWorkflow
-from metis.engine.nodes.simple_llm_triage.workflow.llm import _build_user_prompt
+from metis.engine.nodes.triage.workflow import TriageWorkflow
+from metis.engine.nodes.triage.workflow.llm import _build_user_prompt
 from metis.engine.stages.triage.models import TriageDecisionModel
 
 

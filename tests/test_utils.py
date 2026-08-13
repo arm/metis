@@ -350,7 +350,11 @@ def test_count_tokens_default_matches_legacy_gpt4():
 
 def test_split_snippet_uses_supplied_token_counter():
     text = "alpha\nbeta\ngamma\ndelta\n"
-    chunks = split_snippet(text, max_tokens=2, token_counter=lambda line: 1)
+    chunks = split_snippet(
+        text,
+        max_tokens=2,
+        token_counter=lambda value: len(value.splitlines()),
+    )
     assert [s for _, s in chunks] == [1, 3]
     assert "".join(c for c, _ in chunks) == text
 
@@ -359,3 +363,24 @@ def test_split_snippet_default_counter():
     text = "a\nb\nc\nd\n"
     chunks = split_snippet(text, max_tokens=1)
     assert "".join(c for c, _ in chunks) == text
+
+
+def test_split_snippet_splits_one_overlong_line_without_data_loss():
+    text = "abcdefghijkl\nok\n"
+    chunks = split_snippet(text, max_tokens=4, token_counter=len)
+
+    assert "".join(chunk for chunk, _start in chunks) == text
+    assert all(len(chunk) <= 4 for chunk, _start in chunks)
+    assert all(start == 1 for chunk, start in chunks if "ok" not in chunk)
+    assert any(start == 2 for chunk, start in chunks if "ok" in chunk)
+    assert split_snippet(text, max_tokens=4, token_counter=len) == chunks
+
+
+def test_split_snippet_checks_the_complete_candidate_chunk():
+    def non_additive_counter(value: str) -> int:
+        return 3 if value == "ab" else len(value)
+
+    chunks = split_snippet("ab", max_tokens=2, token_counter=non_additive_counter)
+
+    assert chunks == [("a", 1), ("b", 1)]
+    assert all(non_additive_counter(chunk) <= 2 for chunk, _start in chunks)

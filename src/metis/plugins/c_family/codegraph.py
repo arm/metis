@@ -6,7 +6,9 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import Any
+from typing import Literal
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
@@ -15,44 +17,49 @@ from metis.engine.codegraph import CodeGraphResult
 from metis.engine.codegraph import FunctionNode
 from metis.engine.codegraph import GlobalConstruct
 from metis.engine.codegraph import LockEvent
+from metis.engine.codegraph import SymbolReference
 from metis.engine.nodes.codegraph.progress import CODEGRAPH_PROGRESS
-from metis.engine.nodes.codegraph.annotations import (
-    GLOBAL_INITIALIZER_ENTRYPOINT_REASON,
-)
-from metis.engine.source.tree_sitter_nodes import (
-    _identifier_from_node,
-    _node_child_by_field_name,
-    _node_children,
-    _node_end_line,
-    _node_kind,
-    _node_line,
-    _node_text,
-)
+from metis.engine.source.tree_sitter_nodes import _identifier_from_node
+from metis.engine.source.tree_sitter_nodes import _node_child_by_field_name
+from metis.engine.source.tree_sitter_nodes import _node_children
+from metis.engine.source.tree_sitter_nodes import _node_end_line
+from metis.engine.source.tree_sitter_nodes import _node_kind
+from metis.engine.source.tree_sitter_nodes import _node_line
+from metis.engine.source.tree_sitter_nodes import _node_text
 
 from .ast import ANONYMOUS_NAMESPACE_SCOPE
 from .ast import CFamilyAstMixin
-from .ast import CFamilyCallSite
 from .ast import CFamilyFunctionSyntax
-from .runtime import TreeSitterRuntime
+from .ast import _declarator_name_node
+from .ast import _expression_children
+from .ast import _lexical_scope
+from .ast import _normalized_syntax
+from .linking import ParsedFunction
+from .linking import ValueBinding
+from .linking import _resolve_calls
+from .linking import _visible_value_binding
 from .rules import CONTROL_CALLS
 from .rules import LOCK_CALLS
 from .rules import UNLOCK_CALLS
 from .rules import normalize_lock_expression
+from .runtime import TreeSitterRuntime
+from .runtime import _MacroFunctionDefinition
+from .runtime import _MacroFunctionMask
 
-
-@dataclass
-class ParsedFunction:
-    node: FunctionNode
-    syntax: CFamilyFunctionSyntax
-    calls: tuple[CFamilyCallSite, ...]
+ValueDeclarationKind = Literal["function", "function_pointer", "unnamed", "value"]
 
 
 @dataclass
 class ParsedFileGraph:
+    language: str = ""
     functions: list[ParsedFunction] = field(default_factory=list)
     declarations: list[CFamilyFunctionSyntax] = field(default_factory=list)
     globals: list[GlobalConstruct] = field(default_factory=list)
+    global_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    value_declarations: dict[tuple[str, str], list[int]] = field(default_factory=dict)
     public_declarations: dict[str, list[str]] = field(default_factory=dict)
+    macro_function_definitions: tuple[_MacroFunctionDefinition, ...] = ()
+    diagnostics: list[CodeGraphDiagnostic] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -70,7 +77,11 @@ class CFamilyCodeGraphProvider:
         graph: CodeGraph = CodeGraph()
         functions: list[ParsedFunction] = []
         declarations: list[CFamilyFunctionSyntax] = []
+        global_languages: dict[str, str] = {}
+        global_scopes: dict[str, tuple[str, ...]] = {}
+        value_declarations: dict[tuple[str, str], list[int]] = {}
         diagnostics: list[CodeGraphDiagnostic] = []
+        macro_function_definitions: list[_MacroFunctionDefinition] = []
         processed_files: list[str] = []
         failed_files: list[str] = []
         selected_files = tuple(sorted(str(file) for file in files))
@@ -83,6 +94,7 @@ class CFamilyCodeGraphProvider:
                     codebase_path=codebase_path,
                     file_path=file_path,
                 )
+                diagnostics.extend(parsed.diagnostics)
                 error_messages = tuple(parsed.errors)
                 if not error_messages:
                     file_graph = CodeGraph()
@@ -90,6 +102,10 @@ class CFamilyCodeGraphProvider:
                         file_graph.add_node(function.node)
                     for global_construct in parsed.globals:
                         file_graph.add_global(global_construct)
+                        global_languages[global_construct.unique_name] = parsed.language
+                        global_scopes[global_construct.unique_name] = (
+                            parsed.global_scopes[global_construct.unique_name]
+                        )
                     file_graph.add_public_declarations(parsed.public_declarations)
                     graph.merge(file_graph)
             except Exception as exc:
@@ -109,6 +125,9 @@ class CFamilyCodeGraphProvider:
                 global_count = len(parsed.globals)
                 functions.extend(parsed.functions)
                 declarations.extend(parsed.declarations)
+                macro_function_definitions.extend(parsed.macro_function_definitions)
+                for key, offsets in parsed.value_declarations.items():
+                    value_declarations.setdefault(key, []).extend(offsets)
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -123,7 +142,16 @@ class CFamilyCodeGraphProvider:
                     }
                 )
 
-        _resolve_calls(graph, functions, declarations)
+        _annotate_macro_function_wrappers(functions, macro_function_definitions)
+        _annotate_macro_passthrough_calls(functions, macro_function_definitions)
+        _resolve_calls(
+            graph,
+            functions,
+            declarations,
+            global_languages,
+            global_scopes,
+            value_declarations,
+        )
         graph.annotate_public_entrypoints()
         return CodeGraphResult(
             graph=graph,
@@ -160,35 +188,81 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         except Exception as exc:
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 
-        source = bytes(parsed.text, "utf-8")
+        source = parsed.parse_source
         root = parsed.tree.root_node()
-        functions = self._collect_functions(root, source, rel_path, language)
+        root_nodes = tuple(self._iter_nodes(root))
+        diagnostics: list[CodeGraphDiagnostic] = []
+        diagnostic_root = parsed.diagnostic_tree.root_node()
+        if diagnostic_root.has_error():
+            diagnostic_nodes = tuple(self._iter_nodes(diagnostic_root))
+            syntax_error = next(
+                (
+                    node
+                    for node in diagnostic_nodes
+                    if node.is_error() or node.is_missing()
+                ),
+                diagnostic_root,
+            )
+            diagnostics.append(
+                CodeGraphDiagnostic(
+                    file_path=rel_path,
+                    message=(
+                        "Tree-sitter recovered from invalid syntax; "
+                        "extracted facts may be incomplete"
+                    ),
+                    severity="warning",
+                    code="codegraph.partial_parse",
+                    phase="parse",
+                    line=_node_line(syntax_error),
+                    start_byte=int(syntax_error.start_byte()),
+                    end_byte=int(syntax_error.end_byte()),
+                    partial_output=True,
+                )
+            )
+        functions = self._collect_functions(
+            root,
+            source,
+            rel_path,
+            language,
+            root_nodes=root_nodes,
+            macro_masks_by_body={
+                mask.body_start: mask for mask in parsed.macro_function_masks
+            },
+        )
         declarations = (
-            self._collect_function_declarations(root, source)
+            self._collect_function_declarations(root, source, root_nodes=root_nodes)
             if language == "cpp"
             else []
         )
         function_ids = {function.node.unique_name for function in functions}
-        global_constructs, global_function_refs = self._collect_globals(
+        global_constructs, global_scopes = self._collect_globals(
             root,
             source,
             rel_path,
             function_ids=function_ids,
-            include_nested=language == "c",
+            root_nodes=root_nodes,
         )
         public_declarations = self._collect_public_function_declarations(
-            root, source, rel_path
+            root,
+            source,
+            rel_path,
+            root_nodes=root_nodes,
         )
-        for function in functions:
-            node = function.node
-            if node.name in global_function_refs:
-                node.is_public_entrypoint = True
-                node.entrypoint_reason = GLOBAL_INITIALIZER_ENTRYPOINT_REASON
+        value_declarations = self._collect_namespace_value_declarations(
+            source,
+            rel_path,
+            root_nodes,
+        )
         return ParsedFileGraph(
+            language=language,
             functions=functions,
             declarations=declarations,
             globals=global_constructs,
+            global_scopes=global_scopes,
+            value_declarations=value_declarations,
             public_declarations=public_declarations,
+            macro_function_definitions=parsed.macro_function_definitions,
+            diagnostics=diagnostics,
         )
 
     def _collect_functions(
@@ -197,29 +271,36 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         source: bytes,
         rel_path: str,
         language: str = "c",
+        *,
+        root_nodes: tuple[Any, ...] | None = None,
+        macro_masks_by_body: dict[int, _MacroFunctionMask] | None = None,
     ) -> list[ParsedFunction]:
         functions: list[ParsedFunction] = []
         seen: set[str] = set()
 
-        for node in self._iter_function_definitions(root, include_methods=True):
+        nodes = root_nodes or tuple(self._iter_nodes(root))
+        for node in nodes:
+            if _node_kind(node) not in {"function_definition", "method_definition"}:
+                continue
+            declarator = _node_child_by_field_name(node, "declarator")
+            body = _node_child_by_field_name(node, "body")
+            if _has_parse_error_between_declarator_and_body(node, declarator, body):
+                continue
             syntax: CFamilyFunctionSyntax | None
+            syntax = self._function_syntax(node, source)
+            if syntax is None:
+                continue
             if language == "c":
-                declarator = _node_child_by_field_name(node, "declarator")
                 name = _identifier_from_node(declarator or node, source)
                 if not name:
                     continue
-                syntax = CFamilyFunctionSyntax(
+                syntax = replace(
+                    syntax,
                     name=name,
                     qualified_name=name,
                     signature_suffix="",
                     lexical_scope=(),
-                    minimum_argument_count=0,
-                    maximum_argument_count=None,
                 )
-            else:
-                syntax = self._function_syntax(node, source)
-            if syntax is None:
-                continue
             unique = (
                 f"{rel_path}::{syntax.qualified_name}{syntax.signature_suffix}"
                 if language == "cpp"
@@ -228,6 +309,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             if unique in seen:
                 continue
             seen.add(unique)
+            scope_nodes = tuple(self._iter_nodes(node))
             call_sites = tuple(
                 self._collect_calls_in_scope(
                     node,
@@ -235,7 +317,13 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     exclude_symbols=CONTROL_CALLS,
                     include_constructors=language == "cpp",
                     legacy_identifiers=language == "c",
+                    scope_nodes=scope_nodes,
                 )
+            )
+            references, value_bindings = self._collect_function_references(
+                node,
+                source,
+                scope_nodes,
             )
             has_internal_linkage = self._has_internal_linkage(node, source)
             is_public_entrypoint = self._is_public_function_definition(
@@ -244,29 +332,70 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 rel_path,
                 has_internal_linkage=has_internal_linkage,
             )
+            function_node = FunctionNode(
+                unique,
+                rel_path,
+                syntax.name,
+                _node_line(node),
+                language=language,
+                calls=list(dict.fromkeys(call.symbol for call in call_sites)),
+                references=list(references),
+                end_line=_node_end_line(node),
+                start_byte=int(node.start_byte()),
+                end_byte=int(node.end_byte()),
+                is_public_entrypoint=is_public_entrypoint,
+                entrypoint_reason=(
+                    "non-static function definition" if is_public_entrypoint else ""
+                ),
+                has_internal_linkage=has_internal_linkage,
+                parameter_count=(
+                    syntax.maximum_argument_count
+                    if syntax.maximum_argument_count is not None
+                    else syntax.minimum_argument_count
+                ),
+                parameters=syntax.parameters,
+                lock_events=self._collect_lock_events(
+                    node,
+                    source,
+                    scope_nodes,
+                ),
+                assignments=self._collect_value_assignments(
+                    node,
+                    source,
+                    scope_nodes,
+                ),
+                loops=self._collect_loop_structures(
+                    node,
+                    source,
+                    scope_nodes,
+                ),
+                returns=self._collect_return_sites(
+                    node,
+                    source,
+                    scope_nodes,
+                ),
+            )
+            noreturn_marker = _noreturn_marker(node, source)
+            if noreturn_marker:
+                function_node.set_tag(
+                    "control.noreturn",
+                    value=noreturn_marker,
+                    reason=(
+                        "function declaration contains "
+                        f"{noreturn_marker} at line {_node_line(node)}"
+                    ),
+                )
             functions.append(
                 ParsedFunction(
-                    node=FunctionNode(
-                        unique,
-                        rel_path,
-                        syntax.name,
-                        _node_line(node),
-                        language=language,
-                        calls=list(dict.fromkeys(call.symbol for call in call_sites)),
-                        end_line=_node_end_line(node),
-                        start_byte=int(node.start_byte()),
-                        end_byte=int(node.end_byte()),
-                        is_public_entrypoint=is_public_entrypoint,
-                        entrypoint_reason=(
-                            "non-static function definition"
-                            if is_public_entrypoint
-                            else ""
-                        ),
-                        has_internal_linkage=has_internal_linkage,
-                        lock_events=self._collect_lock_events(node, source),
-                    ),
+                    node=function_node,
                     syntax=syntax,
                     calls=call_sites,
+                    value_bindings=value_bindings,
+                    macro_function_mask=(
+                        None
+                        if body is None or macro_masks_by_body is None
+                        else macro_masks_by_body.get(int(body.start_byte()))
+                    ),
                 )
             )
         return sorted(
@@ -282,9 +411,11 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         self,
         root: Any,
         source: bytes,
+        *,
+        root_nodes: tuple[Any, ...] | None = None,
     ) -> list[CFamilyFunctionSyntax]:
         declarations: list[CFamilyFunctionSyntax] = []
-        for node in self._iter_nodes(root):
+        for node in root_nodes or self._iter_nodes(root):
             if _node_kind(node) not in {"declaration", "field_declaration"}:
                 continue
             syntax = self._function_syntax(node, source)
@@ -296,9 +427,10 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         self,
         scope_node: Any,
         source: bytes,
+        scope_nodes: tuple[Any, ...] | None = None,
     ) -> list[LockEvent]:
         events: list[LockEvent] = []
-        for call in self._iter_nodes(scope_node):
+        for call in scope_nodes or self._iter_nodes(scope_node):
             if _node_kind(call) != "call_expression":
                 continue
             callee_node = _node_child_by_field_name(call, "function")
@@ -317,6 +449,241 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 )
         return events
 
+    def _collect_function_references(
+        self,
+        function_node: Any,
+        source: bytes,
+        scope_nodes: tuple[Any, ...],
+    ) -> tuple[tuple[SymbolReference, ...], tuple[ValueBinding, ...]]:
+        bindings: list[ValueBinding] = []
+        function_parameters = None
+        root_declarator = _node_child_by_field_name(function_node, "declarator")
+        declared_name = _declarator_name_node(root_declarator)
+        function_declarator = (
+            declared_name.parent() if declared_name is not None else None
+        )
+        while (
+            function_declarator is not None and function_declarator is not function_node
+        ):
+            if _node_kind(function_declarator) == "function_declarator":
+                function_parameters = _node_child_by_field_name(
+                    function_declarator,
+                    "parameters",
+                )
+                break
+            function_declarator = function_declarator.parent()
+        references = [
+            reference
+            for node in scope_nodes
+            if _node_kind(node) == "pointer_expression"
+            for reference in _function_value_references(
+                node,
+                source,
+                allow_bare=False,
+            )
+        ]
+
+        for node in scope_nodes:
+            node_kind = _node_kind(node)
+            if node_kind == "lambda_capture_initializer":
+                name_node = _node_child_by_field_name(node, "left")
+                if _node_kind(name_node) != "identifier":
+                    continue
+                binding_targets = _function_value_references(
+                    _node_child_by_field_name(node, "right"),
+                    source,
+                    allow_bare=True,
+                )
+                references.extend(binding_targets)
+                scope = _binding_scope(node, function_node)
+                scope = _node_child_by_field_name(scope, "body") or scope
+                bindings.append(
+                    ValueBinding(
+                        name=_node_text(name_node, source).strip(),
+                        declaration_byte=int(name_node.start_byte()),
+                        scope_start_byte=int(scope.start_byte()),
+                        scope_end_byte=int(scope.end_byte()),
+                        targets=list(binding_targets) if binding_targets else None,
+                    )
+                )
+                continue
+            if node_kind in {
+                "declaration",
+                "for_range_loop",
+                "init_declarator",
+                "optional_parameter_declaration",
+                "parameter_declaration",
+            }:
+                is_parameter = node_kind in {
+                    "optional_parameter_declaration",
+                    "parameter_declaration",
+                }
+                parameter_list = node.parent() if is_parameter else None
+                owns_function_parameter = (
+                    is_parameter
+                    and function_parameters is not None
+                    and parameter_list is not None
+                    and int(parameter_list.start_byte())
+                    == int(function_parameters.start_byte())
+                    and int(parameter_list.end_byte())
+                    == int(function_parameters.end_byte())
+                )
+                owns_catch_parameter = (
+                    is_parameter
+                    and parameter_list is not None
+                    and _node_kind(parameter_list.parent()) == "catch_clause"
+                )
+                owns_lambda_parameter = (
+                    is_parameter
+                    and parameter_list is not None
+                    and _node_kind(parameter_list.parent()) == "lambda_declarator"
+                )
+                if is_parameter and (
+                    not owns_function_parameter
+                    and not owns_catch_parameter
+                    and not owns_lambda_parameter
+                ):
+                    continue
+                if node_kind == "init_declarator" and _node_kind(node.parent()) == (
+                    "declaration"
+                ):
+                    continue
+                for declaration_node in _declaration_declarators(node):
+                    declarator = (
+                        _node_child_by_field_name(declaration_node, "declarator")
+                        if _node_kind(declaration_node) == "init_declarator"
+                        else declaration_node
+                    )
+                    declaration_kind = _value_declaration_kind(
+                        declarator,
+                        is_parameter=is_parameter,
+                    )
+                    if declaration_kind in {"function", "unnamed"}:
+                        continue
+                    is_pointer_binding = declaration_kind == "function_pointer"
+                    value_owner = (
+                        declaration_node
+                        if _node_kind(declaration_node) == "init_declarator"
+                        else node
+                    )
+                    value = _node_child_by_field_name(
+                        value_owner,
+                        "value",
+                    ) or _node_child_by_field_name(value_owner, "default_value")
+                    binding_targets = (
+                        _function_value_references(
+                            value,
+                            source,
+                            allow_bare=True,
+                        )
+                        if is_pointer_binding
+                        else ()
+                    )
+                    references.extend(binding_targets)
+                    name_node = _declarator_name_node(declarator)
+                    if name_node is None:
+                        continue
+                    scope = _binding_scope(declaration_node, function_node)
+                    bindings.append(
+                        ValueBinding(
+                            name=_node_text(name_node, source).strip(),
+                            declaration_byte=int(name_node.start_byte()),
+                            scope_start_byte=int(scope.start_byte()),
+                            scope_end_byte=int(scope.end_byte()),
+                            targets=(
+                                list(binding_targets) if is_pointer_binding else None
+                            ),
+                        )
+                    )
+                continue
+            if node_kind == "assignment_expression":
+                operator = _node_child_by_field_name(node, "operator")
+                if _node_text(operator, source).strip() != "=":
+                    continue
+                left = _node_child_by_field_name(node, "left")
+                if _node_kind(left) != "identifier":
+                    continue
+                binding = _visible_value_binding(
+                    tuple(bindings),
+                    name=_node_text(left, source).strip(),
+                    at_byte=int(node.start_byte()),
+                )
+                is_pointer_binding = binding is not None and binding.targets is not None
+                binding_targets = _function_value_references(
+                    _node_child_by_field_name(node, "right"),
+                    source,
+                    allow_bare=is_pointer_binding,
+                )
+                if not binding_targets:
+                    continue
+                if binding is not None and binding.targets is not None:
+                    binding.targets.extend(binding_targets)
+                references.extend(binding_targets)
+
+        unique_references = {
+            (reference.start_byte, reference.end_byte, reference.symbol): reference
+            for reference in references
+        }
+        return (
+            tuple(unique_references[key] for key in sorted(unique_references)),
+            tuple(bindings),
+        )
+
+    def _collect_namespace_value_declarations(
+        self,
+        source: bytes,
+        rel_path: str,
+        root_nodes: tuple[Any, ...],
+    ) -> dict[tuple[str, str], list[int]]:
+        declarations: dict[tuple[str, str], list[int]] = {}
+        local_scope_kinds = {
+            "class_specifier",
+            "compound_statement",
+            "function_definition",
+            "method_definition",
+            "struct_specifier",
+            "union_specifier",
+        }
+        for node in root_nodes:
+            if _node_kind(node) != "declaration":
+                continue
+            parent = node.parent()
+            while parent is not None and _node_kind(parent) not in local_scope_kinds:
+                parent = parent.parent()
+            if parent is not None:
+                continue
+            lexical_scope = _lexical_scope(node, source)
+            for declaration_node in _declaration_declarators(node):
+                declarator = (
+                    _node_child_by_field_name(declaration_node, "declarator")
+                    if _node_kind(declaration_node) == "init_declarator"
+                    else declaration_node
+                )
+                if _value_declaration_kind(declarator, is_parameter=False) in {
+                    "function",
+                    "unnamed",
+                }:
+                    continue
+                name_node = _declarator_name_node(declarator)
+                if name_node is None:
+                    continue
+                name = _node_text(name_node, source).strip()
+                qualified_name = "::".join((*lexical_scope, name))
+                visible_names = [qualified_name]
+                if ANONYMOUS_NAMESPACE_SCOPE in lexical_scope:
+                    visible_names.append(
+                        "::".join(
+                            part
+                            for part in (*lexical_scope, name)
+                            if part != ANONYMOUS_NAMESPACE_SCOPE
+                        )
+                    )
+                for visible_name in visible_names:
+                    declarations.setdefault((rel_path, visible_name), []).append(
+                        int(name_node.start_byte())
+                    )
+        return declarations
+
     def _collect_globals(
         self,
         root,
@@ -324,37 +691,50 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         rel_path: str,
         *,
         function_ids: set[str] | None = None,
-        include_nested: bool = False,
-    ) -> tuple[list[GlobalConstruct], set[str]]:
+        root_nodes: tuple[Any, ...] | None = None,
+    ) -> tuple[
+        list[GlobalConstruct],
+        dict[str, tuple[str, ...]],
+    ]:
         globals_: list[GlobalConstruct] = []
-        global_function_refs: set[str] = set()
+        global_scopes: dict[str, tuple[str, ...]] = {}
         seen: set[str] = set()
 
-        for node in self._iter_nodes(root):
+        for node in root_nodes or self._iter_nodes(root):
             if _node_kind(node) != "init_declarator":
                 continue
-            if not include_nested:
-                parent = node.parent()
-                while parent is not None and _node_kind(parent) not in {
-                    "class_specifier",
-                    "compound_statement",
-                    "struct_specifier",
-                    "union_specifier",
-                }:
-                    parent = parent.parent()
-                if parent is not None:
-                    continue
-            refs = self._global_function_references(node, source)
+            parent = node.parent()
+            while parent is not None and _node_kind(parent) not in {
+                "class_specifier",
+                "compound_statement",
+                "function_definition",
+                "method_definition",
+                "struct_specifier",
+                "union_specifier",
+                "ERROR",
+            }:
+                parent = parent.parent()
+            if parent is not None:
+                continue
+            references = self._global_symbol_references(node, source)
+            refs = list(
+                dict.fromkeys(
+                    reference.symbol.rpartition("::")[2]
+                    for reference in references
+                    if reference.symbol
+                )
+            )
             if not refs:
                 continue
-            global_function_refs.update(refs)
             name = self._global_name(node, source) or f"global_{_node_line(node)}"
-            unique = f"{rel_path}::{name}"
+            lexical_scope = _lexical_scope(node, source)
+            qualified_name = "::".join((*lexical_scope, name))
+            unique = f"{rel_path}::{qualified_name}"
             if function_ids is not None and unique in function_ids:
-                if not include_nested:
-                    continue
+                continue
             if unique not in seen:
                 seen.add(unique)
+                global_scopes[unique] = lexical_scope
                 globals_.append(
                     GlobalConstruct(
                         unique,
@@ -363,20 +743,23 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                         _node_line(node),
                         initializer=_node_text(node, source)[:2000],
                         referenced_functions=refs,
+                        references=references,
                     )
                 )
-        return globals_, global_function_refs
+        return globals_, global_scopes
 
     def _collect_public_function_declarations(
         self,
         root,
         source: bytes,
         rel_path: str,
+        *,
+        root_nodes: tuple[Any, ...] | None = None,
     ) -> dict[str, list[str]]:
         if not self._has_file_role(rel_path, "header"):
             return {}
         declarations: dict[str, list[str]] = {}
-        for node in self._iter_nodes(root):
+        for node in root_nodes or self._iter_nodes(root):
             if _node_kind(node) != "declaration":
                 continue
             declarator = _node_child_by_field_name(node, "declarator")
@@ -391,16 +774,34 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             declarations.setdefault(name, []).append(location)
         return declarations
 
-    def _global_function_references(self, node, source: bytes) -> list[str]:
+    def _global_symbol_references(
+        self,
+        node: Any,
+        source: bytes,
+    ) -> list[SymbolReference]:
         value = _node_child_by_field_name(node, "value")
         if value is None:
             return []
-        refs = (
-            _node_text(candidate, source).strip()
-            for candidate in self._iter_nodes(value)
-            if _node_kind(candidate) == "identifier"
-        )
-        return list(dict.fromkeys(ref for ref in refs if ref))
+        references: list[SymbolReference] = []
+        covered_ranges: list[tuple[int, int]] = []
+        for candidate in self._iter_nodes(value):
+            start_byte = int(candidate.start_byte())
+            end_byte = int(candidate.end_byte())
+            if any(
+                start_byte >= covered_start and end_byte <= covered_end
+                for covered_start, covered_end in covered_ranges
+            ):
+                continue
+            reference = _symbol_reference_from_expression(
+                candidate,
+                source,
+                allow_bare=True,
+            )
+            if reference is None:
+                continue
+            references.append(reference)
+            covered_ranges.append((start_byte, end_byte))
+        return references
 
     def _global_name(self, node, source: bytes) -> str:
         declarator = _node_child_by_field_name(node, "declarator")
@@ -487,133 +888,299 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         return os.path.relpath(os.path.abspath(full), base).replace("\\", "/")
 
 
-def _resolve_calls(
-    graph: CodeGraph,
-    functions: list[ParsedFunction],
-    declarations: list[CFamilyFunctionSyntax],
-) -> None:
-    graph.resolve_all_calls()
-    definitions_by_name: dict[str, list[ParsedFunction]] = {}
-    definitions_by_qualified_name: dict[str, list[ParsedFunction]] = {}
-    for function in functions:
-        definitions_by_name.setdefault(function.node.name, []).append(function)
-        definitions_by_qualified_name.setdefault(
-            function.syntax.qualified_name, []
-        ).append(function)
-        if ANONYMOUS_NAMESPACE_SCOPE in function.syntax.lexical_scope:
-            visible_name = "::".join(
-                part
-                for part in function.syntax.qualified_name.split("::")
-                if part != ANONYMOUS_NAMESPACE_SCOPE
-            )
-            definitions_by_qualified_name.setdefault(visible_name, []).append(function)
-    declared_minimums: dict[tuple[str, str], int] = {}
-    for declaration in declarations:
-        key = (declaration.qualified_name, declaration.signature_suffix)
-        current = declared_minimums.get(key, declaration.minimum_argument_count)
-        declared_minimums[key] = min(current, declaration.minimum_argument_count)
-
-    for caller in functions:
-        if caller.node.language != "cpp":
+def _noreturn_marker(node: Any, source: bytes) -> str:
+    stack = list(reversed(_node_children(node)))
+    while stack:
+        current = stack.pop()
+        kind = _node_kind(current)
+        if kind in {"compound_statement", "parameter_list"}:
             continue
-        resolved: list[str] = []
-        for call in caller.calls:
-            candidates = _call_candidates(
-                call,
-                caller,
-                definitions_by_name,
-                definitions_by_qualified_name,
-                declared_minimums,
-            )
-            resolved.extend(candidate.node.unique_name for candidate in candidates)
-        caller.node.resolved_calls = list(dict.fromkeys(resolved))
+        if kind == "type_qualifier" and _node_text(current, source) == "_Noreturn":
+            return "_Noreturn"
+        if kind == "attribute_specifier" and _gnu_noreturn_attribute(current, source):
+            return "GNU noreturn attribute"
+        if kind == "attribute" and _cpp_noreturn_attribute(current, source):
+            return "[[noreturn]]"
+        if kind == "ms_declspec_modifier" and _msvc_noreturn_declspec(current, source):
+            return "MSVC noreturn declspec"
+        stack.extend(reversed(_node_children(current)))
+    return ""
 
 
-def _call_candidates(
-    call: CFamilyCallSite,
-    caller: ParsedFunction,
-    definitions_by_name: dict[str, list[ParsedFunction]],
-    definitions_by_qualified_name: dict[str, list[ParsedFunction]],
-    declared_minimums: dict[tuple[str, str], int],
-) -> list[ParsedFunction]:
-    candidates: list[ParsedFunction] = []
-    if call.qualified_name:
-        qualified_names = tuple(
-            dict.fromkeys((call.qualified_name, call.generic_qualified_name))
+def _annotate_macro_function_wrappers(
+    functions: list[ParsedFunction],
+    definitions: list[_MacroFunctionDefinition],
+) -> None:
+    definitions_by_name: dict[str, list[_MacroFunctionDefinition]] = {}
+    for definition in definitions:
+        definitions_by_name.setdefault(definition.name, []).append(definition)
+
+    for function in functions:
+        mask = function.macro_function_mask
+        if mask is None:
+            continue
+        matching_definitions = tuple(
+            definition
+            for definition in definitions_by_name.get(mask.macro_name, ())
+            if len(definition.parameters) == mask.argument_count
         )
-        for qualified_name in qualified_names:
-            normalized_name = qualified_name.removeprefix("::")
-            candidate_names = [normalized_name]
-            if not qualified_name.startswith("::"):
-                candidate_names = [
-                    "::".join((*caller.syntax.lexical_scope[:depth], normalized_name))
-                    for depth in range(len(caller.syntax.lexical_scope), -1, -1)
-                ]
-            for candidate_name in candidate_names:
-                candidates = definitions_by_qualified_name.get(candidate_name, [])
-                if candidates:
-                    break
-            if candidates:
-                break
-    elif call.receiver == "this":
-        member_scope = caller.syntax.qualified_name.rpartition("::")[0]
-        candidates = definitions_by_qualified_name.get(
-            f"{member_scope}::{call.symbol}", []
-        )
-    elif call.receiver:
-        return []
-    elif not call.receiver:
-        for depth in range(len(caller.syntax.lexical_scope), -1, -1):
-            candidate_name = "::".join(
-                (*caller.syntax.lexical_scope[:depth], call.symbol)
+        if not matching_definitions:
+            continue
+        referenced_identifiers = tuple(
+            dict.fromkeys(
+                identifier
+                for argument in mask.annotation_arguments
+                if all(
+                    argument.index in definition.referenced_parameter_indexes
+                    for definition in matching_definitions
+                )
+                for identifier in argument.identifiers
             )
-            candidates = definitions_by_qualified_name.get(candidate_name, [])
-            if candidates:
-                break
+        )
+        if not referenced_identifiers:
+            continue
+        function.node.set_tag(
+            "syntax.macro_function_arguments",
+            value=", ".join(referenced_identifiers),
+            reason=(
+                f"{mask.macro_name} definitions reference non-signature wrapper "
+                f"argument tokens at line {function.node.line_number}"
+            ),
+        )
 
-    if not candidates and call.qualified_name:
-        return []
-    if not candidates:
-        candidates = list(definitions_by_name.get(call.symbol, []))
 
-    candidates = [
-        candidate
-        for candidate in candidates
-        if not candidate.node.has_internal_linkage
-        or candidate.node.file_path == caller.node.file_path
-    ]
-    if not call.qualified_name:
-        visible_candidates: list[ParsedFunction] = []
-        for candidate in candidates:
-            scope = candidate.syntax.lexical_scope
-            if ANONYMOUS_NAMESPACE_SCOPE not in scope:
-                visible_candidates.append(candidate)
+def _annotate_macro_passthrough_calls(
+    functions: list[ParsedFunction],
+    definitions: list[_MacroFunctionDefinition],
+) -> None:
+    definitions_by_name: dict[str, list[_MacroFunctionDefinition]] = {}
+    for definition in definitions:
+        definitions_by_name.setdefault(definition.name, []).append(definition)
+
+    for function in functions:
+        calls = list(function.calls)
+        wrapper_indexes = sorted(
+            range(len(calls)),
+            key=lambda index: (
+                -(calls[index].end_byte - calls[index].start_byte),
+                calls[index].start_byte,
+            ),
+        )
+        for wrapper_index in wrapper_indexes:
+            wrapper = calls[wrapper_index]
+            lexical_arity = len(wrapper.lexical_argument_spans)
+            if not lexical_arity:
                 continue
-            enclosing_scope = scope[: scope.index(ANONYMOUS_NAMESPACE_SCOPE)]
-            if caller.syntax.lexical_scope[: len(enclosing_scope)] == enclosing_scope:
-                visible_candidates.append(candidate)
-        candidates = visible_candidates
-        same_file = [
-            candidate
-            for candidate in candidates
-            if candidate.node.file_path == caller.node.file_path
-        ]
-        if same_file:
-            candidates = same_file
+            matching = tuple(
+                definition
+                for definition in definitions_by_name.get(wrapper.symbol, ())
+                if len(definition.parameters) == lexical_arity
+            )
+            passthrough_indexes = {
+                definition.passthrough_parameter_index for definition in matching
+            }
+            if len(passthrough_indexes) != 1:
+                continue
+            passthrough_index = next(iter(passthrough_indexes))
+            if passthrough_index is None:
+                continue
+            wrapper = replace(
+                wrapper,
+                argument_count=lexical_arity,
+            )
+            calls[wrapper_index] = wrapper
+            if wrapper.result is None:
+                continue
+            argument_span = wrapper.lexical_argument_spans[passthrough_index]
+            rooted_calls = [
+                index
+                for index, candidate in enumerate(calls)
+                if index != wrapper_index
+                and (candidate.start_byte, candidate.end_byte) == argument_span
+            ]
+            if len(rooted_calls) != 1:
+                continue
+            nested_index = rooted_calls[0]
+            nested = calls[nested_index]
+            if nested.result not in {None, wrapper.result}:
+                continue
+            calls[nested_index] = replace(nested, result=wrapper.result)
+        function.calls = tuple(calls)
 
-    return [
-        candidate
-        for candidate in candidates
-        if declared_minimums.get(
-            (candidate.syntax.qualified_name, candidate.syntax.signature_suffix),
-            candidate.syntax.minimum_argument_count,
-        )
-        <= call.argument_count
-        and (
-            candidate.syntax.maximum_argument_count is None
-            or call.argument_count <= candidate.syntax.maximum_argument_count
-        )
+
+def _gnu_noreturn_attribute(node: Any, source: bytes) -> bool:
+    arguments = next(
+        (
+            child
+            for child in _node_children(node)
+            if _node_kind(child) == "argument_list"
+        ),
+        None,
+    )
+    return arguments is not None and any(
+        _node_kind(child) == "identifier"
+        and _node_text(child, source) in {"noreturn", "__noreturn__"}
+        for child in _node_children(arguments)
+    )
+
+
+def _cpp_noreturn_attribute(node: Any, source: bytes) -> bool:
+    names = [
+        _node_text(child, source)
+        for child in _node_children(node)
+        if _node_kind(child) == "identifier"
     ]
+    return bool(names) and names[-1] == "noreturn"
+
+
+def _msvc_noreturn_declspec(node: Any, source: bytes) -> bool:
+    return any(
+        _node_kind(child) == "identifier" and _node_text(child, source) == "noreturn"
+        for child in _node_children(node)
+    )
+
+
+def _declaration_declarators(node: Any) -> tuple[Any, ...]:
+    first_declarator = _node_child_by_field_name(node, "declarator")
+    if first_declarator is None:
+        return ()
+    if _node_kind(node) != "declaration":
+        return (first_declarator,)
+
+    declarators: list[Any] = []
+    expecting_declarator = False
+    first_start_byte = int(first_declarator.start_byte())
+    for child in _node_children(node):
+        child_kind = _node_kind(child)
+        if int(child.start_byte()) == first_start_byte:
+            declarators.append(child)
+            continue
+        if not declarators:
+            continue
+        if child_kind == ",":
+            expecting_declarator = True
+            continue
+        if child_kind == "comment":
+            continue
+        if expecting_declarator:
+            declarators.append(child)
+            expecting_declarator = False
+    return tuple(declarators)
+
+
+def _binding_scope(candidate: Any, function_node: Any) -> Any:
+    current = candidate
+    while current is not None and current is not function_node:
+        if _node_kind(current) in {
+            "catch_clause",
+            "compound_statement",
+            "for_range_loop",
+            "for_statement",
+            "if_statement",
+            "lambda_expression",
+            "switch_statement",
+            "while_statement",
+        }:
+            return current
+        current = current.parent()
+    return _node_child_by_field_name(function_node, "body") or function_node
+
+
+def _value_declaration_kind(
+    declarator: Any,
+    *,
+    is_parameter: bool,
+) -> ValueDeclarationKind:
+    name_node = _declarator_name_node(declarator)
+    if name_node is None:
+        return "unnamed"
+    current = name_node.parent()
+    pointer_depth = 0
+    while current is not None:
+        current_kind = _node_kind(current)
+        if current_kind == "pointer_declarator":
+            pointer_depth += 1
+        elif current_kind == "function_declarator":
+            if pointer_depth == 1 or (is_parameter and pointer_depth == 0):
+                return "function_pointer"
+            return "function" if pointer_depth == 0 else "value"
+        elif current_kind in {
+            "declaration",
+            "function_definition",
+            "optional_parameter_declaration",
+            "parameter_declaration",
+        }:
+            return "value"
+        current = current.parent()
+    return "value"
+
+
+def _function_value_references(
+    expression: Any,
+    source: bytes,
+    *,
+    allow_bare: bool,
+) -> tuple[SymbolReference, ...]:
+    reference = _symbol_reference_from_expression(
+        expression,
+        source,
+        allow_bare=allow_bare,
+    )
+    if reference is not None:
+        return (reference,)
+    if expression is None or _node_kind(expression) != "conditional_expression":
+        return ()
+    branches = (
+        _node_child_by_field_name(expression, "consequence"),
+        _node_child_by_field_name(expression, "alternative"),
+    )
+    return tuple(
+        reference
+        for branch in branches
+        for reference in _function_value_references(
+            branch,
+            source,
+            allow_bare=allow_bare,
+        )
+    )
+
+
+def _symbol_reference_from_expression(
+    expression: Any,
+    source: bytes,
+    *,
+    allow_bare: bool,
+) -> SymbolReference | None:
+    if expression is None:
+        return None
+    current = expression
+    while current is not None and _node_kind(current) == "parenthesized_expression":
+        values = _expression_children(current)
+        current = values[0] if len(values) == 1 else None
+    if current is None:
+        return None
+    addressed = False
+    if _node_kind(current) == "pointer_expression":
+        operator = _node_child_by_field_name(current, "operator")
+        if _node_text(operator, source).strip() != "&":
+            return None
+        addressed = True
+        current = _node_child_by_field_name(current, "argument")
+    if current is None:
+        return None
+    if not allow_bare and not addressed:
+        return None
+    if _node_kind(current) not in {"identifier", "qualified_identifier"}:
+        return None
+    symbol = _normalized_syntax(_node_text(current, source))
+    if not symbol:
+        return None
+    return SymbolReference(
+        symbol=symbol,
+        line=_node_line(current),
+        start_byte=int(current.start_byte()),
+        end_byte=int(current.end_byte()),
+    )
 
 
 def _first_argument(call_node: Any) -> Any | None:
@@ -624,3 +1191,20 @@ def _first_argument(call_node: Any) -> Any | None:
         if _node_kind(child) not in {"(", ")", ",", "comment"}:
             return child
     return None
+
+
+def _has_parse_error_between_declarator_and_body(
+    function_node: Any,
+    declarator: Any,
+    body: Any,
+) -> bool:
+    if declarator is None or body is None:
+        return False
+    declarator_end = int(declarator.end_byte())
+    body_start = int(body.start_byte())
+    return any(
+        child.is_error()
+        and declarator_end <= int(child.start_byte())
+        and int(child.end_byte()) <= body_start
+        for child in _node_children(function_node)
+    )
