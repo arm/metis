@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -199,14 +200,19 @@ class MetisEngine:
         self._simple_llm_triage = builtin_execution.simple_llm_triage
         self._config.memory_service = self.capabilities.get("memory")
 
-    def init_codebase(self) -> dict[str, object]:
+    @contextlib.contextmanager
+    def _execution_span(self, name: str, attributes: dict[str, object] | None = None):
         with (
             bind_runlog(self._runlog),
-            runlog.span("execution", "initialize") as execution_span,
+            runlog.span("execution", name, attributes) as span,
         ):
+            yield span
+
+    def init_codebase(self) -> dict[str, object]:
+        with self._execution_span("initialize") as span:
             result = self.execution.execute_initialize()
             initialization = _require_execution_outputs(result)["initialize"]
-            execution_span.end(
+            span.end(
                 status=result.status.value,
                 attributes={
                     "outputs": initialization,
@@ -222,20 +228,13 @@ class MetisEngine:
         target: str | None = None,
         callbacks: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        with (
-            bind_runlog(self._runlog),
-            runlog.span(
-                "execution",
-                "review",
-                {"mode": mode, "target": target},
-            ) as execution_span,
-        ):
+        with self._execution_span("review", {"mode": mode, "target": target}) as span:
             result = self.execution.execute_review(
                 ReviewCommand(mode=mode, target=target),
                 callbacks=callbacks,
             )
             review = _require_execution_outputs(result)["review"]
-            execution_span.end(
+            span.end(
                 status=result.status.value,
                 attributes={"outputs": review, "diagnostics": result.diagnostics},
             )
@@ -247,20 +246,15 @@ class MetisEngine:
         include_triaged: bool | None = None,
         callbacks: dict[str, object] | None = None,
     ) -> ExecutionResult:
-        with (
-            bind_runlog(self._runlog),
-            runlog.span(
-                "execution",
-                "configured_graph",
-                {"include_triaged": include_triaged},
-            ) as execution_span,
-        ):
+        with self._execution_span(
+            "configured_graph", {"include_triaged": include_triaged}
+        ) as span:
             result = self.execution.execute_graph(
                 include_triaged=include_triaged,
                 callbacks=callbacks,
             )
             outputs = _require_execution_outputs(result)
-            execution_span.end(
+            span.end(
                 status=result.status.value,
                 attributes={"outputs": outputs, "diagnostics": result.diagnostics},
             )
@@ -349,10 +343,7 @@ class MetisEngine:
         return self._state.ask_graph
 
     def ask_question(self, question):
-        with (
-            bind_runlog(self._runlog),
-            runlog.span("execution", "ask", {"question": question}) as execution_span,
-        ):
+        with self._execution_span("ask", {"question": question}) as span:
             retriever_code, retriever_docs = self._index_capability().get_retrievers()
             logger.info("Querying codebase for your question...")
             req = {
@@ -361,7 +352,7 @@ class MetisEngine:
                 "retriever_docs": retriever_docs,
             }
             result = self._get_ask_graph().ask(req)
-            execution_span.end(attributes={"outputs": result})
+            span.end(attributes={"outputs": result})
             return result
 
     def execute_triage(
@@ -374,14 +365,9 @@ class MetisEngine:
         checkpoint_path: str | None = None,
         options: TriageOptions | None = None,
     ) -> dict:
-        with (
-            bind_runlog(self._runlog),
-            runlog.span(
-                "execution",
-                "triage",
-                {"include_triaged": bool(options and options.include_triaged)},
-            ) as execution_span,
-        ):
+        with self._execution_span(
+            "triage", {"include_triaged": bool(options and options.include_triaged)}
+        ) as span:
             options = options or self._triage_options
             if checkpoint_callback is None and checkpoint_path is not None:
                 if self._triage_service is None:
@@ -400,7 +386,7 @@ class MetisEngine:
                 },
             )
             triage = _require_execution_outputs(result)["triage"]
-            execution_span.end(
+            span.end(
                 status=result.status.value,
                 attributes={"outputs": triage, "diagnostics": result.diagnostics},
             )
