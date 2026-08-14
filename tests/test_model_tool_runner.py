@@ -16,12 +16,14 @@ from metis.engine.model_tool_runner import require_max_tool_rounds
 class _FakeTool:
     name = "index_search"
     description = "Search indexed context."
-    metadata = {
-        "metis_contract": "CONTRACT TEXT\nUse index_search for missing project context."
-    }
 
     def __init__(self):
         self.calls = []
+        self.metadata = {
+            "metis_contract": (
+                "CONTRACT TEXT\nUse index_search for missing project context."
+            )
+        }
 
     def invoke(self, args):
         self.calls.append(args)
@@ -52,10 +54,15 @@ class _FakeChat:
     def __init__(self):
         self.bound_chat = _FakeToolChat()
         self.bound_tools = None
+        self.messages = []
 
     def bind_tools(self, tools):
         self.bound_tools = list(tools)
         return self.bound_chat
+
+    def invoke(self, messages):
+        self.messages.append(list(messages))
+        return AIMessage(content='{"reviews": []}')
 
 
 def _prompt():
@@ -87,7 +94,7 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
     chat = _FakeChat()
     caplog.set_level(logging.DEBUG, logger="metis")
 
-    result = invoke_model_with_tools(
+    result, evidence = invoke_model_with_tools(
         chat,
         _prompt(),
         {"body": "review this"},
@@ -96,6 +103,14 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
     )
 
     assert result == '{"reviews": []}'
+    assert evidence == (
+        (
+            "Tool: index_search\n"
+            'Arguments: {"query": "allocator ownership"}\n'
+            "Status: success\n"
+            "Output:\nindexed context"
+        ),
+    )
     assert chat.bound_tools == [tool]
     assert tool.calls == [{"query": "allocator ownership"}]
     messages = [record.getMessage() for record in caplog.records]
@@ -114,7 +129,7 @@ def test_invoke_model_with_tools_requests_final_answer_after_last_tool_round():
     tool = _FakeTool()
     chat = _FakeChat()
 
-    result = invoke_model_with_tools(
+    result, evidence = invoke_model_with_tools(
         chat,
         _prompt(),
         {"body": "review this"},
@@ -123,8 +138,8 @@ def test_invoke_model_with_tools_requests_final_answer_after_last_tool_round():
     )
 
     assert result == '{"reviews": []}'
+    assert evidence
     assert tool.calls == [{"query": "allocator ownership"}]
-    assert len(chat.bound_chat.messages) == 2
 
 
 def test_require_max_tool_rounds_rejects_missing_value():

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from typing import Callable
 
+from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -65,14 +66,28 @@ def _json_chat_prompt(
     system_prompt: str,
     user_prompt: str,
     model_tools: tuple[Any, ...] = (),
+    tool_evidence: tuple[str, ...] = (),
 ) -> ChatPromptTemplate:
-    rendered_system_prompt = model_tool_system_prompt(system_prompt, model_tools)
-    return ChatPromptTemplate.from_messages(
-        [
-            SystemMessage(content=rendered_system_prompt),
-            ("user", user_prompt),
-        ]
+    rendered_system_prompt = model_tool_system_prompt(
+        system_prompt,
+        model_tools,
+        tools_available=not tool_evidence,
     )
+    messages: list[Any] = [
+        SystemMessage(content=rendered_system_prompt),
+        ("user", user_prompt),
+    ]
+    if tool_evidence:
+        messages.append(
+            HumanMessage(
+                content=(
+                    "BEGIN UNTRUSTED TOOL EVIDENCE\n"
+                    + "\n\n".join(tool_evidence)
+                    + "\nEND UNTRUSTED TOOL EVIDENCE"
+                )
+            )
+        )
+    return ChatPromptTemplate.from_messages(messages)
 
 
 class JsonPromptRunner:
@@ -122,6 +137,7 @@ class JsonPromptRunner:
     def _invoke_attempts(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
         confirmed_output_limit = False
+        tool_evidence: tuple[str, ...] = ()
         max_tool_rounds = (
             require_max_tool_rounds(request.max_tool_rounds)
             if request.model_tools
@@ -160,15 +176,17 @@ class JsonPromptRunner:
                     if request.temperature is not None:
                         params["temperature"] = request.temperature
                     chat = self._llm_provider.get_chat_model(**params)
+                    active_tools = request.model_tools if not tool_evidence else ()
                     prompt = _json_chat_prompt(
                         request.system_prompt,
                         request.user_prompt,
                         request.model_tools,
+                        tool_evidence,
                     )
                     used_structured_output = False
                     structured_output = getattr(chat, "with_structured_output", None)
                     if (
-                        not request.model_tools
+                        not active_tools
                         and request.response_model is not None
                         and callable(structured_output)
                     ):
@@ -202,16 +220,18 @@ class JsonPromptRunner:
                         ):
                             confirmed_output_limit = True
                     if parsed is None and not used_structured_output:
-                        if request.model_tools:
+                        if active_tools:
                             assert max_tool_rounds is not None
-                            response_text = invoke_model_with_tools(
+                            response_text, observed_evidence = invoke_model_with_tools(
                                 chat,
                                 prompt,
                                 request.variables,
-                                request.model_tools,
+                                active_tools,
                                 max_tool_rounds=max_tool_rounds,
                             )
                             parsed = request.parse(response_text)
+                            if parsed is None:
+                                tool_evidence = observed_evidence
                         else:
                             response = (prompt | chat).invoke(request.variables)
                             response_text = StrOutputParser().invoke(response)

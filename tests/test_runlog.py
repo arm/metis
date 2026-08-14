@@ -514,7 +514,7 @@ def test_model_tool_loop_records_tool_span(tmp_path):
 
     prompt = ChatPromptTemplate.from_messages([("user", "{question}")])
     with runlog.open_runlog(_exact_config(tmp_path)) as session:
-        result = invoke_model_with_tools(
+        result, evidence = invoke_model_with_tools(
             Chat(),
             prompt,
             {"question": "find it"},
@@ -523,6 +523,7 @@ def test_model_tool_loop_records_tool_span(tmp_path):
         )
 
     assert result == "final"
+    assert evidence
     records = _records(session)
     loop = next(
         record
