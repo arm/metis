@@ -84,8 +84,6 @@ class UsageCallbackHandler(BaseCallbackHandler):
 
     def on_llm_end(self, response, **kwargs: Any) -> Any:
         scope_id = current_scope()
-        if not scope_id:
-            return None
         input_tokens, output_tokens, total_tokens = _extract_usage_metadata(response)
         if input_tokens <= 0 and output_tokens <= 0 and total_tokens <= 0:
             return None

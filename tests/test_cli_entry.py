@@ -3,6 +3,7 @@
 
 from contextlib import nullcontext
 from pathlib import Path
+import json
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -572,3 +573,46 @@ def test_build_engine_allows_graphs_without_index_stage_to_omit_embeddings(
     engine, _backend = entry.build_engine(args, runtime)
 
     assert engine.kwargs["embedding_provider"] is None
+
+
+def test_main_writes_workflow_runlog_bundle(monkeypatch, tmp_path):
+    trace_path = tmp_path / "workflow.ndjson"
+
+    class Engine:
+        def execute_graph(self, **_kwargs):
+            return ExecutionResult(ExecutionStatus.OK, {}, ())
+
+    def build_engine(args, _runtime):
+        assert args._metis_runlog.ndjson_path == trace_path.resolve()
+        return Engine(), None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "metis",
+            "--non-interactive",
+            "--log-workflow-debug-path",
+            str(trace_path),
+        ],
+    )
+    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
+    monkeypatch.setattr(entry, "build_engine", build_engine)
+    monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
+    monkeypatch.setattr(entry, "print_console", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
+
+    entry.main()
+
+    records = [
+        json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[0]["kind"] == "run"
+    command = next(
+        record
+        for record in records
+        if record["record"] == "span.start" and record.get("kind") == "command"
+    )
+    assert command["name"] == "execution_graph"
+    assert records[-1]["kind"] == "run"
+    assert records[-1]["status"] == "ok"

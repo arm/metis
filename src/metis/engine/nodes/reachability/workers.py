@@ -11,6 +11,7 @@ import threading
 from typing import Any, TypeVar
 
 from metis.usage import submit_with_current_context
+from metis import runlog
 
 logger = logging.getLogger("metis")
 
@@ -98,6 +99,18 @@ def run_reachability_jobs(
     def key_for(job):
         return result_key(job) if result_key else job
 
+    def invoke_worker(job):
+        key = key_for(job)
+        with runlog.span(
+            "task",
+            label,
+            {"kind": "reachability_job", "label": label, "key": key},
+        ) as task_span:
+            runlog.bump("tasks")
+            result = worker(job)
+            task_span.end(attributes={"result": result})
+            return result
+
     def collect(job, completed, result_func):
         key = key_for(job)
         try:
@@ -117,12 +130,13 @@ def run_reachability_jobs(
 
     if worker_count == 1:
         for completed, job in enumerate(job_list, start=1):
-            collect(job, completed, lambda job=job: worker(job))
+            collect(job, completed, lambda job=job: invoke_worker(job))
         return results
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
-            submit_with_current_context(executor, worker, job): job for job in job_list
+            submit_with_current_context(executor, invoke_worker, job): job
+            for job in job_list
         }
         for completed, future in enumerate(as_completed(futures), start=1):
             collect(futures[future], completed, future.result)

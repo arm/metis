@@ -11,6 +11,8 @@ from langgraph.graph import END, StateGraph
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.utils import parse_json_output
+from metis import runlog
+from metis.runlog.workflow import traced_step
 
 from metis.engine.stages.triage.models import TriageDecisionModel
 from metis.engine.stages.triage.models import TriageRequest
@@ -113,13 +115,21 @@ class TriageWorkflow:
         graph = StateGraph(cast(Any, TriageState))
         graph.add_node(
             "collect_evidence",
-            partial(triage_node_collect_evidence, toolbox=self.toolbox),
+            traced_step(
+                "simple_llm_triage",
+                "collect_evidence",
+                partial(triage_node_collect_evidence, toolbox=self.toolbox),
+            ),
         )
         graph.add_node(
             "triage",
-            partial(
-                triage_node_llm,
-                invoke_decision=self._invoke_triage_model,
+            traced_step(
+                "simple_llm_triage",
+                "triage",
+                partial(
+                    triage_node_llm,
+                    invoke_decision=self._invoke_triage_model,
+                ),
             ),
         )
         graph.set_entry_point("collect_evidence")
@@ -129,24 +139,50 @@ class TriageWorkflow:
         return self._app
 
     def triage(self, request: TriageRequest) -> dict:
-        out = self._get_app().invoke(
+        state = {
+            "finding_message": request["finding_message"],
+            "finding_file_path": request["finding_file_path"],
+            "finding_line": request["finding_line"],
+            "finding_rule_id": request["finding_rule_id"],
+            "finding_snippet": request["finding_snippet"],
+            "finding_source_tool": request.get("finding_source_tool", ""),
+            "finding_is_metis": bool(request.get("finding_is_metis", False)),
+            "finding_explanation": request.get("finding_explanation", ""),
+            "triage_language": request.get("triage_language", ""),
+            "triage_language_guidance": request.get("triage_language_guidance", ""),
+            "threat_model_context": request.get("threat_model_context", []),
+            "debug_callback": request.get("debug_callback"),
+            "triage_system_prompt": self.triage_system_prompt,
+            "triage_decision_prompt": self.triage_decision_prompt,
+        }
+        with runlog.span(
+            "workflow",
+            "simple_llm_triage",
             {
-                "finding_message": request["finding_message"],
-                "finding_file_path": request["finding_file_path"],
-                "finding_line": request["finding_line"],
-                "finding_rule_id": request["finding_rule_id"],
-                "finding_snippet": request["finding_snippet"],
-                "finding_source_tool": request.get("finding_source_tool", ""),
-                "finding_is_metis": bool(request.get("finding_is_metis", False)),
-                "finding_explanation": request.get("finding_explanation", ""),
-                "triage_language": request.get("triage_language", ""),
-                "triage_language_guidance": request.get("triage_language_guidance", ""),
-                "threat_model_context": request.get("threat_model_context", []),
-                "debug_callback": request.get("debug_callback"),
-                "triage_system_prompt": self.triage_system_prompt,
-                "triage_decision_prompt": self.triage_decision_prompt,
-            }
-        )
+                "nodes": ["collect_evidence", "triage"],
+                "edges": [
+                    ["__start__", "collect_evidence"],
+                    ["collect_evidence", "triage"],
+                    ["triage", "__end__"],
+                ],
+                "initial_state": {
+                    key: value
+                    for key, value in state.items()
+                    if key != "debug_callback"
+                },
+            },
+        ) as workflow_span:
+            runlog.bump("workflow_runs")
+            out = self._get_app().invoke(state)
+            workflow_span.end(
+                attributes={
+                    "final_state": {
+                        key: value
+                        for key, value in out.items()
+                        if key != "debug_callback"
+                    }
+                }
+            )
         try:
             validated = TriageDecisionModel(
                 status=out.get("decision_status", ""),
@@ -188,6 +224,15 @@ class TriageWorkflow:
                 "deterministic adjudicator marked evidence as insufficiently stable"
             ]
         reason = compose_final_reason(status, model_status, reason, reason_codes)
+        runlog.event(
+            "decision",
+            {
+                "kind": "triage_adjudication",
+                "model_status": model_status,
+                "final_status": status,
+                "reason_codes": reason_codes,
+            },
+        )
         return {
             "status": status,
             "reason": reason,

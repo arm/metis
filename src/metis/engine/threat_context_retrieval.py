@@ -9,6 +9,8 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from metis.memory import MemoryService
+from metis import runlog
+
 
 from .nodes.threat_model import THREAT_MODEL_NAMESPACE
 
@@ -17,6 +19,21 @@ def get_threat_model_context(
     service: MemoryService | None,
     *,
     path: str = "",
+) -> list[dict[str, Any]]:
+    with runlog.span(
+        "memory",
+        "threat_model_context",
+        {"operation": "retrieve", "path": path},
+    ) as memory_span:
+        records = _get_threat_model_context(service, path=path)
+        memory_span.end(attributes={"count": len(records), "records": records})
+        return records
+
+
+def _get_threat_model_context(
+    service: MemoryService | None,
+    *,
+    path: str,
 ) -> list[dict[str, Any]]:
     if service is None:
         return []
