@@ -9,7 +9,8 @@ import os
 import pathspec
 from llama_index.core.node_parser import SentenceSplitter
 
-from .runtime import EngineConfig, EngineState
+from .runtime import EngineConfig
+from .runtime import EngineState
 
 logger = logging.getLogger("metis")
 
@@ -155,34 +156,59 @@ class EngineRepository:
         if dir_path:
             base_path = os.path.join(base_path, dir_path)
         metisignore_spec = self.load_metisignore()
-        include_spec = None
-        if self._config.review_code_include_paths:
-            include_spec = pathspec.GitIgnoreSpec.from_lines(
-                self._config.review_code_include_paths
-            )
-        exclude_spec = None
-        if self._config.review_code_exclude_paths:
-            exclude_spec = pathspec.GitIgnoreSpec.from_lines(
-                self._config.review_code_exclude_paths
-            )
         file_list = []
         for root, _, files in os.walk(base_path):
             for file in files:
                 full_path = os.path.join(root, file)
-                if include_suffixed_sources:
-                    if self.get_language_name_for_path(full_path) is None:
-                        continue
-                elif (
-                    os.path.splitext(file)[1].lower()
-                    not in self.get_all_supported_code_extensions()
+                if not self.is_code_file_selected(
+                    full_path,
+                    include_suffixed_sources=include_suffixed_sources,
+                    metisignore_spec=metisignore_spec,
                 ):
-                    continue
-                rel_path = self.normalize_match_path(full_path)
-                if metisignore_spec and metisignore_spec.match_file(rel_path):
-                    continue
-                if include_spec and not include_spec.match_file(rel_path):
-                    continue
-                if exclude_spec and exclude_spec.match_file(rel_path):
                     continue
                 file_list.append(full_path)
         return file_list
+
+    def is_code_file_selected(
+        self,
+        path: str,
+        *,
+        include_suffixed_sources: bool = False,
+        metisignore_spec: pathspec.GitIgnoreSpec | None = None,
+    ) -> bool:
+        base_path = os.path.abspath(self._config.codebase_path)
+        full_path = (
+            os.path.abspath(path)
+            if os.path.isabs(path)
+            else os.path.abspath(os.path.join(base_path, path))
+        )
+        try:
+            if os.path.commonpath((base_path, full_path)) != base_path:
+                return False
+        except ValueError:
+            return False
+        if not os.path.isfile(full_path):
+            return False
+        if include_suffixed_sources:
+            if self.get_language_name_for_path(full_path) is None:
+                return False
+        elif (
+            os.path.splitext(full_path)[1].lower()
+            not in self.get_all_supported_code_extensions()
+        ):
+            return False
+        if metisignore_spec is None:
+            metisignore_spec = self.load_metisignore()
+        rel_path = self.normalize_match_path(full_path)
+        if metisignore_spec and metisignore_spec.match_file(rel_path):
+            return False
+        include_paths = self._config.review_code_include_paths
+        if include_paths and not pathspec.GitIgnoreSpec.from_lines(
+            include_paths
+        ).match_file(rel_path):
+            return False
+        exclude_paths = self._config.review_code_exclude_paths
+        return not (
+            exclude_paths
+            and pathspec.GitIgnoreSpec.from_lines(exclude_paths).match_file(rel_path)
+        )

@@ -7,44 +7,45 @@ import contextlib
 import logging
 from pathlib import Path
 from typing import Any
-from typing import cast
 from typing import Literal
+from typing import cast
 
+from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
 from metis.configuration import load_execution_config
 from metis.configuration import load_plugin_config
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
 from metis.plugins.registry import LanguagePluginRegistry
-from metis.usage import UsageRuntime
 from metis.runlog import RunLogSession
 from metis.runlog import bind_runlog
-from metis import runlog
+from metis.runtime_settings import CapabilityRuntimeSettings
+from metis.runtime_settings import TriageOptions
+from metis.usage import UsageRuntime
 from metis.vector_store.base import BaseVectorStore
 
 from .ask import AskGraph
-from .execution import ExecutionResult
-from .execution import ExecutionStatus
-from .nodes.codegraph import CodeGraphConfiguration
-from .codegraph import CodeGraphReference
-from .nodes.codegraph import CodeGraphService
-from .nodes.codegraph.provider import discover_provider_factories
-from .nodes.codegraph.semantics import CodeGraphSemanticsCatalog
-from .nodes.builtins import build_builtin_execution
-from .capabilities.indexing import IndexingService
-from .nodes.reachability.options import ReachabilityConfiguration
-from .nodes.simple_llm_review.graph import ReviewGraph
-from .repository import EngineRepository
-from .runtime import EngineConfig, EngineState
-from .stages.configuration import ExecutionConfiguration
-from .stages.review.models import ReviewCommand
-from metis.runtime_settings import CapabilityRuntimeSettings
-from metis.runtime_settings import TriageOptions
-from .capabilities.engine import build_engine_capabilities
 from .capabilities.builtins import builtin_capability_registrations
 from .capabilities.catalog import CapabilityCatalog
 from .capabilities.contracts import CapabilityContext
+from .capabilities.engine import build_engine_capabilities
 from .capabilities.index import IndexCapability
+from .capabilities.indexing import IndexingService
+from .codegraph import CodeGraphReference
+from .execution import ExecutionResult
+from .execution import ExecutionStatus
+from .nodes.builtins import build_builtin_execution
+from .nodes.codegraph import CodeGraphConfiguration
+from .nodes.codegraph import CodeGraphService
+from .nodes.codegraph.provider import discover_provider_factories
+from .nodes.codegraph.semantics import CodeGraphSemanticsCatalog
+from .nodes.reachability.options import ReachabilityConfiguration
+from .nodes.simple_llm_review.graph import ReviewGraph
+from .repository import EngineRepository
+from .runtime import EngineConfig
+from .runtime import EngineState
+from .stages.configuration import ExecutionConfiguration
+from .stages.review.models import ReviewCommand
 from .tools.index import index_model_tools
 
 logger = logging.getLogger("metis")
@@ -197,7 +198,7 @@ class MetisEngine:
             raise
         self.execution = builtin_execution.execution
         self._triage_service = builtin_execution.triage_service
-        self._simple_llm_triage = builtin_execution.simple_llm_triage
+        self._triage_classifier = builtin_execution.triage_classifier
         self._config.memory_service = self.capabilities.get("memory")
 
     @contextlib.contextmanager
@@ -393,8 +394,8 @@ class MetisEngine:
             return _execution_value(triage)
 
     def close(self):
-        if self._simple_llm_triage is not None:
-            self._simple_llm_triage.close()
+        if self._triage_classifier is not None:
+            self._triage_classifier.close()
         self.capabilities.close()
 
 

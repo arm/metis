@@ -133,7 +133,6 @@ def run_stage(
                     node_status = result.status
                     if result.status is ExecutionStatus.ERROR:
                         failed.add(node.name)
-                        status = ExecutionStatus.ERROR
                     else:
                         outputs[node.name] = _validate_outputs(
                             node.registration,
@@ -156,7 +155,6 @@ def run_stage(
                         )
                     )
                     failed.add(node.name)
-                    status = ExecutionStatus.ERROR
                 _progress(
                     context,
                     {
@@ -178,6 +176,24 @@ def run_stage(
                     },
                     exc=node_error,
                 )
+        if failed:
+            tolerated_failures = {
+                source.partition(".")[0]
+                for node in planned.nodes
+                for binding in node.input_bindings.values()
+                if isinstance(binding, tuple)
+                for source in binding
+                if not source.startswith("$inputs.")
+            }
+            output_producers = {
+                source.partition(".")[0] for source in planned.output_bindings.values()
+            }
+            fatal_failures = (failed - tolerated_failures) | (failed & output_producers)
+            status = (
+                ExecutionStatus.ERROR
+                if fatal_failures
+                else ExecutionStatus.INCONCLUSIVE
+            )
         if not planned.output_bindings:
             stage_outputs: dict[str, object] = {
                 name: _single_or_mapping(values) for name, values in outputs.items()
@@ -221,7 +237,9 @@ def _resolve_inputs(
             value = initial_inputs.get(input_name)
         elif isinstance(source, tuple):
             value = tuple(
-                _resolve_source(item, outputs, initial_inputs) for item in source
+                _resolve_source(item, outputs, initial_inputs)
+                for item in source
+                if item.startswith("$inputs.") or _source_is_available(item, outputs)
             )
         elif source.startswith("$inputs."):
             value = initial_inputs[source.removeprefix("$inputs.")]
@@ -231,6 +249,12 @@ def _resolve_inputs(
             value = None
         else:
             value = _resolve_source(source, outputs, initial_inputs)
+        if (
+            get_origin(annotation) is tuple
+            and not value
+            and not annotation_allows_none(annotation)
+        ):
+            raise ValueError(f"input {input_name!r} requires at least one value")
         resolved[input_name] = _validate_value(annotation, value)
     return resolved
 

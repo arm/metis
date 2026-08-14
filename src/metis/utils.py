@@ -141,30 +141,68 @@ def split_snippet(
     token_counter: TokenCounter | None = None,
 ) -> list[tuple[str, int]]:
     """Split text into token-bounded chunks, returning (chunk, start_line) pairs."""
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
     counter = token_counter or count_tokens
     lines = snippet.splitlines(keepends=True)
-    chunks: list[tuple[str, int]] = []
-    current_chunk = ""
-    current_start = 1
-    next_start = 1
-    current_token_count = 0
+    parts: list[tuple[str, int]] = []
+    for line_number, line in enumerate(lines, start=1):
+        parts.extend(
+            (part, line_number)
+            for part in _split_token_bounded_text(line, max_tokens, counter)
+        )
+    return _partition_token_bounded_parts(parts, max_tokens, counter)
 
-    for line in lines:
-        line_token_count = counter(line)
-        if current_token_count + line_token_count > max_tokens:
-            if current_chunk:
-                chunks.append((current_chunk, current_start))
-            current_chunk = line
-            current_start = next_start
-            current_token_count = line_token_count
-        else:
-            current_chunk += line
-            current_token_count += line_token_count
-        next_start += 1
 
-    if current_chunk:
-        chunks.append((current_chunk, current_start))
-    return chunks
+def _partition_token_bounded_parts(
+    parts: list[tuple[str, int]],
+    max_tokens: int,
+    token_counter: TokenCounter,
+) -> list[tuple[str, int]]:
+    if not parts:
+        return []
+    combined = "".join(text for text, _line in parts)
+    if token_counter(combined) <= max_tokens:
+        return [(combined, parts[0][1])]
+    if len(parts) == 1:
+        raise ValueError("max_tokens cannot hold one source fragment")
+    midpoint = len(parts) // 2
+    return [
+        *_partition_token_bounded_parts(
+            parts[:midpoint],
+            max_tokens,
+            token_counter,
+        ),
+        *_partition_token_bounded_parts(
+            parts[midpoint:],
+            max_tokens,
+            token_counter,
+        ),
+    ]
+
+
+def _split_token_bounded_text(
+    text: str,
+    max_tokens: int,
+    token_counter: TokenCounter,
+) -> list[str]:
+    """Split one source line without dropping text or exceeding a token limit."""
+    if not text or token_counter(text) <= max_tokens:
+        return [text] if text else []
+
+    parts: list[str] = []
+    pending = [text]
+    while pending:
+        candidate = pending.pop()
+        if token_counter(candidate) <= max_tokens:
+            parts.append(candidate)
+            continue
+        if len(candidate) == 1:
+            raise ValueError("max_tokens cannot hold one source character")
+        midpoint = len(candidate) // 2
+        pending.append(candidate[midpoint:])
+        pending.append(candidate[:midpoint])
+    return parts
 
 
 def parse_json_output(model_output):

@@ -4,35 +4,35 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
 from typing import TYPE_CHECKING
+from typing import cast
 
+from metis.engine.codegraph import CodeGraphDiagnostic
+from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
-from metis.engine.codegraph import CodeGraphDiagnostic
-from metis.engine.codegraph import CodeGraphReference
 from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
-from metis.engine.runtime import EngineConfig
 from metis.engine.repository import EngineRepository
+from metis.engine.runtime import EngineConfig
+from metis.engine.stages.review.execution import combine_review_runs
+from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
-from metis.engine.stages.review.execution import combine_review_runs
-from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.scope import select_review_targets
 from metis.utils import resolve_path_within_root
 
-from .aggregation import ReviewResultAggregator
 from .review_output import group_findings_as_reviews
 from .review_output import reviews_for_findings
 
 if TYPE_CHECKING:
     from metis.engine.capabilities.index import IndexCapability
+    from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
     from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
     from metis.memory import MemoryService
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_node(review_service: "ReachabilityReviewService") -> NodeRegistration:
+def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
         reference = cast(CodeGraphReference, invocation.inputs["codegraph"])
         review = review_service.run_review(
@@ -64,7 +64,10 @@ def create_node(review_service: "ReachabilityReviewService") -> NodeRegistration
         name="reachability",
         stage="review",
         configuration=EmptyNodeConfiguration,
-        inputs={"request": ReviewCommand, "codegraph": CodeGraphReference},
+        inputs={
+            "request": ReviewCommand,
+            "codegraph": CodeGraphReference,
+        },
         outputs={"review": ReviewRun},
         execute=execute,
         capabilities={
@@ -207,31 +210,50 @@ class ReachabilityReviewService:
         provider_diagnostics: list[CodeGraphDiagnostic] = []
         try:
             if command.mode == "file":
-                reviewed = self.file_review(
+                reviewed, analysis = self.file_review(
                     files[0],
                     settings=self._settings,
                     progress_callback=progress_callback,
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
+                    memory_service=memory_service,
                 )
                 raw = {"reviews": [] if reviewed is None else [reviewed]}
             else:
-                raw = {
-                    "reviews": self.codebase_reviews(
-                        files=files,
-                        settings=self._settings,
-                        progress_callback=progress_callback,
-                        diagnostic_callback=provider_diagnostics.append,
-                        codegraph=codegraph,
-                    )
-                }
-            result = StandardReviewResult.model_validate(
-                self.aggregate_results(
-                    raw,
+                codebase_groups, analysis = self.codebase_reviews(
+                    files=files,
                     settings=self._settings,
+                    progress_callback=progress_callback,
+                    diagnostic_callback=provider_diagnostics.append,
+                    codegraph=codegraph,
                     memory_service=memory_service,
-                    deduplicate=command.mode == "file",
                 )
+                raw = {"reviews": codebase_groups}
+            result = StandardReviewResult.model_validate(raw)
+            codegraph_failures = (
+                tuple(dict.fromkeys(analysis.codegraph_failures))
+                if analysis is not None
+                else ()
+            )
+            if codegraph_failures:
+                failure_count = len(codegraph_failures)
+                target_label = "target" if failure_count == 1 else "targets"
+                diagnostics.append(
+                    ReviewDiagnostic(
+                        "review.frontier_analysis_partial",
+                        "Reachability review could not fully analyze "
+                        f"{failure_count} selected {target_label}.",
+                        "warning",
+                    )
+                )
+            review_failures = analysis.review_failures if analysis is not None else ()
+            diagnostics.extend(
+                ReviewDiagnostic(
+                    f"review.frontier_failure.discovery.{failure.kind}",
+                    f"Reachability discovery failure for {failure.function_id}.",
+                    "warning",
+                )
+                for failure in review_failures
             )
         except RuntimeError as exc:
             diagnostics.append(ReviewDiagnostic("review.reachability_failed", str(exc)))
@@ -257,17 +279,12 @@ class ReachabilityReviewService:
         *,
         settings=None,
         progress_callback=None,
-        codebase=False,
     ):
         settings = dict(settings or {})
-        if codebase:
-            settings.setdefault("lens_profile", "review")
         if progress_callback is not None:
             settings["progress_callback"] = progress_callback
-        return ReachabilityReviewOptions.from_kwargs(
-            settings,
-            default_workers=self._config.max_workers,
-        )
+        settings.setdefault("max_workers", self._config.max_workers)
+        return ReachabilityReviewOptions(**settings)
 
     def codebase_reviews(
         self,
@@ -277,22 +294,25 @@ class ReachabilityReviewService:
         progress_callback=None,
         diagnostic_callback=None,
         codegraph=None,
-    ):
+        memory_service: MemoryService | None = None,
+    ) -> tuple[list[dict[str, object]], ReachabilityAnalysis]:
         options = self.review_options(
             settings=settings,
             progress_callback=progress_callback,
-            codebase=True,
         )
         analysis = self._service.analyze_codebase(
             options=options,
             files=files,
             codegraph=codegraph,
             diagnostic_callback=diagnostic_callback,
+            memory_service=memory_service,
         )
-        return group_findings_as_reviews(
-            analysis.findings,
-            analysis.graph,
-            codebase_path=self._config.codebase_path,
+        return (
+            group_findings_as_reviews(
+                analysis.findings,
+                codebase_path=self._config.codebase_path,
+            ),
+            analysis,
         )
 
     def file_review(
@@ -303,7 +323,8 @@ class ReachabilityReviewService:
         progress_callback=None,
         diagnostic_callback=None,
         codegraph=None,
-    ):
+        memory_service: MemoryService | None = None,
+    ) -> tuple[dict[str, object] | None, ReachabilityAnalysis | None]:
         options = self.review_options(
             settings=settings,
             progress_callback=progress_callback,
@@ -313,31 +334,18 @@ class ReachabilityReviewService:
             options=options,
             codegraph=codegraph,
             diagnostic_callback=diagnostic_callback,
+            memory_service=memory_service,
         )
         if analysis is None:
-            return None
-        return {
-            "file": analysis.target_file,
-            "file_path": analysis.target_path,
-            "reviews": reviews_for_findings(
-                analysis.findings,
-                analysis.graph,
-                codebase_path=self._config.codebase_path,
-                target_file=analysis.target_file or "",
-            ),
-        }
-
-    def aggregate_results(
-        self,
-        results: object,
-        *,
-        settings: dict[str, object] | None = None,
-        memory_service: MemoryService | None = None,
-        deduplicate: bool = True,
-    ) -> object:
-        return ReviewResultAggregator(
-            self._config,
-            settings or {},
-            final_adjudicator=self._service.adjudicate_final_findings,
-            memory_service=memory_service,
-        ).aggregate(results, deduplicate=deduplicate)
+            return None, None
+        return (
+            {
+                "file": analysis.target_file,
+                "file_path": analysis.target_path,
+                "reviews": reviews_for_findings(
+                    analysis.findings,
+                    codebase_path=self._config.codebase_path,
+                ),
+            },
+            analysis,
+        )

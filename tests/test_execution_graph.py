@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock
 from dataclasses import replace
-from functools import partial
-import logging
 from typing import Any
 from typing import Literal
+from unittest.mock import Mock
 
 import pytest
 from pydantic import BaseModel
@@ -15,35 +13,30 @@ from pydantic import ConfigDict
 from metis.configuration import load_execution_config
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphReference
+from metis.engine.execution import ExecutionStatus
 from metis.engine.execution.catalog import NodeCatalog
 from metis.engine.execution.compiler import StagePlan
 from metis.engine.execution.compiler import compile_stage
 from metis.engine.execution.graph import StageConfiguration
-from metis.engine.nodes.codegraph import registration as codegraph_node
 from metis.engine.execution.runner import run_stage
-from metis.engine.execution import ExecutionStatus
-from metis.engine.stages.configuration import ExecutionConfiguration
+from metis.engine.nodes.codegraph import registration as codegraph_node
+from metis.engine.nodes.finding_dedup import registration as finding_dedup_node
 from metis.engine.nodes.index import registration as index_node
-from metis.engine.nodes.threat_model import (
-    registration as threat_model_node,
-)
+from metis.engine.nodes.reachability import review as reachability_review_node
 from metis.engine.nodes.result import review as review_results_node
+from metis.engine.nodes.result import triage as triage_results_node
+from metis.engine.nodes.simple_llm_review import registration as review_node
+from metis.engine.nodes.threat_model import registration as threat_model_node
+from metis.engine.nodes.triage import registration as triage_node
+from metis.engine.stages.configuration import ExecutionConfiguration
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
-from metis.engine.nodes.simple_llm_review import registration as review_node
-from metis.engine.nodes.reachability import review as reachability_review_node
 from metis.engine.stages.service import ExecutionGraphService
-from metis.engine.nodes.simple_llm_triage import registration as triage_node
-from metis.engine.nodes.reachability_triage import (
-    registration as reachability_triage_node,
-)
-from metis.engine.nodes.result import triage as triage_results_node
-from metis.runtime_settings import TriageOptions
 from metis.engine.stages.triage.models import TriageRun
-from metis.execution_nodes import EmptyNodeConfiguration
 from metis.execution_nodes import EXECUTION_NODE_API_VERSION
 from metis.execution_nodes import CapabilityRequirement
+from metis.execution_nodes import EmptyNodeConfiguration
 from metis.execution_nodes import ExecutionDiagnostic
 from metis.execution_nodes import NodeCallbacks
 from metis.execution_nodes import NodeContext
@@ -52,6 +45,7 @@ from metis.execution_nodes import NodeRegistration
 from metis.execution_nodes import NodeResult
 from metis.execution_nodes import NodeRuntime
 from metis.execution_nodes import ReviewCommand
+from metis.runtime_settings import TriageOptions
 
 
 def _configuration() -> ExecutionConfiguration:
@@ -72,6 +66,7 @@ def _configuration() -> ExecutionConfiguration:
                     "nodes": {
                         "codegraph": {},
                         "simple_llm_review": {"capabilities": ["index", "memory"]},
+                        "finding_dedup": {},
                         "result": {
                             "formats": ["sarif", "json"],
                         },
@@ -83,7 +78,7 @@ def _configuration() -> ExecutionConfiguration:
                         "codegraph": "review.codegraph",
                     },
                     "nodes": {
-                        "simple_llm_triage": {"capabilities": ["memory", "navigation"]},
+                        "triage": {"capabilities": ["memory", "navigation"]},
                         "result": {
                             "formats": ["sarif"],
                         },
@@ -105,6 +100,135 @@ def _review_run(
     )
 
 
+def _findings_run(*findings: dict[str, object]) -> ReviewRun:
+    return ReviewRun(
+        ReviewStatus.SUCCEEDED,
+        StandardReviewResult.model_validate(
+            {"reviews": [{"file": "src/example.c", "reviews": list(findings)}]}
+        ),
+    )
+
+
+def test_finding_dedup_combines_producers_before_result() -> None:
+    prompt_runner = Mock()
+    prompt_runner.invoke.side_effect = lambda request: request.parse(
+        {
+            "groups": [
+                {
+                    "member_indexes": [0, 1],
+                    "representative_index": 1,
+                    "relationship": "duplicate",
+                    "reason": "same unchecked copy",
+                }
+            ]
+        }
+    )
+    context = replace(
+        _node_context(),
+        stage="review",
+        prompts=prompt_runner,
+        runtime=NodeRuntime("test", 2, 1000, {}, 1, lambda _text: 1),
+    )
+
+    result = finding_dedup_node.execute(
+        NodeInvocation(
+            EmptyNodeConfiguration(),
+            {
+                "reviews": (
+                    _findings_run(
+                        {
+                            "issue": "Unchecked copy",
+                            "line_number": 12,
+                            "reasoning": "length reaches memcpy unchecked",
+                        }
+                    ),
+                    _findings_run(
+                        {
+                            "issue": "Unchecked length reaches copy",
+                            "line_number": 12,
+                            "reasoning": "length reaches memcpy unchecked",
+                        }
+                    ),
+                )
+            },
+            context,
+        )
+    )
+
+    finalized = result.outputs["review"].review
+    assert [
+        finding.issue for group in finalized.result.reviews for finding in group.reviews
+    ] == ["Unchecked length reaches copy"]
+
+
+def test_finding_dedup_fails_open_when_batch_exceeds_global_limit() -> None:
+    prompt_runner = Mock()
+    context = replace(
+        _node_context(),
+        stage="review",
+        prompts=prompt_runner,
+        runtime=NodeRuntime("test", 1, 10, {}, 1, lambda _text: 100),
+    )
+    result = finding_dedup_node.execute(
+        NodeInvocation(
+            EmptyNodeConfiguration(),
+            {
+                "reviews": (
+                    _findings_run({"issue": "First report"}),
+                    _findings_run({"issue": "Second report"}),
+                )
+            },
+            context,
+        )
+    )
+
+    finalized = result.outputs["review"].review
+    assert sum(len(group.reviews) for group in finalized.result.reviews) == 2
+    prompt_runner.invoke.assert_not_called()
+
+
+def test_finding_dedup_keeps_candidates_when_model_returns_no_decision() -> None:
+    prompt_runner = Mock()
+    prompt_runner.invoke.return_value = None
+    result = finding_dedup_node.execute(
+        NodeInvocation(
+            EmptyNodeConfiguration(),
+            {
+                "reviews": (
+                    _findings_run({"issue": "First report"}),
+                    _findings_run({"issue": "Second report"}),
+                )
+            },
+            replace(_node_context(), stage="review", prompts=prompt_runner),
+        )
+    )
+
+    finalized = result.outputs["review"].review
+    assert sum(len(group.reviews) for group in finalized.result.reviews) == 2
+
+
+def test_finding_dedup_removes_exact_duplicates_without_model() -> None:
+    prompt_runner = Mock()
+    prompt_runner.invoke.return_value = None
+
+    result = finding_dedup_node.execute(
+        NodeInvocation(
+            EmptyNodeConfiguration(),
+            {
+                "reviews": (
+                    _findings_run({"issue": "Same report"}),
+                    _findings_run({"issue": "Same report"}),
+                )
+            },
+            replace(_node_context(), stage="review", prompts=prompt_runner),
+        )
+    )
+
+    finalized = result.outputs["review"].review
+    assert sum(len(group.reviews) for group in finalized.result.reviews) == 1
+    prompt_runner.invoke.assert_not_called()
+
+
 def _node_context() -> NodeContext:
     return NodeContext(
         stage="initialize",
@@ -113,7 +237,7 @@ def _node_context() -> NodeContext:
         capabilities={},
         prompts=Mock(),
         codegraphs=Mock(),
-        runtime=NodeRuntime("test", 1, 1000, {}, 1),
+        runtime=NodeRuntime("test", 1, 1000, {}, 1, lambda _text: 1),
         callbacks=NodeCallbacks(),
     )
 
@@ -156,6 +280,7 @@ def _service(
     calls: list[object] = []
     engine_config = Mock(
         codebase_path=".",
+        llm_provider=Mock(count_tokens=lambda _text: 1),
         llama_query_model="test",
         max_workers=2,
         max_token_length=1000,
@@ -184,17 +309,12 @@ def _service(
 
     review.run_review.side_effect = run_review
     triage = Mock()
-    simple_triage = Mock()
-    reachability_triage = Mock()
-    reachability_classifier = Mock()
-    reachability_triage.classifier.return_value = reachability_classifier
+    triage_classifier = Mock()
 
     def triage_run(run, *, classifier, **_kwargs):
         if triage_runs is not None:
             triage_runs.append(run)
-        calls.append(
-            "triage" if isinstance(classifier, partial) else "reachability_triage"
-        )
+        calls.append("triage")
         return replace(run, remaining=(), processed=run.total)
 
     triage.triage_run.side_effect = triage_run
@@ -217,12 +337,9 @@ def _service(
             codegraph_node.registration,
             review_node.create_node(review),
             reachability_review_node.create_node(review),
+            finding_dedup_node,
             review_results_node.registration,
-            triage_node.create_node(simple_triage),
-            reachability_triage_node.create_node(
-                reachability_triage,
-                simple_triage,
-            ),
+            triage_node.create_node(triage_classifier),
             triage_results_node.registration,
         ),
         entry_points=entry_points,
@@ -256,71 +373,6 @@ def test_configured_include_triaged_can_be_overridden_per_run() -> None:
     assert [run.total for run in runs] == [1, 0]
 
 
-@pytest.mark.parametrize("has_codegraph", [False, True])
-def test_reachability_triage_falls_back_once_per_path(
-    has_codegraph: bool,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    reachability = Mock()
-    primary = Mock(return_value=None)
-    reachability.classifier.return_value = primary
-    simple_llm = Mock()
-    decision = {"status": "invalid", "reason": "not reachable"}
-    simple_llm.classify.return_value = decision
-    finding = Mock(file_path="src/example.py")
-    run = Mock()
-    adjudicator = Mock()
-    debug_callback = Mock()
-
-    def triage_run(_run, *, classifier, **_kwargs):
-        assert _kwargs["debug_callback"] is debug_callback
-        assert classifier(finding, [], None) == decision
-        assert classifier(finding, [], None) == decision
-        return run
-
-    adjudicator.triage_run.side_effect = triage_run
-    codegraphs = Mock()
-    codegraphs.load.return_value = CodeGraph()
-    context = replace(
-        _node_context(),
-        stage="triage",
-        capabilities={"navigation": Mock()},
-        codegraphs=codegraphs,
-        callbacks=NodeCallbacks(debug=debug_callback),
-        triage=adjudicator,
-    )
-    reference = (
-        CodeGraphReference(
-            revision=1,
-            fingerprint="fingerprint",
-            producer_version="test",
-        )
-        if has_codegraph
-        else None
-    )
-    registration = reachability_triage_node.create_node(reachability, simple_llm)
-    caplog.set_level(logging.WARNING, logger="metis")
-
-    result = registration.execute(
-        NodeInvocation(
-            EmptyNodeConfiguration(),
-            {"request": run, "codegraph": reference},
-            context,
-        )
-    )
-
-    assert result.outputs == {"run": run}
-    assert primary.call_count == (2 if has_codegraph else 0)
-    assert simple_llm.classify.call_count == 2
-    assert (
-        caplog.messages.count(
-            "Reachability triage is unavailable for src/example.py; "
-            "using simple LLM triage"
-        )
-        == 1
-    )
-
-
 def test_default_graph_runs_fixed_stages_and_passes_review_sarif(monkeypatch):
     configuration = ExecutionConfiguration.model_validate(load_execution_config())
     service, calls = _service(configuration)
@@ -337,9 +389,38 @@ def test_default_graph_runs_fixed_stages_and_passes_review_sarif(monkeypatch):
     result = service.execute_graph()
 
     assert result.status is ExecutionStatus.OK
-    assert calls == ["codegraph", "review", "reachability_triage"]
+    assert calls == ["codegraph", "review", "review", "triage"]
     assert tuple(result.outputs) == ("initialize", "review", "triage")
     assert result.outputs["triage"]["sarif"] == result.outputs["review"]["sarif"]
+
+
+def test_codegraph_node_seeds_file_review_from_target():
+    codegraphs = Mock()
+    reference = CodeGraphReference(
+        revision=1,
+        fingerprint="fingerprint",
+        producer_version="test",
+    )
+    codegraphs.materialize.return_value = reference
+    context = replace(
+        _node_context(),
+        stage="review",
+        codegraphs=codegraphs,
+    )
+
+    result = codegraph_node.registration.execute(
+        NodeInvocation(
+            EmptyNodeConfiguration(),
+            {"request": ReviewCommand(mode="file", target="src/target.c")},
+            context,
+        )
+    )
+
+    assert result.outputs == {"codegraph": reference}
+    codegraphs.materialize.assert_called_once_with(
+        seed_file="src/target.c",
+        progress_callback=None,
+    )
 
 
 def test_inconclusive_review_still_feeds_triage(monkeypatch):
@@ -441,7 +522,7 @@ def test_third_party_sarif_runs_initialize_then_triage():
                     "depends_on": ["initialize"],
                     "inputs": {"sarif": "$inputs.sarif"},
                     "nodes": {
-                        "simple_llm_triage": {"capabilities": ["memory", "navigation"]},
+                        "triage": {"capabilities": ["memory", "navigation"]},
                         "result": {
                             "formats": ["sarif"],
                         },
@@ -822,7 +903,7 @@ def test_explicit_input_resolves_an_implicit_binding_ambiguity():
     assert result.outputs["consumer"] == "first"
 
 
-def test_collection_input_requires_explicit_bindings_for_multiple_producers():
+def test_collection_input_collects_all_compatible_producers():
     registrations = (
         _value_node("second", "second"),
         _value_node("first", "first"),
@@ -835,21 +916,8 @@ def test_collection_input_requires_explicit_bindings_for_multiple_producers():
             lambda invocation: NodeResult({"values": invocation.inputs["values"]}),
         ),
     )
-    implicit = StageConfiguration.model_validate(
-        {"nodes": {"second": {}, "first": {}, "collector": {}}}
-    )
-
-    with pytest.raises(ValueError, match="matches multiple outputs"):
-        _compile(registrations, implicit)
-
     stage = StageConfiguration.model_validate(
-        {
-            "nodes": {
-                "second": {},
-                "first": {},
-                "collector": {"inputs": {"values": ["second", "first"]}},
-            }
-        }
+        {"nodes": {"second": {}, "first": {}, "collector": {}}}
     )
 
     result = run_stage(
@@ -860,6 +928,60 @@ def test_collection_input_requires_explicit_bindings_for_multiple_producers():
     )
 
     assert result.outputs["collector"] == ("second", "first")
+
+
+def test_collection_input_requires_one_available_producer():
+    def fail(_invocation):
+        raise RuntimeError("failed")
+
+    registrations = (
+        NodeRegistration(
+            "failure",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            fail,
+        ),
+        _value_node("success", "available"),
+        NodeRegistration(
+            "collector",
+            "initialize",
+            EmptyNodeConfiguration,
+            {"values": tuple[str, ...]},
+            {"values": tuple[str, ...]},
+            lambda invocation: NodeResult({"values": invocation.inputs["values"]}),
+        ),
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"failure": {}, "success": {}, "collector": {}}}
+    )
+
+    result = run_stage(
+        "initialize",
+        _compile(registrations, stage),
+        _node_context(),
+        {},
+    )
+
+    assert result.status is ExecutionStatus.INCONCLUSIVE
+    assert result.outputs["collector"] == ("available",)
+
+    all_failed = StageConfiguration.model_validate(
+        {"nodes": {"failure": {}, "collector": {}}}
+    )
+    result = run_stage(
+        "initialize",
+        _compile(registrations, all_failed),
+        _node_context(),
+        {},
+    )
+
+    assert result.status is ExecutionStatus.ERROR
+    assert "collector" not in result.outputs
+    assert result.diagnostics[-1].message.endswith(
+        "input 'values' requires at least one value"
+    )
 
 
 def test_union_output_must_be_safe_for_every_consumer_value():

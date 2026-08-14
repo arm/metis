@@ -122,8 +122,8 @@ the same explanation.
 Metis resolves default explanations from the span `kind` and `name`, or from the
 event name. Progress events additionally use `attributes.event`, so a generic
 `progress` record can explain a specific marker such as
-`global_lifecycle_start`. Unknown extension names receive a generic explanation
-instead of omitting the field.
+`reachability_frontier_review_start`. Unknown extension names receive a generic
+explanation instead of omitting the field.
 
 Instrumentation may override the catalogue text when a call site needs more
 specific help:

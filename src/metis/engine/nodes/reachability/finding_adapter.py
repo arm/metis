@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
 from metis.engine.nodes.codegraph.annotations import normalize_sink_type
 from metis.engine.nodes.reachability import VulnerabilityFinding
-from metis.engine.nodes.reachability.finding_values import (
-    _mitigation_text,
-    _safe_int,
-    _severity_title,
-)
 from metis.engine.source import SourceMap
 
 REACHABILITY_REASONING_METADATA_PREFIXES = (
@@ -21,7 +21,11 @@ REACHABILITY_REASONING_METADATA_PREFIXES = (
 )
 
 
-def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""):
+def finding_to_review_item(
+    finding: VulnerabilityFinding,
+    *,
+    codebase_path: str,
+) -> dict[str, Any]:
     line_number = int(
         finding.primary_line or finding.sink_line or finding.source_line or 0
     )
@@ -32,7 +36,7 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
     )
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
     smap = SourceMap.for_file(codebase_path, primary_file) if primary_file else None
-    return {
+    item = {
         "issue": issue,
         "line_number": line_number,
         "anchor": dict(finding.primary_anchor) if finding.primary_anchor else None,
@@ -47,13 +51,19 @@ def finding_to_review_item(finding, *, graph=None, codebase_path, target_file=""
         "reasoning": _review_reasoning(finding),
         "mitigation": _mitigation_text(finding, vtype),
     }
+    return item
 
 
-def review_item_to_finding(item, *, finding_id):
+def review_item_to_finding(
+    item: Mapping[str, Any],
+    *,
+    finding_id: str,
+) -> VulnerabilityFinding:
     root_cause, evidence = split_reachability_reasoning(item.get("reasoning"))
     primary_file = str(item.get("primary_file") or "")
     primary_function = str(item.get("primary_function") or "")
     line_number = _safe_int(item.get("line_number"), 0)
+    raw_path = item.get("path")
     return VulnerabilityFinding(
         finding_id,
         "other",
@@ -66,8 +76,8 @@ def review_item_to_finding(item, *, finding_id):
         primary_file,
         line_number,
         path=(
-            [str(path_item) for path_item in item.get("path") if path_item]
-            if isinstance(item.get("path"), list)
+            [str(path_item) for path_item in raw_path if path_item]
+            if isinstance(raw_path, list)
             else []
         ),
         description=str(item.get("issue") or ""),
@@ -86,16 +96,17 @@ def review_item_to_finding(item, *, finding_id):
     )
 
 
-def review_sort_key(item):
+def review_sort_key(item: Mapping[str, Any]) -> tuple[int, int, str]:
+    severity = str(item.get("severity") or "")
     return (
-        {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(item.get("severity"), 4),
+        {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(severity, 4),
         int(item.get("line_number") or 0),
         str(item.get("issue") or ""),
     )
 
 
-def _review_reasoning(finding):
-    parts = []
+def _review_reasoning(finding: VulnerabilityFinding) -> str:
+    parts: list[str] = []
     evidence = str(finding.evidence or "").strip()
     if evidence:
         parts.append(evidence)
@@ -105,9 +116,9 @@ def _review_reasoning(finding):
     return "\n".join(parts)
 
 
-def split_reachability_reasoning(reasoning):
+def split_reachability_reasoning(reasoning: object) -> tuple[str, str]:
     root_cause = ""
-    evidence_lines = []
+    evidence_lines: list[str] = []
     for raw_line in str(reasoning or "").splitlines():
         line = raw_line.strip()
         if not line:
@@ -121,8 +132,38 @@ def split_reachability_reasoning(reasoning):
     return root_cause, "\n".join(evidence_lines)
 
 
-def safe_float(value, default=0.0):
+def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _severity_title(value: object, default: str = "Medium") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    return text[:1].upper() + text[1:]
+
+
+def _mitigation_text(
+    finding: VulnerabilityFinding,
+    vulnerability_type: str | None = None,
+) -> str:
+    explicit = str(finding.mitigation or "").strip()
+    if explicit:
+        return explicit
+    label = normalize_sink_type(
+        vulnerability_type or finding.vulnerability_type
+    ).replace("_", " ")
+    return (
+        f"Address the {label} issue by adding the missing validation, ordering, "
+        "ownership, or cleanup guard before the reachable operation executes."
+    )

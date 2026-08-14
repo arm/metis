@@ -51,9 +51,13 @@ metis_engine:
           - initialize
         nodes:
           codegraph: {}
+          simple_llm_review:
+            capabilities:
+              - memory
           reachability:
             capabilities:
               - memory
+          finding_dedup: {}
           result:
             formats:
               - sarif
@@ -62,7 +66,7 @@ metis_engine:
           sarif: review.sarif
           codegraph: review.codegraph
         nodes:
-          reachability_triage:
+          triage:
             capabilities:
               - memory
               - navigation
@@ -73,8 +77,6 @@ metis_engine:
     source_functions: []
     security_functions: []
   reachability:
-    max_paths: 0
-    max_paths_per_sink: 3
     max_path_length: 25
     domain_profiles: []
     domain_hints: []

@@ -9,19 +9,20 @@ from dataclasses import dataclass
 from dataclasses import field
 from enum import Enum
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
 from typing import Protocol
-from typing import TYPE_CHECKING
 from typing import get_args
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 
-from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.codegraph import CodeGraphReference
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.utils import count_tokens
 
 if TYPE_CHECKING:
     from metis.engine.stages.triage.contracts import TriageAdjudicator
@@ -56,6 +57,7 @@ class NodeCodeGraphs(Protocol):
     def materialize(
         self,
         *,
+        seed_file: str | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
     ) -> CodeGraphReference: ...
@@ -113,6 +115,7 @@ class NodeRuntime:
     max_token_length: int
     chat_model_kwargs: Mapping[str, object]
     model_tool_max_rounds: int = 0
+    token_counter: Callable[[str], int] = count_tokens
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
+from typing import cast
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
@@ -22,8 +23,8 @@ from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import CodeGraphResult
 from metis.version import __version__ as METIS_VERSION
 
-from .annotations import annotate_graph
 from .annotations import CodeGraphConfiguration
+from .annotations import annotate_graph
 from .progress import CODEGRAPH_DONE
 from .progress import CODEGRAPH_PROGRESS
 from .progress import CODEGRAPH_START
@@ -34,6 +35,8 @@ from .store import SQLiteCodeGraphStore
 if TYPE_CHECKING:
     from metis.engine.repository import EngineRepository
     from metis.engine.runtime import EngineConfig
+
+CODEGRAPH_FINGERPRINT_VERSION = 1
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +70,17 @@ class CodeGraphService:
         self._materialize_active = False
         self._materialize_generation = 0
         self._last_materialization: CodeGraphReference | None = None
+        self._last_materialization_key: str | None = None
         self._lock = threading.RLock()
 
     def materialize(
         self,
         *,
+        seed_file: str | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
     ) -> CodeGraphReference:
+        materialization_key = seed_file
         with self._materialize_condition:
             while self._materialize_active:
                 generation = self._materialize_generation
@@ -82,27 +88,33 @@ class CodeGraphService:
                     lambda: self._materialize_generation > generation
                 )
                 completed = self._last_materialization
-                if completed is not None:
+                if (
+                    completed is not None
+                    and self._last_materialization_key == materialization_key
+                ):
                     _replay_diagnostics(completed, diagnostic_callback)
                     return completed
             self._materialize_active = True
         try:
             completed = self._materialize(
+                seed_file=seed_file,
                 progress_callback=progress_callback,
                 diagnostic_callback=diagnostic_callback,
             )
         except Exception:
-            self._finish_materialization(None)
+            self._finish_materialization(None, materialization_key)
             raise
-        self._finish_materialization(completed)
+        self._finish_materialization(completed, materialization_key)
         return completed
 
     def _finish_materialization(
         self,
         reference: CodeGraphReference | None,
+        materialization_key: str | None,
     ) -> None:
         with self._materialize_condition:
             self._last_materialization = reference
+            self._last_materialization_key = materialization_key
             self._materialize_generation += 1
             self._materialize_active = False
             self._materialize_condition.notify_all()
@@ -110,20 +122,11 @@ class CodeGraphService:
     def _materialize(
         self,
         *,
+        seed_file: str | None,
         progress_callback: Callable[[dict[str, object]], None] | None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None,
     ) -> CodeGraphReference:
-        selected_files = tuple(
-            sorted(
-                dict.fromkeys(
-                    str(path)
-                    for path in self._repository.get_code_files(
-                        include_suffixed_sources=True
-                    )
-                    if self.supports_file(str(path))
-                )
-            )
-        )
+        selected_files = self._selected_files(seed_file=seed_file)
         fingerprint = self._fingerprint(selected_files)
         store = self._store_instance()
         reference = store.reference_for_fingerprint(
@@ -159,7 +162,38 @@ class CodeGraphService:
             failed_files=tuple(
                 dict.fromkeys((*built.failed_files, *semantics_failed_files))
             ),
-            diagnostics=(*built.diagnostics, *semantics_diagnostics),
+            diagnostics=(
+                *built.diagnostics,
+                *semantics_diagnostics,
+            ),
+        )
+
+    def _selected_files(
+        self,
+        *,
+        seed_file: str | None,
+    ) -> tuple[str, ...]:
+        if seed_file is None:
+            candidates = self._repository.get_code_files(include_suffixed_sources=True)
+        else:
+            relative_seed = os.path.normpath(
+                os.path.relpath(seed_file, self._config.codebase_path)
+                if os.path.isabs(seed_file)
+                else seed_file
+            )
+            candidates = (
+                (os.path.join(self._config.codebase_path, relative_seed),)
+                if self._repository.is_code_file_selected(
+                    relative_seed, include_suffixed_sources=True
+                )
+                else ()
+            )
+        return tuple(
+            sorted(
+                dict.fromkeys(
+                    str(path) for path in candidates if self.supports_file(str(path))
+                )
+            )
         )
 
     def load(self, reference: CodeGraphReference) -> CodeGraph:
@@ -186,6 +220,7 @@ class CodeGraphService:
         diagnostics: list[CodeGraphDiagnostic] = []
         processed_files: list[str] = []
         failed_files: list[str] = []
+        partial_parse_warning_count = 0
         total_files = sum(len(paths) for paths in provider_files.values())
         if progress_callback is not None:
             progress_callback({"event": CODEGRAPH_START, "total": total_files})
@@ -198,8 +233,8 @@ class CodeGraphService:
                     return
                 translated = dict(event)
                 if translated.get("event") == CODEGRAPH_PROGRESS:
-                    translated["completed"] = completed_files + int(
-                        translated.get("completed") or 0
+                    translated["completed"] = completed_files + cast(
+                        int, translated["completed"]
                     )
                     translated["total"] = total_files
                     translated["provider"] = provider_name
@@ -253,9 +288,18 @@ class CodeGraphService:
                 diagnostics.append(diagnostic)
                 if diagnostic_callback is not None:
                     diagnostic_callback(diagnostic)
+                elif diagnostic.code == "codegraph.partial_parse":
+                    partial_parse_warning_count += 1
                 else:
                     logger.warning("%s: %s", diagnostic.file_path, diagnostic.message)
             completed_files += len(requested_files)
+
+        if partial_parse_warning_count:
+            logger.warning(
+                "Tree-sitter recovered from invalid syntax in %d files; "
+                "extracted CodeGraph facts may be incomplete",
+                partial_parse_warning_count,
+            )
 
         processed_file_tuple = tuple(processed_files)
         try:
@@ -276,7 +320,7 @@ class CodeGraphService:
                 }
             )
         built = CodeGraphResult(
-            graph=graph.copy(),
+            graph=graph,
             processed_files=processed_file_tuple,
             diagnostics=tuple(diagnostics),
             failed_files=tuple(failed_files),
@@ -323,6 +367,7 @@ class CodeGraphService:
             "selected_files": entries,
             "annotation_settings": self._annotation_settings.model_dump(mode="json"),
             "producer_version": METIS_VERSION,
+            "fingerprint_version": CODEGRAPH_FINGERPRINT_VERSION,
         }
         encoded = json.dumps(
             payload,

@@ -38,12 +38,8 @@ _SPAN_KIND_EXPLANATIONS = {
 _SPAN_NAME_EXPLANATIONS = {
     (
         "task",
-        "Supplementary lens",
-    ): "One supplementary security-analysis lens applied to the current CodeGraph.",
-    (
-        "task",
-        "Global lifecycle chunk",
-    ): "A size-bounded batch of functions checked for lifecycle asymmetry involving global callbacks, timers, work items, operation tables, or shared references.",
+        "Reachability security review",
+    ): "One batch of functions reviewed with deterministic CodeGraph evidence.",
     (
         "task",
         "review_file",
@@ -62,16 +58,12 @@ _SPAN_NAME_EXPLANATIONS = {
     ): "A review workflow that built a prompt, requested model findings, and mapped them back to source.",
     (
         "workflow",
-        "simple_llm_triage",
+        "triage",
     ): "A triage workflow that collected evidence, requested a model decision, and applied deterministic adjudication.",
     (
         "model_loop",
         "tool_loop",
     ): "The sequence of model responses and tool calls used to reach a final answer or the round limit.",
-    (
-        "prompt",
-        "Supplementary reachability analysis",
-    ): "A model analysis of source context for the supplementary security checks selected by the active lens.",
     (
         "memory",
         "threat_model_context",
@@ -107,26 +99,15 @@ _PROGRESS_EXPLANATIONS = {
     "codegraph_start": "CodeGraph materialization began for the selected source files and language providers.",
     "codegraph_progress": "File-level progress from one CodeGraph language provider.",
     "codegraph_done": "CodeGraph materialization finished; attributes show graph and file-coverage totals.",
-    "combined_graph_lenses_start": "Combined supplementary graph analysis began for the selected functions and lens set.",
-    "combined_graph_lenses_done": "Combined supplementary graph analysis finished; the findings count is its raw candidate output.",
-    "reachability_file_paths_done": "File-focused path discovery finished; attributes show incoming, outgoing, and focus-node counts.",
-    "reachability_file_review_done": "File-focused reachability review finished; attributes show supplementary and path findings.",
-    "global_lifecycle_start": "Global-lifecycle analysis began after global constructs and related functions were selected; work was split into size-bounded chunks.",
-    "global_lifecycle_done": "Global-lifecycle analysis finished; the findings count is its raw candidate output before downstream validation and deduplication.",
-    "confirmation_start": "Model-backed confirmation began for the selected reachability path batches.",
-    "confirmation_progress": "One reachability confirmation batch finished.",
-    "confirmation_done": "Model-backed reachability confirmation finished; attributes show its candidate count.",
+    "configured_source_functions_done": "Configured source-function annotations were applied to the CodeGraph.",
+    "configured_security_functions_done": "Configured security-function annotations were applied to the CodeGraph.",
+    "reachability_frontier_review_start": "Reachability security review began for the selected functions and deterministic CodeGraph evidence.",
+    "reachability_frontier_review_done": "Reachability security review finished; attributes show coverage, failures, contradictions, and findings.",
+    "reachability_file_review_done": "Reachability review finished for the selected file.",
+    "reachability_code_review_done": "Reachability review finished for the selected code scope.",
     "findings_finalization_start": "Final validation and deduplication began for the collected candidate findings.",
     "findings_finalization_progress": "Progress through candidate validation or representative adjudication.",
     "findings_finalization_done": "Final validation and deduplication finished; attributes show kept and removed findings.",
-    "intra_audit_start": "Per-file intra-function auditing began for the selected functions.",
-    "intra_audit_progress": "One per-file intra-function audit batch finished.",
-    "lock_order_extraction_start": "Lock-order analysis began for the extracted conflicting acquisition candidates.",
-    "lock_order_extraction_done": "Lock-order analysis finished; attributes show its candidate findings.",
-    "supplementary_done": "All selected supplementary lenses finished; counts are grouped by analysis type before finalization.",
-    "reachability_paths_start": "Deterministic reachability path discovery began for the selected source nodes.",
-    "reachability_paths_progress": "Current progress through deterministic reachability path discovery.",
-    "reachability_paths_done": "Reachability path discovery and confirmation-path selection finished.",
 }
 
 

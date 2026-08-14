@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import sys
 import textwrap
 
 import pytest
@@ -186,6 +189,35 @@ def test_function_slice_infers_end(smap):
     assert out.splitlines()[-1].lstrip().startswith("13:")
 
 
+def test_function_slice_uses_rendered_character_budget():
+    text = "\n".join(
+        ["int many_short_lines(void) {"]
+        + [f"  value += {index};" for index in range(100)]
+        + ["  return value;", "}"]
+    )
+    source_map = SourceMap.for_text("src/short-lines.c", text)
+    complete = source_map.numbered_slice(1, source_map.line_count)
+
+    assert len(complete) < 4096
+    assert (
+        source_map.function_slice(1, source_map.line_count, max_chars=4096) == complete
+    )
+
+
+def test_function_slice_does_not_exceed_rendered_character_budget():
+    text = "\n".join(
+        ["int long_function(void) {"]
+        + [f"  value += {index};" for index in range(100)]
+        + ["  return value;", "}"]
+    )
+    source_map = SourceMap.for_text("src/long.c", text)
+
+    rendered = source_map.function_slice(1, source_map.line_count, max_chars=160)
+
+    assert len(rendered) <= 160
+    assert rendered.startswith("  1: int long_function")
+
+
 def test_find_function_span(smap):
     assert smap.find_function_span(name="parse") == (7, 13)
     assert smap.find_function_span(name="other", near_line=18) == (15, 21)
@@ -244,11 +276,44 @@ def test_split_snippet_returns_offsets():
     assert starts == sorted(starts)
 
 
+def test_source_map_extracts_tree_sitter_utf8_byte_spans():
+    source = "// café\nvoid target(void) { dangerous(); }\n"
+    smap = SourceMap.for_text("src/utf8.c", source)
+    encoded = source.encode("utf-8")
+    start = encoded.index(b"dangerous")
+    end = start + len(b"dangerous()")
+
+    assert smap.byte_slice(start, end) == "dangerous()"
+    assert smap.byte_to_line(start) == 2
+
+
 def test_resolve_issue_uses_model_lines_when_verified(smap):
     a = smap.resolve_issue(snippet="memcpy(tmp, buf, len);", start_line=10, end_line=10)
     assert a.end_line == 10
     assert a.confidence == CONFIDENCE_EXACT
+
+
+def test_resolve_issue_strips_numbered_prompt_prefixes(smap):
+    a = smap.resolve_issue(
+        snippet="9:         if (len > 0) {\n10:             memcpy(tmp, buf, len);",
+        start_line=9,
+        end_line=10,
+    )
+
+    assert (a.start_line, a.end_line, a.confidence) == (9, 10, CONFIDENCE_EXACT)
     assert a.symbol == "src/foo.c::parse"
+
+
+def test_resolve_issue_preserves_assembly_numeric_label():
+    source_map = SourceMap.for_text("src/start.s", "1: nop\nb 1b\n")
+
+    anchor = source_map.resolve_issue(snippet="1: nop", start_line=1, end_line=1)
+
+    assert (anchor.start_line, anchor.end_line, anchor.confidence) == (
+        1,
+        1,
+        CONFIDENCE_EXACT,
+    )
 
 
 def test_resolve_issue_falls_back_when_model_lines_wrong(smap):
@@ -389,3 +454,29 @@ def test_for_file_uses_default_repo(tmp_path):
     smap = SourceMap.for_file(str(tmp_path), "g.c")
     assert smap is not None
     assert smap.resolve_snippet("int parse(char *buf, int len) {").start_line == 7
+
+
+def test_source_map_does_not_cache_native_tree_across_threads(tmp_path):
+    SourceRepository.default().clear()
+    (tmp_path / "threaded.c").write_text(
+        "void threaded(void) {}\n",
+        encoding="utf-8",
+    )
+    unraisable: list[str] = []
+    previous_hook = sys.unraisablehook
+    sys.unraisablehook = lambda error: unraisable.append(str(error.exc_value))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            symbol = executor.submit(
+                lambda: SourceMap.for_file(
+                    str(tmp_path),
+                    "threaded.c",
+                ).enclosing_symbol(1)
+            ).result()
+        SourceRepository.default().clear()
+        gc.collect()
+    finally:
+        sys.unraisablehook = previous_hook
+
+    assert symbol == "threaded.c::threaded"
+    assert not any("unsendable" in error for error in unraisable)

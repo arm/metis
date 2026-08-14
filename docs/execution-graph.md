@@ -17,7 +17,7 @@ separately distributed node can start at
 - **Stage**: a stable workflow boundary such as `initialize`, `review`, or
   `triage`
 - **Node**: executable work inside a stage, such as `codegraph`,
-  `simple_llm_review`, `reachability`, or `result`
+  `simple_llm_review`, `reachability`, `finding_dedup`, `triage`, or `result`
 - **Execution Node API**: the public Python contracts used to implement and
   register Nodes; its exported types are not YAML-selectable Nodes
 - **CodeGraph**: the language-neutral representation of code symbols, calls,
@@ -56,9 +56,13 @@ metis_engine:
           - initialize
         nodes:
           codegraph: {}
+          simple_llm_review:
+            capabilities:
+              - memory
           reachability:
             capabilities:
               - memory
+          finding_dedup: {}
           result:
             formats:
               - sarif
@@ -67,7 +71,7 @@ metis_engine:
           sarif: review.sarif
           codegraph: review.codegraph
         nodes:
-          reachability_triage:
+          triage:
             capabilities:
               - memory
               - navigation
@@ -79,8 +83,6 @@ metis_engine:
     source_functions: []
     security_functions: []
   reachability:
-    max_paths: 0
-    max_paths_per_sink: 3
     max_path_length: 25
     domain_profiles: []
     domain_hints: []
@@ -89,9 +91,20 @@ metis_engine:
 Execution topology describes what runs and how values flow. Deterministic graph
 annotations live under `metis_engine.codegraph`; reachability tuning lives under
 `metis_engine.reachability`. Model and reasoning settings come from the shared
-provider and query configuration. `max_paths: 0` uses automatic security-aware
-evidence selection; a positive value caps selected model-confirmation paths.
-`max_path_length` must be positive.
+provider and query configuration. Reachability first covers selected function
+source with the language plugin's normal security-review prompt, batching
+nearby functions from the same file in source order. The prompt includes
+deterministic CodeGraph evidence and syntax-derived direct-callee return
+contracts. Findings identify every necessary-condition alternative for the
+reported operation. Code rejects a finding only when deterministic evidence
+contradicts every alternative; incomplete or ambiguous evidence remains
+fail-open.
+
+A same-file review batch is split in source order when its fixed context exceeds
+the global input limit or its returned structured analysis is invalid; provider
+failures are not subdivided. Reachability findings are combined with every
+other Review-node output and deduplicated by `finding_dedup`.
+`max_path_length` must be positive; it bounds reported reachability paths.
 
 Capability runtime settings live under `metis_engine.capabilities`. A node's
 `capabilities` list is only an access grant; it does not configure the
@@ -147,8 +160,7 @@ capability or naming one the node did not declare is a configuration error.
 | `index` | [`index`](capabilities/index.md) | — |
 | `simple_llm_review` | — | `index`, `memory` |
 | `reachability` | — | `index`, `memory` |
-| `simple_llm_triage` | [`navigation`](capabilities/navigation.md) | `memory` |
-| `reachability_triage` | [`navigation`](capabilities/navigation.md) | `memory` |
+| `triage` | [`navigation`](capabilities/navigation.md) | `memory` |
 
 Nodes without a row do not declare engine capabilities.
 
@@ -156,26 +168,36 @@ Nodes without a row do not declare engine capabilities.
 
 The review request supports `code`, `dir`, `file`, and `patch` modes.
 
-`codegraph` groups the project's source files by language manifest, invokes the
+`codegraph` groups the selected source files by language manifest, invokes the
 corresponding providers, validates exact file coverage, composes their outputs
 into one `CodeGraph`, and adds deterministic entrypoint, source, and sink
-annotations.
-It persists the canonical graph at `<codebase>/.metis/codegraph.sqlite3` and
-publishes a typed reference to its current revision. An unchanged source set,
-language mapping, annotation configuration, and Metis version reuse that
-revision. A changed graph replaces the previous canonical row; historical
-revisions are not retained.
+annotations. File review selects only the requested file; other review modes
+select the project's supported source files.
+It persists fingerprinted canonical graphs at
+`<codebase>/.metis/codegraph.sqlite3` and publishes a typed reference to the
+selected revision. An unchanged source set, language mapping, annotation
+configuration, and Metis version reuse that revision.
 
 `simple_llm_review` is the generic review node. It reviews every file in the
 selected scope with the language plugin's prompts and does not require a
 CodeGraph.
 
-`reachability` is the default review node. It resolves the declared CodeGraph
-reference, traces the sources and sinks already present in that canonical graph,
-and performs model-backed analysis. The language plugin supplies deterministic
-CodeGraph semantics during materialization.
-Directory and file review derive an in-memory analysis scope from the canonical
-graph without replacing or mutating the persisted project graph.
+`reachability` resolves the declared CodeGraph reference and reviews selected
+function source with the normal language security-review prompt. The evidence
+includes deterministic function, call, control-flow, assignment, loop, return,
+and direct-callee contract facts. The model must identify every
+necessary-condition alternative for each finding. Deterministic admission may
+reject a finding only when every alternative is contradicted by supported
+source facts; missing, ambiguous, or incomplete evidence remains fail-open.
+
+Same-file functions are batched in source order. Invalid or output-limited
+multi-function batches are split immediately and their children are reviewed
+in the same run. Batch results and split decisions are not persisted. The
+language plugin supplies deterministic CodeGraph semantics during
+materialization.
+Directory review derives an in-memory analysis scope from the persisted project
+graph. File review materializes and persists a graph for the requested file
+only. Neither mode replaces or mutates another fingerprinted graph revision.
 Patch review is supported by `simple_llm_review`. If `reachability` is selected
 for a patch request, it publishes an inconclusive warning rather than silently
 running another node. For code, directory, and file review, Reachability sends
@@ -187,9 +209,14 @@ The CodeGraph service returns an independent in-memory graph to each consumer.
 Nodes do not mutate the persisted graph. Model-derived findings remain review
 or SARIF data; they are not written back as structural CodeGraph facts.
 
-`result` validates and publishes the stage result. Its `reviews` input accepts
-one or more Review-node outputs. Findings are combined and duplicate findings
-are removed before SARIF generation. Its `formats` list declares
+`finding_dedup` gathers every selected node output that uses the stable
+`ReviewRun` contract. It combines those runs, removes exact duplicates, and
+resolves semantic duplicates once for the whole review. Its distinct output
+contract makes it the only valid input to `result`. Patch results pass through
+unchanged.
+
+`result` validates and publishes the finalized review before generating SARIF.
+Its `formats` list declares
 the representations written for that execution. Every listed format is saved.
 Review publishes canonical `findings` for JSON, HTML, and CSV renderers and
 always publishes `sarif` in memory for downstream stages. It also publishes a
@@ -198,12 +225,13 @@ output.
 Omitting `sarif` from `formats` prevents a SARIF file from being written; it
 does not remove the in-memory SARIF contract.
 
-The graph compiler binds an omitted node input only when exactly one selected output is
-compatible. This applies to singular and collection inputs. Collection inputs
-with multiple compatible producers require an explicit ordered `inputs` list.
-Explicit bindings also resolve singular ambiguities. Same-named stage inputs,
-such as the Review request, retain precedence. Cross-stage values remain
-explicit under the stage's `inputs` mapping.
+The execution graph planner binds an omitted singular node input only when
+exactly one selected output is compatible. Collection inputs gather all
+compatible outputs in declaration order and require at least one successful
+producer; one failed producer does not suppress the consumer. Explicit
+bindings resolve singular ambiguities and may select or order collection
+sources. Same-named stage inputs, such as the Review request, retain precedence.
+Cross-stage values remain explicit under the stage's `inputs` mapping.
 
 An explicit source written as `node_name` selects that node's only output. Use
 `node_name.output_name` when the producer has multiple outputs. Cross-stage
@@ -245,15 +273,14 @@ annotated by Metis are processed again. It defaults to `false` when omitted and
 is therefore absent from the packaged YAML. It is Triage configuration, not an
 execution-graph input. The `--include-triaged` flag enables it for one run.
 
-`reachability_triage` classifies findings supported by the available CodeGraph.
-For a language or file without reachability support, it logs a warning and
-delegates that finding to the simple LLM triage classifier. The same fallback
-handles standalone triage runs without a CodeGraph reference. Its `codegraph`
-input receives the same-named stage input automatically; Triage never
+`triage` classifies each SARIF finding with navigation evidence. When its
+optional CodeGraph input covers the reported file, deterministic function and
+call relationships are included in that evidence. The same node handles
+unsupported files and standalone triage runs without a CodeGraph. Triage never
 materializes a graph itself.
 
-`simple_llm_triage` remains available as an explicitly selected node when a
-pipeline should use only generic LLM triage.
+Normal review-to-triage execution does not deduplicate twice: `triage` receives
+SARIF generated from the `FinalReviewRun` already produced by `finding_dedup`.
 
 The stage bindings `sarif: review.sarif` and `codegraph: review.codegraph`
 transfer those values and make Review a
@@ -279,7 +306,7 @@ metis_engine:
         inputs:
           sarif: $inputs.sarif
         nodes:
-          simple_llm_triage:
+          triage:
             capabilities:
               - memory
               - navigation
@@ -288,8 +315,7 @@ metis_engine:
               - sarif
 ```
 
-Third-party triage may select only `simple_llm_triage` when no CodeGraph
-reference is available.
+The optional CodeGraph input remains unset for third-party SARIF.
 
 ## Execution
 
@@ -327,10 +353,10 @@ engine/stages/
   service.py
 engine/nodes/
   codegraph/
+  finding_dedup/
   reachability/
   simple_llm_review/
-  reachability_triage/
-  simple_llm_triage/
+  triage/
   threat_model/
   index/
   result/
@@ -421,7 +447,7 @@ A Review node may package a deterministic analyzer, library, or executable in
 the same private distribution. This node-internal implementation is not a Tool
 in the execution-graph terminology and does not need a Metis capability
 registration. The node converts its output to the stable `ReviewRun` contract
-so the built-in `result` node can combine it with other analyses and generate
+so `finding_dedup` can combine it with other analyses before `result` generates
 SARIF.
 
 For example, an independently registered `new_analysis` node can run alongside
@@ -437,17 +463,14 @@ metis_engine:
           codegraph: {}
           reachability: {}
           new_analysis: {}
+          finding_dedup: {}
           result:
-            inputs:
-              reviews:
-                - reachability
-                - new_analysis
             formats:
               - sarif
 ```
 
-The compiler infers the single CodeGraph input. The ordered `reviews` binding is
-explicit because both analysis nodes publish compatible Review outputs.
+The execution graph planner infers the CodeGraph input, gathers every compatible
+Review output for `finding_dedup`, and routes its finalized output to `result`.
 
 Its entry point and essential ports are:
 
@@ -469,9 +492,10 @@ registration = NodeRegistration(
 ```
 
 The runner supplies the Review request because the input uses the canonical
-`request` name and type. To replace Reachability, omit `reachability` and route
-only `new_analysis` into `result.reviews`. To consume an existing CodeGraph,
-declare a `CodeGraphReference` input and bind it to `codegraph` in YAML.
+`request` name and type. To replace Reachability, omit `reachability`; the
+deduplication node then gathers only `new_analysis`. To consume an existing
+CodeGraph, declare a `CodeGraphReference` input. The planner can infer its
+unique producer, or YAML can bind it explicitly.
 
 Engine capabilities such as `memory`, `index`, and `navigation` are declared by
 the node and granted through YAML. Separately distributed shared capabilities
@@ -553,10 +577,11 @@ metis_engine:
           private_policy:
             inputs:
               review: simple_llm_review
-          result:
+          finding_dedup:
             inputs:
               reviews:
                 - private_policy
+          result:
             formats: [sarif, json]
             filename: results/review
     node_configuration:

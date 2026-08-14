@@ -16,6 +16,26 @@ class CodeGraphDiagnostic:
     file_path: str
     message: str
     severity: Literal["warning", "error"] = "error"
+    code: str = "codegraph.provider_error"
+    phase: Literal["parse"] | None = None
+    line: int | None = None
+    start_byte: int | None = None
+    end_byte: int | None = None
+    partial_output: bool = False
+
+    def __post_init__(self) -> None:
+        if self.line is not None and self.line < 1:
+            raise ValueError("Diagnostic line must be positive")
+        if (self.start_byte is None) != (self.end_byte is None):
+            raise ValueError("Diagnostic byte span must include both endpoints")
+        if self.start_byte is not None and self.start_byte < 0:
+            raise ValueError("Diagnostic byte span cannot be negative")
+        if (
+            self.start_byte is not None
+            and self.end_byte is not None
+            and self.end_byte < self.start_byte
+        ):
+            raise ValueError("Diagnostic byte span end precedes its start")
 
 
 @dataclass(frozen=True, slots=True)

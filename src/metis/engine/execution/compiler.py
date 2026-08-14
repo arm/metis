@@ -132,6 +132,7 @@ def compile_stage(
         dependencies = set(definition.depends_on)
         required_dependencies = set(definition.depends_on)
         for input_name, binding in input_bindings.items():
+            collection = isinstance(binding, tuple)
             for source in _sources(binding):
                 if source.startswith("$inputs."):
                     stage_input = source.removeprefix("$inputs.")
@@ -150,7 +151,9 @@ def compile_stage(
                     continue
                 producer_name, _, _output_name = source.partition(".")
                 dependencies.add(producer_name)
-                if not annotation_allows_none(registration.inputs[input_name]):
+                if not collection and not annotation_allows_none(
+                    registration.inputs[input_name]
+                ):
                     required_dependencies.add(producer_name)
         planned[name] = _PlannedNode(
             name,
@@ -237,8 +240,10 @@ def _infer_input_bindings(
             for output_name, output_annotation in producer.outputs.items()
             if _annotations_compatible(output_annotation, target)
         )
-        if len(compatible) == 1:
-            bindings[input_name] = compatible if collection else compatible[0]
+        if collection and compatible:
+            bindings[input_name] = compatible
+        elif len(compatible) == 1:
+            bindings[input_name] = compatible[0]
         elif len(compatible) > 1:
             sources = ", ".join(compatible)
             raise ValueError(

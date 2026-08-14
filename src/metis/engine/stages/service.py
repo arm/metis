@@ -5,16 +5,17 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import assert_never
 from typing import cast
-from typing import TYPE_CHECKING
-
-from metis.engine.llm_runner import JsonPromptRunner
-from metis.engine.codegraph import CodeGraphReference
-from metis.sarif.models import SarifPayload
 
 from metis import runlog
+from metis.engine.codegraph import CodeGraphReference
+from metis.engine.llm_runner import JsonPromptRunner
+from metis.runtime_settings import TriageOptions
+from metis.sarif.models import SarifPayload
+from metis.utils import count_tokens
 
 from ..execution.catalog import NodeCatalog
 from ..execution.compiler import StagePlan
@@ -23,20 +24,19 @@ from ..execution.compiler import compile_stage
 from ..execution.contracts import ExecutionDiagnostic
 from ..execution.contracts import ExecutionResult
 from ..execution.contracts import ExecutionStatus
-from ..execution.contracts import NodeContext
 from ..execution.contracts import NodeCallbacks
 from ..execution.contracts import NodeCodeGraphs
+from ..execution.contracts import NodeContext
 from ..execution.contracts import NodeRegistration
 from ..execution.contracts import NodeRuntime
 from ..execution.contracts import StageName
 from ..execution.graph import StageConfiguration
 from ..execution.runner import run_stage
-from .configuration import ExecutionConfiguration
 from .configuration import STAGE_CONTRACTS
+from .configuration import ExecutionConfiguration
 from .review.models import ReviewCommand
-from .triage.models import TriageRun
-from metis.runtime_settings import TriageOptions
 from .triage.contracts import TriageAdjudicator
+from .triage.models import TriageRun
 
 if TYPE_CHECKING:
     from importlib import metadata
@@ -248,6 +248,7 @@ class ExecutionGraphService:
         *,
         callbacks: Mapping[str, object] | None = None,
     ) -> NodeContext:
+        llm_provider = self._engine_config.llm_provider
         return NodeContext(
             stage=stage,
             codebase_path=self._engine_config.codebase_path,
@@ -259,6 +260,11 @@ class ExecutionGraphService:
                 model=self._engine_config.llama_query_model,
                 max_workers=self._engine_config.max_workers,
                 max_token_length=self._engine_config.max_token_length,
+                token_counter=(
+                    llm_provider.count_tokens
+                    if llm_provider is not None
+                    else count_tokens
+                ),
                 model_tool_max_rounds=(
                     self._engine_config.capability_settings.model_tools.max_rounds
                 ),

@@ -18,30 +18,29 @@ from ..stages.service import ExecutionGraphService
 from ..stages.triage.service import TriageService
 from .codegraph import CodeGraphService
 from .codegraph import registration as codegraph_node
+from .finding_dedup import registration as finding_dedup_node
 from .index import registration as index_node
 from .reachability import review as reachability_node
 from .reachability.review import ReachabilityReviewService
 from .reachability.service import ReachabilityService
-from .reachability_triage import registration as reachability_triage_node
-from .reachability_triage.service import ReachabilityTriageService
 from .result import review as review_result_node
 from .result import triage as triage_result_node
 from .simple_llm_review import registration as simple_llm_review_node
 from .simple_llm_review.service import SimpleLlmReviewService
-from .simple_llm_triage import registration as simple_llm_triage_node
-from .simple_llm_triage.service import SimpleLlmTriageService
 from .threat_model import registration as threat_model_node
+from .triage import registration as triage_node
+from .triage.service import TriageClassifierService
 
 if TYPE_CHECKING:
-    from .simple_llm_review.graph import ReviewGraph
     from ..capabilities.index import IndexCapability
+    from .simple_llm_review.graph import ReviewGraph
 
 
 @dataclass(frozen=True, slots=True)
 class BuiltinExecution:
     execution: ExecutionGraphService
     triage_service: TriageService | None
-    simple_llm_triage: SimpleLlmTriageService | None
+    triage_classifier: TriageClassifierService | None
 
 
 def build_builtin_execution(
@@ -60,6 +59,7 @@ def build_builtin_execution(
     static_registrations = (
         index_node.registration,
         codegraph_node.registration,
+        finding_dedup_node,
         review_result_node.registration,
         triage_result_node.registration,
     )
@@ -73,6 +73,8 @@ def build_builtin_execution(
         registrations.append(threat_model_node.create_node(engine_config, repository))
 
     simple_llm_review = None
+    simple_review_selected = ("review", "simple_llm_review") in selected_nodes
+    reachability_selected = ("review", "reachability") in selected_nodes
     if {
         ("review", "simple_llm_review"),
         ("review", "reachability"),
@@ -82,15 +84,10 @@ def build_builtin_execution(
             repository,
             review_graph_factory=review_graph_factory,
         )
-    if ("review", "simple_llm_review") in selected_nodes:
+    if simple_review_selected:
         assert simple_llm_review is not None
         registrations.append(simple_llm_review_node.create_node(simple_llm_review))
 
-    reachability_selected = ("review", "reachability") in selected_nodes
-    reachability_triage_selected = (
-        "triage",
-        "reachability_triage",
-    ) in selected_nodes
     reachability = (
         ReachabilityService(
             config=engine_config,
@@ -99,7 +96,7 @@ def build_builtin_execution(
             usage_runtime=engine_config.usage_runtime,
             codegraphs=codegraphs,
         )
-        if reachability_selected or reachability_triage_selected
+        if reachability_selected
         else None
     )
     if reachability_selected:
@@ -108,11 +105,7 @@ def build_builtin_execution(
             engine_config,
             repository,
             reachability,
-            (
-                None
-                if ("review", "simple_llm_review") in selected_nodes
-                else simple_llm_review
-            ),
+            None if simple_review_selected else simple_llm_review,
             reachability_settings,
         )
         registrations.append(reachability_node.create_node(reachability_review))
@@ -125,50 +118,23 @@ def build_builtin_execution(
         if configuration.stages.triage is not None
         else None
     )
-    selected_triage_nodes = {
-        name for stage, name in selected_nodes if stage == "triage"
-    }
-    simple_llm_triage = None
-    if {"simple_llm_triage", "reachability_triage"} & selected_triage_nodes:
-        simple_llm_triage = SimpleLlmTriageService(
+    triage_classifier = None
+    if ("triage", "triage") in selected_nodes:
+        triage_classifier = TriageClassifierService(
             llm_provider=engine_config.llm_provider,
             model=engine_config.llama_query_model,
             chat_model_kwargs=engine_config.chat_model_kwargs,
             plugin_config=engine_config.plugin_config,
             get_plugin_for_path=repository.get_plugin_for_path,
             get_language_name_for_path=repository.get_language_name_for_path,
+            normalize_path=repository.normalize_match_path,
             usage_hooks=engine_config.usage_runtime.hooks,
             model_tool_max_contract_chars=(
                 engine_config.capability_settings.model_tools.max_contract_chars
             ),
             navigation_manifest=capabilities.manifest("navigation"),
         )
-        if "simple_llm_triage" in selected_triage_nodes:
-            registrations.append(simple_llm_triage_node.create_node(simple_llm_triage))
-    if "reachability_triage" in selected_triage_nodes:
-        assert reachability is not None
-        assert simple_llm_triage is not None
-        reachability_triage = ReachabilityTriageService(
-            reachability_service=reachability,
-            settings=reachability_settings,
-            max_workers=engine_config.max_workers,
-            llm_provider=engine_config.llm_provider,
-            model=engine_config.llama_query_model,
-            usage_runtime=engine_config.usage_runtime,
-            codebase_path=engine_config.codebase_path,
-            chat_model_kwargs=engine_config.chat_model_kwargs,
-            normalize_path=repository.normalize_match_path,
-            model_tool_max_contract_chars=(
-                engine_config.capability_settings.model_tools.max_contract_chars
-            ),
-            navigation_manifest=capabilities.manifest("navigation"),
-        )
-        registrations.append(
-            reachability_triage_node.create_node(
-                reachability_triage,
-                simple_llm_triage,
-            )
-        )
+        registrations.append(triage_node.create_node(triage_classifier))
 
     try:
         execution = ExecutionGraphService(
@@ -186,7 +152,7 @@ def build_builtin_execution(
             registrations=registrations,
         )
     except Exception:
-        if simple_llm_triage is not None:
-            simple_llm_triage.close()
+        if triage_classifier is not None:
+            triage_classifier.close()
         raise
-    return BuiltinExecution(execution, triage_service, simple_llm_triage)
+    return BuiltinExecution(execution, triage_service, triage_classifier)

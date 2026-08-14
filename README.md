@@ -40,25 +40,28 @@ Metis includes support for the following languages:
 
 | Language | Review | Triage | Notes |
 | --- | --- | --- | --- |
-| C | CodeGraph Reachability with simple LLM fallback | Reachability with simple LLM fallback | Tree-sitter-backed CodeGraph; navigation-assisted fallback |
-| C++ | CodeGraph Reachability with simple LLM fallback | Reachability with simple LLM fallback | Tree-sitter-backed CodeGraph; navigation-assisted fallback |
-| Java | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| C# | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Python | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Rust | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| TypeScript | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Terraform | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Go | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| TableGen | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Verilog | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| SystemVerilog | Language-plugin simple LLM review | Simple LLM triage | Verilog Tree-sitter code splitting; navigation-assisted triage |
-| JavaScript | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Kotlin | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| PHP | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| AArch64 Assembly | Language-plugin simple LLM review | Simple LLM triage | Tree-sitter code splitting; navigation-assisted triage |
-| Jupyter Notebook | Language-plugin simple LLM review | Simple LLM triage | Python Tree-sitter code splitting; navigation-assisted triage |
+| C | Simple LLM and CodeGraph Reachability | Navigation-assisted LLM with CodeGraph context | Tree-sitter-backed CodeGraph |
+| C++ | Simple LLM and CodeGraph Reachability | Navigation-assisted LLM with CodeGraph context | Tree-sitter-backed CodeGraph |
+| Java | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| C# | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Python | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Ruby | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Rust | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Solidity | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| TypeScript | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Terraform | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Go | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| TableGen | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Verilog | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| SystemVerilog | Language-plugin simple LLM review | Navigation-assisted LLM | Verilog Tree-sitter code splitting |
+| JavaScript | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Kotlin | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| PHP | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| AArch64 Assembly | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
+| Jupyter Notebook | Language-plugin simple LLM review | Navigation-assisted LLM | Python Tree-sitter code splitting |
 
-For the current Reachability and simple LLM triage paths, see
+For the current review graph and SARIF triage flow, see
+[docs/execution-graph.md](docs/execution-graph.md) and
 [docs/triage-flow.md](docs/triage-flow.md).
 
 Metis uses a plugin-based language system, making it easy to extend support to additional languages.
@@ -190,7 +193,8 @@ Configuration covers:
 - **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
 - **Index storage:** backend-specific storage parameters for commands that still use the index.
 - **Capability settings:** index-search and navigation limits
-- **Reachability:** path selection, path length, sink limits, and domain hints.
+- **Reachability:** maximum reported path length and optional domain profiles
+  and hints.
 
 Project configuration is optional when the packaged defaults are suitable.
 
@@ -251,8 +255,9 @@ capability.
 
 ### `review_code`
 Runs the configured Review stage over the codebase. The packaged graph uses the
-CodeGraph and Reachability nodes. Files without CodeGraph support are skipped
-by Reachability and reviewed by the simple LLM fallback.
+simple LLM and CodeGraph Reachability nodes, then combines and deduplicates
+their findings. Reachability reviews supported C and C++ functions; the simple
+LLM review covers every file in the selected scope.
 
 ### `review_dir`
 Runs the configured Review stage and limits findings to the selected directory.

@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import cast
 from typing import TYPE_CHECKING
-from functools import partial
 
+from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import NodeInvocation
@@ -15,13 +16,13 @@ from metis.engine.execution.contracts import NodeResult
 from metis.engine.stages.triage.models import TriageRun
 
 if TYPE_CHECKING:
-    from .service import SimpleLlmTriageService
+    from .service import TriageClassifierService
     from metis.engine.capabilities.navigation import NavigationCapability
     from metis.memory import MemoryService
 
 
 def create_node(
-    simple_llm: SimpleLlmTriageService,
+    classifier_service: TriageClassifierService,
 ) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
         adjudicator = invocation.context.triage
@@ -34,11 +35,21 @@ def create_node(
             "NavigationCapability",
             invocation.context.capabilities["navigation"],
         )
+        reference = cast(CodeGraphReference | None, invocation.inputs["codegraph"])
+        codegraph = (
+            invocation.context.codegraphs.load(reference)
+            if reference is not None
+            else None
+        )
         triaged = adjudicator.triage_run(
             cast(TriageRun, invocation.inputs["request"]),
             classifier=partial(
-                simple_llm.classify,
+                classifier_service.classify,
                 navigation=navigation,
+                codegraph=codegraph,
+                unavailable_files=(
+                    reference.failed_files if reference is not None else ()
+                ),
                 model_tool_max_rounds=(
                     invocation.context.runtime.model_tool_max_rounds
                 ),
@@ -51,10 +62,13 @@ def create_node(
         return NodeResult({"run": triaged})
 
     return NodeRegistration(
-        name="simple_llm_triage",
+        name="triage",
         stage="triage",
         configuration=EmptyNodeConfiguration,
-        inputs={"request": TriageRun},
+        inputs={
+            "request": TriageRun,
+            "codegraph": CodeGraphReference | None,
+        },
         outputs={"run": TriageRun},
         execute=execute,
         capabilities={

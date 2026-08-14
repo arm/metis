@@ -3,33 +3,25 @@
 
 from collections.abc import Mapping
 from typing import Any
+from typing import ClassVar
 
 from rich.markup import escape
 from rich.progress import Progress
 
 
 class ReviewCodeProgressReporter:
-    _EVENT_HANDLERS = {
+    _EVENT_HANDLERS: ClassVar[dict[str, str]] = {
         "review_files_start": "_review_files_start",
         "review_result": "_review_result",
         "codegraph_start": "_graph_start",
         "codegraph_progress": "_graph_progress",
         "codegraph_done": "_graph_done",
-        "reachability_paths_start": "_paths_start",
-        "reachability_paths_progress": "_paths_progress",
-        "reachability_paths_done": "_paths_done",
-        "intra_audit_start": "_intra_audit_start",
-        "intra_audit_progress": "_intra_audit_progress",
-        "confirmation_start": "_confirmation_start",
-        "confirmation_progress": "_confirmation_progress",
-        "confirmation_done": "_confirmation_done",
-        "supplementary_done": "_supplementary_done",
+        "reachability_frontier_review_start": "_frontier_review_start",
+        "reachability_frontier_review_done": "_frontier_review_done",
         "findings_finalization_start": "_findings_finalization_start",
         "findings_finalization_progress": "_findings_finalization_progress",
         "findings_finalization_done": "_findings_finalization_done",
         "reachability_code_review_done": "_code_review_done",
-        "review_output_aggregation_start": "_review_output_aggregation_start",
-        "review_output_aggregation_done": "_review_output_aggregation_done",
     }
 
     def __init__(self, progress: Progress, *, total_files: int):
@@ -40,10 +32,8 @@ class ReviewCodeProgressReporter:
             total=None,
         )
         self._review_completed = 0
-        self._confirmation_pending = False
         self._saw_reachability = False
         self._collecting_reachability_results = False
-        self._reachability_result_total = 0
         self._finalizing_review_results = False
 
     def __call__(self, event: Mapping[str, Any] | None):
@@ -118,112 +108,44 @@ class ReviewCodeProgressReporter:
     def _graph_done(self, event: Mapping[str, Any]):
         self._start_phase(
             (
-                "[cyan]Reachability graph ready; finding paths "
+                "[cyan]CodeGraph ready: "
                 f"{event.get('nodes', 0)} functions, "
                 f"{event.get('edges', 0)} calls[/cyan]"
             ),
         )
 
-    def _paths_done(self, event: Mapping[str, Any]):
-        selected = _positive_int(event.get("selected")) or 0
-        self._confirmation_pending = bool(
-            event.get("confirmation_enabled") and selected
+    def _frontier_review_start(self, event: Mapping[str, Any]):
+        self._start_phase(
+            (
+                "[cyan]Reviewing reachability evidence: "
+                f"{event.get('nodes', 0)} functions, "
+                f"{event.get('edges', 0)} calls[/cyan]"
+            ),
+            total=_positive_int(event.get("frontiers")),
+        )
+
+    def _frontier_review_done(self, event: Mapping[str, Any]):
+        failed_nodes = _non_negative_int(event.get("failed_nodes")) or 0
+        incomplete_nodes = (
+            _non_negative_int(event.get("evidence_incomplete_nodes")) or 0
         )
         self._start_phase(
             (
-                "[cyan]Reachability paths ready; running lenses "
-                f"{event.get('paths', 0)} paths, "
-                f"{event.get('selected', 0)} selected[/cyan]"
-            ),
-        )
-
-    def _paths_start(self, event: Mapping[str, Any]):
-        total = _positive_int(event.get("total"))
-        workers = event.get("workers", 0)
-        self._start_phase(
-            (
-                "[cyan]Finding reachability paths "
-                f"{total or 0} sources, {workers} workers[/cyan]"
-            ),
-            total=total,
-        )
-
-    def _paths_progress(self, event: Mapping[str, Any]):
-        total = _positive_int(event.get("total"))
-        completed = _non_negative_int(event.get("completed")) or 0
-        paths = event.get("paths", 0)
-        workers = event.get("workers", 0)
-        self._update_progress(
-            total=total,
-            completed=completed,
-            description=(
-                "[cyan]Finding reachability paths "
-                f"{completed}/{total or 0} sources, "
-                f"{paths} paths, {workers} workers[/cyan]"
-            ),
-            final_description="[cyan]Finalizing reachability paths...[/cyan]",
-        )
-
-    def _intra_audit_start(self, event: Mapping[str, Any]):
-        self._start_phase(
-            "[cyan]Running intra-file reachability audit...[/cyan]",
-            total=_positive_int(event.get("files")),
-        )
-
-    def _intra_audit_progress(self, event: Mapping[str, Any]):
-        self._update_progress(
-            total=_positive_int(event.get("total")),
-            completed=_positive_int(event.get("completed")) or 0,
-            description="[cyan]Auditing reachability files[/cyan]",
-            final_description="[cyan]Finalizing intra-file audit...[/cyan]",
-        )
-
-    def _confirmation_start(self, event: Mapping[str, Any]):
-        self._start_phase(
-            "[cyan]Confirming reachable paths...[/cyan]",
-            total=_positive_int(event.get("total")),
-        )
-
-    def _confirmation_progress(self, event: Mapping[str, Any]):
-        self._update_progress(
-            total=_positive_int(event.get("total")),
-            completed=_positive_int(event.get("completed")) or 0,
-            description="[cyan]Confirming reachable paths...[/cyan]",
-            final_description="[cyan]Finalizing path confirmation...[/cyan]",
-        )
-
-    def _confirmation_done(self, event: Mapping[str, Any]):
-        self._confirmation_pending = False
-        self._start_phase(
-            (
-                "[cyan]Path confirmation complete: "
-                f"{event.get('confirmed', 0)} candidate findings[/cyan]"
-            ),
-        )
-
-    def _supplementary_done(self, event: Mapping[str, Any]):
-        next_phase = "; confirming selected paths" if self._confirmation_pending else ""
-        self._start_phase(
-            (
-                "[cyan]Reachability lenses complete: "
-                f"{event.get('total', 0)} candidate findings{next_phase}[/cyan]"
+                "[cyan]Reachability review complete: "
+                f"{event.get('reviewed_nodes', 0)}/"
+                f"{event.get('planned_nodes', 0)} functions, "
+                f"{event.get('findings', 0)} findings, "
+                f"functions with review failures: {failed_nodes}, "
+                f"functions with incomplete evidence: {incomplete_nodes}[/cyan]"
             ),
         )
 
     def _findings_finalization_start(self, event: Mapping[str, Any]):
         candidates = event.get("candidates", 0)
-        supplementary = event.get("supplementary_findings")
-        path_findings = event.get("path_findings")
-        source_breakdown = (
-            f" ({supplementary} lenses, {path_findings} paths)"
-            if supplementary is not None and path_findings is not None
-            else ""
-        )
         self._start_phase(
-            "[cyan]Deduplicating findings[/cyan]",
+            "[cyan]Checking findings for duplicates[/cyan]",
             print_message=(
-                "[cyan]Going through "
-                f"{candidates} candidate findings{source_breakdown}[/cyan]"
+                f"[cyan]Checking {candidates} findings for duplicates[/cyan]"
             ),
         )
 
@@ -232,9 +154,9 @@ class ReviewCodeProgressReporter:
         completed = _non_negative_int(event.get("completed")) or 0
         phase = str(event.get("phase") or "")
         description = (
-            "[cyan]Adjudicating representative findings[/cyan]"
+            "[cyan]Comparing possible duplicates[/cyan]"
             if phase == "representative"
-            else "[cyan]Adjudicating final findings[/cyan]"
+            else "[cyan]Checking findings for duplicates[/cyan]"
         )
         if total is None:
             self._progress.update(self._task, description=description)
@@ -252,7 +174,7 @@ class ReviewCodeProgressReporter:
                 "[cyan]Final findings ready: "
                 f"{event.get('deduped_findings', 0)} kept, "
                 f"{event.get('removed_findings', 0)} removed from "
-                f"{event.get('raw_findings', 0)} candidates; grouping by file[/cyan]"
+                f"{event.get('raw_findings', 0)} candidates[/cyan]"
             ),
         )
 
@@ -260,23 +182,8 @@ class ReviewCodeProgressReporter:
         self._start_phase(
             (
                 "[cyan]Reachability review output ready: "
-                f"{event.get('deduped_findings', 0)} findings across "
+                f"{event.get('findings', 0)} findings across "
                 f"{event.get('files', 0)} files[/cyan]"
-            ),
-        )
-
-    def _review_output_aggregation_start(self, event: Mapping[str, Any]):
-        self._start_phase("[cyan]Finalizing reachability output...[/cyan]")
-
-    def _review_output_aggregation_done(self, event: Mapping[str, Any]):
-        total = _positive_int(event.get("files")) or 0
-        self._reachability_result_total = total
-        self._start_phase(
-            "[cyan]Collecting reachability results[/cyan]",
-            total=total,
-            print_message=(
-                "[cyan]Reachability output finalized; collecting "
-                f"{total} file results[/cyan]"
             ),
         )
 
@@ -291,19 +198,6 @@ class ReviewCodeProgressReporter:
             )
 
     def _reachability_result(self):
-        if self._reachability_result_total:
-            completed = min(self._review_completed, self._reachability_result_total)
-            if completed >= self._reachability_result_total:
-                self._finalize_review_results()
-                return
-            self._progress.update(
-                self._task,
-                total=self._reachability_result_total,
-                completed=completed,
-                description="[cyan]Collecting reachability results[/cyan]",
-            )
-            return
-
         description = (
             "[cyan]Collecting reachability results "
             f"{self._review_completed} files[/cyan]"

@@ -3,14 +3,15 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import sqlite3
 import threading
+from collections.abc import Iterable
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
-from pydantic import BaseModel
-from pydantic import ConfigDict
 from pydantic import TypeAdapter
 
 from metis.engine.codegraph import CodeGraph
@@ -19,16 +20,10 @@ from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import FunctionNode
 from metis.engine.codegraph import GlobalConstruct
 
-
-class _GraphEnvelope(BaseModel):
-    nodes: tuple[FunctionNode, ...]
-    globals: tuple[GlobalConstruct, ...]
-    public_declarations: dict[str, tuple[str, ...]]
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-_DIAGNOSTICS = TypeAdapter(tuple[CodeGraphDiagnostic, ...])
+_STORE_SCHEMA_VERSION = 2
+_FUNCTION_NODE = TypeAdapter(FunctionNode)
+_GLOBAL_CONSTRUCT = TypeAdapter(GlobalConstruct)
+_DIAGNOSTIC = TypeAdapter(CodeGraphDiagnostic)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,25 +40,6 @@ class SQLiteCodeGraphStore:
         self._lock = threading.RLock()
         self._initialize()
 
-    def current(self, *, codebase_path: str) -> StoredCodeGraph | None:
-        with self._lock:
-            try:
-                with sqlite3.connect(self.location) as connection:
-                    row = connection.execute(
-                        """
-                        SELECT revision, fingerprint, producer_version,
-                               processed_files, failed_files, diagnostics, graph
-                        FROM canonical_codegraph WHERE singleton = 1
-                        """
-                    ).fetchone()
-            except sqlite3.Error as exc:
-                raise RuntimeError(
-                    f"Unable to read CodeGraph store {self.location!r}: {exc}"
-                ) from exc
-        return (
-            self._decode(row, codebase_path=codebase_path) if row is not None else None
-        )
-
     def reference_for_fingerprint(
         self,
         fingerprint: str,
@@ -72,26 +48,30 @@ class SQLiteCodeGraphStore:
     ) -> CodeGraphReference | None:
         with self._lock:
             try:
-                with sqlite3.connect(self.location) as connection:
+                with _connect(self.location) as connection:
                     row = connection.execute(
                         """
-                        SELECT revision, fingerprint, producer_version,
-                               processed_files, failed_files, diagnostics, graph
+                        SELECT revision
                         FROM canonical_codegraph
-                        WHERE singleton = 1 AND fingerprint = ?
+                        WHERE fingerprint = ?
                         """,
                         (fingerprint,),
                     ).fetchone()
+                    if row is None:
+                        return None
+                    try:
+                        stored = _read_stored_graph(
+                            connection,
+                            codebase_path=codebase_path,
+                            revision=int(row[0]),
+                        )
+                    except RuntimeError:
+                        return None
             except sqlite3.Error as exc:
                 raise RuntimeError(
                     f"Unable to read CodeGraph store {self.location!r}: {exc}"
                 ) from exc
-        if row is None:
-            return None
-        try:
-            return self._decode(row, codebase_path=codebase_path).reference
-        except RuntimeError:
-            return None
+        return None if stored is None else stored.reference
 
     def save(
         self,
@@ -103,78 +83,54 @@ class SQLiteCodeGraphStore:
         failed_files: tuple[str, ...],
         diagnostics: tuple[CodeGraphDiagnostic, ...],
     ) -> CodeGraphReference:
-        graph_json = _graph_json(graph)
-        processed_json = _json(list(processed_files))
-        failed_json = _json(list(failed_files))
-        diagnostics_json = _json(
-            [
-                {
-                    "file_path": item.file_path,
-                    "message": item.message,
-                    "severity": item.severity,
-                }
-                for item in diagnostics
-            ]
+        records = _graph_records(
+            graph,
+            processed_files=processed_files,
+            failed_files=failed_files,
+            diagnostics=diagnostics,
         )
+        content_hash = _records_hash(records)
         with self._lock:
             try:
-                with sqlite3.connect(self.location) as connection:
+                with _connect(self.location) as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     current = connection.execute(
                         """
-                        SELECT revision, fingerprint, producer_version,
-                               processed_files, failed_files, diagnostics, graph
-                        FROM canonical_codegraph WHERE singleton = 1
-                        """
+                        SELECT revision FROM canonical_codegraph
+                        WHERE fingerprint = ?
+                        """,
+                        (fingerprint,),
                     ).fetchone()
-                    unchanged = current is not None and (
-                        current[1],
-                        current[2],
-                        current[3],
-                        current[4],
-                        current[5],
-                        current[6],
-                    ) == (
-                        fingerprint,
-                        producer_version,
-                        processed_json,
-                        failed_json,
-                        diagnostics_json,
-                        graph_json,
-                    )
-                    if unchanged:
-                        connection.commit()
-                        return _reference_from_values(
-                            current[0],
-                            current[1],
-                            current[2],
-                            current[4],
-                            current[5],
+                    if current is not None:
+                        connection.execute(
+                            "DELETE FROM canonical_codegraph WHERE revision = ?",
+                            (int(current[0]),),
                         )
-                    revision = 1 if current is None else int(current[0]) + 1
-                    connection.execute(
+                    cursor = connection.execute(
                         """
                         INSERT INTO canonical_codegraph (
-                            singleton, revision, fingerprint, producer_version,
-                            processed_files, failed_files, diagnostics, graph
-                        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(singleton) DO UPDATE SET
-                            revision = excluded.revision,
-                            fingerprint = excluded.fingerprint,
-                            producer_version = excluded.producer_version,
-                            processed_files = excluded.processed_files,
-                            failed_files = excluded.failed_files,
-                            diagnostics = excluded.diagnostics,
-                            graph = excluded.graph
+                            fingerprint, producer_version, content_hash
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (fingerprint, producer_version, content_hash),
+                    )
+                    revision = int(cursor.lastrowid)
+                    connection.executemany(
+                        """
+                        INSERT INTO codegraph_records(
+                            graph_revision, position, kind, identity, payload
+                        ) VALUES (?, ?, ?, ?, ?)
                         """,
                         (
-                            revision,
-                            fingerprint,
-                            producer_version,
-                            processed_json,
-                            failed_json,
-                            diagnostics_json,
-                            graph_json,
+                            (revision, position, kind, identity, payload)
+                            for position, (kind, identity, payload) in enumerate(
+                                _graph_records(
+                                    graph,
+                                    processed_files=processed_files,
+                                    failed_files=failed_files,
+                                    diagnostics=diagnostics,
+                                )
+                            )
                         ),
                     )
                     connection.commit()
@@ -182,14 +138,13 @@ class SQLiteCodeGraphStore:
                 raise RuntimeError(
                     f"Unable to persist CodeGraph store {self.location!r}: {exc}"
                 ) from exc
-        reference = CodeGraphReference(
+        return CodeGraphReference(
             revision=revision,
             fingerprint=fingerprint,
             producer_version=producer_version,
             failed_files=failed_files,
             diagnostics=diagnostics,
         )
-        return reference
 
     def load(
         self,
@@ -197,117 +152,245 @@ class SQLiteCodeGraphStore:
         *,
         codebase_path: str,
     ) -> CodeGraph:
-        current = self.current(codebase_path=codebase_path)
-        if current is None:
+        with self._lock:
+            try:
+                with _connect(self.location) as connection:
+                    stored = _read_stored_graph(
+                        connection,
+                        codebase_path=codebase_path,
+                        revision=reference.revision,
+                    )
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    f"Unable to read CodeGraph store {self.location!r}: {exc}"
+                ) from exc
+        if stored is None or stored.reference != reference:
             raise ValueError("CodeGraph reference does not exist")
-        if current.reference != reference:
-            raise ValueError("CodeGraph reference is not the current canonical graph")
-        return current.graph
+        return stored.graph
 
     def _initialize(self) -> None:
         directory = os.path.dirname(self.location)
         try:
             os.makedirs(directory, exist_ok=True)
-            with sqlite3.connect(self.location) as connection:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS canonical_codegraph (
-                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                        revision INTEGER NOT NULL,
-                        fingerprint TEXT NOT NULL,
-                        producer_version TEXT NOT NULL,
-                        processed_files TEXT NOT NULL,
-                        failed_files TEXT NOT NULL,
-                        diagnostics TEXT NOT NULL,
-                        graph TEXT NOT NULL
-                    )
-                    """
+            with _connect(self.location) as connection:
+                current_version = int(
+                    connection.execute("PRAGMA user_version").fetchone()[0]
                 )
+                if current_version != _STORE_SCHEMA_VERSION:
+                    _drop_store_tables(connection)
+                _create_store_tables(connection)
+                connection.execute(f"PRAGMA user_version = {_STORE_SCHEMA_VERSION}")
                 connection.commit()
         except (OSError, sqlite3.Error) as exc:
             raise RuntimeError(
                 f"Unable to initialize CodeGraph store {self.location!r}: {exc}"
             ) from exc
 
-    def _decode(
-        self,
-        row: tuple[object, ...],
-        *,
-        codebase_path: str,
-    ) -> StoredCodeGraph:
-        (
-            revision,
-            fingerprint,
-            version,
-            processed_raw,
-            failed_raw,
-            diagnostics_raw,
-            graph_raw,
-        ) = row
-        try:
-            processed = tuple(json.loads(str(processed_raw)))
-            graph = _graph_from_json(str(graph_raw))
-            graph.validate_for_files(processed, codebase_path=codebase_path)
-            reference = _reference_from_values(
-                revision,
-                fingerprint,
-                version,
-                failed_raw,
-                diagnostics_raw,
+
+def _read_stored_graph(
+    connection: sqlite3.Connection,
+    *,
+    codebase_path: str,
+    revision: int,
+) -> StoredCodeGraph | None:
+    metadata = connection.execute(
+        """
+        SELECT revision, fingerprint, producer_version, content_hash
+        FROM canonical_codegraph WHERE revision = ?
+        """,
+        (revision,),
+    ).fetchone()
+    if metadata is None:
+        return None
+    try:
+        reference = _reference_from_connection(connection, metadata)
+        graph, processed_files = _graph_from_records(
+            _stored_records(
+                connection,
+                revision=revision,
+                expected_hash=str(metadata[3]),
             )
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"Stored CodeGraph at {self.location!r} is invalid: {exc}"
-            ) from exc
-        return StoredCodeGraph(reference, graph)
+        )
+        graph.validate_for_files(processed_files, codebase_path=codebase_path)
+    except (TypeError, ValueError) as exc:
+        database = connection.execute("PRAGMA database_list").fetchone()[2]
+        raise RuntimeError(
+            f"Stored CodeGraph at {database!r} is invalid: {exc}"
+        ) from exc
+    return StoredCodeGraph(reference, graph)
 
 
-def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _reference_from_values(
-    revision: object,
-    fingerprint: object,
-    producer_version: object,
-    failed_raw: object,
-    diagnostics_raw: object,
+def _reference_from_connection(
+    connection: sqlite3.Connection,
+    metadata: tuple[object, ...],
 ) -> CodeGraphReference:
-    diagnostics = _DIAGNOSTICS.validate_python(
-        json.loads(str(diagnostics_raw)),
-        extra="forbid",
-    )
+    revision = int(metadata[0])
+    failed_files: list[str] = []
+    diagnostics: list[CodeGraphDiagnostic] = []
+    for kind, identity, payload in connection.execute(
+        """
+        SELECT kind, identity, payload FROM codegraph_records
+        WHERE graph_revision = ? AND kind IN ('failed', 'diagnostic')
+        ORDER BY position
+        """,
+        (revision,),
+    ):
+        if kind == "failed":
+            failed_files.append(str(identity))
+        else:
+            diagnostics.append(
+                _DIAGNOSTIC.validate_json(payload, strict=True, extra="forbid")
+            )
     return CodeGraphReference(
         revision=revision,
-        fingerprint=fingerprint,
-        producer_version=producer_version,
-        failed_files=tuple(json.loads(str(failed_raw))),
-        diagnostics=diagnostics,
+        fingerprint=str(metadata[1]),
+        producer_version=str(metadata[2]),
+        failed_files=tuple(failed_files),
+        diagnostics=tuple(diagnostics),
     )
 
 
-def _graph_json(graph: CodeGraph) -> str:
-    return _GraphEnvelope(
-        nodes=tuple(graph.nodes.values()),
-        globals=tuple(graph.globals.values()),
-        public_declarations={
-            name: tuple(locations)
-            for name, locations in graph.public_declarations.items()
-        },
-    ).model_dump_json()
-
-
-def _graph_from_json(raw: str) -> CodeGraph:
-    payload = _GraphEnvelope.model_validate_json(raw, strict=True, extra="forbid")
+def _graph_from_records(
+    records: Iterable[tuple[str, str, bytes]],
+) -> tuple[CodeGraph, tuple[str, ...]]:
     graph = CodeGraph()
-    for item in payload.nodes:
-        graph.add_node(item)
-    for item in payload.globals:
-        graph.add_global(item)
-    graph.add_public_declarations(
-        {
-            name: list(locations)
-            for name, locations in payload.public_declarations.items()
-        }
+    processed_files: list[str] = []
+    declarations: dict[str, list[str]] = {}
+    for kind, identity, payload in records:
+        if kind == "node":
+            node = _FUNCTION_NODE.validate_json(payload, strict=True, extra="forbid")
+            if node.unique_name != identity:
+                raise ValueError(
+                    "Stored CodeGraph node identity does not match its row"
+                )
+            graph.add_node(node)
+        elif kind == "global":
+            construct = _GLOBAL_CONSTRUCT.validate_json(
+                payload,
+                strict=True,
+                extra="forbid",
+            )
+            if construct.unique_name != identity:
+                raise ValueError(
+                    "Stored CodeGraph global identity does not match its row"
+                )
+            graph.add_global(construct)
+        elif kind == "declaration":
+            declarations.setdefault(str(identity), []).append(
+                bytes(payload).decode("utf-8")
+            )
+        elif kind == "processed":
+            processed_files.append(str(identity))
+    graph.add_public_declarations(declarations)
+    return graph, tuple(processed_files)
+
+
+def _graph_records(
+    graph: CodeGraph,
+    *,
+    processed_files: tuple[str, ...],
+    failed_files: tuple[str, ...],
+    diagnostics: tuple[CodeGraphDiagnostic, ...],
+) -> Iterator[tuple[str, str, bytes]]:
+    for unique_name, node in graph.nodes.items():
+        yield "node", unique_name, _FUNCTION_NODE.dump_json(node)
+    for unique_name, construct in graph.globals.items():
+        yield "global", unique_name, _GLOBAL_CONSTRUCT.dump_json(construct)
+    for name, locations in graph.public_declarations.items():
+        for location in locations:
+            yield "declaration", name, location.encode("utf-8")
+    for path in processed_files:
+        yield "processed", path, b""
+    for path in failed_files:
+        yield "failed", path, b""
+    for diagnostic in diagnostics:
+        yield "diagnostic", "", _DIAGNOSTIC.dump_json(diagnostic)
+
+
+def _records_hash(records: Iterable[tuple[str, str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for kind, identity, payload in records:
+        _update_hash(digest, kind, identity, payload)
+    return digest.hexdigest()
+
+
+def _stored_records(
+    connection: sqlite3.Connection,
+    *,
+    revision: int,
+    expected_hash: str,
+) -> Iterator[tuple[str, str, bytes]]:
+    digest = hashlib.sha256()
+    for kind, identity, payload in connection.execute(
+        """
+        SELECT kind, identity, payload FROM codegraph_records
+        WHERE graph_revision = ? ORDER BY position
+        """,
+        (revision,),
+    ):
+        record = str(kind), str(identity), bytes(payload)
+        _update_hash(digest, *record)
+        yield record
+    if digest.hexdigest() != expected_hash:
+        raise ValueError("Stored CodeGraph records are incomplete or modified")
+
+
+def _update_hash(
+    digest: Any,
+    kind: str,
+    identity: str,
+    payload: bytes,
+) -> None:
+    for value in (kind.encode("utf-8"), identity.encode("utf-8"), payload):
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+
+def _drop_store_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        DROP TABLE IF EXISTS codegraph_records;
+        DROP TABLE IF EXISTS codegraph_diagnostics;
+        DROP TABLE IF EXISTS codegraph_failed_files;
+        DROP TABLE IF EXISTS codegraph_processed_files;
+        DROP TABLE IF EXISTS codegraph_public_declarations;
+        DROP TABLE IF EXISTS codegraph_globals;
+        DROP TABLE IF EXISTS codegraph_nodes;
+        DROP TABLE IF EXISTS canonical_codegraph;
+        """
     )
-    return graph
+
+
+def _create_store_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS canonical_codegraph (
+            revision INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL UNIQUE,
+            producer_version TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS codegraph_records (
+            graph_revision INTEGER NOT NULL REFERENCES canonical_codegraph(revision)
+                ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (
+                kind IN (
+                    'node', 'global', 'declaration',
+                    'processed', 'failed', 'diagnostic'
+                )
+            ),
+            identity TEXT NOT NULL,
+            payload BLOB NOT NULL,
+            PRIMARY KEY (graph_revision, position)
+        );
+        CREATE INDEX IF NOT EXISTS codegraph_records_by_kind
+        ON codegraph_records(graph_revision, kind, position);
+        """
+    )
+
+
+def _connect(location: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(location)
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection

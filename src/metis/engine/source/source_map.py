@@ -32,6 +32,7 @@ _TS_LANGUAGE_BY_EXT = {
 }
 
 _TRIVIAL_LINE_MIN_LEN = 8
+_NUMBERED_LINE_PREFIX = re.compile(r"^\s*(\d+):\s?")
 
 _C_FUNC_DEF = re.compile(
     r"(?:^|\n)[^\n;{}#/]*?\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:\n\s*)?\{",
@@ -41,6 +42,27 @@ _C_FUNC_DEF = re.compile(
 
 def _norm_line(line: str) -> str:
     return " ".join(line.split())
+
+
+def _without_consistent_line_numbers(
+    snippet: str,
+    start_line: int | None,
+    end_line: int | None,
+) -> str:
+    if not isinstance(start_line, int) or not isinstance(end_line, int):
+        return snippet
+    lines = snippet.splitlines()
+    expected_numbers = range(start_line, end_line + 1)
+    if len(lines) != len(expected_numbers):
+        return snippet
+
+    stripped_lines: list[str] = []
+    for line, expected_number in zip(lines, expected_numbers, strict=True):
+        match = _NUMBERED_LINE_PREFIX.match(line)
+        if match is None or int(match.group(1)) != expected_number:
+            return snippet
+        stripped_lines.append(line[match.end() :])
+    return "\n".join(stripped_lines)
 
 
 class SourceMap:
@@ -57,8 +79,6 @@ class SourceMap:
         self.text = text
         self.lines: list[str] = text.splitlines()
         self.line_offsets: list[int] = self._compute_line_offsets(text)
-        self._tree: Any | None = None
-        self._tree_attempted = False
         # (start_line, end_line, name) for each top-level function
         self._functions: list[tuple[int, int, str]] | None = None
 
@@ -73,9 +93,9 @@ class SourceMap:
     @staticmethod
     def _compute_line_offsets(text: str) -> list[int]:
         offsets = [0]
-        for i, ch in enumerate(text):
-            if ch == "\n":
-                offsets.append(i + 1)
+        for index, byte in enumerate(text.encode("utf-8")):
+            if byte == ord("\n"):
+                offsets.append(index + 1)
         return offsets
 
     @property
@@ -95,7 +115,14 @@ class SourceMap:
     def line_end_byte(self, line: int) -> int:
         if line < len(self.line_offsets):
             return self.line_offsets[line] - 1
-        return len(self.text)
+        return len(self.text.encode("utf-8"))
+
+    def byte_slice(self, start_byte: int, end_byte: int) -> str:
+        """Return text for a UTF-8 byte span such as a tree-sitter node range."""
+        encoded = self.text.encode("utf-8")
+        start = max(0, min(int(start_byte), len(encoded)))
+        end = max(start, min(int(end_byte), len(encoded)))
+        return encoded[start:end].decode("utf-8")
 
     def numbered_slice(
         self, start_line: int, end_line: int, *, max_lines: int | None = None
@@ -131,8 +158,22 @@ class SourceMap:
             end_line = (
                 span[1] if span else min(self.line_count, start_line + fallback_lines)
             )
-        max_lines = max(1, max_chars // 80)
-        return self.numbered_slice(start_line, end_line, max_lines=max_lines)
+        rendered = self.numbered_slice(start_line, end_line)
+        if len(rendered) <= max_chars:
+            return rendered
+
+        lines = rendered.splitlines()
+        selected: list[str] = []
+        rendered_chars = 0
+        for line in lines:
+            separator_chars = 1 if selected else 0
+            if rendered_chars + separator_chars + len(line) > max_chars:
+                break
+            selected.append(line)
+            rendered_chars += separator_chars + len(line)
+        if selected:
+            return "\n".join(selected)
+        return rendered[:max_chars]
 
     def find_function_span(
         self, *, name: str | None = None, near_line: int = 1
@@ -187,7 +228,7 @@ class SourceMap:
             end_byte=eb,
             symbol=symbol,
             kind=kind,
-            content_hash=content_hash(self.text[sb:eb]),
+            content_hash=content_hash(self.byte_slice(sb, eb)),
             confidence=confidence,
         )
 
@@ -214,7 +255,7 @@ class SourceMap:
             end_byte=end_byte,
             symbol=symbol,
             kind=kind,
-            content_hash=content_hash(self.text[start_byte:end_byte]),
+            content_hash=content_hash(self.byte_slice(start_byte, end_byte)),
             confidence=confidence,
         )
 
@@ -263,13 +304,24 @@ class SourceMap:
         biased by ``hint`` and ``context_text``. Always returns an anchor
         (``confidence == "unresolved"`` when nothing matches).
         """
+        candidates = [snippet]
+        unnumbered_snippet = _without_consistent_line_numbers(
+            snippet,
+            start_line,
+            end_line,
+        )
+        if unnumbered_snippet != snippet:
+            candidates.append(unnumbered_snippet)
         if isinstance(start_line, int) and isinstance(end_line, int):
-            verified = self.verify_lines(start_line, end_line, snippet or "")
-            if verified is not None:
-                return verified
-        if snippet:
+            for candidate in candidates:
+                verified = self.verify_lines(start_line, end_line, candidate)
+                if verified is not None:
+                    return verified
+        for candidate in candidates:
+            if not candidate:
+                continue
             located = self.resolve_snippet(
-                snippet, hint=hint, context_text=context_text
+                candidate, hint=hint, context_text=context_text
             )
             if located is not None:
                 return located
@@ -404,10 +456,12 @@ class SourceMap:
         return self._functions
 
     def _spans_from_tree(self) -> list[tuple[int, int, str]]:
-        tree = self._ensure_tree()
-        if tree is None:
+        language = _TS_LANGUAGE_BY_EXT.get(os.path.splitext(self.rel_path)[1].lower())
+        if language is None:
             return []
         try:
+            from tree_sitter_language_pack import get_parser
+
             from metis.engine.source.tree_sitter_nodes import (
                 _identifier_from_node,
                 _node_child_by_field_name,
@@ -416,7 +470,11 @@ class SourceMap:
                 _node_kind,
                 _node_line,
             )
+
+            tree = get_parser(language).parse(self.text)
         except Exception:
+            return []
+        if tree is None:
             return []
 
         source = self.text.encode("utf-8")
@@ -453,26 +511,12 @@ class SourceMap:
                 elif ch == "}":
                     depth -= 1
                 i += 1
-            start_line = self.byte_to_line(m.start(1))
-            end_line = self.byte_to_line(i - 1)
+            start_byte = len(self.text[: m.start(1)].encode("utf-8"))
+            end_byte = len(self.text[: max(0, i - 1)].encode("utf-8"))
+            start_line = self.byte_to_line(start_byte)
+            end_line = self.byte_to_line(end_byte)
             out.append((start_line, end_line, name))
         return out
-
-    def _ensure_tree(self) -> Any | None:
-        if self._tree is not None or self._tree_attempted:
-            return self._tree
-        self._tree_attempted = True
-        ext = os.path.splitext(self.rel_path)[1].lower()
-        lang = _TS_LANGUAGE_BY_EXT.get(ext)
-        if not lang:
-            return None
-        try:
-            from tree_sitter_language_pack import get_parser
-
-            self._tree = get_parser(lang).parse(self.text)
-        except Exception:
-            self._tree = None
-        return self._tree
 
 
 class SourceRepository:

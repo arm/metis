@@ -2,25 +2,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from dataclasses import replace
 import tempfile
 import threading
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+
 from metis.configuration import load_execution_config
 from metis.engine import MetisEngine
 from metis.engine.capabilities.engine import EngineCapabilities
+from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph import CodeGraphReference
+from metis.engine.execution.contracts import ExecutionStatus
+from metis.engine.nodes.builtins import build_builtin_execution
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
+from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
+from metis.engine.stages.configuration import ExecutionConfiguration
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.tools.index import index_model_tools
 from metis.exceptions import RetrieverInitError
-from metis.usage import UsageRuntime
 from metis.runtime_settings import CapabilityRuntimeSettings
+from metis.usage import UsageRuntime
 
 
 def _embedding_provider(code_embedding_model=None, docs_embedding_model=None):
@@ -319,7 +326,7 @@ def test_init_codebase_populates_memory_without_index(
 
 
 @pytest.mark.parametrize("mode", ["code", "file"])
-def test_execute_review_routes_through_default_reachability_graph(
+def test_execute_review_routes_through_default_simple_review_graph(
     engine,
     monkeypatch,
     mode,
@@ -344,7 +351,7 @@ def test_execute_review_routes_through_default_reachability_graph(
             StandardReviewResult.model_validate({"reviews": [review]}),
         )
 
-    monkeypatch.setattr(ReachabilityReviewService, "run_review", run_review)
+    monkeypatch.setattr(SimpleLlmReviewService, "run_review", run_review)
     target = str(Path(engine.codebase_path) / "test.c") if mode == "file" else None
 
     outputs = engine.execute_review(mode, target=target)
@@ -354,6 +361,67 @@ def test_execute_review_routes_through_default_reachability_graph(
         "unchecked input"
     )
     assert commands == [ReviewCommand(mode=mode, target=target)]
+
+
+def test_explicit_review_producers_run_independently(engine, monkeypatch):
+    configuration = ExecutionConfiguration.model_validate(
+        {
+            "inputs": {"review_request": {"mode": "code"}},
+            "stages": {
+                "review": {
+                    "nodes": {
+                        "codegraph": {},
+                        "simple_llm_review": {},
+                        "reachability": {},
+                        "finding_dedup": {},
+                        "result": {},
+                    }
+                }
+            },
+        }
+    )
+    issues = iter(("simple", "reachable"))
+
+    def run_review(service, _command, **_kwargs):
+        if isinstance(service, ReachabilityReviewService):
+            assert service._simple_llm_review is None
+        issue = next(issues)
+        return ReviewRun(
+            ReviewStatus.SUCCEEDED,
+            StandardReviewResult.model_validate(
+                {"reviews": [{"file": "test.c", "reviews": [{"issue": issue}]}]}
+            ),
+        )
+
+    monkeypatch.setattr(SimpleLlmReviewService, "run_review", run_review)
+    monkeypatch.setattr(ReachabilityReviewService, "run_review", run_review)
+    codegraphs = Mock()
+    codegraphs.materialize.return_value = CodeGraphReference(
+        revision=1,
+        fingerprint="test",
+        producer_version="test",
+    )
+    codegraphs.load.return_value = CodeGraph()
+    execution = build_builtin_execution(
+        configuration,
+        engine_config=engine._config,
+        repository=engine.repository,
+        capabilities=engine.capabilities,
+        codegraphs=codegraphs,
+        reachability_settings={},
+        triage_options=engine._triage_options,
+        triage_checkpoint_every=50,
+        review_graph_factory=Mock(),
+    ).execution
+
+    result = execution.execute_review(ReviewCommand(mode="code"))
+
+    assert result.status is ExecutionStatus.OK
+    assert [
+        item.issue
+        for group in result.outputs["review"]["findings"].reviews
+        for item in group.reviews
+    ] == ["simple", "reachable"]
 
 
 def test_index_search_uses_runtime_capability_config(capability_settings):

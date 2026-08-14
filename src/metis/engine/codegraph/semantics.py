@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Protocol
 
+from .models import CallSite
+from .models import SymbolReference
 from .models import Tag
 
 
@@ -16,6 +18,8 @@ class CodeGraphNodeFacts:
     language: str
     calls: tuple[str, ...]
     unresolved_calls: tuple[str, ...]
+    call_sites: tuple[CallSite, ...] = ()
+    references: tuple[SymbolReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

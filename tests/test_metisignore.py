@@ -52,6 +52,18 @@ def test_get_code_files_supports_default_metisignore_allowlist(
     assert files == ["src/keep.py"]
 
 
+def test_direct_code_file_selection_respects_metisignore(
+    tmp_path, dummy_backend, dummy_llm, capability_settings
+):
+    (tmp_path / "keep.py").write_text("print('keep')\n", encoding="utf-8")
+    (tmp_path / "drop.py").write_text("print('drop')\n", encoding="utf-8")
+    (tmp_path / ".metisignore").write_text("drop.py\n", encoding="utf-8")
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
+
+    assert engine.repository.is_code_file_selected("keep.py") is True
+    assert engine.repository.is_code_file_selected("drop.py") is False
+
+
 def test_count_index_items_respects_metisignore_allowlist(
     tmp_path, dummy_backend, dummy_llm, capability_settings
 ):
