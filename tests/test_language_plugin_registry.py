@@ -330,6 +330,7 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
     assert registry.codegraph_registration_for_path("src/example.c") == "c"
     assert registry.codegraph_registration_for_path("src/example.cpp") == "cpp"
     assert registry.codegraph_registration_for_path("analysis.ipynb") is None
+    assert registry.language_name_for_path("src/example.sol") == "solidity"
     missing_by_language = {
         language: missing
         for language in registry.supported_language_names()
@@ -354,6 +355,7 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
         "php",
         "python",
         "rust",
+        "solidity",
         "systemverilog",
         "tablegen",
         "terraform",
