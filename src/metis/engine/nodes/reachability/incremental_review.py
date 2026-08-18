@@ -450,6 +450,8 @@ class IncrementalGraphReviewer:
                     threat_sections=threat_sections,
                     contracts=contracts,
                 )
+                chunks: list[tuple[list[FunctionNode], str]] = []
+                overflow_error: RuntimeError | ValueError | None = None
                 try:
                     source_token_budget = self._source_token_budget(
                         system_prompt,
@@ -457,6 +459,18 @@ class IncrementalGraphReviewer:
                         response_schema_json,
                     )
                 except RuntimeError as exc:
+                    overflow_error = exc
+                if overflow_error is None:
+                    try:
+                        chunks = _build_file_grouped_node_chunks(
+                            self._config.codebase_path,
+                            group_nodes,
+                            max_tokens=source_token_budget,
+                            token_counter=self._llm_provider.count_tokens,
+                        )
+                    except ValueError as exc:
+                        overflow_error = exc
+                if overflow_error is not None:
                     if len(group_nodes) > 1:
                         midpoint = len(group_nodes) // 2
                         for child_nodes in reversed(
@@ -466,7 +480,7 @@ class IncrementalGraphReviewer:
                         continue
                     logger.warning(
                         "%s for %s; leaving %s incomplete",
-                        exc,
+                        overflow_error,
                         file_path,
                         group_nodes[0].unique_name,
                     )
@@ -475,23 +489,6 @@ class IncrementalGraphReviewer:
                             function_id=group_nodes[0].unique_name,
                             kind="context_overflow",
                         )
-                    )
-                    continue
-                try:
-                    chunks = _build_file_grouped_node_chunks(
-                        self._config.codebase_path,
-                        group_nodes,
-                        max_tokens=source_token_budget,
-                        token_counter=self._llm_provider.count_tokens,
-                    )
-                except ValueError as exc:
-                    logger.warning("%s; leaving local functions incomplete", exc)
-                    failures.update(
-                        FrontierReviewFailure(
-                            function_id=node.unique_name,
-                            kind="context_overflow",
-                        )
-                        for node in group_nodes
                     )
                     continue
                 for chunk_nodes, source_text in chunks:
@@ -648,12 +645,12 @@ class IncrementalGraphReviewer:
         contracts: Mapping[str, FunctionContract] | None = None,
     ) -> str:
         evidence = prompt_evidence._compact_source_evidence(
-            graph,
             prompt_evidence._codegraph_evidence_data(
                 graph,
                 nodes,
-                contracts or {},
+                contracts,
                 shown_lines=prompt_evidence._shown_lines(source_text),
+                file_path=file_path,
             ),
             codebase_path=self._config.codebase_path,
             file_path=file_path,

@@ -275,12 +275,7 @@ class SimpleLlmReviewService:
             plugin = self._repository.get_plugin_for_path(file_diff.path)
             if not plugin:
                 continue
-            snippet = process_diff_file(
-                self._config.codebase_path,
-                file_diff,
-                self._config.max_token_length,
-                token_counter=self._config.llm_provider.count_tokens,
-            )
+            snippet = process_diff_file(file_diff)
             if not snippet:
                 continue
             language_prompts = plugin.get_prompts()

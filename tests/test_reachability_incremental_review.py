@@ -11,12 +11,15 @@ from unittest.mock import Mock
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from pytest import MonkeyPatch
+from pytest import raises
 
 from metis import runlog
 from metis.engine.codegraph import CallSite
 from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph import ControlCondition
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph import ValueAssignment
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.nodes.reachability import finding_admission
 from metis.engine.nodes.reachability import incremental_review
@@ -26,6 +29,7 @@ from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
 from metis.engine.nodes.reachability.state import FactAtom
 from metis.engine.nodes.reachability.state import FunctionContract
 from metis.engine.nodes.reachability.state import GuardedTransfer
+from metis.engine.nodes.reachability.state import NormalExit
 from metis.engine.nodes.reachability.state import ReturnSubject
 from metis.engine.nodes.reachability.state import StateEffect
 from metis.engine.nodes.reachability.state import TrackedObjectSubject
@@ -108,7 +112,7 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
         evidence_text = body.partition("CODEGRAPH_EVIDENCE (untrusted JSON):\n")[2]
         evidence, _end = json.JSONDecoder().raw_decode(evidence_text)
         contract = evidence["direct_function_contracts"][0]
-        assert contract["function"] == "graph.c::sink"
+        assert evidence["function_ids"][contract["function"]] == "::sink"
         assert contract["normal_exit"] == {
             "line": 2,
             "origin": "observed",
@@ -140,6 +144,181 @@ def test_default_review_prompt_has_no_domain_hints(tmp_path: Path) -> None:
     assert "User-provided domain hints:" not in prompt
 
 
+def test_compact_packet_uses_tables_numbered_source_and_target_tags(
+    tmp_path: Path,
+) -> None:
+    source_lines = [
+        "void root(int a, int b) {",
+        "  int x = a + b;",
+        "  int y = a - b;",
+        "}",
+    ]
+    source = "\n".join(source_lines) + "\n"
+    (tmp_path / "graph.c").write_text(source, encoding="utf-8")
+    expressions: list[CodeExpression] = []
+    assignments: list[ValueAssignment] = []
+    for line, text in ((2, "a + b"), (3, "a - b")):
+        start = source.index(text)
+        expression = CodeExpression(
+            text,
+            line,
+            start,
+            start + len(text),
+            identifiers=("a", "b"),
+        )
+        expressions.append(expression)
+        assignments.append(
+            ValueAssignment(
+                expression,
+                expression,
+                "=",
+                line,
+                start,
+                source.index(";", start),
+            )
+        )
+    root = _function("root", 1)
+    root.end_line = len(source_lines)
+    root.assignments = assignments
+    root.calls = ["helper"]
+    root.call_sites = [
+        CallSite(
+            "helper",
+            2,
+            0,
+            start_byte=expressions[0].start_byte,
+            end_byte=source.index(";", expressions[0].start_byte),
+            target_ids=("helper.c::helper",),
+        )
+    ]
+    helper_condition = ControlCondition(
+        CodeExpression(
+            "ready",
+            1,
+            6,
+            11,
+            identifiers=("ready",),
+            direct_identifier="ready",
+        ),
+        True,
+    )
+    helper = FunctionNode(
+        "helper.c::helper",
+        "helper.c",
+        "helper",
+        1,
+        end_line=1,
+        calls=["stop"],
+        call_sites=[
+            CallSite(
+                "stop",
+                1,
+                0,
+                start_byte=1,
+                end_byte=5,
+                target_ids=("stop.c::stop",),
+                conditions=(helper_condition,),
+            )
+        ],
+    )
+    stop = FunctionNode("stop.c::stop", "stop.c", "stop", 1, end_line=1)
+    stop.set_tag("control.noreturn", value="_Noreturn", reason="test fact")
+    reviewer = _reviewer(tmp_path)
+
+    packets, failures = reviewer._build_packets(
+        _graph(root, helper, stop),
+        (root.unique_name, helper.unique_name, stop.unique_name),
+        options=ReachabilityReviewOptions(max_workers=1),
+        memory_service=None,
+        selected_node_ids={root.unique_name},
+        contracts={
+            helper.unique_name: FunctionContract(
+                helper.unique_name,
+                normal_exit=NormalExit("impossible", "observed", 1),
+            )
+        },
+    )
+
+    assert not failures
+    assert len(packets) == 1
+    body_text = packets[0].body_text
+    evidence_text = body_text.partition("CODEGRAPH_EVIDENCE (untrusted JSON):\n")[2]
+    evidence, _end = json.JSONDecoder().raw_decode(evidence_text)
+    assert evidence["expression_table"] == [
+        {"cols": [10, 15], "ids": [0, 1], "line": 2},
+        {"cols": [10, 15], "ids": [0, 1], "line": 3},
+    ]
+    assert evidence["atom_table"] == ["a", "b", "ready"]
+    assignment_data = evidence["functions"][0]["assignments"]
+    assert [item["target"] for item in assignment_data] == [0, 1]
+    assert all(item["target"] == item["value"] for item in assignment_data)
+    direct_function = evidence["direct_functions"][0]
+    assert direct_function["file_path"] == "helper.c"
+    assert "call_index" not in direct_function["calls"][0]
+    foreign_condition = evidence["condition_table"][0]
+    assert foreign_condition["file_path"] == "helper.c"
+    assert direct_function["calls"][0]["conditions"] == [0]
+    assert "file_path" not in foreign_condition["expression"]
+    direct_contract = evidence["direct_function_contracts"][0]
+    assert direct_contract["file_path"] == "helper.c"
+    assert direct_contract["normal_exit"]["line"] == 1
+    assert evidence["function_tags"]["2"]["control.noreturn"] == [
+        "_Noreturn",
+        "test fact",
+    ]
+    assert "expression_table maps integer expression references" in body_text
+    assert "atom_table maps integer references" in body_text
+    assert "expand each reference at its use site" in body_text
+    snippet = body_text.partition("\nSNIPPET:\n")[2].rstrip("\n").splitlines()
+    assert snippet == [
+        f"{number}: {line}" for number, line in enumerate(source_lines, 1)
+    ]
+
+
+def test_oversized_source_line_only_fails_its_function(tmp_path: Path) -> None:
+    reviewer = _reviewer(tmp_path)
+    source = "void small(void) {}\n" + "x" * (reviewer._config.max_token_length + 1)
+    (tmp_path / "graph.c").write_text(source, encoding="utf-8")
+    small = _function("small", 1)
+    oversized = _function("oversized", 2)
+
+    packets, failures = reviewer._build_packets(
+        _graph(small, oversized),
+        (small.unique_name, oversized.unique_name),
+        options=ReachabilityReviewOptions(max_workers=1),
+        memory_service=None,
+    )
+
+    assert [[node.unique_name for node in packet.nodes] for packet in packets] == [
+        [small.unique_name]
+    ]
+    assert {(failure.function_id, failure.kind) for failure in failures} == {
+        (oversized.unique_name, "context_overflow")
+    }
+
+
+def test_source_chunk_runtime_error_propagates(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    (tmp_path / "graph.c").write_text("void root(void) {}\n", encoding="utf-8")
+    reviewer = _reviewer(tmp_path)
+    root = _function("root", 1)
+    monkeypatch.setattr(
+        incremental_review,
+        "_build_file_grouped_node_chunks",
+        Mock(side_effect=RuntimeError("token counter failed")),
+    )
+
+    with raises(RuntimeError, match="token counter failed"):
+        reviewer._build_packets(
+            _graph(root),
+            (root.unique_name,),
+            options=ReachabilityReviewOptions(max_workers=1),
+            memory_service=None,
+        )
+
+
 def test_invalid_discovery_packet_splits_and_reviews_children(tmp_path: Path) -> None:
     (tmp_path / "graph.c").write_text(
         "void first(void) {}\nvoid second(void) {}\n",
@@ -161,11 +340,7 @@ def test_invalid_discovery_packet_splits_and_reviews_children(tmp_path: Path) ->
         }
 
     chat = RunnableLambda(lambda _messages: AIMessage(content=""))
-    setattr(
-        chat,
-        "with_structured_output",
-        lambda *_args, **_kwargs: RunnableLambda(respond),
-    )
+    chat.with_structured_output = lambda *_args, **_kwargs: RunnableLambda(respond)
     reviewer._llm_provider.get_chat_model.return_value = chat
     reviewer._runner = JsonPromptRunner(
         reviewer._llm_provider,
@@ -261,18 +436,23 @@ def test_indexed_null_condition_reaches_deterministic_admission(
         body = request.variables["body_text"]
         evidence_text = body.partition("CODEGRAPH_EVIDENCE (untrusted JSON):\n")[2]
         evidence, _end = json.JSONDecoder().raw_decode(evidence_text)
-        assert evidence["call_results"] == [
-            {
-                "call_result_index": 0,
-                "call_symbol": "allocate",
-                "expression": "p",
-                "function_id": root.unique_name,
-                "kind": "call_result",
-                "line": 2,
-                "start_byte": 39,
-                "end_byte": 40,
-            }
-        ]
+        assert "call_results" not in evidence
+        allocator_index = evidence["function_ids"].index("::allocate")
+        contract_data = evidence["direct_function_contracts"][0]
+        assert contract_data["function"] == allocator_index
+        effect = contract_data["normal_returns"][0]["effects"][0]
+        assert (effect["operation"], effect["atom"]["subject"]) == (
+            "negate",
+            {"function_id": allocator_index, "kind": "return"},
+        )
+        root_index = evidence["function_ids"].index("::root")
+        root_data = next(
+            item for item in evidence["functions"] if item["function_id"] == root_index
+        )
+        producer_data = root_data["calls"][0]
+        assert [call["call_index"] for call in root_data["calls"]] == [0, 1]
+        assert evidence["call_symbols"][producer_data["symbol"]] == "allocate"
+        assert producer_data["result"]["result_index"] == 0
         parsed = request.parse(
             {
                 "reviews": [

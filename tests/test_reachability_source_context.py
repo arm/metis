@@ -3,6 +3,8 @@
 
 import re
 
+import pytest
+
 from metis.engine.codegraph import CallSite, FunctionNode
 from metis.engine.nodes.reachability.source_context import (
     _build_file_grouped_node_chunks,
@@ -80,3 +82,15 @@ def test_function_chunks_never_cross_files_and_follow_source_order(tmp_path):
     assert all(len({node.file_path for node in nodes}) == 1 for nodes, _text in chunks)
     assert all("Function a.c::" not in text for _nodes, text in chunks)
     assert all("===== FILE:" not in text for _nodes, text in chunks)
+
+
+def test_function_chunks_reject_unlabelled_line_fragments(tmp_path):
+    (tmp_path / "sample.c").write_text("void target(void) { operation(); }\n")
+
+    with pytest.raises(ValueError, match="one numbered source line"):
+        _build_file_grouped_node_chunks(
+            str(tmp_path),
+            [_node("target", 1, 1)],
+            max_tokens=10,
+            token_counter=_character_count,
+        )
