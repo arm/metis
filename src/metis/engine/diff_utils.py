@@ -1,16 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-import os
-
-from metis.utils import count_tokens, read_file_content
+from typing import Any
 
 
-logger = logging.getLogger("metis")
-
-
-def extract_content_from_diff(file_diff):
+def extract_content_from_diff(file_diff: Any) -> str:
     content_lines = []
     for hunk in file_diff:
         for line in hunk:
@@ -19,8 +13,7 @@ def extract_content_from_diff(file_diff):
     return "".join(content_lines)
 
 
-def process_diff_file(codebase_path, file_diff, max_token_length, token_counter=None):
-    counter = token_counter or count_tokens
+def process_diff_file(file_diff: Any) -> str:
     changed_lines = []
     for hunk in file_diff:
         for line in hunk:
@@ -28,14 +21,4 @@ def process_diff_file(codebase_path, file_diff, max_token_length, token_counter=
                 changed_lines.append("+" + line.value)
             elif line.is_removed:
                 changed_lines.append("-" + line.value)
-    snippet = "".join(changed_lines)
-    original_file_path = os.path.join(codebase_path, file_diff.path)
-    original_content = read_file_content(original_file_path)
-    if original_content:
-        logger.info(f"Fetched original content for {file_diff.path}.")
-        total_tokens = counter(original_content) + counter(snippet)
-        if total_tokens <= max_token_length:
-            snippet = f"ORIGINAL_FILE:\n{original_content}\n\nFILE_CHANGES:\n{snippet}"
-        else:
-            snippet = f"FILE_CHANGES:\n{snippet}"
-    return snippet
+    return "".join(changed_lines)

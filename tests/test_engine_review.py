@@ -307,24 +307,31 @@ def test_reachability_empty_scope_is_inconclusive(engine):
 class _DummyReviewGraph:
     def __init__(self, review):
         self._review = review
+        self.requests = []
 
     def review(self, req):
+        self.requests.append(req)
         if self._review is None:
             return {"file": "test.py", "reviews": []}
         return self._review
 
 
 def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
+    (Path(engine.codebase_path) / "test.py").write_text(
+        "print('Old')\n",
+        encoding="utf-8",
+    )
     patch_file = tmp_path / "change.diff"
     patch_file.write_text(
-        "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1,2 @@\n+print('Hello')\n+print('World')\n"
+        "--- a/test.py\n+++ b/test.py\n@@ -1 +1 @@\n-print('Old')\n+print('New')\n"
+    )
+    review_graph = _DummyReviewGraph(
+        {"file": "test.py", "reviews": [{"issue": "Issue"}]}
     )
     monkeypatch.setattr(
         engine,
         "_get_review_graph",
-        lambda _index=None: _DummyReviewGraph(
-            {"file": "test.py", "reviews": [{"issue": "Issue"}]}
-        ),
+        lambda _index=None: review_graph,
     )
 
     import metis.engine.nodes.simple_llm_review.service as review_service_mod
@@ -336,6 +343,10 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     result = _simple_llm_review(engine).review_patch(str(patch_file))
     assert "reviews" in result and isinstance(result["reviews"], list)
     assert any(r.get("file") == "test.py" for r in result["reviews"])
+    (request,) = review_graph.requests
+    assert request["mode"] == "patch"
+    assert request["original_file"] == "print('Old')\n"
+    assert request["snippet"] == "-print('Old')\n+print('New')\n"
 
 
 def test_review_patch_handles_parse_error(engine, tmp_path):

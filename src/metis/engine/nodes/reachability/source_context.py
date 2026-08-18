@@ -77,6 +77,11 @@ def _build_file_grouped_node_chunks(
             )
             if not body:
                 continue
+            if any(
+                token_counter(line) > max_tokens
+                for line in body.splitlines(keepends=True)
+            ):
+                raise ValueError("max_tokens cannot hold one numbered source line")
             for body_part, _start_line in split_snippet(
                 body,
                 max_tokens,
