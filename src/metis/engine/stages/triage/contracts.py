@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from metis.engine.execution.contracts import CheckpointCallback
 from metis.engine.execution.contracts import DebugCallback
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.execution.contracts import ProgressCallback
 from metis.sarif.triage import SarifFinding
 from metis.memory import MemoryService
@@ -40,6 +41,7 @@ class TriageAdjudicator(Protocol):
         run: TriageRun,
         *,
         classifier: TriageClassifier,
+        jobs: NodeJobs,
         memory_service: MemoryService | None = None,
         progress_callback: ProgressCallback | None = None,
         debug_callback: DebugCallback | None = None,

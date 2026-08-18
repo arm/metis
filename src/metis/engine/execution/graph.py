@@ -20,6 +20,7 @@ InputBinding = str | tuple[str, ...]
 class ConfiguredNode(BaseModel):
     inputs: dict[str, InputBinding] = Field(default_factory=dict)
     depends_on: tuple[str, ...] = ()
+    max_concurrency: int | None = Field(default=None, strict=True, ge=1)
     capabilities: tuple[str, ...] = ()
     formats: tuple[ResultFormat, ...] | None = None
     filename: str | None = Field(default=None, min_length=1)

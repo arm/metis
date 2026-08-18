@@ -110,7 +110,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         adjudicator=adjudicate,
         packet_fits=packet_fits,
         progress_callback=report_progress,
-        max_workers=invocation.context.runtime.max_workers,
+        jobs=invocation.context.jobs,
     )
     if progress is not None:
         kept_count = sum(len(group.reviews) for group in deduped.reviews)

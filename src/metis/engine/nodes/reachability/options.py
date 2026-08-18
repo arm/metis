@@ -26,7 +26,6 @@ class ReachabilityConfiguration(BaseModel):
 @dataclass(frozen=True, slots=True)
 class ReachabilityReviewOptions:
     confirmation_model: str | None = None
-    max_workers: int | str | None = None
     max_path_length: int = DEFAULT_REACHABILITY_MAX_PATH_LENGTH
     progress_callback: Any = None
     reasoning_effort: str | None = None

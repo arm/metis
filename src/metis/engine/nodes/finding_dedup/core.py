@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from metis.engine.concurrency import run_jobs
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.stages.review.models import ReviewFinding
 from metis.engine.stages.review.models import ReviewGroup
 from metis.engine.stages.review.models import StandardReviewResult
@@ -48,7 +48,7 @@ def consolidate_result(
     | None,
     packet_fits: PacketFits,
     progress_callback: Callable[[dict[str, object]], None] | None,
-    max_workers: int,
+    jobs: NodeJobs,
 ) -> StandardReviewResult:
     original_candidates = [
         ReviewCandidate(group, finding)
@@ -61,7 +61,7 @@ def consolidate_result(
         adjudicator,
         packet_fits=packet_fits,
         progress_callback=progress_callback,
-        max_workers=max_workers,
+        jobs=jobs,
     )
     kept = adjudicated if adjudicated is not None else candidates
     if len(kept) == len(original_candidates):
@@ -100,7 +100,7 @@ def _apply_final_adjudication(
     *,
     packet_fits,
     progress_callback=None,
-    max_workers=1,
+    jobs: NodeJobs,
 ):
     if not callable(adjudicator) or not candidates:
         return None
@@ -127,7 +127,7 @@ def _apply_final_adjudication(
         original_limit,
         progress_callback=progress_callback,
         phase="candidate",
-        max_workers=max_workers,
+        jobs=jobs,
     ):
         saw_valid_decision = True
 
@@ -152,7 +152,7 @@ def _apply_final_adjudication(
             original_limit,
             progress_callback=progress_callback,
             phase="representative",
-            max_workers=max_workers,
+            jobs=jobs,
         ):
             saw_valid_decision = True
 
@@ -174,7 +174,7 @@ def _run_adjudication_batches(
     *,
     progress_callback=None,
     phase="candidate",
-    max_workers=1,
+    jobs: NodeJobs,
 ):
     if not batches:
         return False
@@ -182,10 +182,9 @@ def _run_adjudication_batches(
     total = len(batches)
     if progress_callback:
         progress_callback({"phase": phase, "completed": 0, "total": total})
-    batch_results = run_jobs(
+    batch_results = jobs.run(
         list(enumerate(batches)),
         lambda item: (item[0], adjudicator(item[1])),
-        max_workers=max_workers,
         label="Final review deduplication",
         result_key=lambda item: f"{phase}:{item[0]}",
         on_complete=lambda _job, completed, total: (

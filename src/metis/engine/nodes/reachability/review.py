@@ -12,6 +12,7 @@ from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
@@ -45,6 +46,7 @@ def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
         reference = cast(CodeGraphReference, invocation.inputs["codegraph"])
         review = review_service.run_review(
             cast(ReviewCommand, invocation.inputs["request"]),
+            jobs=invocation.context.jobs,
             codegraph=invocation.context.codegraphs.load(reference),
             codegraph_diagnostics=reference.diagnostics,
             codegraph_failed_files=reference.failed_files,
@@ -96,6 +98,7 @@ class ReachabilityReviewService:
         self,
         command: ReviewCommand,
         *,
+        jobs: NodeJobs,
         codegraph,
         codegraph_diagnostics=(),
         codegraph_failed_files=(),
@@ -168,6 +171,7 @@ class ReachabilityReviewService:
                     command,
                     supported,
                     codegraph=codegraph,
+                    jobs=jobs,
                     memory_service=memory_service,
                     progress_callback=progress_callback,
                     diagnostics=diagnostics,
@@ -185,6 +189,7 @@ class ReachabilityReviewService:
             reviews.append(
                 self._simple_llm_review.run_files(
                     fallback,
+                    jobs=jobs,
                     memory_service=memory_service,
                     index=index,
                     progress_callback=progress_callback,
@@ -203,6 +208,7 @@ class ReachabilityReviewService:
         files: tuple[str, ...],
         *,
         codegraph,
+        jobs: NodeJobs,
         memory_service: MemoryService | None,
         progress_callback,
         diagnostics: list[ReviewDiagnostic],
@@ -213,6 +219,7 @@ class ReachabilityReviewService:
                 reviewed, analysis = self.file_review(
                     files[0],
                     settings=self._settings,
+                    jobs=jobs,
                     progress_callback=progress_callback,
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
@@ -223,6 +230,7 @@ class ReachabilityReviewService:
                 codebase_groups, analysis = self.codebase_reviews(
                     files=files,
                     settings=self._settings,
+                    jobs=jobs,
                     progress_callback=progress_callback,
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
@@ -283,12 +291,12 @@ class ReachabilityReviewService:
         settings = dict(settings or {})
         if progress_callback is not None:
             settings["progress_callback"] = progress_callback
-        settings.setdefault("max_workers", self._config.max_workers)
         return ReachabilityReviewOptions(**settings)
 
     def codebase_reviews(
         self,
         *,
+        jobs: NodeJobs,
         files=None,
         settings=None,
         progress_callback=None,
@@ -301,6 +309,7 @@ class ReachabilityReviewService:
             progress_callback=progress_callback,
         )
         analysis = self._service.analyze_codebase(
+            jobs=jobs,
             options=options,
             files=files,
             codegraph=codegraph,
@@ -319,6 +328,7 @@ class ReachabilityReviewService:
         self,
         file_path,
         *,
+        jobs: NodeJobs,
         settings=None,
         progress_callback=None,
         diagnostic_callback=None,
@@ -331,6 +341,7 @@ class ReachabilityReviewService:
         )
         analysis = self._service.analyze_file(
             file_path,
+            jobs=jobs,
             options=options,
             codegraph=codegraph,
             diagnostic_callback=diagnostic_callback,

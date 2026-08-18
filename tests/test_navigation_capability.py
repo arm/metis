@@ -1,8 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 import subprocess
+from threading import Barrier
+from threading import BrokenBarrierError
+from threading import Lock
 
 from metis.engine.capabilities.navigation import NavigationCapability
 
@@ -114,3 +118,35 @@ def test_shell_grep_forces_filename_prefix_for_single_file(tmp_path):
         out.splitlines()[0].endswith("/a.c:2:beta")
         or out.splitlines()[0] == "a.c:2:beta"
     )
+
+
+def test_shell_navigation_serializes_subprocesses(tmp_path, monkeypatch):
+    runner = NavigationCapability(
+        codebase_path=str(tmp_path), timeout_seconds=8, max_chars=16000
+    )
+    runner._has_grep = True
+    rendezvous = Barrier(2)
+    state_lock = Lock()
+    active = 0
+    peak = 0
+
+    def run(argv, **_kwargs):
+        nonlocal active, peak
+        with state_lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            rendezvous.wait(timeout=0.2)
+        except BrokenBarrierError:
+            pass
+        with state_lock:
+            active -= 1
+        return subprocess.CompletedProcess(argv, 0, stdout="match", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _index: runner.grep("x", "."), range(2)))
+
+    assert results == ("match", "match")
+    assert peak == 1

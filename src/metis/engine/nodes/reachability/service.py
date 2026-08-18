@@ -10,6 +10,7 @@ from typing import Any
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.concurrency import serialized_progress_callback
 from metis.engine.nodes.codegraph import CodeGraphService
 from metis.engine.threat_context_retrieval import get_threat_model_context
@@ -51,6 +52,7 @@ class ReachabilityService:
         self,
         file_path,
         *,
+        jobs: NodeJobs,
         options: ReachabilityReviewOptions,
         codegraph: CodeGraph | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
@@ -103,6 +105,7 @@ class ReachabilityService:
         analysis_graph = _copy_graph_nodes(graph, focus.node_names)
         outcome = self._frontier_reviewer.review(
             analysis_graph,
+            jobs=jobs,
             options=options,
             memory_service=memory_service,
             evidence_graph=graph,
@@ -142,6 +145,7 @@ class ReachabilityService:
     def analyze_codebase(
         self,
         *,
+        jobs: NodeJobs,
         options: ReachabilityReviewOptions,
         files=None,
         codegraph: CodeGraph | None = None,
@@ -188,6 +192,7 @@ class ReachabilityService:
             )
         outcome = self._frontier_reviewer.review(
             analysis_graph,
+            jobs=jobs,
             options=options,
             memory_service=memory_service,
             evidence_graph=graph,

@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -15,7 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 
 from metis.engine import MetisEngine
-from metis.engine.concurrency import run_jobs
+from metis.engine.concurrency import JobScheduler
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
 from metis.engine.execution.catalog import NodeCatalog
@@ -314,7 +317,7 @@ def test_execution_runner_traces_tolerated_failure_under_stage(tmp_path):
         capabilities={},
         prompts=object(),
         codegraphs=object(),
-        runtime=NodeRuntime("test", 1, 1000, {}, 1),
+        runtime=NodeRuntime("test", 1, 1000, {}, 1, jobs=Mock()),
         callbacks=NodeCallbacks(progress=progress.append),
     )
 
@@ -364,14 +367,17 @@ def test_execution_runner_traces_tolerated_failure_under_stage(tmp_path):
 
 
 def test_parallel_jobs_are_traced_with_compact_keys(tmp_path):
-    with runlog.open_runlog(_exact_config(tmp_path)) as session:
-        results = run_jobs(
-            [2, 3],
-            lambda value: value * value,
-            max_workers=2,
-            label="Reachability security review",
-            result_key=lambda value: value,
-        )
+    scheduler = JobScheduler(2)
+    try:
+        with runlog.open_runlog(_exact_config(tmp_path)) as session:
+            results = scheduler.limit(2).run(
+                [2, 3],
+                lambda value: value * value,
+                label="Reachability security review",
+                result_key=lambda value: value,
+            )
+    finally:
+        scheduler.close()
 
     assert sorted(results) == [4, 9]
     tasks = [
@@ -383,6 +389,89 @@ def test_parallel_jobs_are_traced_with_compact_keys(tmp_path):
     assert {record["attributes"]["key"] for record in tasks} == {2, 3}
     assert all(record["parent_span_id"] == session.root_span_id for record in tasks)
     runlog.validate_runlog(session.ndjson_path)
+
+
+def test_scheduler_shares_global_workers_across_node_limits() -> None:
+    scheduler = JobScheduler(2)
+    state_lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def work(value: int) -> int:
+        nonlocal active, peak
+        with state_lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with state_lock:
+            active -= 1
+        return value
+
+    try:
+        jobs = scheduler.limit(2)
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            first = callers.submit(
+                jobs.run,
+                [1, 2, 3],
+                work,
+                label=None,
+                result_key=str,
+            )
+            second = callers.submit(
+                jobs.run,
+                [4, 5, 6],
+                work,
+                label=None,
+                result_key=str,
+            )
+            assert sorted((*first.result(), *second.result())) == [1, 2, 3, 4, 5, 6]
+    finally:
+        scheduler.close()
+
+    assert peak == 2
+
+
+def test_scheduler_limit_one_bounds_submissions_and_runs_off_coordinator() -> None:
+    scheduler = JobScheduler(2)
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    coordinator: list[int] = []
+    workers: list[int] = []
+
+    def work(value: int) -> int:
+        workers.append(threading.get_ident())
+        if value == 1:
+            first_started.set()
+            release_first.wait(timeout=2)
+        else:
+            second_started.set()
+        return value
+
+    def run() -> list[int]:
+        coordinator.append(threading.get_ident())
+        return scheduler.limit(1).run(
+            [1, 2],
+            work,
+            label=None,
+            result_key=str,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            result = caller.submit(run)
+            try:
+                assert first_started.wait(timeout=1)
+                second_was_blocked = not second_started.wait(timeout=0.1)
+            finally:
+                release_first.set()
+            assert result.result() == [1, 2]
+    finally:
+        scheduler.close()
+
+    assert second_was_blocked
+    assert second_started.is_set()
+    assert all(worker != coordinator[0] for worker in workers)
 
 
 def test_prompt_retry_records_logical_attempts(tmp_path):

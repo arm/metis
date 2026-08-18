@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import ValidationError
 
 from metis.configuration import load_execution_config
 from metis.engine.codegraph import CodeGraph
@@ -46,6 +47,18 @@ from metis.execution_nodes import NodeResult
 from metis.execution_nodes import NodeRuntime
 from metis.execution_nodes import ReviewCommand
 from metis.runtime_settings import TriageOptions
+
+
+class _Jobs:
+    def __init__(self) -> None:
+        self.limits: list[int] = []
+
+    def limit(self, max_concurrency: int):
+        self.limits.append(max_concurrency)
+        return self
+
+    def run(self, jobs, worker, **_kwargs):
+        return [worker(job) for job in jobs]
 
 
 def _configuration() -> ExecutionConfiguration:
@@ -127,7 +140,15 @@ def test_finding_dedup_combines_producers_before_result() -> None:
         _node_context(),
         stage="review",
         prompts=prompt_runner,
-        runtime=NodeRuntime("test", 2, 1000, {}, 1, lambda _text: 1),
+        runtime=NodeRuntime(
+            "test",
+            2,
+            1000,
+            {},
+            1,
+            lambda _text: 1,
+            jobs=_Jobs(),
+        ),
     )
 
     result = finding_dedup_node.execute(
@@ -167,7 +188,15 @@ def test_finding_dedup_fails_open_when_batch_exceeds_global_limit() -> None:
         _node_context(),
         stage="review",
         prompts=prompt_runner,
-        runtime=NodeRuntime("test", 1, 10, {}, 1, lambda _text: 100),
+        runtime=NodeRuntime(
+            "test",
+            1,
+            10,
+            {},
+            1,
+            lambda _text: 100,
+            jobs=_Jobs(),
+        ),
     )
     result = finding_dedup_node.execute(
         NodeInvocation(
@@ -237,9 +266,73 @@ def _node_context() -> NodeContext:
         capabilities={},
         prompts=Mock(),
         codegraphs=Mock(),
-        runtime=NodeRuntime("test", 1, 1000, {}, 1, lambda _text: 1),
+        runtime=NodeRuntime(
+            "test",
+            1,
+            1000,
+            {},
+            1,
+            lambda _text: 1,
+            jobs=_Jobs(),
+        ),
         callbacks=NodeCallbacks(),
     )
+
+
+@pytest.mark.parametrize("max_concurrency", (0, -1, True, "2"))
+def test_node_max_concurrency_requires_a_strict_positive_integer(
+    max_concurrency: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        StageConfiguration.model_validate(
+            {"nodes": {"node": {"max_concurrency": max_concurrency}}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    ((None, 2), (1, 1), (3, 2)),
+)
+def test_node_max_concurrency_caps_runtime_limit(
+    configured: int | None,
+    expected: int,
+) -> None:
+    registration = NodeRegistration(
+        "node",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"workers": int},
+        lambda invocation: NodeResult(
+            {"workers": invocation.context.runtime.max_workers}
+        ),
+    )
+    node = {} if configured is None else {"max_concurrency": configured}
+    stage = StageConfiguration.model_validate(
+        {"outputs": ["node"], "nodes": {"node": node}}
+    )
+    context = replace(
+        _node_context(),
+        runtime=NodeRuntime(
+            "test",
+            2,
+            1000,
+            {},
+            1,
+            lambda _text: 1,
+            jobs=_Jobs(),
+        ),
+    )
+
+    result = run_stage(
+        "initialize",
+        _compile((registration,), stage),
+        context,
+        {},
+    )
+
+    assert result.outputs == {"node": expected}
+    assert context.jobs.limits == [expected]
 
 
 def _value_node(name: str, value: str) -> NodeRegistration:

@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from typing import cast
 
 from metis.engine.stages.triage.models import TriageRun
+from metis.engine.execution.contracts import NodeJobs
 from metis.memory import MemoryService
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_scope_policy
@@ -19,7 +19,6 @@ from metis.sarif.triage import (
     save_sarif_file,
 )
 from metis.sarif.utils import create_fingerprint
-from metis.usage import submit_with_current_context
 from metis import runlog
 
 
@@ -33,10 +32,8 @@ class TriageService:
     def __init__(
         self,
         *,
-        max_workers: int,
         triage_checkpoint_every: int,
     ) -> None:
-        self.max_workers = max(1, max_workers)
         self.triage_checkpoint_every = triage_checkpoint_every
 
     def _invoke_callback(self, callback, *args, **kwargs) -> None:
@@ -238,51 +235,54 @@ class TriageService:
         debug_callback,
         checkpoint_callback,
         classifier: TriageClassifier,
+        jobs: NodeJobs,
         memory_service: MemoryService | None,
         processed: int,
     ) -> tuple[int, set[tuple[int, int]]]:
         handled: set[tuple[int, int]] = set()
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_map = {}
-            for idx, finding in enumerate(findings, start=1):
-                self._emit_triage_progress(
-                    progress_callback,
-                    total,
-                    "start",
-                    index=idx,
-                    finding=finding,
-                )
-                future = submit_with_current_context(
-                    executor,
-                    self._triage_one_finding,
+        scheduled = list(enumerate(findings, start=1))
+        for idx, finding in scheduled:
+            self._emit_triage_progress(
+                progress_callback,
+                total,
+                "start",
+                index=idx,
+                finding=finding,
+            )
+
+        def invoke(item):
+            idx, finding = item
+            try:
+                decision = self._triage_one_finding(
                     finding,
                     classifier=classifier,
                     debug_callback=debug_callback,
                     memory_service=memory_service,
                 )
-                future_map[future] = (idx, finding)
+                return idx, finding, decision, None
+            except Exception as exc:
+                return idx, finding, None, exc
 
-            for future in as_completed(future_map):
-                idx, finding = future_map[future]
-                try:
-                    decision = future.result()
-                    error = None
-                except Exception as exc:
-                    decision = None
-                    error = exc
-                processed, was_handled = self._handle_finding_result(
-                    triaged_payload=triaged_payload,
-                    finding=finding,
-                    total=total,
-                    idx=idx,
-                    decision=decision,
-                    error=error,
-                    progress_callback=progress_callback,
-                    checkpoint_callback=checkpoint_callback,
-                    processed=processed,
-                )
-                if was_handled:
-                    handled.add((finding.run_index, finding.result_index))
+        outcomes = jobs.run(
+            scheduled,
+            invoke,
+            label=None,
+            result_key=lambda item: item[0],
+        )
+        for idx, finding, decision, error in outcomes:
+            processed, was_handled = self._handle_finding_result(
+                triaged_payload=triaged_payload,
+                finding=finding,
+                total=total,
+                idx=idx,
+                decision=decision,
+                error=error,
+                progress_callback=progress_callback,
+                checkpoint_callback=checkpoint_callback,
+                processed=processed,
+            )
+            if was_handled:
+                handled.add((finding.run_index, finding.result_index))
         return processed, handled
 
     def triage_run(
@@ -290,6 +290,7 @@ class TriageService:
         run: TriageRun,
         *,
         classifier: TriageClassifier,
+        jobs: NodeJobs,
         memory_service: MemoryService | None = None,
         progress_callback=None,
         debug_callback=None,
@@ -307,6 +308,7 @@ class TriageService:
             debug_callback=debug_callback,
             checkpoint_callback=checkpoint_callback,
             classifier=classifier,
+            jobs=jobs,
             memory_service=memory_service,
             processed=run.processed,
         )

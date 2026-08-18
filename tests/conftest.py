@@ -7,9 +7,19 @@ import shutil
 import pytest
 from metis.configuration import load_execution_config
 from metis.engine import MetisEngine
+from metis.engine.concurrency import JobScheduler
 from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import CapabilityRuntimeSettings
 from unittest.mock import Mock, MagicMock
+
+
+@pytest.fixture
+def node_jobs():
+    scheduler = JobScheduler(2)
+    try:
+        yield scheduler.limit(2)
+    finally:
+        scheduler.close()
 
 
 @pytest.fixture
@@ -110,7 +120,7 @@ def engine(
 ):
     codebase_path = tmp_path / "data"
     shutil.copytree(Path(__file__).parent / "data", codebase_path)
-    return MetisEngine(
+    engine = MetisEngine(
         codebase_path=str(codebase_path),
         vector_backend=dummy_backend,
         language_plugin="c",
@@ -123,6 +133,10 @@ def engine(
         capability_settings=capability_settings,
         execution_config=execution_with_index,
     )
+    try:
+        yield engine
+    finally:
+        engine.close()
 
 
 def pytest_addoption(parser):

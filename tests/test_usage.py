@@ -111,7 +111,10 @@ def test_review_code_propagates_usage_context_into_worker_threads(capability_set
     service._review_file_standard = _review_file
 
     with engine.usage_command("review_code") as command:
-        results = service.execute_standard_review_with_outcome(files).result["reviews"]
+        results = service.execute_standard_review_with_outcome(
+            files,
+            jobs=engine.execution._jobs,
+        ).result["reviews"]
 
     record = engine.finalize_usage_command(command)
 

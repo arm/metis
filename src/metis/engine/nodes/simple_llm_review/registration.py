@@ -31,6 +31,7 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
         )
         review = service.run_review(
             cast(ReviewCommand, invocation.inputs["request"]),
+            jobs=invocation.context.jobs,
             memory_service=memory,
             index=index,
             progress_callback=invocation.context.callbacks.progress,
