@@ -32,7 +32,7 @@ from rich.progress import (
 )
 
 from .exporters import export_csv, export_html, export_sarif
-from metis.sarif.utils import create_fingerprint
+from metis.sarif.triage import apply_triage_annotations
 from metis.vector_store.retrievers import retriever_query_config
 
 try:
@@ -377,7 +377,7 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
     else:
         files = list(output_files)
     json_payload = (
-        _merge_triage_annotations(data, sarif_payload)
+        apply_triage_annotations(data, sarif_payload)
         if sarif_payload is not None
         else data
     )
@@ -429,198 +429,6 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
 
         # default to JSON
         _write_payload(output_path, json_payload, "Results")
-
-
-def _merge_triage_annotations(report_data, sarif_payload):
-    if not isinstance(report_data, dict):
-        return report_data
-    reviews = report_data.get("reviews")
-    if not isinstance(reviews, list):
-        return report_data
-    runs = sarif_payload.get("runs") if isinstance(sarif_payload, dict) else None
-    if not isinstance(runs, list):
-        return report_data
-
-    sarif_results = []
-    for run in runs:
-        if not isinstance(run, dict):
-            continue
-        results = run.get("results")
-        if not isinstance(results, list):
-            continue
-        sarif_results.extend(results)
-
-    issue_refs = []
-    for file_entry in reviews:
-        if not isinstance(file_entry, dict):
-            continue
-        file_name = str(file_entry.get("file") or file_entry.get("file_path") or "")
-        issues = file_entry.get("reviews")
-        if not isinstance(issues, list):
-            continue
-        for issue in issues:
-            if isinstance(issue, dict):
-                issue_refs.append((issue, file_name))
-
-    if not sarif_results or not issue_refs:
-        return report_data
-
-    indexed = []
-    fp_map: dict[str, list[int]] = {}
-    file_line_issue_map: dict[tuple[str, int, str], list[int]] = {}
-    file_line_map: dict[tuple[str, int], list[int]] = {}
-    file_issue_map: dict[tuple[str, str], list[int]] = {}
-    file_line_rule_map: dict[tuple[str, int, str], list[int]] = {}
-    file_rule_issue_map: dict[tuple[str, str, str], list[int]] = {}
-
-    for idx, result in enumerate(sarif_results):
-        if not isinstance(result, dict):
-            continue
-        properties = result.get("properties")
-        if not isinstance(properties, dict):
-            continue
-
-        file_name, line_number = _extract_sarif_location(result)
-        issue_text = _extract_sarif_issue_text(result)
-        rule_id = _extract_sarif_rule_id(result)
-        fingerprint = _extract_sarif_fingerprint(result)
-        indexed.append((idx, properties))
-        if fingerprint:
-            fp_map.setdefault(fingerprint, []).append(idx)
-        if file_name and line_number > 0 and rule_id:
-            file_line_rule_map.setdefault((file_name, line_number, rule_id), []).append(
-                idx
-            )
-        if file_name and line_number > 0 and issue_text:
-            file_line_issue_map.setdefault(
-                (file_name, line_number, issue_text), []
-            ).append(idx)
-        if file_name and rule_id and issue_text:
-            file_rule_issue_map.setdefault((file_name, rule_id, issue_text), []).append(
-                idx
-            )
-        if file_name and line_number > 0:
-            file_line_map.setdefault((file_name, line_number), []).append(idx)
-        if file_name and issue_text:
-            file_issue_map.setdefault((file_name, issue_text), []).append(idx)
-
-    unused = {idx for idx, _ in indexed}
-
-    def _take_from(mapping, key):
-        entries = mapping.get(key)
-        if not entries:
-            return None
-        while entries:
-            candidate = entries.pop(0)
-            if candidate in unused:
-                return candidate
-        return None
-
-    properties_by_idx = {idx: props for idx, props in indexed}
-
-    for issue, file_name in issue_refs:
-        line_number = _normalize_issue_line(issue.get("line_number"))
-        issue_text = str(issue.get("issue") or issue.get("title") or "").strip()
-        issue_rule = str(issue.get("rule_id") or issue.get("ruleId") or "").strip()
-        fingerprint = ""
-        if file_name and line_number > 0:
-            fingerprint = create_fingerprint(file_name, line_number, "AI001")
-
-        matchers = []
-        if fingerprint:
-            matchers.append((fp_map, fingerprint))
-        if file_name and line_number > 0 and issue_rule:
-            matchers.append((file_line_rule_map, (file_name, line_number, issue_rule)))
-        if file_name and line_number > 0 and issue_text:
-            matchers.append((file_line_issue_map, (file_name, line_number, issue_text)))
-        if file_name and issue_rule and issue_text:
-            matchers.append((file_rule_issue_map, (file_name, issue_rule, issue_text)))
-        if file_name and line_number > 0:
-            matchers.append((file_line_map, (file_name, line_number)))
-        if file_name and issue_text:
-            matchers.append((file_issue_map, (file_name, issue_text)))
-
-        match_idx = None
-        for mapping, key in matchers:
-            match_idx = _take_from(mapping, key)
-            if match_idx is not None:
-                break
-        if match_idx is None:
-            continue
-
-        unused.discard(match_idx)
-        properties = properties_by_idx.get(match_idx)
-        if not properties:
-            continue
-        _apply_triage_properties(issue, properties)
-
-    return report_data
-
-
-def _normalize_issue_line(raw_line) -> int:
-    try:
-        parsed = int(raw_line)
-    except Exception:
-        return 1
-    return parsed if parsed > 0 else 1
-
-
-def _extract_sarif_fingerprint(result: dict) -> str:
-    partial = result.get("partialFingerprints")
-    if not isinstance(partial, dict):
-        return ""
-    return str(partial.get("primaryLocationLineHash") or "").strip()
-
-
-def _extract_sarif_location(result: dict) -> tuple[str, int]:
-    locations = result.get("locations")
-    if not isinstance(locations, list) or not locations:
-        return "", 1
-    first = locations[0]
-    if not isinstance(first, dict):
-        return "", 1
-    physical = first.get("physicalLocation")
-    if not isinstance(physical, dict):
-        return "", 1
-    artifact = physical.get("artifactLocation")
-    file_name = ""
-    if isinstance(artifact, dict):
-        file_name = str(artifact.get("uri") or "")
-    region = physical.get("region")
-    properties = result.get("properties")
-    if isinstance(properties, dict):
-        reported_line = properties.get("reportedLineNumber")
-        if reported_line is not None:
-            return file_name, _normalize_issue_line(reported_line)
-    if not isinstance(region, dict):
-        return file_name, 1
-    return file_name, _normalize_issue_line(region.get("startLine"))
-
-
-def _extract_sarif_rule_id(result: dict) -> str:
-    return str(result.get("ruleId") or "").strip()
-
-
-def _extract_sarif_issue_text(result: dict) -> str:
-    message = result.get("message")
-    if isinstance(message, dict):
-        return str(message.get("text") or "").strip()
-    if isinstance(message, str):
-        return message.strip()
-    return ""
-
-
-def _apply_triage_properties(issue: dict, properties: dict) -> None:
-    if "metisTriaged" in properties:
-        issue["metisTriaged"] = bool(properties.get("metisTriaged"))
-    if "metisTriageStatus" in properties:
-        issue["metisTriageStatus"] = str(properties.get("metisTriageStatus") or "")
-    if "metisTriageReason" in properties:
-        issue["metisTriageReason"] = str(properties.get("metisTriageReason") or "")
-    if "metisTriageTimestamp" in properties:
-        issue["metisTriageTimestamp"] = str(
-            properties.get("metisTriageTimestamp") or ""
-        )
 
 
 def check_file_exists(file_path, quiet=False):

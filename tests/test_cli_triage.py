@@ -11,7 +11,6 @@ from metis.cli import triage_cli
 from metis.cli.command_runtime import CommandRuntime
 from metis.cli.commands import run_triage
 from metis.cli.utils import save_output
-from metis.sarif.utils import create_fingerprint
 
 
 @pytest.mark.parametrize(
@@ -159,12 +158,14 @@ def test_run_triage_accepts_metis_json_input(tmp_path):
     class _DummyEngine:
         def execute_triage(self, payload, **kwargs):
             assert kwargs.get("options") is None
-            payload["runs"][0]["results"][0]["properties"] = {
-                "metisTriaged": True,
-                "metisTriageStatus": "invalid",
-                "metisTriageReason": "Contradicted by source.",
-                "metisTriageTimestamp": "2026-01-01T00:00:00Z",
-            }
+            payload["runs"][0]["results"][0]["properties"].update(
+                {
+                    "metisTriaged": True,
+                    "metisTriageStatus": "invalid",
+                    "metisTriageReason": "Contradicted by source.",
+                    "metisTriageTimestamp": "2026-01-01T00:00:00Z",
+                }
+            )
             return {"formats": ("json",), "sarif": payload}
 
     args = SimpleNamespace(quiet=True, output_file=None, include_triaged=False)
@@ -235,85 +236,6 @@ def test_run_triage_rejects_non_metis_json_input(tmp_path, monkeypatch):
     assert any("Metis results object" in message for message in messages)
 
 
-def test_save_output_json_includes_triage_annotations(tmp_path):
-    output_path = tmp_path / "results.json"
-    results = {
-        "reviews": [
-            {
-                "file": "src/a.c",
-                "reviews": [
-                    {"issue": "Issue A", "line_number": 10},
-                    {"issue": "Issue B", "line_number": 20},
-                ],
-            }
-        ]
-    }
-    triaged_sarif = {
-        "version": "2.1.0",
-        "runs": [
-            {
-                "results": [
-                    {
-                        "ruleId": "AI001",
-                        "message": {"text": "Issue A"},
-                        "partialFingerprints": {
-                            "primaryLocationLineHash": create_fingerprint(
-                                "src/a.c", 10, "AI001"
-                            )
-                        },
-                        "locations": [
-                            {
-                                "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
-                                    "region": {"startLine": 10},
-                                }
-                            }
-                        ],
-                        "properties": {
-                            "metisTriaged": True,
-                            "metisTriageStatus": "valid",
-                            "metisTriageReason": "Concrete evidence found.",
-                            "metisTriageTimestamp": "2026-01-01T00:00:00Z",
-                        },
-                    },
-                    {
-                        "ruleId": "AI001",
-                        "message": {"text": "Issue B"},
-                        "partialFingerprints": {
-                            "primaryLocationLineHash": create_fingerprint(
-                                "src/a.c", 20, "AI001"
-                            )
-                        },
-                        "locations": [
-                            {
-                                "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
-                                    "region": {"startLine": 20},
-                                }
-                            }
-                        ],
-                        "properties": {
-                            "metisTriaged": True,
-                            "metisTriageStatus": "inconclusive",
-                            "metisTriageReason": "Alias chain unresolved.",
-                            "metisTriageTimestamp": "2026-01-01T00:00:01Z",
-                        },
-                    },
-                ]
-            }
-        ],
-    }
-
-    save_output(str(output_path), results, quiet=True, sarif_payload=triaged_sarif)
-
-    payload = json.loads(output_path.read_text(encoding="utf-8"))
-    issues = payload["reviews"][0]["reviews"]
-    assert issues[0]["metisTriaged"] is True
-    assert issues[0]["metisTriageStatus"] == "valid"
-    assert issues[0]["metisTriageReason"] == "Concrete evidence found."
-    assert issues[1]["metisTriageStatus"] == "inconclusive"
-
-
 def test_save_output_json_matches_triage_annotations_by_identity(tmp_path):
     output_path = tmp_path / "results.json"
     results = {
@@ -321,29 +243,20 @@ def test_save_output_json_matches_triage_annotations_by_identity(tmp_path):
             {
                 "file": "src/a.c",
                 "reviews": [
-                    {"issue": "Issue A", "line_number": 10},
-                    {"issue": "Issue B", "line_number": 20},
+                    {"id": "finding-a", "issue": "Issue A", "line_number": 10},
+                    {"id": "finding-b", "issue": "Issue B", "line_number": 10},
                 ],
             }
         ]
     }
-    # Intentionally reverse SARIF result order; mapping should still attach by identity.
     triaged_sarif = {
         "version": "2.1.0",
         "runs": [
             {
                 "results": [
                     {
-                        "message": {"text": "Issue B"},
-                        "locations": [
-                            {
-                                "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
-                                    "region": {"startLine": 20},
-                                }
-                            }
-                        ],
                         "properties": {
+                            "metisFindingId": "finding-b",
                             "metisTriaged": True,
                             "metisTriageStatus": "invalid",
                             "metisTriageReason": "Contradicted by code.",
@@ -351,16 +264,8 @@ def test_save_output_json_matches_triage_annotations_by_identity(tmp_path):
                         },
                     },
                     {
-                        "message": {"text": "Issue A"},
-                        "locations": [
-                            {
-                                "physicalLocation": {
-                                    "artifactLocation": {"uri": "src/a.c"},
-                                    "region": {"startLine": 10},
-                                }
-                            }
-                        ],
                         "properties": {
+                            "metisFindingId": "finding-a",
                             "metisTriaged": True,
                             "metisTriageStatus": "valid",
                             "metisTriageReason": "Concrete evidence found.",
@@ -380,6 +285,51 @@ def test_save_output_json_matches_triage_annotations_by_identity(tmp_path):
     assert issues[0]["metisTriageStatus"] == "valid"
     assert issues[1]["issue"] == "Issue B"
     assert issues[1]["metisTriageStatus"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("report_ids", "sarif_ids"),
+    [
+        (("duplicate", "duplicate"), ("duplicate",)),
+        (("duplicate",), ("duplicate", "duplicate")),
+    ],
+)
+def test_save_output_ignores_ambiguous_finding_ids(
+    tmp_path: Path,
+    report_ids: tuple[str, ...],
+    sarif_ids: tuple[str, ...],
+) -> None:
+    output_path = tmp_path / "results.json"
+    results = {
+        "reviews": [
+            {
+                "reviews": [
+                    {"id": finding_id, "issue": f"Issue {index}"}
+                    for index, finding_id in enumerate(report_ids)
+                ]
+            }
+        ]
+    }
+    triaged_sarif = {
+        "runs": [
+            {
+                "results": [
+                    {
+                        "properties": {
+                            "metisFindingId": finding_id,
+                            "metisTriaged": True,
+                        }
+                    }
+                    for finding_id in sarif_ids
+                ]
+            }
+        ]
+    }
+
+    save_output(output_path, results, quiet=True, sarif_payload=triaged_sarif)
+
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert all("metisTriaged" not in issue for issue in saved["reviews"][0]["reviews"])
 
 
 def test_triage_debug_callback_enabled_without_verbose():

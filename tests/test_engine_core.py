@@ -373,7 +373,11 @@ def test_execute_review_routes_through_default_simple_review_graph(
 
     outputs = engine.execute_review(mode, target=target)
 
-    assert outputs["findings"]["reviews"] == [review]
+    findings = outputs["findings"]["reviews"]
+    assert findings[0]["file"] == review["file"]
+    finding = dict(findings[0]["reviews"][0])
+    assert finding.pop("id")
+    assert finding == review["reviews"][0]
     assert outputs["sarif"]["runs"][0]["results"][0]["message"]["text"] == (
         "unchecked input"
     )

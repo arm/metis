@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+from pathlib import Path
 
 from metis.sarif.writer import generate_sarif
 from metis.sarif.utils import read_file_lines, create_fingerprint
+from metis.sarif.triage import METIS_FINDING_ID_KEY
 
 
 def test_read_file_lines(tmp_path):
@@ -93,6 +95,65 @@ def test_generate_sarif_single_issue(tmp_path):
     # Fingerprint matches utility
     fp_expected = create_fingerprint(str(temp_file), 2, "AI001")
     assert issue_entry["partialFingerprints"]["primaryLocationLineHash"] == fp_expected
+    finding_id = results["reviews"][0]["reviews"][0]["id"]
+    assert issue_entry["properties"][METIS_FINDING_ID_KEY] == finding_id
+
+
+def test_review_finding_id_survives_serialization_and_sarif() -> None:
+    from metis.engine.stages.review.models import ReviewFinding
+
+    finding = ReviewFinding(issue="Example issue")
+    restored = ReviewFinding.model_validate(finding.model_dump())
+    sarif = generate_sarif(
+        {"reviews": [{"file": "example.c", "reviews": [restored.model_dump()]}]}
+    )
+
+    assert restored.id == finding.id
+    assert sarif["runs"][0]["results"][0]["properties"][METIS_FINDING_ID_KEY] == (
+        finding.id
+    )
+
+
+def test_generate_sarif_repairs_duplicate_finding_ids() -> None:
+    issues = [
+        {"id": "duplicate", "issue": "First"},
+        {"id": "duplicate", "issue": "Second"},
+    ]
+
+    sarif = generate_sarif({"reviews": [{"file": "example.c", "reviews": issues}]})
+
+    finding_ids = [issue["id"] for issue in issues]
+    sarif_ids = [
+        result["properties"][METIS_FINDING_ID_KEY]
+        for result in sarif["runs"][0]["results"]
+    ]
+    assert len(set(finding_ids)) == 2
+    assert sarif_ids == finding_ids
+
+
+def test_reachability_finding_id_survives_review_and_sarif(tmp_path: Path) -> None:
+    from metis.engine.nodes.reachability.domain import VulnerabilityFinding
+    from metis.engine.nodes.reachability.finding_adapter import finding_to_review_item
+
+    finding = VulnerabilityFinding(
+        "reachability-finding",
+        "other",
+        "high",
+        0.8,
+        "source",
+        "example.c",
+        1,
+        "sink",
+        "example.c",
+        2,
+    )
+    item = finding_to_review_item(finding, codebase_path=str(tmp_path))
+    sarif = generate_sarif({"reviews": [{"file": "example.c", "reviews": [item]}]})
+
+    assert item["id"] == finding.id
+    assert sarif["runs"][0]["results"][0]["properties"][METIS_FINDING_ID_KEY] == (
+        finding.id
+    )
 
 
 def test_generate_sarif_uses_issue_metadata_when_source_missing():

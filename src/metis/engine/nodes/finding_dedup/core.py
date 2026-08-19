@@ -83,7 +83,7 @@ def _unique_candidates(candidates: list[ReviewCandidate]) -> list[ReviewCandidat
     seen: set[tuple[str, str]] = set()
     for candidate in candidates:
         group = candidate.group.model_dump(mode="json", exclude={"reviews"})
-        finding = candidate.finding.model_dump(mode="json")
+        finding = candidate.finding.model_dump(mode="json", exclude={"id"})
         identity = (
             json.dumps(group, sort_keys=True, separators=(",", ":")),
             json.dumps(finding, sort_keys=True, separators=(",", ":")),
