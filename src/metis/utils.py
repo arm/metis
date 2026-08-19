@@ -217,7 +217,7 @@ def parse_json_output(model_output):
         return cleaned
 
 
-def extract_json_content(model_output):
+def extract_json_content(model_output: str) -> str:
     """
     Extract JSON content from LLM output that may contain explanatory text.
     Handles cases like:
@@ -239,44 +239,20 @@ def extract_json_content(model_output):
         if cleaned.endswith("```"):
             cleaned = cleaned[: -len("```")].strip()
 
-    # If still not valid JSON, try to extract JSON object/array from text
-    if not cleaned.startswith("{") and not cleaned.startswith("["):
-        json_start = -1
+    if cleaned.startswith(("{", "[")):
+        return cleaned
 
-        # Find first JSON structure (object or array)
-        for i, char in enumerate(cleaned):
-            if char == "{" or char == "[":
-                json_start = i
-                break
-
-        if json_start == -1:
-            return cleaned
-
-        # Find matching closing brace/bracket using stack
-        stack = []
-        json_end = -1
-
-        for i in range(json_start, len(cleaned)):
-            char = cleaned[i]
-            if char == "{" or char == "[":
-                stack.append(char)
-            elif char == "}" or char == "]":
-                if stack:
-                    stack.pop()
-                    if not stack:
-                        json_end = i + 1
-                        break
-
-        if json_end != -1:
-            extracted = cleaned[json_start:json_end]
-            # Verify it's valid JSON
-            try:
-                json.loads(extracted)
-                return extracted
-            except json.JSONDecodeError:
-                pass
-
-    return cleaned
+    json_start = next(
+        (index for index, character in enumerate(cleaned) if character in "{["),
+        -1,
+    )
+    if json_start < 0:
+        return cleaned
+    try:
+        _, json_end = json.JSONDecoder().raw_decode(cleaned, json_start)
+    except json.JSONDecodeError:
+        return cleaned
+    return cleaned[json_start:json_end]
 
 
 def read_file_content(file_path):
