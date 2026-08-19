@@ -60,7 +60,10 @@ def test_simple_llm_review_processes_the_selected_scope(engine):
         )
     )
 
-    run = service.run_review(ReviewCommand(mode="code"))
+    run = service.run_review(
+        ReviewCommand(mode="code"),
+        jobs=engine.execution._jobs,
+    )
 
     assert run.status is ReviewStatus.SUCCEEDED
     assert run.diagnostics == ()
@@ -78,6 +81,7 @@ def test_patch_review_uses_simple_llm_review(engine):
 
     run = service.run_review(
         ReviewCommand(mode="patch", target="change.patch"),
+        jobs=engine.execution._jobs,
     )
 
     assert run.status is ReviewStatus.SUCCEEDED
@@ -122,6 +126,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     ):
         run = service.run_review(
             ReviewCommand(mode="code"),
+            jobs=engine.execution._jobs,
             codegraph=CodeGraph(),
         )
 
@@ -134,6 +139,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     assert service.codebase_reviews.call_args.kwargs["files"] == (c_file,)
     fallback.run_files.assert_called_once_with(
         (python_file,),
+        jobs=engine.execution._jobs,
         memory_service=None,
         index=None,
         progress_callback=None,
@@ -167,6 +173,7 @@ def test_reachability_does_not_run_simple_review_for_supported_files(engine):
     )
     run = service.run_review(
         ReviewCommand(mode="file", target=target),
+        jobs=engine.execution._jobs,
         codegraph=CodeGraph(),
     )
 
@@ -201,6 +208,7 @@ def test_reachability_missing_graph_coverage_is_inconclusive(engine):
 
     run = service.run_review(
         ReviewCommand(mode="file", target=target),
+        jobs=engine.execution._jobs,
         codegraph=CodeGraph(),
     )
 
@@ -236,6 +244,7 @@ def test_reachability_operational_failure_detail_survives_product_boundary(engin
 
     run = service.run_review(
         ReviewCommand(mode="file", target=target),
+        jobs=engine.execution._jobs,
         codegraph=CodeGraph(),
     )
 
@@ -261,6 +270,7 @@ def test_reachability_review_rejects_symlink_outside_codebase(engine, tmp_path):
 
     run = service.run_review(
         ReviewCommand(mode="file", target=str(target)),
+        jobs=engine.execution._jobs,
         codegraph=CodeGraph(),
     )
 
@@ -281,7 +291,11 @@ def test_reachability_defers_fallback_to_explicit_simple_review(engine):
     service._repository.get_code_files = Mock(return_value=[python_file])
     service.supports_file = Mock(return_value=False)
 
-    run = service.run_review(ReviewCommand(mode="code"), codegraph=CodeGraph())
+    run = service.run_review(
+        ReviewCommand(mode="code"),
+        jobs=engine.execution._jobs,
+        codegraph=CodeGraph(),
+    )
 
     assert run.status is ReviewStatus.SUCCEEDED
     assert run.result is not None
@@ -299,7 +313,11 @@ def test_reachability_empty_scope_is_inconclusive(engine):
     )
     service._repository.get_code_files = Mock(return_value=[])
 
-    run = service.run_review(ReviewCommand(mode="code"), codegraph=CodeGraph())
+    run = service.run_review(
+        ReviewCommand(mode="code"),
+        jobs=engine.execution._jobs,
+        codegraph=CodeGraph(),
+    )
 
     assert run.status is ReviewStatus.INCONCLUSIVE
 

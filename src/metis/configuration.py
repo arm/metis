@@ -71,7 +71,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
 
     engine_cfg = cfg.get("metis_engine", {})
     runtime["max_token_length"] = engine_cfg.get("max_token_length", 100000)
-    runtime["max_workers"] = engine_cfg.get("max_workers", 8)
+    runtime["max_workers"] = _required_positive_int(
+        engine_cfg,
+        "max_workers",
+        section="metis_engine",
+        default=8,
+    )
     runtime["embed_dim"] = engine_cfg.get("embed_dim", 1536)
     runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
     runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
@@ -195,8 +200,14 @@ def _positive_int(value: object, *, fallback: int) -> int:
     return parsed
 
 
-def _required_positive_int(values: dict[str, Any], key: str, *, section: str) -> int:
-    value = values.get(key)
+def _required_positive_int(
+    values: dict[str, Any],
+    key: str,
+    *,
+    section: str,
+    default: int | None = None,
+) -> int:
+    value = values.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{section}.{key} must be a positive integer")
     return value

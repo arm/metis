@@ -575,6 +575,7 @@ metis_engine:
               - index
               - memory
           private_policy:
+            max_concurrency: 50
             inputs:
               review: simple_llm_review
           finding_dedup:
@@ -592,7 +593,13 @@ metis_engine:
 
 A handler receives validated inputs and a small context containing its granted
 capabilities together with the repository lookup contract, CodeGraph
-materialize/load API, model runner, runtime limits, and callbacks. A node
+materialize/load API, model runner, runtime limits, shared job scheduler, and
+callbacks. `max_concurrency` limits that node's active jobs without reserving
+threads; omitted values use the global `metis_engine.max_workers` limit. All
+nodes on one engine share that worker pool, so their combined active work never
+exceeds the global limit; larger node values are capped by it. A node submits
+bounded work through `invocation.context.jobs.run(...)`; it does not construct
+its own executor. A node
 accesses only the names in `invocation.context.capabilities`. A node declares
 `request: ReviewCommand` when it needs the review-stage request; the runner
 supplies that typed stage input without extra YAML. The context does not expose

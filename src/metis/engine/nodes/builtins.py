@@ -112,7 +112,6 @@ def build_builtin_execution(
 
     triage_service = (
         TriageService(
-            max_workers=engine_config.max_workers,
             triage_checkpoint_every=triage_checkpoint_every,
         )
         if configuration.stages.triage is not None

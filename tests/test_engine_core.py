@@ -43,6 +43,23 @@ def _execution_with_index() -> dict[str, object]:
     return execution
 
 
+@pytest.mark.parametrize("max_workers", (0, -1, True, "2"))
+def test_engine_rejects_invalid_max_workers(capability_settings, max_workers):
+    with pytest.raises(
+        ValueError,
+        match="MetisEngine.max_workers must be a positive integer",
+    ):
+        MetisEngine(
+            vector_backend=Mock(),
+            llm_provider=Mock(),
+            max_workers=max_workers,
+            max_token_length=2048,
+            llama_query_model="gpt-test",
+            similarity_top_k=3,
+            capability_settings=capability_settings,
+        )
+
+
 def test_index_capability_rejects_missing_retrievers(capability_settings):
     bad_backend = Mock()
     bad_backend.init = Mock()
@@ -722,6 +739,14 @@ def test_close_clears_retriever_cache_and_closes_backend(capability_settings):
     assert engine._state.retriever_code is None
     assert engine._state.retriever_docs is None
     backend.close.assert_called_once()
+
+    with pytest.raises(RuntimeError, match="cannot schedule new futures"):
+        engine.execution._jobs.run(
+            [None],
+            lambda _value: None,
+            label=None,
+            result_key=str,
+        )
 
     assert index.get_retrievers() == ("code-retriever", "docs-retriever")
     assert backend.get_retrievers.call_count == 2

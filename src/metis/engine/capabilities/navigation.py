@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from threading import Lock
 from typing import Sequence
 
 from pydantic import BaseModel
@@ -43,6 +44,9 @@ class NavigationCapability:
         self.max_chars = max_chars
         self._has_grep = shutil.which("grep") is not None
         self._has_find = shutil.which("find") is not None
+        # Serialize subprocess tools; add a measured FD-aware pool if tool
+        # latency becomes material.
+        self._subprocess_lock = Lock()
 
     def _resolve_path(self, raw_path: str) -> Path:
         return resolve_path_within_root(self.codebase_path, raw_path)
@@ -53,13 +57,14 @@ class NavigationCapability:
         *,
         ok_returncodes: tuple[int, ...] = (0,),
     ) -> str:
-        proc = subprocess.run(
-            list(argv),
-            cwd=str(self.codebase_path),
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-        )
+        with self._subprocess_lock:
+            proc = subprocess.run(
+                list(argv),
+                cwd=str(self.codebase_path),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
         stdout = (proc.stdout or "").strip()
         stderr = (proc.stderr or "").strip()
         if proc.returncode not in ok_returncodes:

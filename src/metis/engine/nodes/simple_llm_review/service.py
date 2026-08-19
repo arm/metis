@@ -6,15 +6,14 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 from typing import TYPE_CHECKING
 
 import unidiff
 
-from metis.usage import submit_with_current_context
 from metis import runlog
+from metis.engine.execution.contracts import NodeJobs
 from metis.utils import read_file_content
 
 from metis.engine.diff_utils import process_diff_file
@@ -68,6 +67,7 @@ class SimpleLlmReviewService:
         self,
         command: ReviewCommand,
         *,
+        jobs: NodeJobs,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
@@ -91,6 +91,7 @@ class SimpleLlmReviewService:
         )
         return self.run_files(
             files,
+            jobs=jobs,
             memory_service=memory_service,
             index=index,
             progress_callback=progress_callback,
@@ -100,6 +101,7 @@ class SimpleLlmReviewService:
         self,
         files: tuple[str, ...],
         *,
+        jobs: NodeJobs,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
@@ -107,6 +109,7 @@ class SimpleLlmReviewService:
         return self._run_traditional_review(
             files,
             progress_callback,
+            jobs=jobs,
             memory_service=memory_service,
             review_graph=self._review_graph_factory(index),
         )
@@ -116,11 +119,13 @@ class SimpleLlmReviewService:
         files: tuple[str, ...],
         progress_callback,
         *,
+        jobs: NodeJobs,
         memory_service: MemoryService | None,
         review_graph: Any,
     ) -> ReviewRun:
         outcome = self.execute_standard_review_with_outcome(
             files,
+            jobs=jobs,
             progress_callback=progress_callback,
             memory_service=memory_service,
             review_graph=review_graph,
@@ -148,6 +153,7 @@ class SimpleLlmReviewService:
         self,
         files,
         *,
+        jobs: NodeJobs,
         progress_callback=None,
         memory_service: MemoryService | None = None,
         review_graph: Any | None = None,
@@ -164,6 +170,7 @@ class SimpleLlmReviewService:
                 memory_service=memory_service,
                 review_graph=review_graph,
             ),
+            jobs,
         ):
             if error is not None:
                 logger.error(f"Error reviewing file {path}: {error}")
@@ -228,20 +235,20 @@ class SimpleLlmReviewService:
         self,
         files,
         review_fn,
+        jobs: NodeJobs,
     ):
-        with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
-            future_to_path = {
-                submit_with_current_context(
-                    executor, self._review_file_task, review_fn, path
-                ): path
-                for path in files
-            }
-            for future in as_completed(future_to_path):
-                path = future_to_path[future]
-                try:
-                    yield path, future.result(), None
-                except Exception as exc:
-                    yield path, None, exc
+        def review(path):
+            try:
+                return path, self._review_file_task(review_fn, path), None
+            except Exception as exc:
+                return path, None, exc
+
+        return jobs.run(
+            files,
+            review,
+            label=None,
+            result_key=str,
+        )
 
     def review_patch(
         self,

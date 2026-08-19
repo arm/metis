@@ -124,6 +124,26 @@ llm_provider:
     assert runtime["triage_options"] == TriageOptions(include_triaged=True)
 
 
+@pytest.mark.parametrize("max_workers", (0, -1, True, "2"))
+def test_runtime_rejects_invalid_max_workers(tmp_path, monkeypatch, max_workers):
+    config_path = _write_config(
+        tmp_path,
+        yaml.safe_dump(
+            {
+                "metis_engine": {"max_workers": max_workers},
+                "llm_provider": {"name": "openai", "model": "test-model"},
+            }
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    with pytest.raises(
+        ValueError,
+        match="metis_engine.max_workers must be a positive integer",
+    ):
+        load_runtime_config(config_path)
+
+
 def test_runtime_passes_language_replacements_from_selected_yaml(tmp_path, monkeypatch):
     config_path = _write_config(
         tmp_path,

@@ -12,6 +12,7 @@ from typing import cast
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.configuration import _required_positive_int
 from metis.configuration import load_execution_config
 from metis.configuration import load_plugin_config
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
@@ -75,7 +76,11 @@ class MetisEngine:
         if missing:
             raise ValueError(f"Missing required config: {', '.join(missing)}")
 
-        max_workers = cast(int, kwargs["max_workers"])
+        max_workers = _required_positive_int(
+            kwargs,
+            "max_workers",
+            section="MetisEngine",
+        )
         max_token_length = cast(int, kwargs["max_token_length"])
         llama_query_model = cast(str, kwargs["llama_query_model"])
         similarity_top_k = cast(int, kwargs["similarity_top_k"])
@@ -105,7 +110,6 @@ class MetisEngine:
             kwargs.get("reachability_config") or {}
         )
         reachability_settings = reachability_config.as_review_settings()
-        reachability_settings["max_workers"] = max_workers
         reasoning_effort = chat_model_kwargs.get("reasoning_effort")
         if reasoning_effort is not None:
             reachability_settings["reasoning_effort"] = reasoning_effort
@@ -394,6 +398,7 @@ class MetisEngine:
             return _execution_value(triage)
 
     def close(self):
+        self.execution.close()
         if self._triage_classifier is not None:
             self._triage_classifier.close()
         self.capabilities.close()

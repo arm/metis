@@ -38,6 +38,7 @@ def test_execution_node_public_api_is_explicit() -> None:
         "NodeCodeGraphs",
         "NodeContext",
         "NodeInvocation",
+        "NodeJobs",
         "NodeRegistration",
         "NodeResult",
         "NodeRuntime",

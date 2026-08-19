@@ -22,6 +22,7 @@ from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import NodeContext
 from metis.engine.execution.contracts import NodeCodeGraphs
 from metis.engine.execution.contracts import NodeInvocation
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.contracts import NodeRuntime
@@ -53,6 +54,7 @@ __all__ = [
     "NodeContext",
     "NodeCodeGraphs",
     "NodeInvocation",
+    "NodeJobs",
     "NodeRegistration",
     "NodeResult",
     "NodeRuntime",

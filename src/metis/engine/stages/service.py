@@ -11,6 +11,7 @@ from typing import assert_never
 from typing import cast
 
 from metis import runlog
+from metis.engine.concurrency import JobScheduler
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.runtime_settings import TriageOptions
@@ -70,6 +71,11 @@ class ExecutionGraphService:
         catalog = NodeCatalog(registrations, entry_points)
         self._plans: dict[StageName, StagePlan] = {}
         self._validate_configuration(catalog, capabilities)
+        self._scheduler = JobScheduler(engine_config.max_workers)
+        self._jobs = self._scheduler.limit(engine_config.max_workers)
+
+    def close(self) -> None:
+        self._scheduler.close()
 
     def execute_initialize(
         self,
@@ -269,6 +275,7 @@ class ExecutionGraphService:
                     self._engine_config.capability_settings.model_tools.max_rounds
                 ),
                 chat_model_kwargs=dict(self._engine_config.chat_model_kwargs),
+                jobs=self._jobs,
             ),
             callbacks=_node_callbacks(callbacks),
             triage=self._triage_adjudicator,

@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
-from metis.engine.concurrency import run_jobs
+from metis.engine.execution.contracts import NodeJobs
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.llm_runner import rendered_prompt_token_count
@@ -200,6 +200,7 @@ class IncrementalGraphReviewer:
         self,
         graph: CodeGraph,
         *,
+        jobs: NodeJobs,
         options: ReachabilityReviewOptions,
         memory_service: MemoryService | None = None,
         evidence_graph: CodeGraph | None = None,
@@ -232,6 +233,7 @@ class IncrementalGraphReviewer:
             graph,
             node_ids,
             packets,
+            jobs=jobs,
             options=options,
             memory_service=memory_service,
             evidence_graph=discovery_graph,
@@ -326,6 +328,7 @@ class IncrementalGraphReviewer:
         node_ids: tuple[str, ...],
         initial_packets: list[_FrontierPacket],
         *,
+        jobs: NodeJobs,
         options: ReachabilityReviewOptions,
         memory_service: MemoryService | None,
         evidence_graph: CodeGraph | None = None,
@@ -340,10 +343,9 @@ class IncrementalGraphReviewer:
 
         while pending:
             unique_scheduled, representative_by_index = _unique_packet_schedule(pending)
-            responses = run_jobs(
+            responses = jobs.run(
                 unique_scheduled,
                 self._review_packet,
-                max_workers=options.max_workers,
                 label="Reachability security review",
                 result_key=lambda packet: packet.index,
             )

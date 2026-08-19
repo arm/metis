@@ -119,7 +119,7 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
                 raise RuntimeError("boom")
             return {"status": "valid", "reason": "confirmed"}
 
-    engine._triage_service.max_workers = 1
+    engine.execution._jobs = engine.execution._scheduler.limit(1)
     dummy_workflow = _DummyWorkflow()
     monkeypatch.setattr(
         engine._triage_classifier,
@@ -151,7 +151,7 @@ def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkey
         def triage(self, _request):
             raise RuntimeError("boom")
 
-    engine._triage_service.max_workers = 1
+    engine.execution._jobs = engine.execution._scheduler.limit(1)
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
@@ -189,7 +189,7 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
         "_workflow",
         lambda _navigation, _rounds: _DummyWorkflow(),
     )
-    engine._triage_service.max_workers = 1
+    engine.execution._jobs = engine.execution._scheduler.limit(1)
 
     out = engine.execute_triage(payload)["sarif"]
     props = out["runs"][0]["results"][0]["properties"]
@@ -241,7 +241,7 @@ def test_execute_triage_writes_checkpoints_at_configured_cadence(
         "metis.engine.stages.triage.service.save_sarif_file",
         save_checkpoint,
     )
-    engine._triage_service.max_workers = 1
+    engine.execution._jobs = engine.execution._scheduler.limit(1)
     engine._triage_service.triage_checkpoint_every = 2
 
     result = engine.execute_triage(
@@ -298,7 +298,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
         "_workflow",
         lambda _navigation, _rounds: _DummyWorkflow(),
     )
-    engine._triage_service.max_workers = 1
+    engine.execution._jobs = engine.execution._scheduler.limit(1)
 
     out = engine.execute_triage(payload)["sarif"]
     assert out["runs"][0]["results"][0]["properties"]["metisTriaged"] is True

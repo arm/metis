@@ -43,6 +43,7 @@ def create_node(
         )
         triaged = adjudicator.triage_run(
             cast(TriageRun, invocation.inputs["request"]),
+            jobs=invocation.context.jobs,
             classifier=partial(
                 classifier_service.classify,
                 navigation=navigation,

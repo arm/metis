@@ -79,6 +79,7 @@ def _reviewer(tmp_path: Path) -> IncrementalGraphReviewer:
 
 def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     tmp_path: Path,
+    node_jobs,
 ) -> None:
     (tmp_path / "graph.c").write_text(
         "void root(void) { sink(); }\nvoid sink(void) {}\n",
@@ -125,8 +126,8 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     reviewer._runner.invoke = Mock(side_effect=invoke)
     outcome = reviewer.review(
         _graph(root, sink),
+        jobs=node_jobs,
         options=ReachabilityReviewOptions(
-            max_workers=1,
             domain_profiles=(" GPU ",),
             domain_hints=("CustomTerm",),
         ),
@@ -228,7 +229,7 @@ def test_compact_packet_uses_tables_numbered_source_and_target_tags(
     packets, failures = reviewer._build_packets(
         _graph(root, helper, stop),
         (root.unique_name, helper.unique_name, stop.unique_name),
-        options=ReachabilityReviewOptions(max_workers=1),
+        options=ReachabilityReviewOptions(),
         memory_service=None,
         selected_node_ids={root.unique_name},
         contracts={
@@ -285,7 +286,7 @@ def test_oversized_source_line_only_fails_its_function(tmp_path: Path) -> None:
     packets, failures = reviewer._build_packets(
         _graph(small, oversized),
         (small.unique_name, oversized.unique_name),
-        options=ReachabilityReviewOptions(max_workers=1),
+        options=ReachabilityReviewOptions(),
         memory_service=None,
     )
 
@@ -314,12 +315,15 @@ def test_source_chunk_runtime_error_propagates(
         reviewer._build_packets(
             _graph(root),
             (root.unique_name,),
-            options=ReachabilityReviewOptions(max_workers=1),
+            options=ReachabilityReviewOptions(),
             memory_service=None,
         )
 
 
-def test_invalid_discovery_packet_splits_and_reviews_children(tmp_path: Path) -> None:
+def test_invalid_discovery_packet_splits_and_reviews_children(
+    tmp_path: Path,
+    node_jobs,
+) -> None:
     (tmp_path / "graph.c").write_text(
         "void first(void) {}\nvoid second(void) {}\n",
         encoding="utf-8",
@@ -352,7 +356,8 @@ def test_invalid_discovery_packet_splits_and_reviews_children(tmp_path: Path) ->
     ) as session:
         outcome = reviewer.review(
             _graph(_function("first", 1), _function("second", 2)),
-            options=ReachabilityReviewOptions(max_workers=1),
+            jobs=node_jobs,
+            options=ReachabilityReviewOptions(),
         )
 
     assert calls == 3
@@ -373,6 +378,7 @@ def test_invalid_discovery_packet_splits_and_reviews_children(tmp_path: Path) ->
 def test_indexed_null_condition_reaches_deterministic_admission(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
+    node_jobs,
 ) -> None:
     source = (
         "void *allocate(void);\nvoid root(void) { void *p = allocate(); consume(p); }\n"
@@ -482,7 +488,8 @@ def test_indexed_null_condition_reaches_deterministic_admission(
     reviewer._runner.invoke = Mock(side_effect=invoke)
     outcome = reviewer.review(
         graph,
-        options=ReachabilityReviewOptions(max_workers=1),
+        jobs=node_jobs,
+        options=ReachabilityReviewOptions(),
     )
 
     assert outcome.findings == ()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from enum import Enum
@@ -65,6 +66,20 @@ class NodeCodeGraphs(Protocol):
     def load(self, reference: CodeGraphReference) -> CodeGraph: ...
 
 
+class NodeJobs(Protocol):
+    def limit(self, max_concurrency: int) -> "NodeJobs": ...
+
+    def run[JobT, ResultT](
+        self,
+        jobs: Sequence[JobT],
+        worker: Callable[[JobT], ResultT],
+        *,
+        label: str | None,
+        result_key: Callable[[JobT], object],
+        on_complete: Callable[[JobT, int, int], None] | None = None,
+    ) -> list[ResultT]: ...
+
+
 class EmptyNodeConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -116,6 +131,7 @@ class NodeRuntime:
     chat_model_kwargs: Mapping[str, object]
     model_tool_max_rounds: int = 0
     token_counter: Callable[[str], int] = count_tokens
+    jobs: NodeJobs | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -143,6 +159,12 @@ class NodeContext:
             "capabilities",
             MappingProxyType(dict(self.capabilities)),
         )
+
+    @property
+    def jobs(self) -> NodeJobs:
+        if self.runtime.jobs is None:
+            raise RuntimeError("Node job scheduler is unavailable")
+        return self.runtime.jobs
 
 
 @dataclass(frozen=True, slots=True)

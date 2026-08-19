@@ -88,6 +88,10 @@ def run_stage(
                     },
                 )
                 continue
+            max_concurrency = min(
+                node.definition.max_concurrency or context.runtime.max_workers,
+                context.runtime.max_workers,
+            )
             with runlog.span(
                 "node",
                 f"{stage_name}.{node.name}",
@@ -99,6 +103,7 @@ def run_stage(
                     "capabilities": sorted(node.capabilities),
                     "formats": node.definition.formats,
                     "filename": node.definition.filename,
+                    "max_concurrency": max_concurrency,
                 },
             ) as node_span:
                 _progress(
@@ -119,6 +124,11 @@ def run_stage(
                     node_context = replace(
                         context,
                         capabilities=node.capabilities,
+                        runtime=replace(
+                            context.runtime,
+                            max_workers=max_concurrency,
+                            jobs=context.jobs.limit(max_concurrency),
+                        ),
                     )
                     result = node.registration.execute(
                         NodeInvocation(

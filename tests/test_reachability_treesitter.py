@@ -1190,6 +1190,7 @@ def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
     service._frontier_reviewer = frontier_reviewer
 
     service.analyze_codebase(
+        jobs=Mock(),
         files=["src/target.c"],
         codegraph=graph,
         options=ReachabilityReviewOptions(),
@@ -1231,6 +1232,7 @@ def test_file_review_scans_full_focus():
 
     service.analyze_file(
         "src/review.c",
+        jobs=Mock(),
         options=ReachabilityReviewOptions(),
         codegraph=graph,
     )
@@ -1265,6 +1267,7 @@ def test_file_review_reports_missing_codegraph_coverage(graph, expected_code):
 
     analysis = service.analyze_file(
         "src/review.c",
+        jobs=Mock(),
         options=ReachabilityReviewOptions(),
         codegraph=graph,
         diagnostic_callback=diagnostics.append,
