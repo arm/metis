@@ -6,7 +6,6 @@ aliases:
 extensions:
 - .cs
 filename_patterns: []
-implementation: metis.plugins.csharp_plugin:CSharpPlugin
 config_resource: languages/csharp.yaml
 capabilities: {}
 priority: 0

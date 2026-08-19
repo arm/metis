@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Any
 
 from llama_index.core.node_parser import CodeSplitter
 
 
-def build_code_splitter(language: str, splitting_cfg: dict):
+def build_code_splitter(
+    language: str,
+    splitting_cfg: Mapping[str, Any],
+) -> CodeSplitter:
     """Build a CodeSplitter with a parser compatible with llama-index."""
     from tree_sitter import Parser
     import tree_sitter_language_pack
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "language": language,
         "parser": Parser(tree_sitter_language_pack.get_language(language)),
     }
@@ -51,25 +56,33 @@ class BaseLanguagePlugin(ABC):
 class ConfigBackedLanguagePlugin(BaseLanguagePlugin):
     NAME = ""
 
-    def __init__(self, plugin_config):
+    def __init__(
+        self,
+        plugin_config: Mapping[str, Any],
+        *,
+        name: str | None = None,
+    ) -> None:
         self.plugin_config = plugin_config
+        self._name = name or self.NAME
+        if not self._name:
+            raise ValueError("Language plugin name is required")
 
     def get_name(self) -> str:
-        return self.NAME
+        return self._name
 
-    def _plugin_section(self) -> dict:
+    def _plugin_section(self) -> dict[str, Any]:
         return self.plugin_config.get("plugins", {}).get(self.get_name(), {})
 
     def can_handle(self, extension: str) -> bool:
         return str(extension or "").lower() in self.get_supported_extensions()
 
-    def get_supported_extensions(self) -> list:
+    def get_supported_extensions(self) -> list[str]:
         configured = self._plugin_section().get("supported_extensions", [])
         return [str(ext).lower() for ext in configured]
 
-    def get_splitter(self):
+    def get_splitter(self) -> CodeSplitter:
         splitting_cfg = self._plugin_section().get("splitting", {})
         return build_code_splitter(self.get_name(), splitting_cfg)
 
-    def get_prompts(self) -> dict:
+    def get_prompts(self) -> dict[str, Any]:
         return self._plugin_section().get("prompts", {})

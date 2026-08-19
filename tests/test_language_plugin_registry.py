@@ -317,6 +317,21 @@ def test_get_plugin_for_path_imports_and_instantiates_only_selected_plugin_once(
     )
 
 
+def test_manifest_without_implementation_uses_cached_config_backed_plugin() -> None:
+    registry_module = _import_registry_api()
+    registry = _build_registry(
+        registry_module,
+        [_make_manifest(registry_module, implementation="")],
+    )
+
+    plugin = registry.get_plugin("c")
+
+    assert plugin is registry.get_plugin_for_extension(".c")
+    assert plugin.get_name() == "c"
+    assert plugin.get_supported_extensions() == [".c", ".h"]
+    assert "security_review" in plugin.get_prompts()
+
+
 def test_startup_plugin_config_excludes_language_prompt_configs():
     plugin_config = load_plugin_config()
 

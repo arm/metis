@@ -5,7 +5,6 @@ extensions:
 - .ts
 - .tsx
 filename_patterns: []
-implementation: metis.plugins.typescript_plugin:TypeScriptPlugin
 config_resource: languages/typescript.yaml
 capabilities: {}
 priority: 0

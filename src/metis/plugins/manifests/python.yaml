@@ -4,7 +4,6 @@ aliases:
 extensions:
 - .py
 filename_patterns: []
-implementation: metis.plugins.python_plugin:PythonPlugin
 config_resource: languages/python.yaml
 capabilities: {}
 priority: 0

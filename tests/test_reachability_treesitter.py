@@ -34,7 +34,7 @@ from metis.plugins.c_family.ast import CFamilyAstMixin
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.codegraph import CFamilyTreeSitterExtractor
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
-from metis.plugins.c_plugin import CPlugin
+from metis.plugins.base import ConfigBackedLanguagePlugin
 
 
 class _Point:
@@ -98,7 +98,7 @@ class _Node:
 
 
 def _codegraph_service(codebase_path, *, files=(), annotation_settings=None):
-    plugin = CPlugin(plugin_config={"plugins": {}})
+    plugin = ConfigBackedLanguagePlugin(plugin_config={"plugins": {}}, name="c")
     repository = SimpleNamespace(
         get_code_files=lambda **_kwargs: list(files),
         is_code_file_selected=lambda path, **_kwargs: (
