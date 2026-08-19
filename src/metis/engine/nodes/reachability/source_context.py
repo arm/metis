@@ -8,31 +8,6 @@ from metis.engine.codegraph import FunctionNode
 from metis.engine.source import SourceMap
 from metis.utils import split_snippet
 
-from .limits import FUNCTION_BODY_DEFAULT_CHARS, FUNCTION_BODY_FALLBACK_LINES
-
-
-def _read_function_body(codebase_path, node, max_chars=FUNCTION_BODY_DEFAULT_CHARS):
-    smap = SourceMap.for_file(codebase_path, node.file_path)
-    if smap is None:
-        return ""
-    return smap.function_slice(
-        node.line_number,
-        node.end_line,
-        max_chars=max_chars,
-        fallback_lines=FUNCTION_BODY_FALLBACK_LINES,
-    )
-
-
-def _read_line_context(codebase_path, rel_file, line_number, context=2, max_chars=1200):
-    smap = SourceMap.for_file(codebase_path, rel_file)
-    if smap is None:
-        return ""
-    return smap.context_slice(
-        int(line_number or 1),
-        radius=context,
-        max_chars=max_chars,
-    )
-
 
 def _build_file_grouped_node_chunks(
     codebase_path: str,

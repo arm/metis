@@ -6,8 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import metadata
 from importlib import import_module
-from pathlib import Path
-import tomllib
 from typing import Type
 
 from metis.providers.base import ChatProvider
@@ -92,35 +90,7 @@ def _discover_provider_loaders() -> None:
         else:
             _register_provider_loader(provider_name, embedding=entry_point.value)
 
-    _discover_source_tree_provider_loaders()
-
     _PROVIDER_LOADERS_DISCOVERED = True
-
-
-def _discover_source_tree_provider_loaders() -> None:
-    pyproject_path = _find_pyproject_path()
-    if pyproject_path is None:
-        return
-
-    data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    provider_entry_points = (
-        data.get("project", {}).get("entry-points", {}).get(_PROVIDER_ENTRY_POINT_GROUP)
-        or {}
-    )
-    for entry_point_name, dotted_path in provider_entry_points.items():
-        provider_name, surface = _parse_provider_entry_point_name(entry_point_name)
-        if surface == "chat":
-            _register_provider_loader(provider_name, chat=dotted_path)
-        else:
-            _register_provider_loader(provider_name, embedding=dotted_path)
-
-
-def _find_pyproject_path() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        pyproject_path = parent / "pyproject.toml"
-        if pyproject_path.is_file():
-            return pyproject_path
-    return None
 
 
 def _parse_provider_entry_point_name(name: str) -> tuple[str, str]:

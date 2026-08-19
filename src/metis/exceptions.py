@@ -2,13 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-class DatabaseNotFoundError(Exception):
-    """Exception raised when the database is not found."""
-
-    def __init__(self, db_name: str):
-        super().__init__(f"Requested database '{db_name}' not found.")
-
-
 class RetrieverInitError(Exception):
     """Exception raised when retriever initialization fails."""
 
