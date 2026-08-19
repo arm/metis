@@ -48,6 +48,13 @@ class ChatProvider(ABC):
         """
         return heuristic_token_count(text)
 
+    def cache_identity(self) -> Mapping[str, object]:
+        config = getattr(self, "config", None)
+        return {
+            "type": f"{type(self).__module__}.{type(self).__qualname__}",
+            "configuration": dict(config) if isinstance(config, Mapping) else {},
+        }
+
 
 class EmbeddingProvider(ABC):
     def __init__(self, config: Mapping[str, object]) -> None:

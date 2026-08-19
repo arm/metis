@@ -39,14 +39,6 @@ def execute(invocation: NodeInvocation) -> NodeResult:
                 "warning",
             ),
         )
-    elif inconclusive_results:
-        diagnostics = (
-            ExecutionDiagnostic(
-                "triage.findings_inconclusive",
-                f"Triage left {inconclusive_results} finding(s) inconclusive",
-                "warning",
-            ),
-        )
     output = NodeResult(
         {
             "formats": invocation.formats or (),

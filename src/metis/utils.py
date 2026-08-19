@@ -112,7 +112,11 @@ def anthropic_token_count(text: str) -> int:
 
 
 def tiktoken_token_count(text: str, model: str | None = None) -> int:
-    return len(_tiktoken_encoding_for(model).encode(text))
+    try:
+        encoding = _tiktoken_encoding_for(model)
+    except ValueError:
+        return heuristic_token_count(text, model=model)
+    return len(encoding.encode(text))
 
 
 def count_tokens(text: str, model: str | None = None) -> int:

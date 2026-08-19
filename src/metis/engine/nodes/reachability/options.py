@@ -1,13 +1,18 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from dataclasses import replace
+from typing import TYPE_CHECKING
 from typing import Any
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import PositiveInt
+
+if TYPE_CHECKING:
+    from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 
 DEFAULT_REACHABILITY_MAX_PATH_LENGTH = 25
 
@@ -31,8 +36,4 @@ class ReachabilityReviewOptions:
     reasoning_effort: str | None = None
     domain_hints: Any = None
     domain_profiles: Any = None
-
-    def with_progress_callback(
-        self, progress_callback: Any
-    ) -> "ReachabilityReviewOptions":
-        return replace(self, progress_callback=progress_callback)
+    checkpoint_session: ReviewCheckpointSession | None = None

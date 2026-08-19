@@ -85,7 +85,7 @@ class Span:
         self._span_token = _current_span.set(self.span_id)
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         try:
             if not self._ended:
                 if exc is None:
@@ -166,7 +166,7 @@ class _NullSpan:
     def __enter__(self) -> _NullSpan:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         return False
 
     @contextlib.contextmanager

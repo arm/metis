@@ -194,8 +194,10 @@ Deduplication happens in two stages:
 
 If semantic reduction fails validation, omits source indexes, or returns no
 usable claims, Metis keeps all deterministically deduplicated input claims.
-Source distillation failures abort initialization, so an incomplete snapshot
-does not replace existing repository memory.
+If source distillation returns no valid response after retries, Metis preserves
+the source text in its authoritative record and continues without compiled
+claims. Provider exceptions and source read failures still abort initialization,
+so an incomplete snapshot does not replace existing repository memory.
 
 ## Configuration
 

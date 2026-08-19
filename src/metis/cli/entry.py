@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-from collections.abc import Mapping
 from datetime import datetime
 import logging
 from pathlib import Path
-import sys
+from typing import Any
 from typing import cast
 
 from rich.markup import escape
@@ -30,12 +29,15 @@ except ImportError:
 
 from .command_registry import COMMANDS, completer
 from .command_runtime import CommandRuntime
+from .review_checkpoints import review_checkpoint_callbacks
+from .review_progress import ExecutionGraphProgressReporter
 from .utils import (
     configure_logger,
     PG_SUPPORTED,
     build_pg_backend,
     build_chroma_backend,
     build_qdrant_backend,
+    build_standard_progress,
     print_console,
     print_usage_summary,
     print_final_usage_summary,
@@ -60,15 +62,22 @@ def _print_graph_diagnostic(diagnostic, quiet):
     )
 
 
-def _print_graph_progress(event: Mapping[str, object], quiet: bool) -> None:
-    if event.get("event") == "execution_stage_start":
-        print_console(f"[cyan]Stage:[/cyan] {escape(str(event['stage']))}", quiet)
-    elif event.get("event") == "execution_node_start":
-        print_console(
-            "[cyan]Node:[/cyan] "
-            f"{escape(str(event['stage']))}.{escape(str(event['node']))}",
-            quiet,
-        )
+def _execute_graph_with_progress(
+    engine: Any,
+    args: argparse.Namespace,
+    callbacks: dict[str, object],
+) -> ExecutionResult:
+    kwargs = {"include_triaged": True if args.include_triaged else None}
+    if not args.verbose:
+        return engine.execute_graph(callbacks=callbacks, **kwargs)
+
+    with build_standard_progress(transient=True) as progress:
+        reporter = ExecutionGraphProgressReporter(progress)
+        callbacks["progress_callback"] = reporter
+        try:
+            return engine.execute_graph(callbacks=callbacks, **kwargs)
+        finally:
+            reporter.finish()
 
 
 def _save_graph_outputs(
@@ -98,8 +107,14 @@ def _save_graph_outputs(
             triage_files.append(path)
         elif format_name in review_formats:
             review_files.append(path)
+        elif triage_sarif is not None:
+            triage_formats = (*triage_formats, format_name)
+            triage_files.append(path)
+        elif findings is not None:
+            review_formats = (*review_formats, format_name)
+            review_files.append(path)
         else:
-            raise ValueError(f"Execution graph did not request {format_name} output")
+            raise ValueError(f"Execution graph did not produce {format_name} output")
 
     if triage_formats:
         if triage_sarif is None:
@@ -245,24 +260,10 @@ def finalize_cli_session(engine, args):
     if engine is None or not hasattr(engine, "has_usage") or not engine.has_usage():
         return None
     saved_path = engine.save_usage_summary()
-    completed_commands = None
-    usage_runtime = getattr(engine, "usage_runtime", None)
-    completed_commands_fn = getattr(usage_runtime, "completed_commands", None)
-    if callable(completed_commands_fn):
-        try:
-            completed_commands = completed_commands_fn()
-        except Exception:
-            completed_commands = None
-    include_totals = not (
-        bool(getattr(args, "non_interactive", False))
-        and isinstance(completed_commands, list)
-        and len(completed_commands) == 1
-    )
     print_final_usage_summary(
         engine.usage_totals(),
         saved_path=saved_path,
         quiet=args.quiet,
-        include_totals=include_totals,
     )
     return saved_path
 
@@ -278,24 +279,13 @@ def finalize_cli_session_and_close(engine, args, farewell):
             close_fn()
 
 
-def _prepare_command_runtime(cmd, cmd_args, args):
-    spec = COMMANDS[cmd]
-    if not spec.validate_options(cmd, args):
-        return None
-
-    return CommandRuntime(
-        command=cmd,
-        command_args=cmd_args,
-    )
-
-
 def execute_command(engine, cmd, cmd_args, args):
     with runlog.span(
         "command",
         cmd,
         lambda: {
             "arguments": list(cmd_args),
-            "interactive": not bool(getattr(args, "non_interactive", False)),
+            "interactive": True,
         },
     ):
         return _execute_command(engine, cmd, cmd_args, args)
@@ -309,9 +299,7 @@ def _execute_command(engine, cmd, cmd_args, args):
     spec = COMMANDS[cmd]
     if cmd == "exit":
         return EXIT_REQUESTED
-    runtime = _prepare_command_runtime(cmd, list(cmd_args), args)
-    if runtime is None:
-        return
+    runtime = CommandRuntime(command=cmd, command_args=list(cmd_args))
 
     if spec.prepares_output_file:
         determine_output_file(cmd, args, runtime.command_args)
@@ -341,26 +329,6 @@ def _execute_command(engine, cmd, cmd_args, args):
         record["cumulative"],
         quiet=args.quiet,
     )
-
-
-def run_non_interactive(engine, args):
-    args.quiet = not args.verbose
-    if not args.command:
-        print_console(
-            "[red]Error:[/red] --command is required in non-interactive mode.",
-            args.quiet,
-        )
-        return 1, None
-    parts = args.command.strip().split()
-    cmd, cmd_args = parts[0], parts[1:]
-    try:
-        result = execute_command(engine, cmd, cmd_args, args)
-    except Exception as e:
-        logger.exception("Non-interactive command failed: %s", e)
-        print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
-        return 1, None
-    farewell = "[magenta]Goodbye![/magenta]" if result is EXIT_REQUESTED else None
-    return 0, farewell
 
 
 def run_interactive_loop(engine, args, vector_backend):
@@ -455,7 +423,10 @@ def main():
     parser.add_argument(
         "--output-file",
         action="append",
-        help="Save analysis results to this file (repeatable, supports .json/.html/.sarif)",
+        help=(
+            "Save analysis results to this file "
+            "(repeatable, supports .json/.html/.csv/.sarif)"
+        ),
     )
     parser.add_argument(
         "--output-files",
@@ -463,17 +434,15 @@ def main():
         help="Alternative syntax to provide multiple output files",
     )
     parser.add_argument(
-        "--non-interactive", action="store_true", help="Run in non-interactive mode"
-    )
-    parser.add_argument(
-        "--command",
-        type=str,
-        help="Command to run in non-interactive mode (e.g., 'review_patch file.patch')",
+        "--interactive", action="store_true", help="Run the interactive prompt"
     )
     parser.add_argument(
         "--triage",
         action="store_true",
-        help="After review commands, triage findings and annotate SARIF output.",
+        help=(
+            "In the interactive prompt, triage findings after review commands "
+            "and annotate SARIF output."
+        ),
     )
     parser.add_argument(
         "--include-triaged",
@@ -485,9 +454,7 @@ def main():
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
-    graph_requested = len(sys.argv) == 1 or (
-        args.non_interactive and args.command is None
-    )
+    graph_requested = not args.interactive
     if args.output_files:
         if args.output_file:
             args.output_file.extend(args.output_files)
@@ -532,6 +499,9 @@ def main():
                 config_path=args.config,
                 enable_psql=(args.backend == "postgres"),
             )
+            args._review_checkpoints_enabled = runtime.pop(
+                "review_checkpoints_enabled", True
+            )
             engine, vector_backend = build_engine(args, runtime)
             if graph_requested:
                 with runlog.span(
@@ -548,13 +518,18 @@ def main():
                                 )
                             )
                         }
-                        if args.verbose:
-                            callbacks["progress_callback"] = lambda event: (
-                                _print_graph_progress(event, args.quiet)
+                        callbacks.update(
+                            review_checkpoint_callbacks(
+                                codebase_path=args.codebase_path,
+                                enabled=getattr(
+                                    args, "_review_checkpoints_enabled", True
+                                ),
                             )
-                        result = engine.execute_graph(
-                            include_triaged=True if args.include_triaged else None,
-                            callbacks=callbacks,
+                        )
+                        result = _execute_graph_with_progress(
+                            engine,
+                            args,
+                            callbacks,
                         )
                         _save_graph_outputs(
                             args.output_file,
@@ -575,8 +550,6 @@ def main():
                         print_console(
                             "[green]Execution graph complete.[/green]", args.quiet
                         )
-            elif args.non_interactive:
-                exit_code, farewell = run_non_interactive(engine, args)
             else:
                 farewell = run_interactive_loop(engine, args, vector_backend)
         finally:

@@ -7,6 +7,7 @@ from importlib.resources import as_file
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
+from typing import cast
 
 import yaml
 
@@ -81,6 +82,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
     runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
     runtime["triage_checkpoint_every"] = engine_cfg.get("triage_checkpoint_every", 50)
+    review_checkpoints_enabled = engine_cfg.get("review_checkpoints", True)
+    if not isinstance(review_checkpoints_enabled, bool):
+        raise ValueError("metis_engine.review_checkpoints must be a boolean")
+    runtime["review_checkpoints_enabled"] = review_checkpoints_enabled
     runtime["llm_max_retries"] = int(engine_cfg.get("llm_max_retries", 5))
     runtime["hnsw_kwargs"] = engine_cfg.get(
         "hnsw_kwargs",
@@ -192,7 +197,7 @@ def _get_provider_cls(provider_name: str, section: str) -> type:
 
 def _positive_int(value: object, *, fallback: int) -> int:
     try:
-        parsed = int(value)
+        parsed = int(cast(Any, value))
     except (TypeError, ValueError):
         return fallback
     if parsed <= 0:
@@ -279,7 +284,7 @@ def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
                 "metis_engine.pgvector_use_halfvec must be true, false, or auto."
             )
     try:
-        parsed_embed_dim = int(embed_dim)
+        parsed_embed_dim = int(cast(Any, embed_dim))
     except (TypeError, ValueError):
         return False
     return parsed_embed_dim > 2000

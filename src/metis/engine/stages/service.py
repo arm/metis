@@ -12,6 +12,7 @@ from typing import cast
 
 from metis import runlog
 from metis.engine.concurrency import JobScheduler
+from metis.engine.concurrency import serialized_progress_callback
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.runtime_settings import TriageOptions
@@ -91,7 +92,6 @@ class ExecutionGraphService:
             self._context("initialize", callbacks=callbacks),
             {},
         )
-        _notify_diagnostics(callbacks, run.diagnostics)
         return ExecutionResult(
             run.status,
             {"initialize": run.outputs},
@@ -113,7 +113,6 @@ class ExecutionGraphService:
             self._context("review", callbacks=callbacks),
             {"request": command},
         )
-        _notify_diagnostics(callbacks, run.diagnostics)
         return ExecutionResult(run.status, {"review": run.outputs}, run.diagnostics)
 
     def execute_triage(
@@ -148,7 +147,6 @@ class ExecutionGraphService:
                 "codegraph": codegraph,
             },
         )
-        _notify_diagnostics(callbacks, run.diagnostics)
         return ExecutionResult(run.status, {"triage": run.outputs}, run.diagnostics)
 
     def execute_graph(
@@ -277,7 +275,7 @@ class ExecutionGraphService:
                 chat_model_kwargs=dict(self._engine_config.chat_model_kwargs),
                 jobs=self._jobs,
             ),
-            callbacks=_node_callbacks(callbacks),
+            callbacks=_node_callbacks(stage, callbacks),
             triage=self._triage_adjudicator,
         )
 
@@ -326,14 +324,29 @@ def _resolve_stage_input(
     return outputs[stage_name][output_name]
 
 
-def _node_callbacks(callbacks: Mapping[str, object] | None) -> NodeCallbacks:
+def _node_callbacks(
+    stage: StageName,
+    callbacks: Mapping[str, object] | None,
+) -> NodeCallbacks:
     values = callbacks or {}
+    checkpoint_callback = values.get(
+        "review_checkpoint_callback" if stage == "review" else "checkpoint_callback"
+    )
     return NodeCallbacks(
-        progress=_mapping_callback(
-            "progress", cast(Any, values.get("progress_callback"))
+        progress=serialized_progress_callback(
+            _mapping_callback("progress", cast(Any, values.get("progress_callback")))
         ),
         debug=_mapping_callback("debug", cast(Any, values.get("debug_callback"))),
-        checkpoint=_checkpoint_callback(cast(Any, values.get("checkpoint_callback"))),
+        checkpoint=(
+            cast(Any, checkpoint_callback)
+            if stage == "review"
+            else _checkpoint_callback(cast(Any, checkpoint_callback))
+        ),
+        resume=(
+            cast(Any, values.get("review_resume_callback"))
+            if stage == "review"
+            else None
+        ),
         diagnostic=_diagnostic_callback(cast(Any, values.get("diagnostic_callback"))),
     )
 
@@ -390,14 +403,3 @@ def _unavailable_stage(stage: str) -> ExecutionResult:
             ),
         ),
     )
-
-
-def _notify_diagnostics(
-    callbacks: Mapping[str, object] | None,
-    diagnostics: tuple[ExecutionDiagnostic, ...],
-) -> None:
-    callback = (callbacks or {}).get("diagnostic_callback")
-    for diagnostic in diagnostics:
-        runlog.event("diagnostic", {"diagnostic": diagnostic})
-        if callable(callback):
-            callback(diagnostic)

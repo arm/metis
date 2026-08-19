@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections import deque
+from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
@@ -117,7 +118,11 @@ class FunctionContract:
     normal_exit: NormalExit = NormalExit()
 
 
-def augment_function_contracts(graph: CodeGraph) -> dict[str, FunctionContract]:
+def augment_function_contracts(
+    graph: CodeGraph,
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> dict[str, FunctionContract]:
     """Derive source-proven normal-return facts to a fixed point."""
 
     augmented = {
@@ -138,13 +143,19 @@ def augment_function_contracts(graph: CodeGraph) -> dict[str, FunctionContract]:
                 callers[target_id].add(node.unique_name)
     pending = deque(sorted(graph.nodes, key=lambda value: _node_sort_key(graph, value)))
     scheduled = set(pending)
+    processed = 0
+    if progress_callback is not None:
+        progress_callback(0, len(pending))
     while pending:
         function_id = pending.popleft()
         scheduled.discard(function_id)
+        processed += 1
         node = graph.nodes[function_id]
         transfer = _derive_nonnull_return_transfer(node, augmented)
         contract = augmented[function_id]
         if transfer is None or transfer in contract.normal_return_transfers:
+            if progress_callback is not None:
+                progress_callback(processed, processed + len(pending))
             continue
         augmented[function_id] = replace(
             contract,
@@ -159,6 +170,8 @@ def augment_function_contracts(graph: CodeGraph) -> dict[str, FunctionContract]:
             if caller_id not in scheduled:
                 pending.append(caller_id)
                 scheduled.add(caller_id)
+        if progress_callback is not None:
+            progress_callback(processed, processed + len(pending))
     return augmented
 
 

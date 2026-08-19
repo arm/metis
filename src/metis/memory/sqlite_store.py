@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from datetime import datetime
 import json
 from pathlib import Path
@@ -40,7 +41,7 @@ class SQLiteMemoryStore(BaseStore):
     def batch(self, ops: Iterable[Op]) -> list[Result]:
         with self._lock:
             self._ensure_schema()
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 results = [self._execute_op(conn, op) for op in ops]
                 conn.commit()
                 return results
@@ -90,7 +91,7 @@ class SQLiteMemoryStore(BaseStore):
         if self._initialized:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             self._records.ensure_schema(conn)
             self._fts_enabled = self._records.ensure_fts(conn)
             conn.commit()

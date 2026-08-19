@@ -493,7 +493,12 @@ def _model_distilled_source_claims(
                 chat_model_kwargs=config.chat_model_kwargs,
             )
             if batch_records is None:
-                raise RuntimeError("distillation returned no valid response")
+                logger.warning(
+                    "Threat-model source distillation returned no valid response "
+                    "for %s; preserving source text",
+                    rel_path,
+                )
+                return []
             records.extend(batch_records)
     except Exception as exc:
         logger.warning(

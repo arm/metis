@@ -35,7 +35,6 @@ class CommandSpec:
     invocation_mode: InvocationMode = "none"
     include_target_in_display_name: bool = False
     prepares_output_file: bool = False
-    supports_triage: bool = False
 
     def usage_target(self, cmd_args: list[str]) -> str | None:
         if self.invocation_mode == "path" and cmd_args:
@@ -58,22 +57,6 @@ class CommandSpec:
         if self.invocation_mode == "args" and cmd_args:
             print_console(
                 f"[red]Error:[/red] Command '{escape(cmd)}' does not accept positional arguments.",
-                args.quiet,
-            )
-            return False
-        return True
-
-    def validate_options(self, cmd: str, args) -> bool:
-        triage_requested = bool(getattr(args, "triage", False))
-        strict_triage_validation = bool(getattr(args, "non_interactive", False))
-        if (
-            triage_requested
-            and strict_triage_validation
-            and cmd != "triage"
-            and not self.supports_triage
-        ):
-            print_console(
-                "[red]Error:[/red] --triage can only be used with review_code, review_dir, review_file, or review_patch.",
                 args.quiet,
             )
             return False
@@ -125,14 +108,12 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        supports_triage=True,
     ),
     "review_code": CommandSpec(
         run_review_code,
         tracked=True,
         invocation_mode="args",
         prepares_output_file=True,
-        supports_triage=True,
     ),
     "update": CommandSpec(
         run_update,
@@ -145,7 +126,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        supports_triage=True,
     ),
     "review_dir": CommandSpec(
         run_dir_review,
@@ -153,7 +133,6 @@ COMMANDS = {
         invocation_mode="path",
         include_target_in_display_name=True,
         prepares_output_file=True,
-        supports_triage=True,
     ),
     "ask": CommandSpec(
         run_ask,

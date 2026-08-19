@@ -11,7 +11,6 @@ from typing import Any
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.execution.contracts import NodeJobs
-from metis.engine.concurrency import serialized_progress_callback
 from metis.engine.nodes.codegraph import CodeGraphService
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_scope_policy
@@ -25,6 +24,7 @@ from .graph_utils import _copy_graph_nodes
 from .incremental_review import IncrementalGraphReviewer
 from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
+from .progress import emit_phase_progress
 from .progress import emit_progress
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,6 @@ class ReachabilityService:
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
         memory_service=None,
     ):
-        options = self._review_options(options)
         abs_target, relative_target = self._normalize_target_file(file_path)
         graph = codegraph or self._load_graph(
             options=options,
@@ -152,7 +151,6 @@ class ReachabilityService:
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
         memory_service=None,
     ):
-        options = self._review_options(options)
         graph = codegraph or self._load_graph(
             options=options,
             diagnostic_callback=diagnostic_callback,
@@ -175,11 +173,21 @@ class ReachabilityService:
                 graph,
                 max_path_length=options.max_path_length,
             )
-            for selected_file in sorted(selected_files):
+            ordered_files = sorted(selected_files)
+            emit_phase_progress(
+                options.progress_callback, "analysis", 0, len(ordered_files)
+            )
+            for completed, selected_file in enumerate(ordered_files, start=1):
                 focus = focus_builder.build(selected_file)
                 focus_nodes.update(focus.node_names)
                 if not focus.target_nodes:
                     missing_selected_files.append(selected_file)
+                emit_phase_progress(
+                    options.progress_callback,
+                    "analysis",
+                    completed,
+                    len(ordered_files),
+                )
             analysis_graph = _copy_graph_nodes(graph, focus_nodes)
         if analysis_graph.node_count() == 0:
             return ReachabilityAnalysis(
@@ -253,7 +261,6 @@ class ReachabilityService:
         codegraph: CodeGraph | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
     ) -> CodeGraph:
-        options = self._review_options(options)
         return codegraph or self._load_graph(
             options=options,
             diagnostic_callback=diagnostic_callback,
@@ -270,13 +277,6 @@ class ReachabilityService:
             diagnostic_callback=diagnostic_callback,
         )
         return self._codegraphs.load(reference)
-
-    def _review_options(self, options):
-        if options.progress_callback is None:
-            return options
-        return options.with_progress_callback(
-            serialized_progress_callback(options.progress_callback)
-        )
 
     def _filter_authoritative_scope(
         self,

@@ -6,9 +6,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from dataclasses import field
 from enum import Enum
+from threading import Event
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 from typing import Any
@@ -69,6 +71,10 @@ class NodeCodeGraphs(Protocol):
 class NodeJobs(Protocol):
     def limit(self, max_concurrency: int) -> "NodeJobs": ...
 
+    def with_cancellation(self, cancellation: Event) -> "NodeJobs": ...
+
+    def cancel(self) -> None: ...
+
     def run[JobT, ResultT](
         self,
         jobs: Sequence[JobT],
@@ -105,6 +111,7 @@ class ExecutionDiagnostic:
 ProgressCallback = Callable[[Mapping[str, object]], None]
 DebugCallback = Callable[[Mapping[str, object]], None]
 CheckpointCallback = Callable[[dict[str, Any], int, int], None]
+ResumeCallback = Callable[[str], Mapping[str, Mapping[str, Any]] | None]
 DiagnosticCallback = Callable[[ExecutionDiagnostic], None]
 
 
@@ -113,7 +120,12 @@ class NodeCallbacks:
     progress: ProgressCallback | None = None
     debug: DebugCallback | None = None
     checkpoint: CheckpointCallback | None = None
+    resume: ResumeCallback | None = None
     diagnostic: DiagnosticCallback | None = None
+
+
+def _not_cancelled() -> bool:
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +144,7 @@ class NodeRuntime:
     model_tool_max_rounds: int = 0
     token_counter: Callable[[str], int] = count_tokens
     jobs: NodeJobs | None = None
+    is_cancelled: Callable[[], bool] = _not_cancelled
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -165,6 +178,12 @@ class NodeContext:
         if self.runtime.jobs is None:
             raise RuntimeError("Node job scheduler is unavailable")
         return self.runtime.jobs
+
+    def report_progress(self, event: Mapping[str, object]) -> None:
+        if self.runtime.is_cancelled():
+            raise CancelledError("Execution stage was cancelled")
+        if self.callbacks.progress is not None:
+            self.callbacks.progress(event)
 
 
 @dataclass(frozen=True, slots=True)

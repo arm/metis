@@ -266,6 +266,37 @@ a graph run writes
 `results/graph_triage_<timestamp>.<format>` for the formats requested by each
 stage. Supported formats are SARIF, JSON, HTML, and CSV.
 
+### Review checkpoints and resume
+
+Built-in review producers persist successful work items under the codebase's
+private Metis state directory. Review checkpoints are enabled by default in the
+packaged `metis.yaml`:
+
+```text
+<codebase>/.metis/checkpoints/review.simple_llm_review.sqlite3
+<codebase>/.metis/checkpoints/review.reachability.sqlite3
+```
+
+Every review of that codebase automatically reuses compatible records,
+independent of its output filename. A changed source, prompt, threat-model
+context, model setting, Metis version, response schema, or chunk plan produces a
+different record key and reruns that work. Simple reviews with model tools
+enabled are rerun because the index has no stable revision identity.
+
+Simple review checkpoints contain validated per-file results; patch records also
+retain each completed file summary. Reachability checkpoints contain validated
+packet responses; deterministic anchoring, admission, authority filtering, and
+finding preparation always run again. Failures are not cached. Each successful
+work item is atomically upserted by key. `finding_dedup` writes the normal final
+output without replacing producer files.
+
+Disable review checkpoint reads and writes globally in the selected YAML:
+
+```yaml
+metis_engine:
+  review_checkpoints: false
+```
+
 ### Triage
 
 `metis_engine.triage.include_triaged` controls whether findings already
@@ -319,10 +350,10 @@ The optional CodeGraph input remains unset for third-party SARIF.
 
 ## Execution
 
-Metis runs the selected graph when invoked with no arguments or with
-`--non-interactive` and no `--command`. Passing `--non-interactive --command`
-runs that command instead. Interactive commands enter the corresponding stage
-contract directly:
+Metis runs the selected graph whenever `--interactive` is absent. Global options
+such as `--verbose`, `--config`, and `--codebase-path` do not change the run
+mode. `--interactive` starts the prompt. Interactive commands enter the
+corresponding stage contract directly:
 
 | Command | Stage |
 | --- | --- |
@@ -437,8 +468,7 @@ submodule checkout:
 
 ```bash
 uv pip install -e ./private-metis-nodes
-uv run metis --config internal-metis.yaml --codebase-path ../project \
-  --non-interactive
+uv run metis --config internal-metis.yaml --codebase-path ../project
 ```
 
 ### Private analysis with a bundled implementation
@@ -594,12 +624,19 @@ metis_engine:
 A handler receives validated inputs and a small context containing its granted
 capabilities together with the repository lookup contract, CodeGraph
 materialize/load API, model runner, runtime limits, shared job scheduler, and
-callbacks. `max_concurrency` limits that node's active jobs without reserving
-threads; omitted values use the global `metis_engine.max_workers` limit. All
-nodes on one engine share that worker pool, so their combined active work never
-exceeds the global limit; larger node values are capped by it. A node submits
-bounded work through `invocation.context.jobs.run(...)`; it does not construct
-its own executor. A node
+callbacks. Dependency-ready nodes run concurrently. For example,
+`codegraph` and `simple_llm_review` start together, then `reachability` starts
+as soon as `codegraph` completes while `simple_llm_review` may continue.
+`max_concurrency` limits that node's active jobs; omitted values use the global
+`metis_engine.max_workers` limit. All nodes on one engine share that job pool,
+so their combined active jobs never exceed the global limit and newly active
+nodes receive the next available workers before a busier node is replenished.
+Running calls are not preempted. Interrupting a stage cancels queued jobs and
+signals active nodes through `runtime.is_cancelled`; built-in long-running nodes
+check that signal through their progress callbacks. Provider calls already in
+flight still run until their configured timeout. Node-coordinator threads are
+separate from this job budget. A node submits bounded work through
+`invocation.context.jobs.run(...)`; it does not construct its own executor. A node
 accesses only the names in `invocation.context.capabilities`. A node declares
 `request: ReviewCommand` when it needs the review-stage request; the runner
 supplies that typed stage input without extra YAML. The context does not expose
@@ -621,7 +658,9 @@ Progress callbacks receive lifecycle events for stage and node starts
 and ends, dependency-skipped nodes, final status, and elapsed duration. Node
 exceptions and invalid outputs produce an `execution.node_failed` diagnostic;
 dependants with required inputs are reported as skipped while independent
-nodes continue.
+nodes continue. Long-running node loops should emit through
+`invocation.context.report_progress(...)` so cancellation is checked even when
+the CLI is not rendering progress.
 
 ## CodeGraph provider contract
 

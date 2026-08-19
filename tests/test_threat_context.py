@@ -89,7 +89,7 @@ def test_initialize_threat_model_memory_removes_deleted_sources(tmp_path):
     )
 
 
-def test_initialize_threat_model_memory_preserves_snapshot_on_model_failure(
+def test_initialize_threat_model_memory_preserves_source_on_invalid_model_response(
     tmp_path, monkeypatch
 ):
     config = _config(tmp_path)
@@ -108,8 +108,8 @@ def test_initialize_threat_model_memory_preserves_snapshot_on_model_failure(
         repo_fingerprint="old-repo",
         input_fingerprint="old-input",
         body_json={"authority": "authoritative"},
-        summary_text="Known-good threat-model contract.",
-        search_text="known-good threat-model contract",
+        summary_text="Stale compiled contract.",
+        search_text="stale compiled contract",
         metadata={"authority": "authoritative", "binding": True},
         source_kind="compiled_contract",
     )
@@ -119,15 +119,54 @@ def test_initialize_threat_model_memory_preserves_snapshot_on_model_failure(
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(RuntimeError, match="distillation returned no valid response"):
+    result = initialize_threat_model_memory(config)
+
+    record = config.memory_service.get_record(
+        ("repo", "threat_model", "authoritative"),
+        "SECURITY.md",
+    )
+    assert result["status"] == "ok"
+    assert record is not None
+    assert record.body_json["distilled_claims"] == []
+    assert "Firmware images are untrusted." in record.summary_text
+    assert (
+        config.memory_service.get_record(
+            ("repo", "threat_model", "contracts"),
+            "authoritative",
+        )
+        is None
+    )
+
+
+def test_initialize_threat_model_memory_preserves_snapshot_on_provider_exception(
+    tmp_path, monkeypatch
+):
+    config = _config(tmp_path)
+    security = tmp_path / "repo" / "SECURITY.md"
+    security.write_text("# Security\n\nKnown-good policy.\n", encoding="utf-8")
+    initialize_threat_model_memory(config)
+    config.llm_provider = SimpleNamespace(count_tokens=lambda _text: 1)
+    config.llama_query_model = "test-model"
+    security.write_text("# Security\n\nReplacement policy.\n", encoding="utf-8")
+
+    def fail_distillation(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        threat_context,
+        "invoke_langchain_json_prompt_with_retry",
+        fail_distillation,
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
         initialize_threat_model_memory(config)
 
     preserved = config.memory_service.get_record(
-        ("repo", "threat_model", "contracts"),
-        "authoritative",
+        ("repo", "threat_model", "authoritative"),
+        "SECURITY.md",
     )
     assert preserved is not None
-    assert preserved.summary_text == "Known-good threat-model contract."
+    assert "Known-good policy." in preserved.summary_text
 
 
 def test_history_memory_is_advisory_and_path_scoped(tmp_path, monkeypatch):

@@ -9,6 +9,7 @@ from rich.markup import escape
 
 from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
+from .review_checkpoints import review_checkpoint_callbacks
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.sarif.writer import generate_sarif
@@ -162,14 +163,21 @@ def _run_review_command(engine, mode, target, args, spinner_text):
 
 
 def _execute_review(engine, mode, target, args, spinner_text):
+    callbacks = {
+        "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
+            diagnostic,
+            args.quiet,
+        )
+    }
+    callbacks.update(
+        review_checkpoint_callbacks(
+            codebase_path=getattr(engine, "codebase_path", "."),
+            enabled=getattr(args, "_review_checkpoints_enabled", True),
+        )
+    )
     kwargs = {
         "target": target,
-        "callbacks": {
-            "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
-                diagnostic,
-                args.quiet,
-            )
-        },
+        "callbacks": callbacks,
     }
     if mode not in {"code", "dir"} or args.quiet:
         return with_spinner(
@@ -180,18 +188,14 @@ def _execute_review(engine, mode, target, args, spinner_text):
             quiet=args.quiet,
         )
 
-    with build_standard_progress(transient=True) as progress:
-        reporter = ReviewCodeProgressReporter(progress, total_files=0)
+    with build_standard_progress(transient=False) as progress:
+        reporter = ReviewCodeProgressReporter(progress)
         try:
+            callbacks["progress_callback"] = reporter
             return engine.execute_review(
                 mode,
                 target=target,
-                callbacks={
-                    "progress_callback": reporter,
-                    "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
-                        diagnostic, args.quiet
-                    ),
-                },
+                callbacks=callbacks,
             )
         finally:
             reporter.finish()

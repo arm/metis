@@ -97,6 +97,7 @@ def test_extract_findings_skips_metis_triaged_by_default():
 
 
 def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
+    progress_events: list[dict[str, object]] = []
     payload = {
         "version": "2.1.0",
         "runs": [
@@ -127,7 +128,10 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
         lambda _navigation, _rounds: dummy_workflow,
     )
 
-    out = engine.execute_triage(payload)["sarif"]
+    out = engine.execute_triage(
+        payload,
+        progress_callback=progress_events.append,
+    )["sarif"]
     first = out["runs"][0]["results"][0]
     second = out["runs"][0]["results"][1]
 
@@ -139,6 +143,22 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
         "Triage failed before a decision" in second["properties"]["metisTriageReason"]
     )
     assert second["properties"]["metisMissingEvidence"] == ["triage execution failed"]
+    triage_events = [
+        event
+        for event in progress_events
+        if event.get("event") in {"start", "progress", "done", "error"}
+    ]
+    assert [event["event"] for event in triage_events] == [
+        "start",
+        "progress",
+        "start",
+        "progress",
+        "done",
+        "error",
+    ]
+    assert [
+        event["completed"] for event in triage_events if event["event"] == "progress"
+    ] == [1, 2]
 
 
 def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkeypatch):
@@ -161,7 +181,7 @@ def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkey
     result = engine.execution.execute_triage(payload)
 
     assert result.status is ExecutionStatus.INCONCLUSIVE
-    assert result.diagnostics[-1].code == "triage.findings_inconclusive"
+    assert result.diagnostics == ()
 
 
 def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):

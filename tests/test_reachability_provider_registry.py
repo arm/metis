@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import metis.engine.nodes.codegraph.provider as providers
+import metis.engine.nodes.codegraph.store as codegraph_store
 from metis.engine.codegraph import CallSite
 from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
@@ -37,6 +38,25 @@ class _EntryPoints:
     def select(self, *, group):
         assert group == providers.CODEGRAPH_PROVIDER_ENTRY_POINT_GROUP
         return self._entries
+
+
+def test_codegraph_store_closes_connections(tmp_path, monkeypatch):
+    connections: list[sqlite3.Connection] = []
+    connect = codegraph_store._connect
+
+    def tracked_connect(location: str) -> sqlite3.Connection:
+        connection = connect(location)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(codegraph_store, "_connect", tracked_connect)
+
+    codegraph_store.SQLiteCodeGraphStore(str(tmp_path))
+
+    assert connections
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 def _repository(files, registration_for_path):
@@ -140,11 +160,13 @@ def test_materialize_persists_and_reuses_codegraph(tmp_path):
     assert not (tmp_path / ".metis").exists()
 
     first = service.materialize()
-    second = service.materialize()
+    progress_events = []
+    second = service.materialize(progress_callback=progress_events.append)
     first_graph = service.load(first)
     first_graph.add_node(FunctionNode("new", "module.py", "new", 2))
 
     assert first == second
+    assert progress_events == [{"event": "codegraph_reused"}]
     assert built == [("module.py",)]
     assert (tmp_path / ".metis" / "codegraph.sqlite3").is_file()
     assert service.load(second).get_node("new") is None
@@ -283,6 +305,42 @@ def test_materialize_rebuilds_when_source_changes(tmp_path):
     assert service.load(first).get_node("module.py::entry_1") is not None
     assert service.load(second).get_node("module.py::entry_2") is not None
     assert service.load(second).get_node("module.py::entry_1") is None
+
+
+def test_materialize_restarts_when_source_changes_during_build(tmp_path):
+    source = tmp_path / "module.py"
+    source.write_text("x", encoding="utf-8")
+    calls = []
+
+    def build_graph(**kwargs):
+        calls.append(kwargs["files"])
+        revision_name = f"entry_{len(calls)}"
+        graph = CodeGraph()
+        graph.add_node(
+            FunctionNode(
+                f"module.py::{revision_name}",
+                "module.py",
+                revision_name,
+                1,
+            )
+        )
+        if len(calls) == 1:
+            source.write_text("y", encoding="utf-8")
+        return CodeGraphResult(graph, kwargs["files"])
+
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("module.py",), lambda _path: "python"),
+        {"python": lambda _context: SimpleNamespace(build_graph=build_graph)},
+    )
+
+    reference = service.materialize()
+    cached = service.materialize()
+
+    assert calls == [("module.py",), ("module.py",)]
+    assert cached == reference
+    assert service.load(reference).get_node("module.py::entry_1") is None
+    assert service.load(reference).get_node("module.py::entry_2") is not None
 
 
 def test_load_rejects_incomplete_stored_codegraph(tmp_path):
@@ -432,7 +490,7 @@ def test_materialize_includes_suffix_pattern_sources(tmp_path):
 
     reference = service.materialize()
 
-    assert selections == [{"include_suffixed_sources": True}]
+    assert selections == [{"include_suffixed_sources": True}] * 2
     assert reference.failed_files == ()
 
 

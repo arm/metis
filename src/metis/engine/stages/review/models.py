@@ -109,6 +109,15 @@ class ReviewRun:
     diagnostics: tuple[ReviewDiagnostic, ...] = ()
 
 
+class ReviewCheckpointRecord(BaseModel):
+    metis_version: str
+    producer: str = Field(min_length=1, pattern=r"^[A-Za-z_]\w*$")
+    key: str = Field(min_length=1)
+    record: dict[str, Any]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 @dataclass(frozen=True, slots=True)
 class FinalReviewRun:
     review: ReviewRun

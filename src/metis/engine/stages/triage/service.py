@@ -241,7 +241,9 @@ class TriageService:
     ) -> tuple[int, set[tuple[int, int]]]:
         handled: set[tuple[int, int]] = set()
         scheduled = list(enumerate(findings, start=1))
-        for idx, finding in scheduled:
+
+        def invoke(item):
+            idx, finding = item
             self._emit_triage_progress(
                 progress_callback,
                 total,
@@ -249,9 +251,6 @@ class TriageService:
                 index=idx,
                 finding=finding,
             )
-
-        def invoke(item):
-            idx, finding = item
             try:
                 decision = self._triage_one_finding(
                     finding,
@@ -263,11 +262,20 @@ class TriageService:
             except Exception as exc:
                 return idx, finding, None, exc
 
+        def report_completion(_item, completed: int, _scheduled_total: int) -> None:
+            self._emit_triage_progress(
+                progress_callback,
+                total,
+                "progress",
+                completed=processed + completed,
+            )
+
         outcomes = jobs.run(
             scheduled,
             invoke,
             label=None,
             result_key=lambda item: item[0],
+            on_complete=report_completion,
         )
         for idx, finding, decision, error in outcomes:
             processed, was_handled = self._handle_finding_result(

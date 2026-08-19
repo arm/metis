@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from collections.abc import Iterable
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,7 +49,7 @@ class SQLiteCodeGraphStore:
     ) -> CodeGraphReference | None:
         with self._lock:
             try:
-                with _connect(self.location) as connection:
+                with closing(_connect(self.location)) as connection:
                     row = connection.execute(
                         """
                         SELECT revision
@@ -92,7 +93,7 @@ class SQLiteCodeGraphStore:
         content_hash = _records_hash(records)
         with self._lock:
             try:
-                with _connect(self.location) as connection:
+                with closing(_connect(self.location)) as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     current = connection.execute(
                         """
@@ -154,7 +155,7 @@ class SQLiteCodeGraphStore:
     ) -> CodeGraph:
         with self._lock:
             try:
-                with _connect(self.location) as connection:
+                with closing(_connect(self.location)) as connection:
                     stored = _read_stored_graph(
                         connection,
                         codebase_path=codebase_path,
@@ -172,7 +173,7 @@ class SQLiteCodeGraphStore:
         directory = os.path.dirname(self.location)
         try:
             os.makedirs(directory, exist_ok=True)
-            with _connect(self.location) as connection:
+            with closing(_connect(self.location)) as connection:
                 current_version = int(
                     connection.execute("PRAGMA user_version").fetchone()[0]
                 )

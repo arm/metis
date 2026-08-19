@@ -117,8 +117,7 @@ def workflow_debug_context(args):
             "backend": getattr(args, "backend", None),
             "config_path": getattr(args, "config", None),
             "log_level": getattr(args, "log_level", None),
-            "non_interactive": getattr(args, "non_interactive", None),
-            "command": getattr(args, "command", None),
+            "interactive": getattr(args, "interactive", False),
         },
     )
     return open_runlog(
@@ -221,7 +220,7 @@ def print_final_usage_summary(
 def with_spinner(task_description, fn, *args, quiet=False, **kwargs):
     """
     Run a function optionally displaying a spinner.
-    When quiet=True (e.g., non-interactive without --verbose), suppress any spinner.
+    When quiet=True, suppress any spinner.
     """
     if quiet:
         return fn(*args, **kwargs)
@@ -368,7 +367,12 @@ def _record_output_artifact(path: str | Path, format_name: str) -> None:
     )
 
 
-def save_output(output_files, data, quiet=False, sarif_payload=None):
+def save_output(
+    output_files,
+    data,
+    quiet=False,
+    sarif_payload=None,
+):
     if not output_files:
         return
 

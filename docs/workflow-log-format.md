@@ -166,7 +166,7 @@ may have no tasks or prompts.
 ### Stable span kinds
 
 - `run`: one bundle lifecycle
-- `command`: one interactive, non-interactive, or default graph command
+- `command`: one interactive command or configured graph execution
 - `execution`: a configured graph, standalone stage, or ask execution
 - `stage`: initialize, review, or triage
 - `node`: one selected `NodeRegistration`

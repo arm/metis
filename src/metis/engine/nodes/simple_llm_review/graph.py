@@ -21,6 +21,7 @@ from metis.engine.stages.review.models import ReviewRequest
 from metis.engine.stages.review.models import ReviewState
 from metis.engine.threat_context_retrieval import format_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
+from metis.memory.fingerprints import stable_json_hash
 from metis.runlog.workflow import traced_step
 from metis.usage import usage_operation
 from metis.utils import parse_json_output
@@ -263,6 +264,41 @@ class ReviewGraph:
         self._app_cache[cache_key] = compiled
         return compiled
 
+    def checkpoint_key(self, request: ReviewRequest) -> str | None:
+        if self.model_tools:
+            return None
+        chunks = self._chunks(request["snippet"])
+        chat_model_kwargs = {
+            key: value
+            for key, value in self.chat_model_kwargs.items()
+            if key not in {"callbacks", "callback_manager"}
+        }
+        return stable_json_hash(
+            {
+                "schema_version": 1,
+                "provider": self.llm_provider.cache_identity(),
+                "model": self.llama_query_model,
+                "max_token_length": self.max_token_length,
+                "chat_model_kwargs": chat_model_kwargs,
+                "plugin_config": self.plugin_config,
+                "custom_prompt_text": self.custom_prompt_text,
+                "custom_guidance_precedence": self.custom_guidance_precedence,
+                "schema_prompt": self._schema_prompt_section,
+                "request": dict(request),
+                "chunk_plan": [
+                    (start_line, stable_json_hash(chunk))
+                    for chunk, start_line in chunks
+                ],
+            }
+        )
+
+    def _chunks(self, snippet: str) -> list[tuple[str, int]]:
+        return split_snippet(
+            snippet,
+            self.max_token_length,
+            self.llm_provider.count_tokens,
+        )
+
     def review(self, request: ReviewRequest):
         file_path = request["file_path"]
         snippet = request["snippet"]
@@ -280,9 +316,7 @@ class ReviewGraph:
             smap = SourceMap.for_text(rel_path, original_file)
         else:
             smap = None
-        chunks = split_snippet(
-            snippet, self.max_token_length, self.llm_provider.count_tokens
-        )
+        chunks = self._chunks(snippet)
         accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk, chunk_start in chunks:

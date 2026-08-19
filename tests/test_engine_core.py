@@ -401,12 +401,13 @@ def test_explicit_review_producers_run_independently(engine, monkeypatch):
             },
         }
     )
-    issues = iter(("simple", "reachable"))
 
     def run_review(service, _command, **_kwargs):
         if isinstance(service, ReachabilityReviewService):
             assert service._simple_llm_review is None
-        issue = next(issues)
+            issue = "reachable"
+        else:
+            issue = "simple"
         return ReviewRun(
             ReviewStatus.SUCCEEDED,
             StandardReviewResult.model_validate(
