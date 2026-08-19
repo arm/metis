@@ -6,10 +6,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
+
+from metis.json_io import write_json_atomic
 
 METIS_TRIAGED_KEY = "metisTriaged"
 METIS_TRIAGE_STATUS_KEY = "metisTriageStatus"
@@ -48,19 +48,7 @@ def load_sarif_file(path: str | Path) -> dict[str, Any]:
 def save_sarif_file(path: str | Path, payload: dict[str, Any]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=p.parent,
-        prefix=f".{p.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as tmp:
-        json.dump(payload, tmp, indent=4)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = tmp.name
-    os.replace(tmp_path, p)
+    write_json_atomic(p, payload, indent=4)
 
 
 def extract_findings(

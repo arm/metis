@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 from typing import Literal
 
+from metis.json_io import write_json_atomic
+
 from .encoding import PayloadEncoder
 from .schema import event_explanation
 from .schema import RunLogConfig
@@ -521,22 +523,15 @@ class RunLogSession:
             "metadata": self._encoder.encode_mapping(self._metadata),
             "totals": self.counters if complete else {},
         }
-        temporary = self.meta_path.with_name(
-            f".{self.meta_path.name}.{uuid.uuid4().hex}.tmp"
+        self.meta_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_json_atomic(
+            self.meta_path,
+            payload,
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+            mode=0o600,
         )
-        temporary.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                json.dump(
-                    payload, handle, ensure_ascii=False, allow_nan=False, indent=2
-                )
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.chmod(0o600)
-            os.replace(temporary, self.meta_path)
-            self.meta_path.chmod(0o600)
-        finally:
-            temporary.unlink(missing_ok=True)
 
     def _disable_after_failure(self, exc: BaseException) -> None:
         with self._lock:

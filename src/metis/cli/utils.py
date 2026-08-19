@@ -4,11 +4,9 @@
 import contextlib
 import hashlib
 import importlib.metadata
-import json
 import logging
 import os
 import re
-import tempfile
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +19,7 @@ from metis.runlog import RunLogConfig
 from metis.runlog import build_run_metadata
 from metis.runlog import open_runlog
 from metis import runlog
+from metis.json_io import write_json_atomic
 from rich.markup import escape
 from rich.progress import (
     Progress,
@@ -384,28 +383,9 @@ def save_output(output_files, data, quiet=False, sarif_payload=None):
     )
     sarif_payload_local = sarif_payload
 
-    def _write_payload(path, payload, label):
+    def _write_payload(path: Path, payload: object, label: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        serialized = json.dumps(payload, indent=4)
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as tmp:
-                tmp.write(serialized)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-                tmp_path = tmp.name
-            os.replace(tmp_path, path)
-        except Exception:
-            if tmp_path is not None:
-                Path(tmp_path).unlink(missing_ok=True)
-            raise
+        write_json_atomic(path, payload, indent=4)
         _record_output_artifact(path, output_format(path))
         print_console(
             f"[blue]{label} saved to {escape(str(path))}[/blue]",

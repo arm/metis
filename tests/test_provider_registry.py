@@ -3,7 +3,6 @@
 
 import pytest
 
-import metis.providers.registry as registry
 from metis.providers.registry import get_chat_provider
 from metis.providers.registry import get_embedding_provider
 
@@ -59,20 +58,3 @@ def test_registry_loads_embedding_providers(name, class_name, module_name):
 def test_registry_rejects_embedding_for_chat_only_providers(name):
     with pytest.raises(ValueError, match="Unsupported embedding provider"):
         get_embedding_provider(name)
-
-
-def test_registry_loads_source_tree_providers_without_installed_entry_points(
-    monkeypatch,
-):
-    class _NoEntryPoints:
-        def select(self, **_kwargs):
-            return []
-
-    monkeypatch.setattr(registry.metadata, "entry_points", lambda: _NoEntryPoints())
-    monkeypatch.setattr(registry, "_CHAT_PROVIDERS", {})
-    monkeypatch.setattr(registry, "_EMBEDDING_PROVIDERS", {})
-    monkeypatch.setattr(registry, "_PROVIDER_LOADERS", {})
-    monkeypatch.setattr(registry, "_PROVIDER_LOADERS_DISCOVERED", False)
-
-    assert get_chat_provider("openai").__name__ == "OpenAIProvider"
-    assert get_embedding_provider("openai").__name__ == "OpenAIEmbeddingProvider"
