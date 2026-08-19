@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from uuid import uuid4
+
+from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.version import __version__ as TOOL_VERSION
 from metis.sarif.utils import anchor_fingerprint, create_fingerprint, read_file_lines
 
@@ -107,6 +110,7 @@ def generate_sarif(
 
     run = sarif["runs"][0]
 
+    finding_ids: set[str] = set()
     for review in results.get("reviews", []):
         file_path = review.get("file_path")
         artifact_uri = review.get("file") or file_path or "<unknown>"
@@ -115,6 +119,11 @@ def generate_sarif(
         total_lines = len(lines) if source_available else 0
 
         for issue in review.get("reviews", []):
+            finding_id = str(issue.get("id") or "").strip()
+            if not finding_id or finding_id in finding_ids:
+                finding_id = uuid4().hex
+                issue["id"] = finding_id
+            finding_ids.add(finding_id)
             text = issue.get("issue", "unspecified")
             anchor = (
                 issue.get("anchor") if isinstance(issue.get("anchor"), dict) else None
@@ -167,7 +176,7 @@ def generate_sarif(
                 end = line_num + snippet_line_count - 1
                 context = snippet_text or "<context unavailable>"
 
-            properties = {}
+            properties = {METIS_FINDING_ID_KEY: finding_id}
             cwe_id = issue.get("cwe")
             if isinstance(cwe_id, str) and cwe_id.strip():
                 properties["cwe"] = cwe_id.strip()

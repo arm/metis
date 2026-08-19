@@ -37,6 +37,7 @@ def finding_to_review_item(
     primary_file = finding.primary_file or finding.sink_file or finding.source_file
     smap = SourceMap.for_file(codebase_path, primary_file) if primary_file else None
     item = {
+        "id": finding.id,
         "issue": issue,
         "line_number": line_number,
         "anchor": dict(finding.primary_anchor) if finding.primary_anchor else None,

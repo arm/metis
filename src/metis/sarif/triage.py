@@ -12,6 +12,7 @@ from typing import Any
 from metis.json_io import write_json_atomic
 
 METIS_TRIAGED_KEY = "metisTriaged"
+METIS_FINDING_ID_KEY = "metisFindingId"
 METIS_TRIAGE_STATUS_KEY = "metisTriageStatus"
 METIS_TRIAGE_REASON_KEY = "metisTriageReason"
 METIS_TRIAGE_TIMESTAMP_KEY = "metisTriageTimestamp"
@@ -49,6 +50,57 @@ def save_sarif_file(path: str | Path, payload: dict[str, Any]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(p, payload, indent=4)
+
+
+def apply_triage_annotations(report_data: Any, sarif_payload: Any) -> Any:
+    if not isinstance(report_data, dict) or not isinstance(sarif_payload, dict):
+        return report_data
+    reviews = report_data.get("reviews")
+    runs = sarif_payload.get("runs")
+    if not isinstance(reviews, list) or not isinstance(runs, list):
+        return report_data
+
+    properties_by_id: dict[str, dict[str, Any]] = {}
+    ambiguous_ids: set[str] = set()
+    for run in runs:
+        for result in run.get("results", ()) if isinstance(run, dict) else ():
+            properties = result.get("properties") if isinstance(result, dict) else None
+            if not isinstance(properties, dict):
+                continue
+            finding_id = str(properties.get(METIS_FINDING_ID_KEY) or "").strip()
+            if not finding_id:
+                continue
+            if finding_id in properties_by_id:
+                ambiguous_ids.add(finding_id)
+            else:
+                properties_by_id[finding_id] = properties
+    for finding_id in ambiguous_ids:
+        properties_by_id.pop(finding_id, None)
+
+    issues_by_id: dict[str, dict[str, Any]] = {}
+    ambiguous_report_ids: set[str] = set()
+    for review in reviews:
+        issues = review.get("reviews") if isinstance(review, dict) else None
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            finding_id = str(issue.get("id") or "").strip()
+            if not finding_id:
+                continue
+            if finding_id in issues_by_id:
+                ambiguous_report_ids.add(finding_id)
+            else:
+                issues_by_id[finding_id] = issue
+    for finding_id in ambiguous_report_ids:
+        issues_by_id.pop(finding_id, None)
+
+    for finding_id, issue in issues_by_id.items():
+        properties = properties_by_id.get(finding_id)
+        if properties is not None:
+            _apply_triage_properties(issue, properties)
+    return report_data
 
 
 def extract_findings(
@@ -241,3 +293,15 @@ def _apply_triage_metadata(
         properties[METIS_THREAT_MODEL_POLICY_KEY] = dict(threat_model_policy)
     else:
         properties.pop(METIS_THREAT_MODEL_POLICY_KEY, None)
+
+
+def _apply_triage_properties(issue: dict[str, Any], properties: dict[str, Any]) -> None:
+    if METIS_TRIAGED_KEY in properties:
+        issue[METIS_TRIAGED_KEY] = bool(properties.get(METIS_TRIAGED_KEY))
+    for key in (
+        METIS_TRIAGE_STATUS_KEY,
+        METIS_TRIAGE_REASON_KEY,
+        METIS_TRIAGE_TIMESTAMP_KEY,
+    ):
+        if key in properties:
+            issue[key] = str(properties.get(key) or "")

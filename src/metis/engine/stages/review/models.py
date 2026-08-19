@@ -9,6 +9,7 @@ from typing import Any
 from typing import Literal
 from typing import NotRequired
 from typing import Required
+from uuid import uuid4
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -60,6 +61,7 @@ class ReviewCommand(BaseModel):
 
 
 class ReviewFinding(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
     issue: str = Field(min_length=1)
 
     model_config = ConfigDict(extra="allow", frozen=True)
