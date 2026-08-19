@@ -66,8 +66,8 @@ class RunLogCallbackHandler(BaseCallbackHandler):
         call = self._pop(run_id)
         if call is None:
             return None
-        usage = _usage(response)
-        model = _model_name(response)
+        usage = extract_response_usage(response)
+        model = extract_response_model_name(response)
         if usage:
             call.event("usage", {"model": model, **usage})
             bump("input_tokens", usage["input_tokens"])
@@ -152,7 +152,7 @@ def _serialized_name(serialized: dict[str, Any]) -> str:
     return "model"
 
 
-def _usage(response: Any) -> dict[str, int]:
+def extract_response_usage(response: Any) -> dict[str, int]:
     llm_output = getattr(response, "llm_output", None) or {}
     token_usage = llm_output.get("token_usage") if isinstance(llm_output, dict) else {}
     if not isinstance(token_usage, dict):
@@ -187,10 +187,12 @@ def _usage(response: Any) -> dict[str, int]:
     }
 
 
-def _model_name(response: Any) -> str:
+def extract_response_model_name(response: Any) -> str:
     llm_output = getattr(response, "llm_output", None) or {}
-    if isinstance(llm_output, dict) and llm_output.get("model_name"):
-        return str(llm_output["model_name"])
+    if isinstance(llm_output, dict):
+        name = str(llm_output.get("model_name") or "").strip()
+        if name:
+            return name
     for generation_list in getattr(response, "generations", None) or []:
         for generation in (
             generation_list if isinstance(generation_list, Iterable) else ()
@@ -198,9 +200,11 @@ def _model_name(response: Any) -> str:
             message = getattr(generation, "message", generation)
             metadata = getattr(message, "response_metadata", None) or {}
             if isinstance(metadata, dict):
-                name = metadata.get("model_name") or metadata.get("model")
-                if name:
-                    return str(name)
+                candidate = metadata.get("model_name") or metadata.get("model")
+                if candidate:
+                    normalized = str(candidate).strip()
+                    if normalized:
+                        return normalized
     return "unknown"
 
 

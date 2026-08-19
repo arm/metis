@@ -524,15 +524,15 @@ def test_langchain_callback_records_physical_call_and_usage(tmp_path):
         "Response",
         (),
         {
-            "llm_output": {
-                "model_name": "fake-model",
-                "token_usage": {
-                    "prompt_tokens": 7,
-                    "completion_tokens": 3,
-                    "total_tokens": 10,
-                },
-            },
-            "generations": [],
+            "llm_output": {},
+            "generations": [
+                [
+                    SimpleNamespace(
+                        usage_metadata={"input_tokens": 7, "output_tokens": 3},
+                        response_metadata={"model_name": " fake-model "},
+                    )
+                ]
+            ],
         },
     )()
 
@@ -553,6 +553,7 @@ def test_langchain_callback_records_physical_call_and_usage(tmp_path):
     )
     usage = next(record for record in records if record["name"] == "usage")
     assert usage["span_id"] == call_start["span_id"]
+    assert usage["attributes"]["model"] == "fake-model"
     assert usage["attributes"]["total_tokens"] == 10
     assert session.counters["llm_calls"] == 1
     assert session.counters["total_tokens"] == 10
