@@ -26,7 +26,6 @@ extensions:
 filename_patterns:
 - .v.*
 - .vh.*
-implementation: metis.plugins.verilog_plugin:VerilogPlugin
 config_resource: languages/verilog.yaml
 capabilities: {}
 priority: 0
@@ -42,7 +41,7 @@ Fields:
 | `source_extensions` | no | Extensions treated as source files by language-aware providers. Also list them in `extensions` for path matching. |
 | `header_extensions` | no | Extensions treated as headers by language-aware providers. Also list them in `extensions` for path matching. |
 | `filename_patterns` | no | Basename patterns for generated files, such as `.v.*`. |
-| `implementation` | yes | `module:ClassOrFactory` import path for the plugin. |
+| `implementation` | no | `module:ClassOrFactory` import path when custom runtime behavior is required. Built-ins otherwise use `ConfigBackedLanguagePlugin`. |
 | `config_resource` | yes | Per-language YAML resource that defines or inherits prompts and splitter settings. |
 | `capabilities` | no | Feature flags Metis can check without importing the plugin. |
 | `prompt_profile` | no | Shared profile to merge before language-specific config. |
@@ -110,7 +109,8 @@ Required prompt keys:
 
 1. Add `src/metis/plugins/manifests/<language>.yaml`.
 2. Add `src/metis/plugins/languages/<language>.yaml`.
-3. Add a plugin class under `src/metis/plugins/`.
+3. Add a plugin class and `implementation` manifest field only when the language
+   needs custom runtime behavior.
 4. If the language supports CodeGraph analysis, implement its provider and
    deterministic semantics, then register both in the `MetisEngine`
    composition root under the manifest's language name.
@@ -118,15 +118,9 @@ Required prompt keys:
 6. Add tests for manifest matching, lazy import, prompt loading, exact
    CodeGraph file coverage, persisted semantics, and unsupported-file fallback.
 
-The plugin class can usually subclass `ConfigBackedLanguagePlugin`:
-
-```python
-from metis.plugins.base import ConfigBackedLanguagePlugin
-
-
-class JavaPlugin(ConfigBackedLanguagePlugin):
-    NAME = "java"
-```
+Built-in languages without custom runtime behavior omit `implementation` and use
+the manifest name with `ConfigBackedLanguagePlugin`. Custom implementations can
+subclass it and override the behavior they need.
 
 ## Add An External Language Plugin
 

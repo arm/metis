@@ -17,7 +17,6 @@ header_extensions:
 - .hh
 - .hxx
 filename_patterns: []
-implementation: metis.plugins.cpp_plugin:CppPlugin
 config_resource: languages/cpp.yaml
 capabilities:
   codegraph: true

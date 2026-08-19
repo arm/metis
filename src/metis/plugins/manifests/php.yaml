@@ -16,7 +16,6 @@ extensions:
 - .php7
 - .php8
 filename_patterns: []
-implementation: metis.plugins.php_plugin:PHPPlugin
 config_resource: languages/php.yaml
 capabilities: {}
 priority: 0

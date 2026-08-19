@@ -4,7 +4,6 @@ aliases:
 extensions:
 - .tf
 filename_patterns: []
-implementation: metis.plugins.terraform_plugin:TerraformPlugin
 config_resource: languages/terraform.yaml
 capabilities: {}
 priority: 0

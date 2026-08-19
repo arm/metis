@@ -72,8 +72,8 @@ def _matches_suffix_pattern(name: str, pattern: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class LanguagePluginManifest:
     name: str
-    implementation: str
-    config_resource: str
+    implementation: str = ""
+    config_resource: str = ""
     extensions: tuple[str, ...] = ()
     source_extensions: tuple[str, ...] = ()
     header_extensions: tuple[str, ...] = ()
@@ -87,10 +87,12 @@ class LanguagePluginManifest:
         name = str(self.name or "").strip().lower()
         if not name:
             raise ValueError("Language plugin manifest name is required")
-        if not str(self.implementation or "").strip():
-            raise ValueError(f"Language plugin manifest {name!r} needs implementation")
         object.__setattr__(self, "name", name)
-        object.__setattr__(self, "implementation", str(self.implementation).strip())
+        object.__setattr__(
+            self,
+            "implementation",
+            str(self.implementation or "").strip(),
+        )
         object.__setattr__(self, "extensions", _as_tuple(self.extensions))
         object.__setattr__(self, "source_extensions", _as_tuple(self.source_extensions))
         object.__setattr__(self, "header_extensions", _as_tuple(self.header_extensions))
@@ -133,7 +135,7 @@ class LanguagePluginManifest:
             filename_patterns=tuple(data.get("filename_patterns") or ()),
             aliases=tuple(data.get("aliases") or ()),
             capabilities=dict(data.get("capabilities") or {}),
-            config_resource=data.get("config_resource"),
+            config_resource=str(data.get("config_resource") or ""),
             prompt_profile=data.get("prompt_profile"),
             priority=int(data.get("priority") or 0),
         )
@@ -211,10 +213,22 @@ class LanguagePluginHandle:
             "plugins": _LazyPluginSections(self),
         }
 
-    def get_plugin(self):
+    def get_plugin(self) -> Any:
         if self._plugin is None:
             with self._lock:
                 if self._plugin is None:
+                    if not self.manifest.implementation:
+                        from .base import ConfigBackedLanguagePlugin
+
+                        self._plugin = ConfigBackedLanguagePlugin(
+                            self.plugin_config(),
+                            name=self.manifest.name,
+                        )
+                        logger.debug(
+                            "Loaded config-backed language plugin for '%s'",
+                            self.manifest.name,
+                        )
+                        return self._plugin
                     module_path, class_name = self.manifest.implementation.split(":", 1)
                     module = importlib.import_module(module_path)
                     target = getattr(module, class_name)
@@ -293,7 +307,7 @@ class LanguagePluginRegistry:
             "Matched language plugin manifest '%s' for path '%s'; module remains lazy until needed: %s",
             manifest.name,
             path,
-            manifest.implementation,
+            manifest.implementation or "metis.plugins.base:ConfigBackedLanguagePlugin",
         )
 
     @classmethod

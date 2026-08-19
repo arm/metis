@@ -9,7 +9,6 @@ source_extensions:
 header_extensions:
 - .h
 filename_patterns: []
-implementation: metis.plugins.c_plugin:CPlugin
 config_resource: languages/c.yaml
 capabilities:
   codegraph: true

@@ -7,7 +7,6 @@ extensions:
 filename_patterns:
 - .v.*
 - .vh.*
-implementation: metis.plugins.verilog_plugin:VerilogPlugin
 config_resource: languages/verilog.yaml
 capabilities: {}
 priority: 0

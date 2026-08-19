@@ -4,7 +4,6 @@ aliases:
 extensions:
 - .sol
 filename_patterns: []
-implementation: metis.plugins.solidity_plugin:SolidityPlugin
 config_resource: languages/solidity.yaml
 capabilities: {}
 priority: 0
