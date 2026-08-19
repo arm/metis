@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from llama_index.core import StorageContext, VectorStoreIndex
@@ -50,13 +51,14 @@ def test_usage_runtime_command_summary_and_persistence(tmp_path):
     runtime = UsageRuntime(tmp_path)
 
     with runtime.command("index") as command:
-        runtime.collector.record(
-            scope_id=command.scope_id,
-            operation="index",
-            model="embed-model",
-            input_tokens=80,
-            output_tokens=0,
-            total_tokens=80,
+        runtime.langchain_handler.on_llm_end(
+            SimpleNamespace(
+                llm_output={
+                    "model_name": "embed-model",
+                    "token_usage": {"prompt_tokens": 80},
+                },
+                generations=[],
+            )
         )
 
     record = runtime.finalize_command(command)
