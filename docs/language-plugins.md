@@ -206,8 +206,8 @@ Provide the replacement implementation explicitly:
 ```yaml
 language_plugins:
   verilog:
-    implementation: vendor_metis_verilog:VerilogPlugin
-    config_resource: vendor_metis_verilog:verilog.yaml
+    implementation: external_metis_verilog:VerilogPlugin
+    config_resource: external_metis_verilog:verilog.yaml
 ```
 
 Replacement is explicit. A third-party entry point does not override a built-in

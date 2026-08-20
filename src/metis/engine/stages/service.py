@@ -7,7 +7,6 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from typing import Any
-from typing import assert_never
 from typing import cast
 
 from metis import runlog
@@ -34,7 +33,6 @@ from ..execution.contracts import NodeRuntime
 from ..execution.contracts import StageName
 from ..execution.graph import StageConfiguration
 from ..execution.runner import run_stage
-from .configuration import STAGE_CONTRACTS
 from .configuration import ExecutionConfiguration
 from .review.models import ReviewCommand
 from .triage.contracts import TriageAdjudicator
@@ -71,6 +69,7 @@ class ExecutionGraphService:
         self._triage_options = triage_options
         catalog = NodeCatalog(registrations, entry_points)
         self._plans: dict[StageName, StagePlan] = {}
+        self._contracts = configuration.stage_contracts()
         self._validate_configuration(catalog, capabilities)
         self._scheduler = JobScheduler(engine_config.max_workers)
         self._jobs = self._scheduler.limit(engine_config.max_workers)
@@ -180,7 +179,11 @@ class ExecutionGraphService:
                     callbacks=callbacks,
                 )
             else:
-                assert_never(stage_name)
+                result = self._execute_configured_stage(
+                    stage_name,
+                    outputs,
+                    callbacks=callbacks,
+                )
             diagnostics.extend(result.diagnostics)
             if result.status is ExecutionStatus.ERROR:
                 return ExecutionResult(result.status, outputs, tuple(diagnostics))
@@ -189,6 +192,28 @@ class ExecutionGraphService:
                 status = ExecutionStatus.INCONCLUSIVE
         return ExecutionResult(status, outputs, tuple(diagnostics))
 
+    def _execute_configured_stage(
+        self,
+        stage_name: StageName,
+        outputs: Mapping[str, Any],
+        *,
+        callbacks: Mapping[str, object] | None,
+    ) -> ExecutionResult:
+        stage = self.configuration.stages.get(stage_name)
+        if stage is None:
+            return _unavailable_stage(stage_name)
+        inputs = {
+            name: _resolve_stage_input(binding, outputs, self.configuration.inputs)
+            for name, binding in stage.inputs.items()
+        }
+        run = run_stage(
+            stage_name,
+            self._plans[stage_name],
+            self._context(stage_name, callbacks=callbacks),
+            inputs,
+        )
+        return ExecutionResult(run.status, {stage_name: run.outputs}, run.diagnostics)
+
     def _validate_configuration(
         self,
         catalog: NodeCatalog,
@@ -196,7 +221,7 @@ class ExecutionGraphService:
     ) -> None:
         stage_order = self.configuration.stage_order()
         for stage_name in stage_order:
-            contract = STAGE_CONTRACTS[stage_name]
+            contract = self._contracts[stage_name]
             stage = cast(StageConfiguration, self.configuration.stages.get(stage_name))
             self._plans[stage_name] = compile_stage(
                 catalog,
@@ -229,14 +254,14 @@ class ExecutionGraphService:
                 if source.startswith("$inputs."):
                     continue
                 source_stage, _, source_output = source.partition(".")
-                source_plan = self._plans[cast(StageName, source_stage)]
+                source_plan = self._plans[source_stage]
                 if source_output not in source_plan.output_annotations:
                     raise ValueError(
                         f"Execution stage {stage_name!r} input {input_name!r} "
                         f"references unknown output {source!r}"
                     )
                 source_annotation = source_plan.output_annotations[source_output]
-                target_annotation = STAGE_CONTRACTS[stage_name].stage_inputs[input_name]
+                target_annotation = self._contracts[stage_name].stage_inputs[input_name]
                 if not _annotations_compatible(
                     source_annotation,
                     target_annotation,

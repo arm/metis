@@ -1,21 +1,21 @@
 # Execution Graph
 
 Metis executes the graph under `metis_engine.execution` in the selected YAML
-file. The packaged graph runs `initialize`, `review`, and `triage`. A
-project-provided execution section replaces that graph as a whole. Every node
-listed in the selected graph executes; an omitted node is not part of that
-graph.
+file. The packaged graph runs `initialize`, `review`, and `triage`. Installed
+packages may add more stages and nodes. A project-provided execution section
+replaces that graph as a whole. Every node listed in the selected graph
+executes; an omitted node is not part of that graph.
 
 Read [Terminology](#terminology), [Default graph](#default-graph), and
 [Stage contracts](#stage-contracts) to configure a run. Contributors adding a
 separately distributed node can start at
-[Adding public or private nodes](#adding-public-or-private-nodes).
+[Adding external nodes and stages](#adding-external-nodes-and-stages).
 
 ## Terminology
 
 - **Execution graph**: the complete configured workflow
-- **Stage**: a stable workflow boundary such as `initialize`, `review`, or
-  `triage`
+- **Stage**: a workflow boundary such as `initialize`, `review`, `triage`, or
+  an installed external stage
 - **Node**: executable work inside a stage, such as `codegraph`,
   `simple_llm_review`, `reachability`, `finding_dedup`, `triage`, or `result`
 - **Execution Node API**: the public Python contracts used to implement and
@@ -110,8 +110,8 @@ Capability runtime settings live under `metis_engine.capabilities`. A node's
 `capabilities` list is only an access grant; it does not configure the
 capability.
 
-Unknown stages, nodes, inputs, formats, and configuration fields are rejected
-when the YAML is loaded.
+Unregistered stages, nodes, unknown inputs, formats, and configuration fields
+are rejected when the YAML is loaded.
 
 ## Stage contracts
 
@@ -241,7 +241,14 @@ mapping, it selects an input already bound on that stage.
 
 When a stage omits `outputs`, the complete output contract of its terminal
 `result` node becomes the stage contract. Stages without a `result` node, such
-as Initialize, list the same-named single-output nodes they publish.
+as Initialize, may list the same-named single-output nodes they publish. A
+stage may instead map public output names to explicit node sources when it
+needs a selected output from a multi-output node or a renamed stage output:
+
+```yaml
+outputs:
+  verdict: verifier.verdict
+```
 
 `filename` optionally sets an extensionless output base on a result node:
 
@@ -393,9 +400,9 @@ engine/nodes/
   result/
 ```
 
-Stages own stable workflow contracts and orchestration. Nodes own executable
-behavior and may be selected, omitted, or supplied by another package. Built-in
-Nodes import Stage contracts; Stages do not import Node implementations.
+Stages own workflow contracts and orchestration. Nodes own executable behavior
+and may be selected, omitted, or supplied by another package. Built-in Nodes
+import Stage contracts; Stages do not import Node implementations.
 
 Stages do not enumerate or construct their nodes. The built-in Node composition
 module constructs the selected registrations and their services, while
@@ -403,37 +410,35 @@ module constructs the selected registrations and their services, while
 execution runner remains unaware of built-in Stage behavior. Adding a built-in
 Node therefore changes its Node package, the built-in composition module, and
 YAML topology; it does not change Stage execution code. Separately distributed
-public or private Nodes require no Metis change and register through the
-stage-qualified entry point described below.
+public or private Nodes and Stages require no Metis change and register through
+the entry points described below.
 
-## Adding public or private nodes
+## Adding external nodes and stages
 
-Stages are fixed product boundaries. Packages may add nodes within those stages
-without modifying Metis.
+Packages may add nodes within built-in or external stages without modifying
+Metis. Packages may also add new top-level stages.
 
 The `metis.execution_nodes` Python module is the Execution Node API. It exports
 registration, invocation, context, result, and Stage value contracts for Node
 authors. Its `__all__` list defines those Python exports; it is not a catalog of
-Nodes available to the YAML graph. `EXECUTION_NODE_API_VERSION` identifies the
-breaking-change version of that surface. An installed registration must declare
-the API version it targets; Metis rejects omitted or unsupported versions before
-execution.
+Nodes available to the YAML graph. External packages should declare a Metis
+dependency range in `pyproject.toml` for the API surface they use.
 
 A Node becomes selectable in YAML only when Metis has a `NodeRegistration` for
 its name and Stage. Built-in registrations come from Metis. A separately
 distributed package supplies registrations through the stage-qualified
 `metis.execution_nodes` Python packaging entry-point group:
 
-### Private package template
+### External package template
 
-A private repository can start with this layout and add one registration
+An external repository can start with this layout and add one registration
 module per node:
 
 ```text
-private-metis-nodes/
+external_metis_nodes/
   pyproject.toml
   src/
-    company_metis_nodes/
+    external_metis_nodes/
       __init__.py
       policy.py
 ```
@@ -447,34 +452,98 @@ build-backend = "setuptools.build_meta"
 requires = ["setuptools>=82"]
 
 [project]
-name = "company-metis-nodes"
+name = "external-metis-nodes"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["metis"]
+dependencies = ["metis>=1.5,<2"]
 
 [project.entry-points."metis.execution_nodes"]
-"review.private_policy" = "company_metis_nodes.policy:registration"
+"review.private_policy" = "external_metis_nodes.policy:registration"
 ```
 
-Install that package in the same environment as Metis. Adding another private
+Install that package in the same environment as Metis. Adding another external
 node means adding its module, one entry-point line, and its YAML selection; no
 Metis source change is required.
 
-Custom nodes from any private Python repository can be added without changing
-Metis. For example, the repository may be cloned independently or included as
-a Git submodule. A checkout alone is not discoverable: install the package into
-the Metis environment so Python registers its entry points. For an editable
-submodule checkout:
+For an internal checkout that keeps the open-source Metis tree untouched, let
+the external submodule own the uv project:
 
-```bash
-uv pip install -e ./private-metis-nodes
-uv run metis --config internal-metis.yaml --codebase-path ../project
+```text
+metis/
+  pyproject.toml
+  external_modules/
+    custom_flow/
+      pyproject.toml
+      src/
+        external_metis_nodes/
+        external_metis_stages/
 ```
 
-### Private analysis with a bundled implementation
+```toml
+[project]
+name = "external-metis-flow"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["metis>=1.5,<2"]
+
+[tool.uv.sources]
+metis = { path = "../..", editable = true }
+```
+
+The external package owns dependencies, entry points, environment, and
+lockfile. The open-source checkout does not change when another package
+is added:
+
+```bash
+git submodule add <external-repo> external_modules/custom_flow
+uv sync --project external_modules/custom_flow
+uv run --project external_modules/custom_flow metis \
+  --config external_modules/custom_flow/examples/metis.yaml \
+  --codebase-path ../project
+```
+
+A checkout alone is not discoverable. Metis finds external nodes and stages
+through installed Python entry points, and uv installs the local Metis path
+source editably.
+
+### External stages
+
+An external stage declares its input and required output contract through the
+`metis.execution_stages` entry-point group. Keep the stage package separate
+from Metis; the YAML uses only the registered stage name:
+
+```toml
+[project.entry-points."metis.execution_stages"]
+verify = "external_metis_stages.verify:registration"
+```
+
+```python
+from metis.execution_nodes import ReviewRun
+from metis.execution_stages import StageContract, StageRegistration
+
+registration = StageRegistration(
+    name="verify",
+    contract=StageContract(
+        inputs={"review": ReviewRun},
+        required_outputs={"verdict": str},
+    ),
+)
+```
+
+Put Metis compatibility bounds in `project.dependencies`. `tool.uv.sources`
+only selects the local editable source during development.
+
+Nodes in that stage still use the normal stage-qualified node entry point:
+
+```toml
+[project.entry-points."metis.execution_nodes"]
+"verify.private_verifier" = "external_metis_nodes.verify:registration"
+```
+
+### External analysis with a bundled implementation
 
 A Review node may package a deterministic analyzer, library, or executable in
-the same private distribution. This node-internal implementation is not a Tool
+the same external distribution. This node-internal implementation is not a Tool
 in the execution-graph terminology and does not need a Metis capability
 registration. The node converts its output to the stable `ReviewRun` contract
 so `finding_dedup` can combine it with other analyses before `result` generates
@@ -506,7 +575,7 @@ Its entry point and essential ports are:
 
 ```toml
 [project.entry-points."metis.execution_nodes"]
-"review.new_analysis" = "company_metis_nodes.new_analysis:registration"
+"review.new_analysis" = "external_metis_nodes.new_analysis:registration"
 ```
 
 ```python
@@ -517,7 +586,6 @@ registration = NodeRegistration(
     inputs={"request": ReviewCommand},
     outputs={"review": ReviewRun},
     execute=execute,
-    api_version=1,
 )
 ```
 
@@ -541,7 +609,7 @@ a model.
 
 The entry-point name is always `<stage>.<node>`. Its target returns the
 registration used by the bare node name in YAML. In this example,
-`company_metis_nodes/policy.py` contains:
+`external_metis_nodes/policy.py` contains:
 
 ```python
 from typing import cast
@@ -549,7 +617,6 @@ from typing import cast
 from pydantic import BaseModel, ConfigDict
 
 from metis.execution_nodes import CapabilityRequirement
-from metis.execution_nodes import EXECUTION_NODE_API_VERSION
 from metis.execution_nodes import NodeInvocation, NodeRegistration, NodeResult
 from metis.execution_nodes import ReviewRun
 
@@ -577,7 +644,6 @@ registration = NodeRegistration(
     capabilities={
         "memory": CapabilityRequirement.OPTIONAL,
     },
-    api_version=EXECUTION_NODE_API_VERSION,
 )
 ```
 
@@ -710,7 +776,7 @@ entry-point name must match the language manifest name:
 
 ```toml
 [project.entry-points."metis.codegraph_semantics"]
-python = "company_metis_python.semantics:PythonSemantics"
+python = "external_metis_python.semantics:PythonSemantics"
 ```
 
 The provider consumes immutable per-node facts and returns validated

@@ -52,7 +52,7 @@ class ConfiguredNode(BaseModel):
 class StageConfiguration(BaseModel):
     depends_on: tuple[StageName, ...] = ()
     inputs: dict[str, str] = Field(default_factory=dict)
-    outputs: tuple[str, ...] = ()
+    outputs: tuple[str, ...] | dict[str, str] = ()
     nodes: dict[str, ConfiguredNode]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -61,9 +61,18 @@ class StageConfiguration(BaseModel):
     def require_nodes(self) -> "StageConfiguration":
         if not self.nodes:
             raise ValueError("Execution stage must contain a node")
-        if len(set(self.outputs)) != len(self.outputs):
+        invalid_dependencies = [
+            name for name in self.depends_on if not name or not name.isidentifier()
+        ]
+        if invalid_dependencies:
+            raise ValueError(
+                "Execution stage has invalid dependencies: "
+                f"{sorted(invalid_dependencies)!r}"
+            )
+        output_names = tuple(self.outputs)
+        if len(set(output_names)) != len(output_names):
             raise ValueError("Execution stage outputs must be unique")
-        invalid_outputs = [name for name in self.outputs if not name.isidentifier()]
+        invalid_outputs = [name for name in output_names if not name.isidentifier()]
         if invalid_outputs:
             raise ValueError(
                 f"Execution stage has invalid outputs: {sorted(invalid_outputs)!r}"

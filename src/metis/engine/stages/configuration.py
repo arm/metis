@@ -8,29 +8,32 @@ from dataclasses import dataclass
 from dataclasses import field
 from types import MappingProxyType
 from typing import Any
-from typing import cast
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import RootModel
 from pydantic import model_validator
 
 from metis.engine.codegraph import CodeGraphReference
 from metis.sarif.models import SarifPayload
 
+from ..execution.contracts import BUILTIN_STAGE_NAMES
 from ..execution.contracts import ResultFormat
-from ..execution.contracts import STAGE_NAMES
 from ..execution.contracts import StageName
 from ..execution.contracts import annotation_allows_none
+from ..execution.compiler import _annotations_compatible
 from ..execution.graph import StageConfiguration
 from ..execution.graph import _topological_order
+from .catalog import StageCatalog
+from .contracts import StageRegistration
 from .review.models import ReviewCommand
 from .review.models import ReviewResult
 from .triage.models import TriageRun
 
 
 @dataclass(frozen=True, slots=True)
-class StageContract:
+class _ResolvedStageContract:
     initial_inputs: Mapping[str, Any]
     stage_inputs: Mapping[str, Any]
     required_execution_inputs: frozenset[str] = frozenset()
@@ -54,10 +57,10 @@ class StageContract:
         )
 
 
-STAGE_CONTRACTS: Mapping[StageName, StageContract] = MappingProxyType(
+BUILTIN_STAGE_CONTRACTS: Mapping[StageName, _ResolvedStageContract] = MappingProxyType(
     {
-        "initialize": StageContract({}, {}),
-        "review": StageContract(
+        "initialize": _ResolvedStageContract({}, {}),
+        "review": _ResolvedStageContract(
             {"request": ReviewCommand},
             {},
             required_execution_inputs=frozenset({"review_request"}),
@@ -67,7 +70,7 @@ STAGE_CONTRACTS: Mapping[StageName, StageContract] = MappingProxyType(
                 "sarif": SarifPayload,
             },
         ),
-        "triage": StageContract(
+        "triage": _ResolvedStageContract(
             {
                 "sarif": SarifPayload,
                 "request": TriageRun,
@@ -86,22 +89,39 @@ STAGE_CONTRACTS: Mapping[StageName, StageContract] = MappingProxyType(
 )
 
 
-class ExecutionStages(BaseModel):
-    initialize: StageConfiguration | None = None
-    review: StageConfiguration | None = None
-    triage: StageConfiguration | None = None
+class ExecutionStages(RootModel[dict[StageName, StageConfiguration]]):
+    root: dict[StageName, StageConfiguration]
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def validate_names(self) -> "ExecutionStages":
+        invalid = [name for name in self.root if not name or not name.isidentifier()]
+        if invalid:
+            raise ValueError(f"Execution graph has invalid stages: {sorted(invalid)!r}")
+        return self
+
+    @property
+    def initialize(self) -> StageConfiguration | None:
+        return self.get("initialize")
+
+    @property
+    def review(self) -> StageConfiguration | None:
+        return self.get("review")
+
+    @property
+    def triage(self) -> StageConfiguration | None:
+        return self.get("triage")
 
     def get(self, name: StageName) -> StageConfiguration | None:
-        return cast(StageConfiguration | None, getattr(self, name))
+        return self.root.get(name)
 
     def configured(self) -> tuple[tuple[StageName, StageConfiguration], ...]:
-        return tuple(
-            (name, stage)
-            for name in STAGE_NAMES
-            if (stage := self.get(name)) is not None
+        names = (
+            *BUILTIN_STAGE_NAMES,
+            *(name for name in self.root if name not in BUILTIN_STAGE_NAMES),
         )
+        return tuple((name, self.root[name]) for name in names if name in self.root)
 
 
 class ExecutionInputs(BaseModel):
@@ -127,16 +147,17 @@ class ExecutionConfiguration(BaseModel):
         enabled: set[StageName] = {name for name, _stage in configured_stages}
         if not enabled:
             raise ValueError("Execution graph must contain a stage")
+        contracts = self.stage_contracts()
         required_stage_inputs = {
             name: {
                 input_name
-                for input_name, annotation in STAGE_CONTRACTS[name].stage_inputs.items()
+                for input_name, annotation in contracts[name].stage_inputs.items()
                 if not annotation_allows_none(annotation)
             }
             for name, _stage in configured_stages
         }
         for name, stage in configured_stages:
-            contract = STAGE_CONTRACTS[name]
+            contract = contracts[name]
             unknown_inputs = set(stage.inputs) - set(contract.stage_inputs)
             required_inputs = required_stage_inputs[name]
             missing_inputs = required_inputs - set(stage.inputs)
@@ -191,12 +212,21 @@ class ExecutionConfiguration(BaseModel):
                             f"Execution stage {name!r} references unknown "
                             f"execution input {input_name!r}"
                         )
+                    value = getattr(self.inputs, input_name)
                     if (
                         stage_input_name in required_stage_inputs[name]
-                        and getattr(self.inputs, input_name) is None
+                        and value is None
                     ):
                         raise ValueError(
                             f"Execution input {input_name!r} is required by {name}"
+                        )
+                    if value is not None and not _annotations_compatible(
+                        type(value),
+                        contracts[name].stage_inputs[stage_input_name],
+                    ):
+                        raise ValueError(
+                            f"Execution stage {name!r} input {stage_input_name!r} "
+                            f"is incompatible with {source!r}"
                         )
                     continue
                 source_stage, separator, output_name = source.partition(".")
@@ -221,9 +251,25 @@ class ExecutionConfiguration(BaseModel):
                 if source.startswith("$inputs."):
                     continue
                 source_stage, _, _ = source.partition(".")
-                dependencies.add(cast(StageName, source_stage))
+                dependencies.add(source_stage)
             predecessors[stage_name] = dependencies
-        return _topological_order(predecessors, STAGE_NAMES)
+        return _topological_order(
+            predecessors,
+            tuple(name for name, _stage in self.stages.configured()),
+        )
+
+    def stage_contracts(self) -> Mapping[StageName, _ResolvedStageContract]:
+        catalog = StageCatalog(BUILTIN_STAGE_CONTRACTS)
+        return MappingProxyType(
+            {
+                name: (
+                    BUILTIN_STAGE_CONTRACTS[name]
+                    if name in BUILTIN_STAGE_CONTRACTS
+                    else _external_stage_contract(catalog.resolve(name))
+                )
+                for name, _stage in self.stages.configured()
+            }
+        )
 
     def selected_nodes(self) -> set[tuple[StageName, str]]:
         return {
@@ -239,3 +285,13 @@ class ExecutionConfiguration(BaseModel):
             for node in stage.nodes.values()
             for capability in node.capabilities
         }
+
+
+def _external_stage_contract(
+    registration: StageRegistration,
+) -> _ResolvedStageContract:
+    return _ResolvedStageContract(
+        registration.contract.inputs,
+        registration.contract.inputs,
+        required_outputs=registration.contract.required_outputs,
+    )

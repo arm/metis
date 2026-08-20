@@ -38,7 +38,6 @@ from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.service import ExecutionGraphService
 from metis.engine.stages.triage.models import TriageRun
-from metis.execution_nodes import EXECUTION_NODE_API_VERSION
 from metis.execution_nodes import CapabilityRequirement
 from metis.execution_nodes import EmptyNodeConfiguration
 from metis.execution_nodes import ExecutionDiagnostic
@@ -49,6 +48,8 @@ from metis.execution_nodes import NodeRegistration
 from metis.execution_nodes import NodeResult
 from metis.execution_nodes import NodeRuntime
 from metis.execution_nodes import ReviewCommand
+from metis.execution_stages import StageContract
+from metis.execution_stages import StageRegistration
 from metis.runtime_settings import TriageOptions
 
 
@@ -129,6 +130,20 @@ def _findings_run(*findings: dict[str, object]) -> ReviewRun:
             {"reviews": [{"file": "src/example.c", "reviews": list(findings)}]}
         ),
     )
+
+
+def test_builtin_stage_order_is_stable_when_yaml_is_reordered() -> None:
+    configuration = ExecutionConfiguration.model_validate(
+        {
+            "inputs": {"review_request": {"mode": "code"}},
+            "stages": {
+                "review": {"nodes": {"result": {}}},
+                "initialize": {"nodes": {"init": {}}},
+            },
+        }
+    )
+
+    assert configuration.stage_order() == ("initialize", "review")
 
 
 def test_finding_dedup_combines_producers_before_result() -> None:
@@ -878,6 +893,27 @@ def test_required_execution_input_must_be_configured():
         )
 
 
+def test_execution_input_binding_must_match_stage_contract():
+    with pytest.raises(
+        ValueError,
+        match=r"Execution stage 'triage' input 'codegraph' is incompatible",
+    ):
+        ExecutionConfiguration.model_validate(
+            {
+                "inputs": {"sarif": {"version": "2.1.0", "runs": []}},
+                "stages": {
+                    "triage": {
+                        "inputs": {
+                            "sarif": "$inputs.sarif",
+                            "codegraph": "$inputs.sarif",
+                        },
+                        "nodes": {"result": {"formats": ["sarif"]}},
+                    }
+                },
+            }
+        )
+
+
 def test_initialize_stage_requires_explicit_outputs():
     configuration = ExecutionConfiguration.model_validate(
         {"stages": {"initialize": {"nodes": {"index": {"capabilities": ["index"]}}}}}
@@ -1406,7 +1442,6 @@ class _EntryPoint:
                     ),
                 ),
             ),
-            api_version=EXECUTION_NODE_API_VERSION,
         )
 
 
@@ -1429,8 +1464,61 @@ class _SharedEntryPoint:
             {},
             {"value": str},
             lambda _invocation: NodeResult({"value": self._stage}),
-            api_version=EXECUTION_NODE_API_VERSION,
         )
+
+
+class _StageEntryPoints:
+    def __init__(self, entries: tuple[object, ...]) -> None:
+        self._entries = entries
+
+    def select(self, *, group: str) -> tuple[object, ...]:
+        return self._entries if group == "metis.execution_stages" else ()
+
+
+class _AuditStageEntryPoint:
+    name = "audit"
+
+    def load(self) -> StageRegistration:
+        return StageRegistration(
+            "audit",
+            StageContract({}, required_outputs={"value": str}),
+        )
+
+
+class _AuditNodeEntryPoint:
+    name = "audit.audit_node"
+
+    def load(self) -> NodeRegistration:
+        return NodeRegistration(
+            "audit_node",
+            "audit",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            lambda _invocation: NodeResult({"value": "private"}),
+        )
+
+
+def test_external_stage_registration_runs_generic_stage(monkeypatch):
+    monkeypatch.setattr(
+        "metis.engine.stages.catalog.metadata.entry_points",
+        lambda: _StageEntryPoints((_AuditStageEntryPoint(),)),
+    )
+    configuration = ExecutionConfiguration.model_validate(
+        {
+            "stages": {
+                "audit": {
+                    "outputs": {"value": "audit_node.value"},
+                    "nodes": {"audit_node": {}},
+                }
+            }
+        }
+    )
+    service, _calls = _service(configuration, entry_points=(_AuditNodeEntryPoint(),))
+
+    result = service.execute_graph()
+
+    assert result.outputs == {"audit": {"value": "private"}}
 
 
 @pytest.mark.parametrize(

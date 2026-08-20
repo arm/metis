@@ -15,7 +15,6 @@ from metis.engine.codegraph import CodeGraphProviderContext
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import CodeGraphResult
 from metis.engine.execution.contracts import EmptyNodeConfiguration
-from metis.engine.execution.contracts import EXECUTION_NODE_API_VERSION
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.execution.contracts import ExecutionStatus
@@ -48,7 +47,6 @@ __all__ = [
     "CodeGraphResult",
     "CapabilityRequirement",
     "EmptyNodeConfiguration",
-    "EXECUTION_NODE_API_VERSION",
     "ExecutionDiagnostic",
     "ExecutionStatus",
     "NodeContext",

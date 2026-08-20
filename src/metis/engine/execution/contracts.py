@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
 from typing import Protocol
+from typing import TypeAlias
 from typing import get_args
 
 from pydantic import BaseModel
@@ -30,11 +31,10 @@ from metis.utils import count_tokens
 if TYPE_CHECKING:
     from metis.engine.stages.triage.contracts import TriageAdjudicator
 
-StageName = Literal["initialize", "review", "triage"]
-STAGE_NAMES: tuple[StageName, ...] = get_args(StageName)
+StageName: TypeAlias = str
+BUILTIN_STAGE_NAMES: tuple[StageName, ...] = ("initialize", "review", "triage")
 ResultFormat = Literal["sarif", "json", "html", "csv"]
 NodeHandler = Callable[["NodeInvocation"], "NodeResult"]
-EXECUTION_NODE_API_VERSION = 1
 
 
 def annotation_allows_none(annotation: Any) -> bool:
@@ -211,29 +211,20 @@ class NodeRegistration:
     outputs: Mapping[str, Any]
     execute: NodeHandler
     capabilities: Mapping[str, CapabilityRequirement] = field(default_factory=dict)
-    api_version: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("Execution node name must not be empty")
         if not self.name.isidentifier():
             raise ValueError(f"Execution node name {self.name!r} must be an identifier")
-        if self.stage not in STAGE_NAMES:
-            raise ValueError(f"Unknown execution stage: {self.stage!r}")
+        if not self.stage or not self.stage.isidentifier():
+            raise ValueError(f"Invalid execution stage: {self.stage!r}")
         if not isinstance(self.configuration, type) or not issubclass(
             self.configuration, BaseModel
         ):
             raise TypeError("Execution node configuration must be a Pydantic model")
         if not callable(self.execute):
             raise TypeError(f"Execution node {self.name!r} handler is not callable")
-        if (
-            self.api_version is not None
-            and self.api_version != EXECUTION_NODE_API_VERSION
-        ):
-            raise ValueError(
-                f"Execution node {self.name!r} targets unsupported API version "
-                f"{self.api_version}; expected {EXECUTION_NODE_API_VERSION}"
-            )
         for port in (*self.inputs, *self.outputs):
             if not port.isidentifier():
                 raise ValueError(

@@ -83,11 +83,11 @@ Register the object from the package metadata:
 
 ```toml
 [project.entry-points."metis.capabilities"]
-private_analysis = "company_metis_capabilities.analysis:registration"
+private_analysis = "external_metis_capabilities.analysis:registration"
 ```
 
 The entry-point name must match the registration and manifest name. A package
-may contain both private nodes and private capabilities.
+may contain both external nodes and external capabilities.
 
 ## 3. Describe Operations When Needed
 
@@ -102,7 +102,7 @@ from metis.capabilities import CapabilityOperationManifest
 
 CapabilityManifest(
     name="private_analysis",
-    contracts={"model": "package://company_metis_capabilities/analysis.md"},
+    contracts={"model": "package://external_metis_capabilities/analysis.md"},
     operations=(
         CapabilityOperationManifest(
             id="private_analysis.lookup",
@@ -192,7 +192,7 @@ metis_engine:
     stages:
       review:
         nodes:
-          company_review:
+          external_review:
             capabilities:
               - private_analysis
 ```

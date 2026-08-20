@@ -5,10 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from importlib import metadata
-from typing import cast
-
 from .contracts import NodeRegistration
-from .contracts import STAGE_NAMES
 from .contracts import StageName
 
 EXECUTION_NODE_ENTRY_POINT_GROUP = "metis.execution_nodes"
@@ -66,10 +63,6 @@ class NodeCatalog:
             raise TypeError(
                 f"Execution node entry point {name!r} did not return a NodeRegistration"
             )
-        if registration.api_version is None:
-            raise ValueError(
-                f"Execution node entry point {name!r} must declare api_version"
-            )
         if registration.name != name or registration.stage != stage:
             raise ValueError(
                 f"Execution node entry point {name!r} returned registration "
@@ -91,6 +84,6 @@ class NodeCatalog:
 
 def _entry_point_key(name: str) -> tuple[StageName, str] | None:
     prefix, separator, node_name = name.partition(".")
-    if separator and prefix in STAGE_NAMES:
-        return cast(StageName, prefix), node_name
+    if separator and prefix.isidentifier() and node_name.isidentifier():
+        return prefix, node_name
     return None

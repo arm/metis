@@ -191,7 +191,11 @@ def compile_stage(
                     registrations,
                     collection=isinstance(binding, tuple),
                 )
-    output_bindings = {name: name for name in stage.outputs}
+    output_bindings = (
+        dict(stage.outputs)
+        if isinstance(stage.outputs, dict)
+        else {name: name for name in stage.outputs}
+    )
     if not output_bindings and "result" in registrations:
         result_dependants = [
             name
