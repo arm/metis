@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import patch
+
 import pytest
 
 from metis.providers.registry import get_chat_provider
@@ -58,3 +60,12 @@ def test_registry_loads_embedding_providers(name, class_name, module_name):
 def test_registry_rejects_embedding_for_chat_only_providers(name):
     with pytest.raises(ValueError, match="Unsupported embedding provider"):
         get_embedding_provider(name)
+
+
+@pytest.mark.parametrize("get_provider", [get_chat_provider, get_embedding_provider])
+def test_registry_reuses_loaded_provider(get_provider) -> None:
+    provider_cls = get_provider("openai")
+
+    with patch("metis.providers.registry.import_module") as import_module:
+        assert get_provider("OPENAI") is provider_cls
+    import_module.assert_not_called()
