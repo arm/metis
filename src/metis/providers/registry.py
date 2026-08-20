@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import metadata
 from importlib import import_module
-from typing import Type
+from typing import Literal, Type, TypeVar
 
 from metis.providers.base import ChatProvider
 from metis.providers.base import EmbeddingProvider
@@ -17,6 +17,9 @@ _CHAT_PROVIDERS: dict[str, Type[ChatProvider]] = {}
 _EMBEDDING_PROVIDERS: dict[str, Type[EmbeddingProvider]] = {}
 _PROVIDER_LOADERS_DISCOVERED = False
 
+ProviderT = TypeVar("ProviderT", ChatProvider, EmbeddingProvider)
+ProviderSurface = Literal["chat", "embedding"]
+
 
 @dataclass(frozen=True)
 class ProviderLoader:
@@ -25,16 +28,6 @@ class ProviderLoader:
 
 
 _PROVIDER_LOADERS: dict[str, ProviderLoader] = {}
-
-
-def _register_chat_provider(name: str, provider_cls: Type[ChatProvider]) -> None:
-    _CHAT_PROVIDERS[name.lower()] = provider_cls
-
-
-def _register_embedding_provider(
-    name: str, provider_cls: Type[EmbeddingProvider]
-) -> None:
-    _EMBEDDING_PROVIDERS[name.lower()] = provider_cls
 
 
 def _register_provider_loader(
@@ -55,25 +48,38 @@ def _register_provider_loader(
 
 
 def get_chat_provider(name: str) -> Type[ChatProvider]:
-    key = name.lower()
-    if key in _CHAT_PROVIDERS:
-        return _CHAT_PROVIDERS[key]
-    _discover_provider_loaders()
-    loader = _PROVIDER_LOADERS.get(key)
-    if loader and loader.chat:
-        return _load_chat_provider(name, loader.chat)
-    raise ValueError(f"Unsupported chat provider: {name}")
+    return _get_provider(name, "chat", _CHAT_PROVIDERS)
 
 
 def get_embedding_provider(name: str) -> Type[EmbeddingProvider]:
+    return _get_provider(name, "embedding", _EMBEDDING_PROVIDERS)
+
+
+def _get_provider(
+    name: str,
+    surface: ProviderSurface,
+    providers: dict[str, Type[ProviderT]],
+) -> Type[ProviderT]:
     key = name.lower()
-    if key in _EMBEDDING_PROVIDERS:
-        return _EMBEDDING_PROVIDERS[key]
+    if provider_cls := providers.get(key):
+        return provider_cls
     _discover_provider_loaders()
     loader = _PROVIDER_LOADERS.get(key)
-    if loader and loader.embedding:
-        return _load_embedding_provider(name, loader.embedding)
-    raise ValueError(f"Unsupported embedding provider: {name}")
+    dotted_path = getattr(loader, surface) if loader else None
+    if not dotted_path:
+        raise ValueError(f"Unsupported {surface} provider: {name}")
+
+    module_path, class_name = dotted_path.split(":", 1)
+    try:
+        module = import_module(module_path)
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            f"{surface.capitalize()} provider '{name}' is registered but required "
+            "dependencies are missing."
+        ) from exc
+    provider_cls = getattr(module, class_name)
+    providers[key] = provider_cls
+    return provider_cls
 
 
 def _discover_provider_loaders() -> None:
@@ -105,35 +111,3 @@ def _parse_provider_entry_point_name(name: str) -> tuple[str, str]:
             f"Provider entry point '{name}' must be named '<provider>.<{surfaces}>'."
         )
     return provider_name, surface
-
-
-def _load_chat_provider(name: str, dotted_path: str) -> Type[ChatProvider]:
-    module_path, class_name = dotted_path.split(":", 1)
-    try:
-        module = import_module(module_path)
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            f"Chat provider '{name}' is registered but required dependencies are missing."
-        ) from exc
-    key = name.lower()
-    if key in _CHAT_PROVIDERS:
-        return _CHAT_PROVIDERS[key]
-    provider_cls = getattr(module, class_name)
-    _register_chat_provider(name, provider_cls)
-    return provider_cls
-
-
-def _load_embedding_provider(name: str, dotted_path: str) -> Type[EmbeddingProvider]:
-    module_path, class_name = dotted_path.split(":", 1)
-    try:
-        module = import_module(module_path)
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            f"Embedding provider '{name}' is registered but required dependencies are missing."
-        ) from exc
-    key = name.lower()
-    if key in _EMBEDDING_PROVIDERS:
-        return _EMBEDDING_PROVIDERS[key]
-    provider_cls = getattr(module, class_name)
-    _register_embedding_provider(name, provider_cls)
-    return provider_cls
