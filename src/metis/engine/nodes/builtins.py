@@ -53,7 +53,7 @@ def build_builtin_execution(
     reachability_settings: dict[str, object],
     triage_options: TriageOptions,
     triage_checkpoint_every: int,
-    review_graph_factory: Callable[[IndexCapability | None], ReviewGraph],
+    review_graph_factory: Callable[[IndexCapability | None, str | None], ReviewGraph],
 ) -> BuiltinExecution:
     selected_nodes = configuration.selected_nodes()
     static_registrations = (

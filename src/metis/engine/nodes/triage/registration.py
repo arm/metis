@@ -51,6 +51,7 @@ def create_node(
                 unavailable_files=(
                     reference.failed_files if reference is not None else ()
                 ),
+                model=invocation.context.runtime.model,
                 model_tool_max_rounds=(
                     invocation.context.runtime.model_tool_max_rounds
                 ),

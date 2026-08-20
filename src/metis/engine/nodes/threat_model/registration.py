@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from typing import Literal
 from typing import cast
 from typing import TYPE_CHECKING
@@ -43,9 +44,11 @@ def create_node(
         memory_service = cast(
             "MemoryService", invocation.context.capabilities["memory"]
         )
+        node_config = copy(engine_config)
+        node_config.llama_query_model = invocation.context.runtime.model
         result = InitializedThreatModelResult.model_validate(
             initialize_threat_model_memory(
-                engine_config,
+                node_config,
                 repository,
                 memory_service,
             )

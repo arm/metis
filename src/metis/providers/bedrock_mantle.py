@@ -91,7 +91,7 @@ class BedrockMantleProvider(ChatProvider):
         self.default_headers = dict(config.get("default_headers", {}))
         self.max_retries = int(config.get("max_retries", 5))
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, text: str, model: str | None = None) -> int:
         return anthropic_token_count(text)
 
     def get_chat_model(

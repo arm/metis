@@ -302,8 +302,13 @@ class MetisEngine:
     def _index_capability(self) -> IndexCapability:
         return cast(IndexCapability, self.capabilities.require("index"))
 
-    def _get_review_graph(self, index: IndexCapability | None = None):
-        cache_key = index is not None
+    def _get_review_graph(
+        self,
+        index: IndexCapability | None = None,
+        model: str | None = None,
+    ):
+        model = model or self._config.llama_query_model
+        cache_key = (index is not None, model)
         if cache_key not in self._state.review_graphs:
             model_tools = (
                 index_model_tools(
@@ -321,7 +326,7 @@ class MetisEngine:
                 plugin_config=self._config.plugin_config,
                 custom_prompt_text=self._config.custom_prompt_text,
                 custom_guidance_precedence=self._config.custom_guidance_precedence,
-                llama_query_model=self._config.llama_query_model,
+                llama_query_model=model,
                 max_token_length=self._config.max_token_length,
                 chat_model_kwargs=self._chat_model_kwargs(),
                 model_tools=model_tools,

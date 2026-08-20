@@ -29,8 +29,8 @@ class VLLMProvider(OpenAICompatibleChatProvider):
         if not self.api_key:
             logger.debug("vLLM provider running without API key")
 
-    def count_tokens(self, text: str) -> int:
-        return count_tokens_for_model(text, self.default_model)
+    def count_tokens(self, text: str, model: str | None = None) -> int:
+        return count_tokens_for_model(text, model or self.default_model)
 
 
 class VLLMEmbeddingProvider(OpenAICompatibleEmbeddingProvider):

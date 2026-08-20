@@ -68,7 +68,7 @@ def dummy_backend():
 def dummy_llm():
     llm = Mock()
     llm.get_chat_model.return_value = MagicMock()
-    llm.count_tokens = lambda text: len(text)
+    llm.count_tokens = lambda text, model=None: len(text)
     return llm
 
 

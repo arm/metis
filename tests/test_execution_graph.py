@@ -359,6 +359,52 @@ def test_node_max_concurrency_caps_runtime_limit(
     assert context.jobs.limits == [expected]
 
 
+def test_node_model_overrides_runtime_and_token_counter() -> None:
+    received: list[tuple[str, int]] = []
+    registration = NodeRegistration(
+        "node",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {},
+        lambda invocation: (
+            received.append(
+                (
+                    invocation.context.runtime.model,
+                    invocation.context.runtime.token_counter("prompt"),
+                )
+            )
+            or NodeResult({})
+        ),
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"node": {"model": "node-model"}}}
+    )
+    context = _node_context()
+    context = replace(
+        context,
+        runtime=replace(
+            context.runtime,
+            token_counter_for_model=lambda model: lambda text: len(model + text),
+        ),
+    )
+
+    result = run_stage(
+        "initialize",
+        _compile((registration,), stage),
+        context,
+        {},
+    )
+
+    assert result.status is ExecutionStatus.OK
+    assert received == [("node-model", len("node-modelprompt"))]
+
+
+def test_node_model_must_not_be_blank() -> None:
+    with pytest.raises(ValidationError, match="model must not be blank"):
+        StageConfiguration.model_validate({"nodes": {"node": {"model": " "}}})
+
+
 def test_ready_nodes_run_as_dependencies_complete() -> None:
     simple_started = threading.Event()
     reachability_started = threading.Event()
@@ -599,7 +645,7 @@ def _service(
     calls: list[object] = []
     engine_config = Mock(
         codebase_path=".",
-        llm_provider=Mock(count_tokens=lambda _text: 1),
+        llm_provider=Mock(count_tokens=lambda _text, model=None: 1),
         llama_query_model="test",
         max_workers=2,
         max_token_length=1000,

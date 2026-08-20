@@ -61,7 +61,7 @@ class SimpleLlmReviewService:
         self,
         config: EngineConfig,
         repository: EngineRepository,
-        review_graph_factory: Callable[[IndexCapability | None], Any],
+        review_graph_factory: Callable[[IndexCapability | None, str | None], Any],
     ) -> None:
         self._config = config
         self._repository = repository
@@ -72,16 +72,18 @@ class SimpleLlmReviewService:
         command: ReviewCommand,
         *,
         jobs: NodeJobs,
+        model: str | None = None,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
-            review_graph = self._review_graph_factory(index)
+            review_graph = self._review_graph_factory(index, model)
             result = PatchReviewResult.model_validate(
                 self.review_patch(
                     command.target,
+                    model=model,
                     memory_service=memory_service,
                     review_graph=review_graph,
                     checkpoint_session=checkpoint_session,
@@ -98,6 +100,7 @@ class SimpleLlmReviewService:
         return self.run_files(
             files,
             jobs=jobs,
+            model=model,
             memory_service=memory_service,
             index=index,
             progress_callback=progress_callback,
@@ -109,6 +112,7 @@ class SimpleLlmReviewService:
         files: tuple[str, ...],
         *,
         jobs: NodeJobs,
+        model: str | None = None,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
@@ -119,7 +123,7 @@ class SimpleLlmReviewService:
             progress_callback,
             jobs=jobs,
             memory_service=memory_service,
-            review_graph=self._review_graph_factory(index),
+            review_graph=self._review_graph_factory(index, model),
             checkpoint_session=checkpoint_session,
         )
 
@@ -170,7 +174,7 @@ class SimpleLlmReviewService:
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> TraditionalReviewOutcome:
-        review_graph = review_graph or self._review_graph_factory(None)
+        review_graph = review_graph or self._review_graph_factory(None, None)
         selected_files: list[str] = list(files)
         remaining_files = selected_files
         reviews_by_path: dict[str, dict[str, Any]] = {}
@@ -296,7 +300,7 @@ class SimpleLlmReviewService:
             "mode": "file",
             "threat_model_context": threat_model_context,
         }
-        graph = review_graph or self._review_graph_factory(None)
+        graph = review_graph or self._review_graph_factory(None, None)
         checkpoint_key = (
             graph.checkpoint_key(req) if checkpoint_session is not None else None
         )
@@ -374,6 +378,7 @@ class SimpleLlmReviewService:
         self,
         patch_file,
         *,
+        model: str | None = None,
         memory_service: MemoryService | None = None,
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
@@ -389,7 +394,7 @@ class SimpleLlmReviewService:
         overall_summaries = []
         base_path = os.path.abspath(self._config.codebase_path)
         metisignore_spec = self._repository.load_metisignore()
-        graph = review_graph or self._review_graph_factory(None)
+        graph = review_graph or self._review_graph_factory(None, model)
         for file_diff in diff:
             if file_diff.is_removed_file or file_diff.is_binary_file:
                 continue
@@ -492,7 +497,7 @@ class SimpleLlmReviewService:
                             file_diff.path,
                             issues,
                             summary_prompt,
-                            model=self._config.llama_query_model,
+                            model=model or self._config.llama_query_model,
                             chat_model_kwargs=self._config.chat_model_kwargs,
                             callbacks=self._config.usage_runtime.hooks.callbacks,
                         )

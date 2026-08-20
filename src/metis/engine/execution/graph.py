@@ -21,6 +21,7 @@ class ConfiguredNode(BaseModel):
     inputs: dict[str, InputBinding] = Field(default_factory=dict)
     depends_on: tuple[str, ...] = ()
     max_concurrency: int | None = Field(default=None, strict=True, ge=1)
+    model: str | None = Field(default=None, min_length=1)
     capabilities: tuple[str, ...] = ()
     formats: tuple[ResultFormat, ...] | None = None
     filename: str | None = Field(default=None, min_length=1)
@@ -29,6 +30,8 @@ class ConfiguredNode(BaseModel):
 
     @model_validator(mode="after")
     def validate_capabilities(self) -> "ConfiguredNode":
+        if self.model is not None and not self.model.strip():
+            raise ValueError("Execution node model must not be blank")
         if len(set(self.capabilities)) != len(self.capabilities):
             raise ValueError("Execution node capabilities must be unique")
         invalid = [name for name in self.capabilities if not name.isidentifier()]

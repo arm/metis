@@ -61,7 +61,7 @@ def _graph(*nodes: FunctionNode) -> CodeGraph:
 
 def _reviewer(tmp_path: Path) -> IncrementalGraphReviewer:
     provider = Mock()
-    provider.count_tokens.side_effect = len
+    provider.count_tokens.side_effect = lambda text, model=None: len(text)
     plugin = Mock()
     plugin.get_prompts.return_value = {
         "security_review_file": "Review the file. [[REVIEW_SCHEMA_FIELDS]]",

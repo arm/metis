@@ -33,7 +33,7 @@ def _simple_llm_review(engine: MetisEngine) -> SimpleLlmReviewService:
     return SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda index: engine._get_review_graph(index),
+        lambda index, model: engine._get_review_graph(index, model),
     )
 
 
@@ -108,7 +108,7 @@ def test_simple_review_orders_results_by_selected_file(engine):
     service = SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda _index: graph,
+        lambda _index, _model: graph,
     )
 
     class ReverseJobs:
@@ -137,7 +137,7 @@ def test_simple_llm_review_resumes_completed_files(engine, tmp_path):
     service = SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda _index: graph,
+        lambda _index, _model: graph,
     )
     callbacks = review_checkpoint_callbacks(
         codebase_path=tmp_path,
@@ -261,6 +261,7 @@ def test_patch_review_uses_simple_llm_review(engine):
     assert run.result.overall_changes == "No security-relevant change."
     service.review_patch.assert_called_once_with(
         "change.patch",
+        model=None,
         memory_service=None,
         review_graph=engine._get_review_graph(),
         checkpoint_session=None,
@@ -294,7 +295,7 @@ def test_patch_review_resumes_completed_files(engine, tmp_path, monkeypatch):
     service = SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda _index: graph,
+        lambda _index, _model: graph,
     )
     callbacks = review_checkpoint_callbacks(
         codebase_path=tmp_path,
@@ -399,6 +400,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     fallback.run_files.assert_called_once_with(
         (python_file,),
         jobs=engine.execution._jobs,
+        model=None,
         memory_service=None,
         index=None,
         progress_callback=progress_events.append,
@@ -609,7 +611,7 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     monkeypatch.setattr(
         engine,
         "_get_review_graph",
-        lambda _index=None: review_graph,
+        lambda _index=None, _model=None: review_graph,
     )
 
     import metis.engine.nodes.simple_llm_review.service as review_service_mod

@@ -125,7 +125,7 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
-        lambda _navigation, _rounds: dummy_workflow,
+        lambda _navigation, _rounds, _model=None: dummy_workflow,
     )
 
     out = engine.execute_triage(
@@ -207,7 +207,7 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
-        lambda _navigation, _rounds: _DummyWorkflow(),
+        lambda _navigation, _rounds, _model=None: _DummyWorkflow(),
     )
     engine.execution._jobs = engine.execution._scheduler.limit(1)
 
@@ -255,7 +255,7 @@ def test_execute_triage_writes_checkpoints_at_configured_cadence(
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
-        lambda _navigation, _rounds: _DummyWorkflow(),
+        lambda _navigation, _rounds, _model=None: _DummyWorkflow(),
     )
     monkeypatch.setattr(
         "metis.engine.stages.triage.service.save_sarif_file",
@@ -316,7 +316,7 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
-        lambda _navigation, _rounds: _DummyWorkflow(),
+        lambda _navigation, _rounds, _model=None: _DummyWorkflow(),
     )
     engine.execution._jobs = engine.execution._scheduler.limit(1)
 

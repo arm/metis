@@ -201,6 +201,8 @@ def _run_node(
     outputs: Mapping[str, Mapping[str, object]],
     initial_inputs: Mapping[str, object],
 ) -> NodeResult:
+    model = node.definition.model or context.runtime.model
+    token_counter_for_model = context.runtime.token_counter_for_model
     max_concurrency = min(
         node.definition.max_concurrency or context.runtime.max_workers,
         context.runtime.max_workers,
@@ -216,6 +218,7 @@ def _run_node(
             "capabilities": sorted(node.capabilities),
             "formats": node.definition.formats,
             "filename": node.definition.filename,
+            "model": model,
             "max_concurrency": max_concurrency,
         },
     ) as node_span:
@@ -252,7 +255,13 @@ def _run_node(
                 ),
                 runtime=replace(
                     context.runtime,
+                    model=model,
                     max_workers=max_concurrency,
+                    token_counter=(
+                        token_counter_for_model(model)
+                        if token_counter_for_model is not None
+                        else context.runtime.token_counter
+                    ),
                     jobs=context.jobs.limit(max_concurrency),
                 ),
             )

@@ -123,7 +123,7 @@ def test_simple_review_checkpoint_key_tracks_effective_input():
         def get_chat_model(self, **_kwargs):
             return Mock()
 
-        def count_tokens(self, text: str) -> int:
+        def count_tokens(self, text: str, model: str | None = None) -> int:
             return len(text) if self.exact_tokens else max(1, len(text) // 4)
 
     provider = Provider()
