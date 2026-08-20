@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from threading import Lock
 
 import pathspec
 from llama_index.core.node_parser import SentenceSplitter
@@ -29,6 +30,7 @@ class EngineRepository:
         self._state = state
         self._metisignore_loaded = False
         self._metisignore_spec: pathspec.GitIgnoreSpec | None = None
+        self._metisignore_lock = Lock()
 
     def get_plugin_for_extension(self, extension):
         registry = self._config.language_registry
@@ -134,20 +136,23 @@ class EngineRepository:
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
         if self._metisignore_loaded:
             return self._metisignore_spec
-        self._metisignore_loaded = True
-
-        metisignore_path = self.resolve_metisignore_path()
-        try:
-            if not metisignore_path:
-                logger.debug("No MetisIgnore file provided")
-                return None
-            with open(metisignore_path, "r") as f:
-                self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(f)
-                logger.info(f"MetisIgnore file loaded: {metisignore_path}")
+        with self._metisignore_lock:
+            if self._metisignore_loaded:
+                return self._metisignore_spec
+            metisignore_path = self.resolve_metisignore_path()
+            try:
+                if not metisignore_path:
+                    logger.debug("No MetisIgnore file provided")
+                else:
+                    with open(metisignore_path, "r") as metisignore_file:
+                        self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(
+                            metisignore_file
+                        )
+                    logger.info(f"MetisIgnore file loaded: {metisignore_path}")
+            except FileNotFoundError:
+                logger.debug(f"MetisIgnore file not loaded {metisignore_path}")
+            self._metisignore_loaded = True
             return self._metisignore_spec
-        except FileNotFoundError:
-            logger.debug(f"MetisIgnore file not loaded {metisignore_path}")
-            return None
 
     def get_code_files(
         self, *, include_suffixed_sources: bool = False, dir_path: str | None = None

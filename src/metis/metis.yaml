@@ -2,6 +2,7 @@ metis_engine:
   max_token_length: 250000
   max_workers: 5
   triage_checkpoint_every: 50
+  review_checkpoints: true
   llm_max_retries: 5
   embed_dim: 3072
   model_tools:

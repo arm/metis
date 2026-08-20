@@ -9,11 +9,14 @@ from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
+from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
 
 from .service import SimpleLlmReviewService
+
+NODE_NAME = "simple_llm_review"
 
 if TYPE_CHECKING:
     from metis.engine.capabilities.index import IndexCapability
@@ -22,6 +25,12 @@ if TYPE_CHECKING:
 
 def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
+        callbacks = invocation.context.callbacks
+        checkpoint_session = (
+            ReviewCheckpointSession(NODE_NAME, callbacks)
+            if callbacks.checkpoint is not None or callbacks.resume is not None
+            else None
+        )
         memory = cast(
             "MemoryService | None", invocation.context.capabilities.get("memory")
         )
@@ -35,11 +44,12 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
             memory_service=memory,
             index=index,
             progress_callback=invocation.context.callbacks.progress,
+            checkpoint_session=checkpoint_session,
         )
         return review_node_result(review)
 
     return NodeRegistration(
-        name="simple_llm_review",
+        name=NODE_NAME,
         stage="review",
         configuration=EmptyNodeConfiguration,
         inputs={"request": ReviewCommand},

@@ -131,18 +131,23 @@ def _setup_cli(monkeypatch, tmp_path):
     return captured
 
 
-def test_noninteractive_verbose_command_prints_usage_and_persists_run(
-    monkeypatch, tmp_path
-):
+def test_interactive_command_prints_usage_and_persists_run(monkeypatch, tmp_path):
     captured = _setup_cli(monkeypatch, tmp_path)
+    prompts = iter(["ask explain"])
+
+    def prompt(*_args, **_kwargs):
+        try:
+            return next(prompts)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    monkeypatch.setattr(entry, "prompt", prompt)
     monkeypatch.setattr(
         "sys.argv",
         [
             "metis",
-            "--non-interactive",
+            "--interactive",
             "--verbose",
-            "--command",
-            "ask explain",
             "--codebase-path",
             str(tmp_path),
         ],
@@ -151,7 +156,7 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
     entry.main()
 
     assert any("Token usage (ask)" in line for line in captured)
-    assert not any("Session token usage" in line for line in captured)
+    assert any("Session token usage" in line for line in captured)
     assert any("Usage saved to" in line for line in captured)
     usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
     assert usage_files
@@ -160,45 +165,22 @@ def test_noninteractive_verbose_command_prints_usage_and_persists_run(
     assert payload["commands"][0]["command_name"] == "ask"
 
 
-def test_noninteractive_default_quiet_prints_answer_but_not_usage(
-    monkeypatch, tmp_path
-):
+def test_interactive_help_does_not_persist_usage(monkeypatch, tmp_path):
     captured = _setup_cli(monkeypatch, tmp_path)
+    prompts = iter(["help"])
+
+    def prompt(*_args, **_kwargs):
+        try:
+            return next(prompts)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    monkeypatch.setattr(entry, "prompt", prompt)
     monkeypatch.setattr(
         "sys.argv",
         [
             "metis",
-            "--non-interactive",
-            "--command",
-            "ask explain",
-            "--codebase-path",
-            str(tmp_path),
-        ],
-    )
-
-    entry.main()
-
-    assert not any("Token usage (ask)" in line for line in captured)
-    assert not any("Session token usage" in line for line in captured)
-    assert any("Metis Answer:" in line for line in captured)
-    assert any("Code Context:" in line for line in captured)
-    assert any("Documentation Context:" in line for line in captured)
-    usage_files = sorted((tmp_path / "results").glob("metis_usage_*.json"))
-    assert usage_files
-    payload = json.loads(usage_files[-1].read_text(encoding="utf-8"))
-    assert payload["totals"]["total_tokens"] == 14
-    assert payload["commands"][0]["command_name"] == "ask"
-
-
-def test_noninteractive_help_does_not_persist_usage(monkeypatch, tmp_path):
-    captured = _setup_cli(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "metis",
-            "--non-interactive",
-            "--command",
-            "help",
+            "--interactive",
             "--codebase-path",
             str(tmp_path),
         ],
@@ -229,7 +211,7 @@ def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
     monkeypatch.setattr(entry, "prompt", _fake_prompt)
     monkeypatch.setattr(
         "sys.argv",
-        ["metis", "--codebase-path", str(tmp_path)],
+        ["metis", "--interactive", "--codebase-path", str(tmp_path)],
     )
 
     entry.main()
@@ -241,15 +223,22 @@ def test_interactive_eof_finalizes_usage(monkeypatch, tmp_path):
 
 def test_review_code_with_triage_prints_operation_breakdown(monkeypatch, tmp_path):
     captured = _setup_cli(monkeypatch, tmp_path)
+    prompts = iter(["review_code"])
+
+    def prompt(*_args, **_kwargs):
+        try:
+            return next(prompts)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    monkeypatch.setattr(entry, "prompt", prompt)
     monkeypatch.setattr(
         "sys.argv",
         [
             "metis",
-            "--non-interactive",
+            "--interactive",
             "--verbose",
             "--triage",
-            "--command",
-            "review_code",
             "--codebase-path",
             str(tmp_path),
         ],
@@ -261,4 +250,4 @@ def test_review_code_with_triage_prints_operation_breakdown(monkeypatch, tmp_pat
     assert any("Breakdown by operation" in line for line in captured)
     assert any("review_code (input: 12" in line for line in captured)
     assert any("triage (input: 5" in line for line in captured)
-    assert not any("Session token usage" in line for line in captured)
+    assert any("Session token usage" in line for line in captured)

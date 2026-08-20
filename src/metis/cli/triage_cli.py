@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import Counter
+
 from rich.markup import escape
+from rich.progress import Progress
+from rich.progress import TaskID
 
 from .utils import build_standard_progress, with_spinner, print_console
 
@@ -16,7 +20,7 @@ def run_triage_action(args, *, action, spinner_text):
                 progress_callback=progress_callback,
             )
 
-        return _run_with_triage_progress(args, _runner)
+        return _run_with_triage_progress(_runner)
 
     return with_spinner(
         spinner_text,
@@ -26,82 +30,81 @@ def run_triage_action(args, *, action, spinner_text):
     )
 
 
-def _run_with_triage_progress(args, runner):
-    with build_standard_progress(transient=True) as progress:
+def _run_with_triage_progress(runner):
+    with build_standard_progress(transient=False) as progress:
         task = progress.add_task("[cyan]Triaging findings...[/cyan]", total=1)
-        callback = _make_triage_progress_callback(args, progress, task)
+        callback = TriageProgressReporter(progress, task)
         result = runner(callback)
-        final_total = callback.state["total"]
-        final_completed = callback.state["completed"]
-        if final_total and final_total > 0:
-            progress.update(task, completed=min(final_completed, final_total))
-        else:
-            progress.update(task, completed=1)
+        callback.finish()
     return result
 
 
-def _make_triage_progress_callback(args, progress, task):
-    class _ProgressCb:
-        def __init__(self):
-            self.state = {"completed": 0, "total": None}
+class TriageProgressReporter:
+    def __init__(self, progress: Progress, task: TaskID) -> None:
+        self._progress = progress
+        self._task = task
+        self._completed = 0
+        self._total: int | None = None
+        self._statuses: Counter[str] = Counter()
 
-        def __call__(self, event):
-            finding = event.get("finding")
-            total = event.get("total", 0)
-            if isinstance(total, int) and total > 0 and self.state["total"] != total:
-                self.state["total"] = total
-                progress.update(task, total=total)
+    def __call__(self, event) -> None:
+        total = event.get("total", 0)
+        if isinstance(total, int) and total > 0 and self._total != total:
+            self._total = total
 
-            file_part = ""
-            line_part = ""
-            if finding is not None:
-                file_path = getattr(finding, "file_path", "") or "<unknown>"
-                line_no = getattr(finding, "line", 1)
-                file_part = file_path
-                line_part = (
-                    f":{line_no}" if isinstance(line_no, int) and line_no > 0 else ""
-                )
+        kind = event.get("event")
+        if kind == "progress":
+            completed = event.get("completed")
+            if isinstance(completed, int) and completed >= 0:
+                self._completed = max(self._completed, completed)
+            self._progress.update(
+                self._task,
+                total=self._total,
+                completed=self._completed,
+                description=self._progress_description(),
+            )
+            return
+        if kind == "done":
+            decision = event.get("decision") or {}
+            normalized = str(decision.get("status", "unknown")).lower()
+            self._statuses[normalized] += 1
+            self._progress.update(
+                self._task,
+                completed=self._completed,
+                description=self._progress_description(),
+            )
+        elif kind == "error":
+            self._statuses["error"] += 1
+            self._progress.update(
+                self._task,
+                completed=self._completed,
+                description=self._progress_description(),
+            )
 
-            kind = event.get("event")
-            if kind == "start":
-                progress.update(
-                    task,
-                    description=f"[cyan]Triaging {escape(file_part)}{line_part}[/cyan]",
-                )
-                return
+    def _progress_description(self) -> str:
+        return f"[cyan]Triaging findings {self._completed}/{self._total or '?'}[/cyan]"
 
-            if kind in {"done", "error"}:
-                self.state["completed"] += 1
-
-            if kind == "done":
-                decision = event.get("decision") or {}
-                status = str(decision.get("status", "unknown"))
-                normalized = status.lower()
-                if normalized == "invalid":
-                    status_color = "red"
-                elif normalized == "inconclusive":
-                    status_color = "yellow"
-                else:
-                    status_color = "green"
-                progress.console.print(
-                    f"[{status_color}]{escape(status)}[/{status_color}] {escape(file_part)}{line_part}"
-                )
-                progress.update(
-                    task,
-                    completed=self.state["completed"],
-                    description=(
-                        f"[cyan]Triaging {escape(file_part)}{line_part} -> "
-                        f"[{status_color}]{escape(status)}[/{status_color}][/cyan]"
-                    ),
-                )
-            elif kind == "error":
-                progress.update(
-                    task,
-                    completed=self.state["completed"],
-                    description=f"[yellow]Triage failed {escape(file_part)}{line_part}[/yellow]",
-                )
-
-    return _ProgressCb()
+    def finish(self) -> None:
+        if self._total is not None:
+            completed = min(self._completed, self._total)
+        else:
+            completed = 1
+        styles = (
+            ("valid", "Valid", "green"),
+            ("invalid", "Invalid", "red"),
+            ("inconclusive", "Inconclusive", "yellow"),
+            ("error", "Error", "red"),
+        )
+        summary = " ".join(
+            f"[{color}]{label}: {self._statuses[status]}[/{color}]"
+            for status, label, color in styles
+            if self._statuses[status]
+        )
+        self._progress.update(
+            self._task,
+            completed=completed,
+            description=summary or "[green]No findings[/green]",
+        )
 
 
 def _make_triage_debug_callback(args):

@@ -63,6 +63,7 @@ class AzureOpenAIProvider(ChatProvider):
     )
 
     def __init__(self, config: AzureOpenAIChatConfig) -> None:
+        self.config = dict(config)
         self.api_key = config["api_key"]
         self.azure_endpoint = config["azure_endpoint"]
         self.api_version = config["azure_api_version"]
@@ -104,7 +105,7 @@ class AzureOpenAIProvider(ChatProvider):
             params["use_responses_api"] = bool(self.use_responses_api)
         max_tokens = kwargs.get("max_tokens")
         if max_tokens is not None:
-            params["max_tokens"] = int(max_tokens)
+            params["max_tokens"] = int(cast(Any, max_tokens))
         if callbacks is not None:
             params["callbacks"] = callbacks
         if "response_format" in kwargs:
@@ -115,7 +116,7 @@ class AzureOpenAIProvider(ChatProvider):
         if self.supports_temperature:
             temperature = kwargs.get("temperature")
             if temperature is not None:
-                params["temperature"] = float(temperature)
+                params["temperature"] = float(cast(Any, temperature))
         for optional_key in (
             "timeout",
             "max_retries",

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -472,6 +473,171 @@ def test_scheduler_limit_one_bounds_submissions_and_runs_off_coordinator() -> No
     assert second_was_blocked
     assert second_started.is_set()
     assert all(worker != coordinator[0] for worker in workers)
+
+
+def test_scheduler_gives_a_new_run_the_next_available_worker() -> None:
+    scheduler = JobScheduler(2)
+    first_started = threading.Event()
+    second_started = threading.Event()
+    third_started = threading.Event()
+    other_started = threading.Event()
+    release_first = threading.Event()
+    release_second = threading.Event()
+    release_other = threading.Event()
+
+    def first_work(value: int) -> int:
+        if value == 1:
+            first_started.set()
+            release_first.wait(timeout=2)
+        elif value == 2:
+            second_started.set()
+            release_second.wait(timeout=2)
+        else:
+            third_started.set()
+        return value
+
+    def other_work(value: int) -> int:
+        other_started.set()
+        release_other.wait(timeout=2)
+        return value
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            first = callers.submit(
+                scheduler.limit(2).run,
+                [1, 2, 3],
+                first_work,
+                label=None,
+                result_key=str,
+            )
+            assert first_started.wait(timeout=1)
+            assert second_started.wait(timeout=1)
+            other = callers.submit(
+                scheduler.limit(2).run,
+                [4],
+                other_work,
+                label=None,
+                result_key=str,
+            )
+            assert not other_started.wait(timeout=0.05)
+            release_first.set()
+            assert other_started.wait(timeout=1)
+            assert not third_started.is_set()
+            release_second.set()
+            release_other.set()
+            assert sorted(first.result()) == [1, 2, 3]
+            assert other.result() == [4]
+    finally:
+        release_first.set()
+        release_second.set()
+        release_other.set()
+        scheduler.close()
+
+
+def test_scheduler_does_not_replenish_before_a_failure_is_collected() -> None:
+    scheduler = JobScheduler(2)
+    allow_failure = threading.Event()
+    failure_started = threading.Event()
+    failure_finished = threading.Event()
+    collecting = threading.Event()
+    release_collector = threading.Event()
+    extra_started = threading.Event()
+
+    def work(value: int) -> int:
+        if value == 0:
+            failure_started.wait(timeout=2)
+            return value
+        if value == 1:
+            failure_started.set()
+            allow_failure.wait(timeout=2)
+            failure_finished.set()
+            raise RuntimeError("terminal")
+        extra_started.set()
+        return value
+
+    def on_complete(_value: int, _completed: int, _total: int) -> None:
+        collecting.set()
+        release_collector.wait(timeout=2)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            failed = callers.submit(
+                scheduler.limit(2).run,
+                [0, 1, 2, 3],
+                work,
+                label=None,
+                result_key=str,
+                on_complete=on_complete,
+            )
+            assert collecting.wait(timeout=1)
+            allow_failure.set()
+            assert failure_finished.wait(timeout=1)
+            other = callers.submit(
+                scheduler.limit(2).run,
+                [4],
+                lambda value: value,
+                label=None,
+                result_key=str,
+            )
+            assert other.result() == [4]
+            assert not extra_started.is_set()
+            release_collector.set()
+            with pytest.raises(RuntimeError, match="terminal"):
+                failed.result()
+    finally:
+        allow_failure.set()
+        release_collector.set()
+        scheduler.close()
+
+
+def test_scheduler_cancellation_does_not_spin_or_start_queued_jobs() -> None:
+    scheduler = JobScheduler(2)
+    cancellation = threading.Event()
+    jobs = scheduler.limit(2).with_cancellation(cancellation)
+    release = threading.Event()
+    two_started = threading.Event()
+    state_lock = threading.Lock()
+    started = 0
+    wait_calls = 0
+    wait_for = scheduler._condition.wait_for
+
+    def tracked_wait_for(predicate, timeout=None):
+        nonlocal wait_calls
+        wait_calls += 1
+        return wait_for(predicate, timeout)
+
+    scheduler._condition.wait_for = tracked_wait_for
+
+    def work(value: int) -> int:
+        nonlocal started
+        with state_lock:
+            started += 1
+            if started == 2:
+                two_started.set()
+        release.wait(timeout=2)
+        return value
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            result = caller.submit(
+                jobs.run,
+                list(range(20)),
+                work,
+                label=None,
+                result_key=str,
+            )
+            assert two_started.wait(timeout=1)
+            jobs.cancel()
+            time.sleep(0.05)
+            assert wait_calls < 10
+            release.set()
+            with pytest.raises(CancelledError):
+                result.result()
+    finally:
+        release.set()
+        scheduler.close()
+
+    assert started == 2
 
 
 def test_prompt_retry_records_logical_attempts(tmp_path):

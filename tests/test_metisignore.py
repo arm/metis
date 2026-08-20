@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import metis.engine.capabilities.indexing as indexing_service_mod
@@ -62,6 +63,50 @@ def test_direct_code_file_selection_respects_metisignore(
 
     assert engine.repository.is_code_file_selected("keep.py") is True
     assert engine.repository.is_code_file_selected("drop.py") is False
+
+
+def test_concurrent_metisignore_load_waits_for_initialized_spec(
+    tmp_path,
+    dummy_backend,
+    dummy_llm,
+    capability_settings,
+    monkeypatch,
+):
+    metisignore = tmp_path / ".metisignore"
+    metisignore.write_text("drop.py\n", encoding="utf-8")
+    engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
+    real_open = open
+    opened = threading.Event()
+    release = threading.Event()
+    second_finished = threading.Event()
+    results = []
+
+    def slow_open(path, *args, **kwargs):
+        if Path(path) == metisignore:
+            opened.set()
+            release.wait(timeout=2)
+        return real_open(path, *args, **kwargs)
+
+    def load_first() -> None:
+        results.append(engine.repository.load_metisignore())
+
+    def load_second() -> None:
+        results.append(engine.repository.load_metisignore())
+        second_finished.set()
+
+    monkeypatch.setattr("builtins.open", slow_open)
+    first = threading.Thread(target=load_first)
+    second = threading.Thread(target=load_second)
+    first.start()
+    assert opened.wait(timeout=1)
+    second.start()
+    assert not second_finished.wait(timeout=0.05)
+    release.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert len(results) == 2
+    assert all(spec is not None for spec in results)
 
 
 def test_count_index_items_respects_metisignore_allowlist(

@@ -7,18 +7,26 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
+import pytest
+
+from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.engine import MetisEngine
 from metis.engine.codegraph import CodeGraph
+from metis.engine.execution.contracts import NodeCallbacks
 from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import ModelProviderConfigurationError
 from metis.engine.nodes.reachability.domain import FrontierReviewFailure
 from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.engine.nodes.simple_llm_review.service import TraditionalReviewOutcome
+from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.models import ReviewCommand
+from metis.engine.stages.review.models import ReviewCheckpointRecord
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
+from metis.version import __version__ as METIS_VERSION
 
 
 def _simple_llm_review(engine: MetisEngine) -> SimpleLlmReviewService:
@@ -70,6 +78,170 @@ def test_simple_llm_review_processes_the_selected_scope(engine):
     assert service.execute_standard_review_with_outcome.call_args.args == (files,)
 
 
+def test_simple_review_stops_scheduling_after_provider_configuration_failure(
+    engine,
+):
+    service = _simple_llm_review(engine)
+    files = tuple(f"file-{index}.c" for index in range(20))
+    calls: list[str] = []
+
+    def fail(path: str) -> None:
+        calls.append(path)
+        raise ModelProviderConfigurationError("bad certificate")
+
+    with pytest.raises(ModelProviderConfigurationError, match="bad certificate"):
+        service._review_files(files, fail, engine.execution._jobs)
+
+    assert 0 < len(calls) <= engine._config.max_workers
+
+
+def test_simple_review_orders_results_by_selected_file(engine):
+    files = tuple(
+        str(Path(engine.codebase_path) / name) for name in ("first.c", "second.c")
+    )
+    for path in files:
+        Path(path).write_text("int value;\n", encoding="utf-8")
+    graph = Mock()
+    graph.review.side_effect = lambda request: {
+        "reviews": [{"issue": request["relative_file"]}]
+    }
+    service = SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda _index: graph,
+    )
+
+    class ReverseJobs:
+        def run(self, jobs, worker, **_kwargs):
+            return [worker(job) for job in reversed(jobs)]
+
+    review = service.run_files(files, jobs=ReverseJobs())
+
+    assert review.result is not None
+    assert [group.model_dump()["file"] for group in review.result.reviews] == [
+        "first.c",
+        "second.c",
+    ]
+
+
+def test_simple_llm_review_resumes_completed_files(engine, tmp_path):
+    target = Path(engine.codebase_path) / "supported.c"
+    target.write_text("int original(void) { return 0; }\n", encoding="utf-8")
+    graph = Mock()
+    graph.checkpoint_key.side_effect = lambda request: request["snippet"]
+    graph.review.return_value = {
+        "file": "supported.c",
+        "file_path": str(target),
+        "reviews": [{"issue": "cached finding"}],
+    }
+    service = SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda _index: graph,
+    )
+    callbacks = review_checkpoint_callbacks(
+        codebase_path=tmp_path,
+        enabled=True,
+    )
+    node_callbacks = NodeCallbacks(
+        checkpoint=callbacks["review_checkpoint_callback"],
+        resume=callbacks["review_resume_callback"],
+    )
+    callbacks["review_checkpoint_callback"](
+        ReviewCheckpointRecord(
+            metis_version=METIS_VERSION,
+            producer="simple_llm_review",
+            key=f"file:{target.read_text(encoding='utf-8')}",
+            record={"reviews": "invalid"},
+        ).model_dump(mode="json"),
+        1,
+        1,
+    )
+
+    first_session = ReviewCheckpointSession(
+        "simple_llm_review",
+        node_callbacks,
+    )
+    first = service.run_files(
+        (str(target),),
+        jobs=engine.execution._jobs,
+        checkpoint_session=first_session,
+    )
+    progress_events = []
+    second = service.run_files(
+        (str(target),),
+        jobs=engine.execution._jobs,
+        progress_callback=progress_events.append,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review",
+            node_callbacks,
+        ),
+    )
+
+    assert first.result == second.result
+    graph.review.assert_called_once()
+    assert progress_events[-1] == {
+        "event": "review_result",
+        "completed": 1,
+        "total": 1,
+        "resumed": 1,
+    }
+
+    fresh_target = Path(engine.codebase_path) / "fresh.c"
+    fresh_target.write_text("int fresh(void) { return 1; }\n", encoding="utf-8")
+    progress_events.clear()
+    service.run_files(
+        (str(target), str(fresh_target)),
+        jobs=engine.execution._jobs,
+        progress_callback=progress_events.append,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review",
+            node_callbacks,
+        ),
+    )
+
+    assert progress_events[0] == {
+        "event": "review_result",
+        "completed": 1,
+        "total": 2,
+        "resumed": 1,
+    }
+    assert progress_events[-1] == {
+        "event": "review_result",
+        "completed": 2,
+        "total": 2,
+        "resumed": 1,
+    }
+    assert graph.review.call_count == 2
+    assert graph.review.call_args.args[0]["file_path"] == str(fresh_target)
+
+    target.write_text("int changed(void) { return 1; }\n", encoding="utf-8")
+    service.run_files(
+        (str(target),),
+        jobs=engine.execution._jobs,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review",
+            node_callbacks,
+        ),
+    )
+
+    assert graph.review.call_count == 3
+
+
+def test_review_checkpoint_callback_failures_are_best_effort():
+    session = ReviewCheckpointSession(
+        "simple_llm_review",
+        NodeCallbacks(
+            checkpoint=Mock(side_effect=RuntimeError("write failed")),
+            resume=Mock(side_effect=RuntimeError("read failed")),
+        ),
+    )
+
+    session.put("file:key", {"reviews": []})
+
+    assert session.get("file:key") == {"reviews": []}
+
+
 def test_patch_review_uses_simple_llm_review(engine):
     service = _simple_llm_review(engine)
     service.review_patch = Mock(
@@ -91,10 +263,76 @@ def test_patch_review_uses_simple_llm_review(engine):
         "change.patch",
         memory_service=None,
         review_graph=engine._get_review_graph(),
+        checkpoint_session=None,
     )
 
 
+def test_patch_review_resumes_completed_files(engine, tmp_path, monkeypatch):
+    target = Path(engine.codebase_path) / "target.c"
+    target.write_text("int value = 1;\n", encoding="utf-8")
+    patch = tmp_path / "change.patch"
+    patch.write_text(
+        "--- a/target.c\n"
+        "+++ b/target.c\n"
+        "@@ -1 +1 @@\n"
+        "-int value = 0;\n"
+        "+int value = 1;\n",
+        encoding="utf-8",
+    )
+    graph = Mock()
+    graph.checkpoint_key.side_effect = lambda request: request["snippet"]
+    graph.review.return_value = {
+        "file": "target.c",
+        "file_path": str(target),
+        "reviews": [{"issue": "patch finding"}],
+    }
+    summarize = Mock(return_value="patch summary")
+    monkeypatch.setattr(
+        "metis.engine.nodes.simple_llm_review.service.summarize_changes",
+        summarize,
+    )
+    service = SimpleLlmReviewService(
+        engine._config,
+        engine.repository,
+        lambda _index: graph,
+    )
+    callbacks = review_checkpoint_callbacks(
+        codebase_path=tmp_path,
+        enabled=True,
+    )
+    node_callbacks = NodeCallbacks(
+        checkpoint=callbacks["review_checkpoint_callback"],
+        resume=callbacks["review_resume_callback"],
+    )
+
+    first = service.review_patch(
+        str(patch),
+        review_graph=graph,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review",
+            node_callbacks,
+        ),
+    )
+    second = service.review_patch(
+        str(patch),
+        review_graph=graph,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review",
+            node_callbacks,
+        ),
+    )
+
+    assert first == second
+    graph.review.assert_called_once()
+    summarize.assert_called_once()
+
+    graph.review.side_effect = ModelProviderConfigurationError("bad certificate")
+    with pytest.raises(ModelProviderConfigurationError, match="bad certificate"):
+        service.review_patch(str(patch), review_graph=graph)
+
+
 def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
+    progress_events: list[dict[str, object]] = []
     fallback = Mock(spec=SimpleLlmReviewService)
     fallback.run_files.return_value = ReviewRun(
         ReviewStatus.SUCCEEDED,
@@ -128,6 +366,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
             ReviewCommand(mode="code"),
             jobs=engine.execution._jobs,
             codegraph=CodeGraph(),
+            progress_callback=progress_events.append,
         )
 
     assert run.status is ReviewStatus.SUCCEEDED
@@ -137,12 +376,33 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     ] == ["reachable", "fallback"]
     assert run.diagnostics == ()
     assert service.codebase_reviews.call_args.kwargs["files"] == (c_file,)
+    assert progress_events[:3] == [
+        {
+            "event": "reachability_phase_progress",
+            "phase": "scope",
+            "completed": 0,
+            "total": 2,
+        },
+        {
+            "event": "reachability_phase_progress",
+            "phase": "scope",
+            "completed": 1,
+            "total": 2,
+        },
+        {
+            "event": "reachability_phase_progress",
+            "phase": "scope",
+            "completed": 2,
+            "total": 2,
+        },
+    ]
     fallback.run_files.assert_called_once_with(
         (python_file,),
         jobs=engine.execution._jobs,
         memory_service=None,
         index=None,
-        progress_callback=None,
+        progress_callback=progress_events.append,
+        checkpoint_session=None,
     )
     assert "using simple LLM review fallback" in caplog.text
 

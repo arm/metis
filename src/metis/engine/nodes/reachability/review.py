@@ -18,6 +18,7 @@ from metis.engine.execution.contracts import NodeResult
 from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
+from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.execution import combine_review_runs
 from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
@@ -28,6 +29,7 @@ from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.scope import select_review_targets
 from metis.utils import resolve_path_within_root
 
+from .progress import emit_phase_progress
 from .review_output import group_findings_as_reviews
 from .review_output import reviews_for_findings
 
@@ -39,10 +41,17 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+NODE_NAME = "reachability"
 
 
 def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
+        callbacks = invocation.context.callbacks
+        checkpoint_session = (
+            ReviewCheckpointSession(NODE_NAME, callbacks)
+            if callbacks.checkpoint is not None or callbacks.resume is not None
+            else None
+        )
         reference = cast(CodeGraphReference, invocation.inputs["codegraph"])
         review = review_service.run_review(
             cast(ReviewCommand, invocation.inputs["request"]),
@@ -58,12 +67,13 @@ def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
                 "IndexCapability | None",
                 invocation.context.capabilities.get("index"),
             ),
-            progress_callback=invocation.context.callbacks.progress,
+            progress_callback=invocation.context.report_progress,
+            checkpoint_session=checkpoint_session,
         )
         return review_node_result(review)
 
     return NodeRegistration(
-        name="reachability",
+        name=NODE_NAME,
         stage="review",
         configuration=EmptyNodeConfiguration,
         inputs={
@@ -105,6 +115,7 @@ class ReachabilityReviewService:
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
         progress_callback=None,
+        checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
             return ReviewRun(
@@ -123,22 +134,29 @@ class ReachabilityReviewService:
             self._repository.normalize_match_path(path)
             for path in codegraph_failed_files
         }
-        in_codebase: list[str] = []
+        selected_match_paths = {
+            self._repository.normalize_match_path(path) for path in files
+        }
+        supported_files: list[str] = []
+        fallback_files: list[str] = []
         outside_codebase: list[str] = []
-        for path in files:
+        emit_phase_progress(progress_callback, "scope", 0, len(files))
+        for completed, path in enumerate(files, start=1):
             try:
                 resolved = resolve_path_within_root(self._config.codebase_path, path)
             except (OSError, ValueError):
                 outside_codebase.append(path)
-                continue
-            in_codebase.append(str(resolved))
-        supported = tuple(
-            path
-            for path in in_codebase
-            if self._repository.normalize_match_path(path) not in unavailable
-            and self.supports_file(path)
-        )
-        fallback = tuple(path for path in in_codebase if path not in supported)
+            else:
+                resolved_path = str(resolved)
+                if self._repository.normalize_match_path(
+                    resolved_path
+                ) not in unavailable and self.supports_file(resolved_path):
+                    supported_files.append(resolved_path)
+                else:
+                    fallback_files.append(resolved_path)
+            emit_phase_progress(progress_callback, "scope", completed, len(files))
+        supported = tuple(supported_files)
+        fallback = tuple(fallback_files)
         diagnostics = [
             ReviewDiagnostic(
                 "review.codegraph_provider_warning",
@@ -147,7 +165,7 @@ class ReachabilityReviewService:
             )
             for item in codegraph_diagnostics
             if self._repository.normalize_match_path(item.file_path)
-            in {self._repository.normalize_match_path(path) for path in files}
+            in selected_match_paths
         ]
         if outside_codebase:
             diagnostics.append(
@@ -175,6 +193,7 @@ class ReachabilityReviewService:
                     memory_service=memory_service,
                     progress_callback=progress_callback,
                     diagnostics=diagnostics,
+                    checkpoint_session=checkpoint_session,
                 )
             )
         elif diagnostics:
@@ -193,6 +212,7 @@ class ReachabilityReviewService:
                     memory_service=memory_service,
                     index=index,
                     progress_callback=progress_callback,
+                    checkpoint_session=checkpoint_session,
                 )
             )
         if not reviews:
@@ -212,6 +232,7 @@ class ReachabilityReviewService:
         memory_service: MemoryService | None,
         progress_callback,
         diagnostics: list[ReviewDiagnostic],
+        checkpoint_session: ReviewCheckpointSession | None,
     ) -> ReviewRun:
         provider_diagnostics: list[CodeGraphDiagnostic] = []
         try:
@@ -224,6 +245,7 @@ class ReachabilityReviewService:
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
                     memory_service=memory_service,
+                    checkpoint_session=checkpoint_session,
                 )
                 raw = {"reviews": [] if reviewed is None else [reviewed]}
             else:
@@ -235,6 +257,7 @@ class ReachabilityReviewService:
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
                     memory_service=memory_service,
+                    checkpoint_session=checkpoint_session,
                 )
                 raw = {"reviews": codebase_groups}
             result = StandardReviewResult.model_validate(raw)
@@ -287,10 +310,13 @@ class ReachabilityReviewService:
         *,
         settings=None,
         progress_callback=None,
+        checkpoint_session: ReviewCheckpointSession | None = None,
     ):
         settings = dict(settings or {})
         if progress_callback is not None:
             settings["progress_callback"] = progress_callback
+        if checkpoint_session is not None:
+            settings["checkpoint_session"] = checkpoint_session
         return ReachabilityReviewOptions(**settings)
 
     def codebase_reviews(
@@ -303,10 +329,12 @@ class ReachabilityReviewService:
         diagnostic_callback=None,
         codegraph=None,
         memory_service: MemoryService | None = None,
+        checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[list[dict[str, object]], ReachabilityAnalysis]:
         options = self.review_options(
             settings=settings,
             progress_callback=progress_callback,
+            checkpoint_session=checkpoint_session,
         )
         analysis = self._service.analyze_codebase(
             jobs=jobs,
@@ -334,10 +362,12 @@ class ReachabilityReviewService:
         diagnostic_callback=None,
         codegraph=None,
         memory_service: MemoryService | None = None,
+        checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[dict[str, object] | None, ReachabilityAnalysis | None]:
         options = self.review_options(
             settings=settings,
             progress_callback=progress_callback,
+            checkpoint_session=checkpoint_session,
         )
         analysis = self._service.analyze_file(
             file_path,

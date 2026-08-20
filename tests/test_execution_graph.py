@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+import time
 from dataclasses import replace
 from typing import Any
 from typing import Literal
@@ -14,6 +16,7 @@ from pydantic import ValidationError
 from metis.configuration import load_execution_config
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphReference
+from metis.engine.concurrency import JobScheduler
 from metis.engine.execution import ExecutionStatus
 from metis.engine.execution.catalog import NodeCatalog
 from metis.engine.execution.compiler import StagePlan
@@ -56,6 +59,12 @@ class _Jobs:
     def limit(self, max_concurrency: int):
         self.limits.append(max_concurrency)
         return self
+
+    def with_cancellation(self, _cancellation):
+        return self
+
+    def cancel(self):
+        return None
 
     def run(self, jobs, worker, **_kwargs):
         return [worker(job) for job in jobs]
@@ -335,6 +344,208 @@ def test_node_max_concurrency_caps_runtime_limit(
     assert context.jobs.limits == [expected]
 
 
+def test_ready_nodes_run_as_dependencies_complete() -> None:
+    simple_started = threading.Event()
+    reachability_started = threading.Event()
+    events: list[dict[str, object]] = []
+
+    def run_simple(_invocation: NodeInvocation) -> NodeResult:
+        simple_started.set()
+        assert reachability_started.wait(timeout=2)
+        return NodeResult({"value": "simple"})
+
+    def build_codegraph(_invocation: NodeInvocation) -> NodeResult:
+        assert simple_started.wait(timeout=2)
+        return NodeResult({"value": "codegraph"})
+
+    def run_reachability(invocation: NodeInvocation) -> NodeResult:
+        reachability_started.set()
+        assert invocation.context.callbacks.progress is not None
+        invocation.context.callbacks.progress({"event": "reachability_work"})
+        return NodeResult({"value": "reachability"})
+
+    registrations = tuple(
+        NodeRegistration(
+            name,
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            execute,
+        )
+        for name, execute in (
+            ("simple", run_simple),
+            ("codegraph", build_codegraph),
+            ("reachability", run_reachability),
+        )
+    )
+    stage = StageConfiguration.model_validate(
+        {
+            "nodes": {
+                "simple": {},
+                "codegraph": {},
+                "reachability": {"depends_on": ["codegraph"]},
+            }
+        }
+    )
+    context = replace(
+        _node_context(),
+        callbacks=NodeCallbacks(progress=events.append),
+        runtime=NodeRuntime(
+            "test",
+            2,
+            1000,
+            {},
+            1,
+            lambda _text: 1,
+            jobs=_Jobs(),
+        ),
+    )
+
+    result = run_stage(
+        "initialize",
+        _compile(registrations, stage),
+        context,
+        {},
+    )
+
+    assert result.status is ExecutionStatus.OK
+    assert tuple(result.outputs) == ("simple", "codegraph", "reachability")
+    assert (
+        next(event for event in events if event["event"] == "reachability_work")["node"]
+        == "reachability"
+    )
+
+
+def test_stage_interrupt_cancels_queued_node_jobs() -> None:
+    scheduler = JobScheduler(2)
+    two_started = threading.Event()
+    state_lock = threading.Lock()
+    started = 0
+
+    def work(value: int) -> int:
+        nonlocal started
+        with state_lock:
+            started += 1
+            if started == 2:
+                two_started.set()
+        threading.Event().wait(timeout=0.2)
+        return value
+
+    def run_jobs(invocation: NodeInvocation) -> NodeResult:
+        values = invocation.context.jobs.run(
+            list(range(20)),
+            work,
+            label=None,
+            result_key=str,
+        )
+        return NodeResult({"value": str(len(values))})
+
+    def interrupt(_invocation: NodeInvocation) -> NodeResult:
+        assert two_started.wait(timeout=1)
+        raise KeyboardInterrupt
+
+    registrations = (
+        NodeRegistration(
+            "jobs",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            run_jobs,
+        ),
+        NodeRegistration(
+            "interrupt",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            interrupt,
+        ),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"jobs": {}, "interrupt": {}}})
+    context = replace(
+        _node_context(),
+        runtime=replace(
+            _node_context().runtime,
+            max_workers=2,
+            jobs=scheduler.limit(2),
+        ),
+    )
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_stage(
+                "initialize",
+                _compile(registrations, stage),
+                context,
+                {},
+            )
+    finally:
+        scheduler.close()
+
+    assert started == 2
+
+
+def test_stage_interrupt_signals_running_node_progress() -> None:
+    scheduler = JobScheduler(1)
+    started = threading.Event()
+
+    def run_until_cancelled(invocation: NodeInvocation) -> NodeResult:
+        started.set()
+        for _iteration in range(2_000):
+            invocation.context.report_progress({"event": "work"})
+            threading.Event().wait(timeout=0.001)
+        return NodeResult({"value": "timed-out"})
+
+    def interrupt(_invocation: NodeInvocation) -> NodeResult:
+        assert started.wait(timeout=1)
+        raise KeyboardInterrupt
+
+    registrations = (
+        NodeRegistration(
+            "work",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            run_until_cancelled,
+        ),
+        NodeRegistration(
+            "interrupt",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            interrupt,
+        ),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"work": {}, "interrupt": {}}})
+    base_context = _node_context()
+    context = replace(
+        base_context,
+        runtime=replace(
+            base_context.runtime,
+            max_workers=2,
+            jobs=scheduler.limit(1),
+        ),
+    )
+
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_stage(
+                "initialize",
+                _compile(registrations, stage),
+                context,
+                {},
+            )
+    finally:
+        scheduler.close()
+
+    assert time.monotonic() - started_at < 1
+
+
 def _value_node(name: str, value: str) -> NodeRegistration:
     return NodeRegistration(
         name,
@@ -510,10 +721,9 @@ def test_codegraph_node_seeds_file_review_from_target():
     )
 
     assert result.outputs == {"codegraph": reference}
-    codegraphs.materialize.assert_called_once_with(
-        seed_file="src/target.c",
-        progress_callback=None,
-    )
+    codegraphs.materialize.assert_called_once()
+    assert codegraphs.materialize.call_args.kwargs["seed_file"] == "src/target.c"
+    assert callable(codegraphs.materialize.call_args.kwargs["progress_callback"])
 
 
 def test_inconclusive_review_still_feeds_triage(monkeypatch):
@@ -786,9 +996,14 @@ def test_node_receives_only_its_configured_capabilities() -> None:
 
 def test_node_failure_skips_dependants_but_runs_independent_nodes():
     events: list[dict[str, object]] = []
+    diagnostic_seen = threading.Event()
 
     def fail(_invocation):
         raise RuntimeError("failed")
+
+    def run_independent(_invocation: NodeInvocation) -> NodeResult:
+        assert diagnostic_seen.wait(timeout=2)
+        return NodeResult({"value": "ran"})
 
     registrations = (
         NodeRegistration(
@@ -800,7 +1015,14 @@ def test_node_failure_skips_dependants_but_runs_independent_nodes():
             fail,
         ),
         _value_node("dependant", "not-run"),
-        _value_node("independent", "ran"),
+        NodeRegistration(
+            "independent",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": str},
+            run_independent,
+        ),
     )
     stage = StageConfiguration.model_validate(
         {
@@ -813,9 +1035,14 @@ def test_node_failure_skips_dependants_but_runs_independent_nodes():
     )
     plan = _compile(registrations, stage)
 
+    context = _node_context()
     context = replace(
-        _node_context(),
-        callbacks=NodeCallbacks(progress=events.append),
+        context,
+        runtime=replace(context.runtime, max_workers=2),
+        callbacks=NodeCallbacks(
+            progress=events.append,
+            diagnostic=lambda _diagnostic: diagnostic_seen.set(),
+        ),
     )
     result = run_stage("initialize", plan, context, {})
 
@@ -827,24 +1054,24 @@ def test_node_failure_skips_dependants_but_runs_independent_nodes():
             "Execution node initialize.failure failed: failed",
         ),
     )
-    assert [event["event"] for event in events] == [
-        "execution_stage_start",
-        "execution_node_start",
-        "execution_node_end",
-        "execution_node_start",
-        "execution_node_end",
-        "execution_node_skipped",
-        "execution_stage_end",
-    ]
-    assert events[2]["status"] == "error"
-    assert events[4]["status"] == "ok"
-    assert events[5] == {
+    assert events[0]["event"] == "execution_stage_start"
+    assert events[-1]["event"] == "execution_stage_end"
+    node_statuses = {
+        str(event["node"]): event["status"]
+        for event in events
+        if event["event"] == "execution_node_end"
+    }
+    assert node_statuses == {"failure": "error", "independent": "ok"}
+    skipped = next(
+        event for event in events if event["event"] == "execution_node_skipped"
+    )
+    assert skipped == {
         "event": "execution_node_skipped",
         "stage": "initialize",
         "node": "dependant",
         "reason": "dependency_failed",
     }
-    assert events[6]["status"] == "error"
+    assert events[-1]["status"] == "error"
     assert all(
         event["duration_seconds"] >= 0
         for event in events

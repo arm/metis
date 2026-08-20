@@ -1172,6 +1172,7 @@ def test_codegraph_service_preserves_provider_resolution_without_cross_links(tmp
 
 
 def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
+    progress_events: list[dict[str, object]] = []
     graph = _graph(
         _fn("src/api.c::api", 1, source=True, calls=["target"]),
         _fn("src/target.c::target", 2, calls=["sink"]),
@@ -1193,7 +1194,7 @@ def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
         jobs=Mock(),
         files=["src/target.c"],
         codegraph=graph,
-        options=ReachabilityReviewOptions(),
+        options=ReachabilityReviewOptions(progress_callback=progress_events.append),
     )
 
     frontier_graph = frontier_reviewer.review.call_args.args[0]
@@ -1203,6 +1204,20 @@ def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
         "src/target.c::target",
         "src/sink.c::sink",
     }
+    assert progress_events[:2] == [
+        {
+            "event": "reachability_phase_progress",
+            "phase": "analysis",
+            "completed": 0,
+            "total": 1,
+        },
+        {
+            "event": "reachability_phase_progress",
+            "phase": "analysis",
+            "completed": 1,
+            "total": 1,
+        },
+    ]
 
 
 def test_file_review_scans_full_focus():

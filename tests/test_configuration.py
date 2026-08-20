@@ -91,6 +91,7 @@ def test_packaged_execution_graph_omits_index_initialization():
     assert review["nodes"]["result"]["formats"] == ["sarif"]
     assert triage["nodes"]["result"]["formats"] == ["sarif"]
     assert "triage" not in packaged["metis_engine"]
+    assert packaged["metis_engine"]["review_checkpoints"] is True
 
 
 def test_runtime_loads_codegraph_and_reachability_tuning_outside_execution(
@@ -141,6 +142,48 @@ def test_runtime_rejects_invalid_max_workers(tmp_path, monkeypatch, max_workers)
         ValueError,
         match="metis_engine.max_workers must be a positive integer",
     ):
+        load_runtime_config(config_path)
+
+
+@pytest.mark.parametrize("enabled", (True, False))
+def test_runtime_loads_review_checkpoint_setting(tmp_path, monkeypatch, enabled):
+    config_path = _write_config(
+        tmp_path,
+        yaml.safe_dump(
+            {
+                "metis_engine": {"review_checkpoints": enabled},
+                "llm_provider": {"name": "openai", "model": "test-model"},
+            }
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    runtime = load_runtime_config(config_path)
+
+    assert runtime["review_checkpoints_enabled"] is enabled
+
+
+@pytest.mark.parametrize(
+    "review_checkpoints",
+    ([], "false"),
+)
+def test_runtime_rejects_invalid_review_checkpoint_setting(
+    tmp_path,
+    monkeypatch,
+    review_checkpoints,
+):
+    config_path = _write_config(
+        tmp_path,
+        yaml.safe_dump(
+            {
+                "metis_engine": {"review_checkpoints": review_checkpoints},
+                "llm_provider": {"name": "openai", "model": "test-model"},
+            }
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
+
+    with pytest.raises(ValueError, match="metis_engine.review_checkpoints"):
         load_runtime_config(config_path)
 
 

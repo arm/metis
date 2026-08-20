@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,10 @@ from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_tool_system_prompt
 from metis.engine.model_tool_runner import require_max_tool_rounds
 from metis.runlog.langchain import ensure_runlog_callback
+
+
+class ModelProviderConfigurationError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +173,8 @@ class JsonPromptRunner:
                         model=request.model,
                         reasoning_effort=request.reasoning_effort,
                     )
+                    if attempt == 0:
+                        params["max_retries"] = 0
                     params["callbacks"] = ensure_runlog_callback(
                         params.get("callbacks")
                     )
@@ -253,6 +260,12 @@ class JsonPromptRunner:
                 except Exception as exc:
                     if isinstance(exc, ModelToolConfigurationError):
                         raise
+                    if _certificate_verification_failed(exc):
+                        raise ModelProviderConfigurationError(
+                            "TLS certificate verification failed while contacting "
+                            "the model provider. Install the required CA certificate "
+                            "in the Python environment before retrying."
+                        ) from exc
                     attempt_error = exc
                     attempt_failure = str(exc)
                 last_failure = attempt_failure
@@ -323,6 +336,23 @@ def _response_reached_output_limit(response: object) -> bool:
                 "max_tokens",
             }:
                 return True
+    return False
+
+
+def _certificate_verification_failed(error: BaseException) -> bool:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        message = str(current).lower()
+        if (
+            "certificate_verify_failed" in message
+            or "certificate verify failed" in message
+        ):
+            return True
+        current = current.__cause__ or current.__context__
     return False
 
 

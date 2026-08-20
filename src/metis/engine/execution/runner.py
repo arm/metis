@@ -4,8 +4,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
+from concurrent.futures import FIRST_COMPLETED
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait
 from dataclasses import dataclass
 from dataclasses import replace
+from threading import Event
 from time import perf_counter
 from typing import Any
 from typing import get_origin
@@ -14,6 +20,7 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError
 
 from metis import runlog
+from metis.usage import submit_with_current_context
 
 from .compiler import StagePlan
 from .compiler import _PlannedNode
@@ -22,6 +29,7 @@ from .contracts import ExecutionStatus
 from .contracts import NodeContext
 from .contracts import NodeInvocation
 from .contracts import NodeRegistration
+from .contracts import NodeResult
 from .contracts import StageName
 from .contracts import annotation_allows_none
 
@@ -57,135 +65,89 @@ def run_stage(
         },
     ) as stage_span:
         outputs: dict[str, Mapping[str, object]] = {}
-        diagnostics: list[ExecutionDiagnostic] = []
+        diagnostics_by_node: dict[str, tuple[ExecutionDiagnostic, ...]] = {}
         status = ExecutionStatus.OK
         failed: set[str] = set()
+        completed: set[str] = set()
+        pending = {node.name for node in planned.nodes}
         stage_started = perf_counter()
-        _progress(context, {"event": "execution_stage_start", "stage": stage_name})
-        for node in planned.nodes:
-            if node.required_dependencies & failed:
-                failed.add(node.name)
-                with runlog.span(
-                    "node",
-                    f"{stage_name}.{node.name}",
-                    {
-                        "stage": stage_name,
-                        "node": node.name,
-                        "dependencies": sorted(node.dependencies),
-                    },
-                ) as skipped_span:
-                    skipped_span.end(
-                        status="cancelled",
-                        attributes={"reason": "dependency_failed"},
-                    )
-                _progress(
-                    context,
-                    {
-                        "event": "execution_node_skipped",
-                        "stage": stage_name,
-                        "node": node.name,
-                        "reason": "dependency_failed",
-                    },
-                )
-                continue
-            max_concurrency = min(
-                node.definition.max_concurrency or context.runtime.max_workers,
-                context.runtime.max_workers,
-            )
-            with runlog.span(
-                "node",
-                f"{stage_name}.{node.name}",
-                lambda: {
-                    "stage": stage_name,
-                    "node": node.name,
-                    "configuration": node.configuration,
-                    "input_bindings": dict(node.input_bindings),
-                    "capabilities": sorted(node.capabilities),
-                    "formats": node.definition.formats,
-                    "filename": node.definition.filename,
-                    "max_concurrency": max_concurrency,
-                },
-            ) as node_span:
-                _progress(
-                    context,
-                    {
-                        "event": "execution_node_start",
-                        "stage": stage_name,
-                        "node": node.name,
-                    },
-                )
-                node_started = perf_counter()
-                node_status = ExecutionStatus.ERROR
-                inputs: dict[str, object] = {}
-                result = None
-                node_error: Exception | None = None
-                try:
-                    inputs = _resolve_inputs(node, outputs, initial_inputs)
-                    node_context = replace(
-                        context,
-                        capabilities=node.capabilities,
-                        runtime=replace(
-                            context.runtime,
-                            max_workers=max_concurrency,
-                            jobs=context.jobs.limit(max_concurrency),
-                        ),
-                    )
-                    result = node.registration.execute(
-                        NodeInvocation(
-                            configuration=node.configuration,
-                            inputs=inputs,
-                            context=node_context,
-                            formats=node.definition.formats,
-                            filename=node.definition.filename,
-                        )
-                    )
-                    diagnostics.extend(result.diagnostics)
-                    node_status = result.status
-                    if result.status is ExecutionStatus.ERROR:
+        cancellation = Event()
+        stage_jobs = context.jobs.with_cancellation(cancellation)
+        stage_context = replace(
+            context,
+            runtime=replace(
+                context.runtime,
+                jobs=stage_jobs,
+                is_cancelled=cancellation.is_set,
+            ),
+        )
+        _progress(
+            stage_context,
+            {"event": "execution_stage_start", "stage": stage_name},
+        )
+        worker_count = min(context.runtime.max_workers, len(planned.nodes))
+        executor = ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="metis-node",
+        )
+        running: dict[Future[NodeResult], _PlannedNode] = {}
+        try:
+            while pending or running:
+                for node in planned.nodes:
+                    if node.name not in pending or not node.dependencies <= completed:
+                        continue
+                    pending.remove(node.name)
+                    if node.required_dependencies & failed:
+                        _skip_node(stage_name, node, stage_context)
                         failed.add(node.name)
-                    else:
-                        outputs[node.name] = _validate_outputs(
-                            node.registration,
-                            result.outputs,
+                        completed.add(node.name)
+                        continue
+                    running[
+                        submit_with_current_context(
+                            executor,
+                            _run_node,
+                            stage_name,
+                            node,
+                            stage_context,
+                            dict(outputs),
+                            initial_inputs,
                         )
-                        if (
-                            result.status is ExecutionStatus.INCONCLUSIVE
-                            and status is ExecutionStatus.OK
-                        ):
-                            status = ExecutionStatus.INCONCLUSIVE
-                except Exception as exc:
-                    node_error = exc
-                    node_status = ExecutionStatus.ERROR
-                    diagnostics.append(
-                        ExecutionDiagnostic(
-                            code="execution.node_failed",
-                            message=(
-                                f"Execution node {stage_name}.{node.name} failed: {exc}"
-                            ),
-                        )
-                    )
-                    failed.add(node.name)
-                _progress(
-                    context,
-                    {
-                        "event": "execution_node_end",
-                        "stage": stage_name,
-                        "node": node.name,
-                        "status": node_status.value,
-                        "duration_seconds": perf_counter() - node_started,
-                    },
+                    ] = node
+                if not running:
+                    if pending:
+                        raise AssertionError("Execution stage scheduler stalled")
+                    break
+                finished, _unfinished = wait(
+                    tuple(running),
+                    return_when=FIRST_COMPLETED,
                 )
-                node_span.end(
-                    status=node_status.value,
-                    attributes={
-                        "inputs": inputs,
-                        "outputs": result.outputs if result is not None else {},
-                        "diagnostics": (
-                            result.diagnostics if result is not None else ()
-                        ),
-                    },
-                    exc=node_error,
-                )
+                for future in finished:
+                    node = running.pop(future)
+                    node_run = future.result()
+                    completed.add(node.name)
+                    diagnostics_by_node[node.name] = node_run.diagnostics
+                    if node_run.status is ExecutionStatus.ERROR:
+                        failed.add(node.name)
+                        continue
+                    outputs[node.name] = node_run.outputs
+                    if (
+                        node_run.status is ExecutionStatus.INCONCLUSIVE
+                        and status is ExecutionStatus.OK
+                    ):
+                        status = ExecutionStatus.INCONCLUSIVE
+        except BaseException:
+            cancellation.set()
+            stage_jobs.cancel()
+            for future in running:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+        diagnostics = [
+            diagnostic
+            for node in planned.nodes
+            for diagnostic in diagnostics_by_node.get(node.name, ())
+        ]
         if failed:
             tolerated_failures = {
                 source.partition(".")[0]
@@ -206,7 +168,9 @@ def run_stage(
             )
         if not planned.output_bindings:
             stage_outputs: dict[str, object] = {
-                name: _single_or_mapping(values) for name, values in outputs.items()
+                node.name: _single_or_mapping(outputs[node.name])
+                for node in planned.nodes
+                if node.name in outputs
             }
         else:
             stage_outputs = {
@@ -215,7 +179,7 @@ def run_stage(
                 if _source_is_available(source, outputs)
             }
         _progress(
-            context,
+            stage_context,
             {
                 "event": "execution_stage_end",
                 "stage": stage_name,
@@ -228,6 +192,148 @@ def run_stage(
             attributes={"outputs": stage_outputs, "diagnostics": diagnostics},
         )
         return StageRun(status, stage_outputs, tuple(diagnostics))
+
+
+def _run_node(
+    stage_name: StageName,
+    node: _PlannedNode,
+    context: NodeContext,
+    outputs: Mapping[str, Mapping[str, object]],
+    initial_inputs: Mapping[str, object],
+) -> NodeResult:
+    max_concurrency = min(
+        node.definition.max_concurrency or context.runtime.max_workers,
+        context.runtime.max_workers,
+    )
+    with runlog.span(
+        "node",
+        f"{stage_name}.{node.name}",
+        lambda: {
+            "stage": stage_name,
+            "node": node.name,
+            "configuration": node.configuration,
+            "input_bindings": dict(node.input_bindings),
+            "capabilities": sorted(node.capabilities),
+            "formats": node.definition.formats,
+            "filename": node.definition.filename,
+            "max_concurrency": max_concurrency,
+        },
+    ) as node_span:
+        _progress(
+            context,
+            {
+                "event": "execution_node_start",
+                "stage": stage_name,
+                "node": node.name,
+            },
+        )
+        node_started = perf_counter()
+        node_status = ExecutionStatus.ERROR
+        inputs: dict[str, object] = {}
+        result = None
+        node_outputs: Mapping[str, object] = {}
+        node_error: Exception | None = None
+        diagnostics: tuple[ExecutionDiagnostic, ...] = ()
+        try:
+            if context.runtime.is_cancelled():
+                raise CancelledError("Execution stage was cancelled")
+            inputs = _resolve_inputs(node, outputs, initial_inputs)
+            progress = context.callbacks.progress
+            node_context = replace(
+                context,
+                capabilities=node.capabilities,
+                callbacks=(
+                    replace(
+                        context.callbacks,
+                        progress=lambda event: progress({**event, "node": node.name}),
+                    )
+                    if progress is not None
+                    else context.callbacks
+                ),
+                runtime=replace(
+                    context.runtime,
+                    max_workers=max_concurrency,
+                    jobs=context.jobs.limit(max_concurrency),
+                ),
+            )
+            result = node.registration.execute(
+                NodeInvocation(
+                    configuration=node.configuration,
+                    inputs=inputs,
+                    context=node_context,
+                    formats=node.definition.formats,
+                    filename=node.definition.filename,
+                )
+            )
+            diagnostics = result.diagnostics
+            node_status = result.status
+            if node_status is not ExecutionStatus.ERROR:
+                node_outputs = _validate_outputs(
+                    node.registration,
+                    result.outputs,
+                )
+        except Exception as exc:
+            node_error = exc
+            node_status = ExecutionStatus.ERROR
+            diagnostics = (
+                *diagnostics,
+                ExecutionDiagnostic(
+                    code="execution.node_failed",
+                    message=f"Execution node {stage_name}.{node.name} failed: {exc}",
+                ),
+            )
+        _progress(
+            context,
+            {
+                "event": "execution_node_end",
+                "stage": stage_name,
+                "node": node.name,
+                "status": node_status.value,
+                "duration_seconds": perf_counter() - node_started,
+            },
+        )
+        if context.callbacks.diagnostic is not None:
+            for diagnostic in diagnostics:
+                context.callbacks.diagnostic(diagnostic)
+        node_span.end(
+            status=node_status.value,
+            attributes={
+                "inputs": inputs,
+                "outputs": result.outputs if result is not None else {},
+                "diagnostics": diagnostics,
+            },
+            exc=node_error,
+        )
+        return NodeResult(node_outputs, node_status, diagnostics)
+
+
+def _skip_node(
+    stage_name: StageName,
+    node: _PlannedNode,
+    context: NodeContext,
+) -> None:
+    with runlog.span(
+        "node",
+        f"{stage_name}.{node.name}",
+        {
+            "stage": stage_name,
+            "node": node.name,
+            "dependencies": sorted(node.dependencies),
+        },
+    ) as skipped_span:
+        skipped_span.end(
+            status="cancelled",
+            attributes={"reason": "dependency_failed"},
+        )
+    _progress(
+        context,
+        {
+            "event": "execution_node_skipped",
+            "stage": stage_name,
+            "node": node.name,
+            "reason": "dependency_failed",
+        },
+    )
 
 
 def _progress(context: NodeContext, event: Mapping[str, object]) -> None:

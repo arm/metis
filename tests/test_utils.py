@@ -115,6 +115,21 @@ def test_tiktoken_token_count_unknown_model_falls_back_to_cl100k():
     )
 
 
+def test_tiktoken_token_count_falls_back_when_registry_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(_model: str | None) -> None:
+        raise ValueError("Unknown encoding cl100k_base")
+
+    monkeypatch.setattr("metis.utils._tiktoken_encoding_for", unavailable)
+    text = "hello world"
+
+    assert tiktoken_token_count(text, "gpt-4") == heuristic_token_count(
+        text,
+        model="gpt-4",
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [

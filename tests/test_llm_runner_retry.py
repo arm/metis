@@ -15,15 +15,35 @@ from metis.engine.llm_runner import rendered_prompt_token_count
 class _CountingProvider:
     def __init__(self, responses: list[AIMessage] | None = None) -> None:
         self.calls = 0
+        self.params: list[dict[str, Any]] = []
         self._responses = responses or [AIMessage(content="not-json")]
 
-    def get_chat_model(self, **_params: Any) -> RunnableLambda:
+    def get_chat_model(self, **params: Any) -> RunnableLambda:
+        self.params.append(params)
+
         def _respond(_messages: object) -> AIMessage:
             response = self._responses[min(self.calls, len(self._responses) - 1)]
             self.calls += 1
             return response
 
         return RunnableLambda(_respond)
+
+
+class _CertificateFailureProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.params: list[dict[str, Any]] = []
+
+    def get_chat_model(self, **params: Any) -> RunnableLambda:
+        self.params.append(params)
+
+        def _fail(_messages: object) -> AIMessage:
+            self.calls += 1
+            raise RuntimeError(
+                "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+            )
+
+        return RunnableLambda(_fail)
 
 
 class _StructuredProvider:
@@ -179,10 +199,33 @@ def test_retries_configured_attempts_with_backoff(monkeypatch, caplog):
 
     assert result is None
     assert provider.calls == 4
+    assert provider.params[0]["max_retries"] == 0
+    assert all("max_retries" not in params for params in provider.params[1:])
     assert sleeps == [0.5, 1.0, 2.0]
     assert "retrying (attempt 1/4)" in caplog.text
     assert "retrying (attempt 3/4)" in caplog.text
     assert "giving up" in caplog.text
+
+
+def test_certificate_verification_failure_aborts_without_retry(monkeypatch):
+    monkeypatch.setattr(
+        "metis.engine.llm_runner.time.sleep",
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("certificate failure must not retry")
+        ),
+    )
+    provider = _CertificateFailureProvider()
+
+    with pytest.raises(RuntimeError, match="TLS certificate verification failed"):
+        JsonPromptRunner(
+            provider,
+            max_attempts=4,
+            retry_backoff_seconds=1,
+        ).invoke(_request(logging.getLogger("metis.test.certificate")))
+
+    assert provider.calls == 1
+    assert len(provider.params) == 1
+    assert provider.params[0]["max_retries"] == 0
 
 
 def test_zero_backoff_skips_sleep(monkeypatch):

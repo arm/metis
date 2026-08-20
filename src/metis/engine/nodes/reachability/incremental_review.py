@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -38,6 +37,7 @@ from metis.engine.source import SourceMap
 from metis.engine.threat_context_retrieval import format_threat_model_context
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
+from metis.memory.fingerprints import stable_json_hash
 from metis.usage import usage_operation
 from metis.utils import parse_json_output
 
@@ -52,6 +52,7 @@ from .graph_utils import _node_sort_key
 from .graph_utils import function_for_location
 from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
+from .progress import emit_phase_progress
 from .progress import emit_progress
 from .source_context import _build_file_grouped_node_chunks
 from .state import FunctionContract
@@ -220,7 +221,15 @@ class IncrementalGraphReviewer:
             nodes=len(node_ids),
             edges=len(represented_edges),
         )
-        contracts = augment_function_contracts(graph)
+        contracts = augment_function_contracts(
+            graph,
+            progress_callback=lambda completed, total: emit_phase_progress(
+                options.progress_callback,
+                "contracts",
+                completed,
+                total,
+            ),
+        )
         packets, build_failures = self._build_packets(
             graph,
             node_ids,
@@ -343,11 +352,42 @@ class IncrementalGraphReviewer:
 
         while pending:
             unique_scheduled, representative_by_index = _unique_packet_schedule(pending)
+            emit_phase_progress(
+                options.progress_callback, "packets", 0, len(unique_scheduled)
+            )
+
+            def report_packet_completion(
+                _packet: _FrontierPacket,
+                completed: int,
+                total: int,
+            ) -> None:
+                emit_phase_progress(
+                    options.progress_callback, "packets", completed, total
+                )
+
+            def review_packet(packet: _FrontierPacket) -> _PacketResponse:
+                checkpoint_session = options.checkpoint_session
+                checkpoint_key = f"packet:{packet.cache_key}"
+                if checkpoint_session is not None:
+                    cached = checkpoint_session.get(checkpoint_key)
+                    if cached is not None:
+                        analysis = self._validated_packet_analysis(packet, cached)
+                        if analysis is not None:
+                            return _PacketResponse(packet.index, analysis)
+                response = self._review_packet(packet)
+                if checkpoint_session is not None and response.analysis is not None:
+                    checkpoint_session.put(
+                        checkpoint_key,
+                        {"reviews": list(response.analysis.reviews)},
+                    )
+                return response
+
             responses = jobs.run(
                 unique_scheduled,
-                self._review_packet,
+                review_packet,
                 label="Reachability security review",
                 result_key=lambda packet: packet.index,
+                on_complete=report_packet_completion,
             )
             responses_by_index = _fan_out_packet_results(
                 pending,
@@ -429,7 +469,11 @@ class IncrementalGraphReviewer:
         packets: list[_FrontierPacket] = []
         scheduled_node_ids: set[str] = set()
         failures: set[FrontierReviewFailure] = set()
-        for file_path in sorted(nodes_by_file):
+        ordered_files = sorted(nodes_by_file)
+        emit_phase_progress(
+            options.progress_callback, "evidence", 0, len(ordered_files)
+        )
+        for completed, file_path in enumerate(ordered_files, start=1):
             file_nodes = sorted(
                 nodes_by_file[file_path],
                 key=partial(_node_sort_key, graph),
@@ -547,6 +591,12 @@ class IncrementalGraphReviewer:
                         )
                     )
                     scheduled_node_ids.update(packet_node_ids)
+            emit_phase_progress(
+                options.progress_callback,
+                "evidence",
+                completed,
+                len(ordered_files),
+            )
         failed_node_ids = {failure.function_id for failure in failures}
         failures.update(
             FrontierReviewFailure(
@@ -879,6 +929,7 @@ class IncrementalGraphReviewer:
         response_schema_json: str,
     ) -> str:
         payload = {
+            "provider": self._llm_provider.cache_identity(),
             "model": model,
             "reasoning_effort": reasoning_effort,
             "chat_model_kwargs": self._config.chat_model_kwargs,
@@ -886,13 +937,7 @@ class IncrementalGraphReviewer:
             "body_text": body_text,
             "response_schema": response_schema_json,
         }
-        return hashlib.sha256(
-            json.dumps(
-                payload,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        return stable_json_hash(payload)
 
 
 def _parse_review_response[ResponseModelT: BaseModel](

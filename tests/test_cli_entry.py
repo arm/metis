@@ -15,6 +15,7 @@ from metis.cli import command_registry
 from metis.engine.execution import ExecutionDiagnostic
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
+from metis.version import __version__ as METIS_VERSION
 
 
 def test_cli_entry_imports_in_clean_interpreter():
@@ -28,33 +29,6 @@ def test_cli_entry_imports_in_clean_interpreter():
     assert completed.returncode == 0, completed.stderr
 
 
-def test_execute_command_rejects_triage_flag_for_ask_before_index_gating(monkeypatch):
-    args = SimpleNamespace(
-        quiet=True,
-        triage=True,
-        output_file=None,
-        non_interactive=True,
-        codebase_path="src/metis",
-    )
-    captured = []
-    monkeypatch.setattr(
-        command_registry,
-        "print_console",
-        lambda message, *_args, **_kwargs: captured.append(str(message)),
-    )
-
-    result = entry.execute_command(
-        SimpleNamespace(),
-        "ask",
-        ["hi"],
-        args,
-    )
-
-    assert result is None
-    assert any("--triage can only be used" in message for message in captured)
-    assert not any("Index missing" in message for message in captured)
-
-
 def test_execute_command_allows_interactive_triage_command_with_global_triage_flag(
     monkeypatch,
 ):
@@ -62,7 +36,6 @@ def test_execute_command_allows_interactive_triage_command_with_global_triage_fl
         quiet=True,
         triage=True,
         output_file=None,
-        non_interactive=False,
         codebase_path="src/metis",
         include_triaged=False,
     )
@@ -97,7 +70,6 @@ def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypa
         quiet=True,
         triage=True,
         output_file=None,
-        non_interactive=False,
         codebase_path="src/metis",
     )
     calls = []
@@ -127,21 +99,6 @@ def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypa
     assert calls == [("ask", ["hi"])]
 
 
-def test_run_non_interactive_keeps_quiet_without_verbose():
-    args = SimpleNamespace(
-        command="triage data.sarif",
-        verbose=False,
-        quiet=True,
-        log_level="DEBUG",
-    )
-
-    exit_code, farewell = entry.run_non_interactive(SimpleNamespace(), args)
-
-    assert exit_code == 1
-    assert farewell is None
-    assert args.quiet is True
-
-
 def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     def fail_load_runtime_config(*_args, **_kwargs):
         raise AssertionError("runtime config should not be loaded for --version")
@@ -155,17 +112,45 @@ def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize(
+    "removed_args",
+    (["--non-interactive"], ["--command", "version"]),
+)
+def test_main_rejects_removed_command_mode_flags(monkeypatch, removed_args, capsys):
+    monkeypatch.setattr(sys, "argv", ["metis", *removed_args])
+
+    with pytest.raises(SystemExit, match="2"):
+        entry.main()
+
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     "argv",
     [
         ["metis"],
-        ["metis", "-v", "--non-interactive", "--config", "graph.yaml"],
+        ["metis", "-v"],
+        ["metis", "-v", "--config", "graph.yaml"],
     ],
 )
 def test_main_executes_configured_graph_by_default(monkeypatch, argv):
     calls = []
     messages = []
+    progress_events = []
+    reporter_finishes = []
+
+    class _Reporter:
+        def __init__(self, _progress):
+            pass
+
+        def __call__(self, event):
+            progress_events.append(event)
+
+        def finish(self):
+            reporter_finishes.append(True)
 
     def execute_graph(**kwargs):
+        assert callable(kwargs["callbacks"]["review_checkpoint_callback"])
+        assert callable(kwargs["callbacks"]["review_resume_callback"])
         progress = kwargs["callbacks"].get("progress_callback")
         if progress is not None:
             progress({"event": "execution_stage_start", "stage": "review"})
@@ -184,7 +169,7 @@ def test_main_executes_configured_graph_by_default(monkeypatch, argv):
             ExecutionStatus.INCONCLUSIVE,
             {
                 "review": {
-                    "formats": ["sarif", "json"],
+                    "formats": ["sarif"],
                     "findings": {"reviews": []},
                     "sarif": {"version": "2.1.0", "runs": []},
                 },
@@ -200,6 +185,12 @@ def test_main_executes_configured_graph_by_default(monkeypatch, argv):
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
     monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+    monkeypatch.setattr(
+        entry,
+        "build_standard_progress",
+        lambda **_kwargs: nullcontext(object()),
+    )
+    monkeypatch.setattr(entry, "ExecutionGraphProgressReporter", _Reporter)
     monkeypatch.setattr(
         entry,
         "determine_output_file",
@@ -224,10 +215,83 @@ def test_main_executes_configured_graph_by_default(monkeypatch, argv):
     assert calls == ["graph", "save", "save", "close"]
     assert "[yellow]fallback review[/yellow]" in messages
     if "-v" in argv:
-        assert "[cyan]Stage:[/cyan] review" in messages
-        assert "[cyan]Node:[/cyan] review.reachability" in messages
+        assert [event["event"] for event in progress_events] == [
+            "execution_stage_start",
+            "execution_node_start",
+        ]
+        assert reporter_finishes == [True]
     else:
-        assert not any("Stage:" in message for message in messages)
+        assert progress_events == []
+        assert reporter_finishes == []
+
+
+def test_main_interactive_flag_starts_prompt(monkeypatch):
+    calls = []
+    engine = SimpleNamespace()
+    monkeypatch.setattr(sys, "argv", ["metis", "--interactive"])
+    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
+    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+    monkeypatch.setattr(
+        entry,
+        "run_interactive_loop",
+        lambda *_args: calls.append("interactive") or None,
+    )
+    monkeypatch.setattr(
+        entry,
+        "finalize_cli_session_and_close",
+        lambda *_args: calls.append("close"),
+    )
+
+    entry.main()
+
+    assert calls == ["interactive", "close"]
+
+
+def test_graph_checkpoints_use_codebase_metis_directory(monkeypatch, tmp_path):
+    generated_path = tmp_path / "generated.json"
+
+    def execute_graph(**kwargs):
+        kwargs["callbacks"]["review_checkpoint_callback"](
+            {
+                "metis_version": METIS_VERSION,
+                "producer": "simple_llm_review",
+                "key": "file:key",
+                "record": {"reviews": []},
+            },
+            1,
+            1,
+        )
+        return ExecutionResult(ExecutionStatus.OK, {}, ())
+
+    def determine_output(_cmd, args, _cmd_args):
+        args.output_file = [str(generated_path)]
+        args._metis_generated_output = True
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["metis", "--codebase-path", str(tmp_path)],
+    )
+    monkeypatch.setattr(
+        entry,
+        "load_runtime_config",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        entry,
+        "build_engine",
+        lambda *_args: (SimpleNamespace(execute_graph=execute_graph), None),
+    )
+    monkeypatch.setattr(entry, "determine_output_file", determine_output)
+    monkeypatch.setattr(entry, "print_console", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
+
+    entry.main()
+
+    assert (
+        tmp_path / ".metis" / "checkpoints" / "review.simple_llm_review.sqlite3"
+    ).exists()
+    assert not (tmp_path / "generated.simple_llm_review.sqlite3").exists()
 
 
 def test_main_rejects_a_missing_codebase_before_creating_outputs(
@@ -428,34 +492,20 @@ def test_main_passes_custom_config_path_to_runtime_loader(monkeypatch, tmp_path)
             "metis",
             "--config",
             str(config_path),
-            "--non-interactive",
-            "--command",
-            "version",
         ],
     )
     monkeypatch.setattr(entry, "load_runtime_config", load_runtime_config)
-    monkeypatch.setattr(entry, "build_engine", lambda *_args: (SimpleNamespace(), None))
-    monkeypatch.setattr(entry, "run_non_interactive", lambda *_args: (0, None))
+    engine = SimpleNamespace(
+        execute_graph=lambda **_kwargs: ExecutionResult(ExecutionStatus.OK, {})
+    )
+    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+    monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
+    monkeypatch.setattr(entry, "_save_graph_outputs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
 
     entry.main()
 
     assert captured == {"config_path": str(config_path), "enable_psql": False}
-
-
-def test_main_returns_noninteractive_failure_status(monkeypatch):
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["metis", "--non-interactive", "--command", "version"],
-    )
-    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
-    monkeypatch.setattr(entry, "build_engine", lambda *_args: (SimpleNamespace(), None))
-    monkeypatch.setattr(entry, "run_non_interactive", lambda *_args: (1, None))
-    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
-
-    with pytest.raises(SystemExit, match="1"):
-        entry.main()
 
 
 def test_build_engine_defers_embedding_model_construction(
@@ -591,7 +641,6 @@ def test_main_writes_workflow_runlog_bundle(monkeypatch, tmp_path):
         "argv",
         [
             "metis",
-            "--non-interactive",
             "--log-workflow-debug-path",
             str(trace_path),
         ],

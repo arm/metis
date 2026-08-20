@@ -1,14 +1,18 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import Mock
+
 from metis.engine.ask import AskGraph
 from metis.engine.ask.models import AskRequest
 from metis.engine.nodes.simple_llm_review.graph import (
+    ReviewGraph,
     review_node_build_prompt,
     review_node_llm,
     review_node_parse,
 )
 from metis.engine.stages.review.models import ReviewState
+from metis.providers.base import ChatProvider
 
 
 class _Doc:
@@ -108,3 +112,48 @@ def test_review_body_includes_threat_model_context():
     assert "THREAT_MODEL_CONTEXT:" in body
     assert "Authoritative policy says images are untrusted." in body
     assert body.index("THREAT_MODEL_CONTEXT:") < body.index("SNIPPET:")
+
+
+def test_simple_review_checkpoint_key_tracks_effective_input():
+    class Provider(ChatProvider):
+        def __init__(self) -> None:
+            self.config = {"base_url": "https://first.example"}
+            self.exact_tokens = False
+
+        def get_chat_model(self, **_kwargs):
+            return Mock()
+
+        def count_tokens(self, text: str) -> int:
+            return len(text) if self.exact_tokens else max(1, len(text) // 4)
+
+    provider = Provider()
+    graph = ReviewGraph(
+        provider,
+        {"general_prompts": {"security_review_report": "Report."}},
+        None,
+        "",
+        "test-model",
+        5,
+        chat_model_kwargs={"reasoning_effort": "medium"},
+    )
+    request = {
+        "file_path": "/repo/a.c",
+        "snippet": "int a;",
+        "language_prompts": {
+            "security_review_file": "Review. [[REVIEW_SCHEMA_FIELDS]]"
+        },
+        "threat_model_context": [],
+    }
+
+    first = graph.checkpoint_key(request)
+
+    assert first == graph.checkpoint_key(dict(request))
+    assert first != graph.checkpoint_key({**request, "snippet": "int b;"})
+    provider.config["base_url"] = "https://second.example"
+    assert first != graph.checkpoint_key(request)
+    provider.config["base_url"] = "https://first.example"
+    provider.exact_tokens = True
+    assert first != graph.checkpoint_key(request)
+
+    graph.model_tools = (object(),)
+    assert graph.checkpoint_key(request) is None

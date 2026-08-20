@@ -1,9 +1,33 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
+
+import pytest
+
 from metis.memory import MemoryService
 from metis.memory import SQLiteMemoryStore
 from metis.memory.fingerprints import input_fingerprint
+
+
+def test_sqlite_memory_store_closes_connections(tmp_path, monkeypatch):
+    store = SQLiteMemoryStore(tmp_path / "memory.sqlite3")
+    connections: list[sqlite3.Connection] = []
+    connect = store._connect
+
+    def tracked_connect() -> sqlite3.Connection:
+        connection = connect()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(store, "_connect", tracked_connect)
+
+    store.put(("metis",), "record", {"value": "stored"})
+
+    assert connections
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 def test_sqlite_memory_store_round_trips_namespace_key_value(tmp_path):

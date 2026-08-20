@@ -14,12 +14,14 @@ from pytest import MonkeyPatch
 from pytest import raises
 
 from metis import runlog
+from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.engine.codegraph import CallSite
 from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import ControlCondition
 from metis.engine.codegraph import FunctionNode
 from metis.engine.codegraph import ValueAssignment
+from metis.engine.execution.contracts import NodeCallbacks
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.nodes.reachability import finding_admission
 from metis.engine.nodes.reachability import incremental_review
@@ -33,6 +35,8 @@ from metis.engine.nodes.reachability.state import NormalExit
 from metis.engine.nodes.reachability.state import ReturnSubject
 from metis.engine.nodes.reachability.state import StateEffect
 from metis.engine.nodes.reachability.state import TrackedObjectSubject
+from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
+from metis.providers.base import ChatProvider
 
 
 def _function(name: str, line: int, *, source: bool = False) -> FunctionNode:
@@ -100,6 +104,7 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     sink.set_tag("control.noreturn", value="_Noreturn", reason="test fact")
     reviewer = _reviewer(tmp_path)
     seen_bodies: list[str] = []
+    progress_events: list[dict[str, object]] = []
 
     def invoke(request: Any) -> object:
         assert "gpu_ready" in request.system_prompt
@@ -130,6 +135,7 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
         options=ReachabilityReviewOptions(
             domain_profiles=(" GPU ",),
             domain_hints=("CustomTerm",),
+            progress_callback=progress_events.append,
         ),
     )
 
@@ -137,12 +143,123 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     assert "CONTRACT_MANIFEST" not in seen_bodies[0]
     assert "STATE_REVIEW_CASES" not in seen_bodies[0]
     assert outcome.stats.packet_count == 1
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "contracts",
+        "completed": 0,
+        "total": 2,
+    } in progress_events
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "contracts",
+        "completed": 2,
+        "total": 2,
+    } in progress_events
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "packets",
+        "completed": 0,
+        "total": 1,
+    } in progress_events
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "evidence",
+        "completed": 0,
+        "total": 1,
+    } in progress_events
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "evidence",
+        "completed": 1,
+        "total": 1,
+    } in progress_events
+    assert {
+        "event": "reachability_phase_progress",
+        "phase": "packets",
+        "completed": 1,
+        "total": 1,
+    } in progress_events
+
+
+def test_reachability_review_resumes_validated_packets(tmp_path: Path, node_jobs):
+    (tmp_path / "graph.c").write_text(
+        "void root(void) {}\n",
+        encoding="utf-8",
+    )
+    reviewer = _reviewer(tmp_path)
+    reviewer._runner.invoke = Mock(
+        side_effect=lambda request: request.parse({"reviews": []})
+    )
+    callbacks = review_checkpoint_callbacks(
+        codebase_path=tmp_path,
+        enabled=True,
+    )
+    node_callbacks = NodeCallbacks(
+        checkpoint=callbacks["review_checkpoint_callback"],
+        resume=callbacks["review_resume_callback"],
+    )
+    graph = _graph(_function("root", 1, source=True))
+
+    first = reviewer.review(
+        graph,
+        jobs=node_jobs,
+        options=ReachabilityReviewOptions(
+            checkpoint_session=ReviewCheckpointSession(
+                "reachability",
+                node_callbacks,
+            )
+        ),
+    )
+    second = reviewer.review(
+        graph,
+        jobs=node_jobs,
+        options=ReachabilityReviewOptions(
+            checkpoint_session=ReviewCheckpointSession(
+                "reachability",
+                node_callbacks,
+            )
+        ),
+    )
+
+    assert first == second
+    reviewer._runner.invoke.assert_called_once()
 
 
 def test_default_review_prompt_has_no_domain_hints(tmp_path: Path) -> None:
     prompt = _reviewer(tmp_path)._system_prompt("graph.c", ReachabilityReviewOptions())
 
     assert "User-provided domain hints:" not in prompt
+
+
+def test_reachability_checkpoint_key_includes_provider(tmp_path: Path) -> None:
+    reviewer = _reviewer(tmp_path)
+
+    class Provider(ChatProvider):
+        def __init__(self) -> None:
+            self.config = {"base_url": "https://first.example"}
+
+        def get_chat_model(self, **_kwargs):
+            return Mock()
+
+    provider = Provider()
+    reviewer._llm_provider = provider
+    first = reviewer._cache_key(
+        "system",
+        "body",
+        model="model",
+        reasoning_effort=None,
+        response_schema_json="{}",
+    )
+
+    provider.config["base_url"] = "https://second.example"
+
+    assert first != reviewer._cache_key(
+        "system",
+        "body",
+        model="model",
+        reasoning_effort=None,
+        response_schema_json="{}",
+    )
 
 
 def test_compact_packet_uses_tables_numbered_source_and_target_tags(
@@ -434,7 +551,7 @@ def test_indexed_null_condition_reaches_deterministic_admission(
     monkeypatch.setattr(
         incremental_review,
         "augment_function_contracts",
-        lambda _graph: {allocator_id: contract},
+        lambda _graph, **_kwargs: {allocator_id: contract},
     )
     reviewer = _reviewer(tmp_path)
 

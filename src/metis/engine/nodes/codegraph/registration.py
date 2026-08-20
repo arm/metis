@@ -17,7 +17,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
     command = cast(ReviewCommand, invocation.inputs["request"])
     reference = invocation.context.codegraphs.materialize(
         seed_file=command.target if command.mode == "file" else None,
-        progress_callback=invocation.context.callbacks.progress,
+        progress_callback=invocation.context.report_progress,
     )
     return NodeResult({"codegraph": reference})
 

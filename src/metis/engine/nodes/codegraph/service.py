@@ -27,6 +27,7 @@ from .annotations import CodeGraphConfiguration
 from .annotations import annotate_graph
 from .progress import CODEGRAPH_DONE
 from .progress import CODEGRAPH_PROGRESS
+from .progress import CODEGRAPH_REUSED
 from .progress import CODEGRAPH_START
 from .provider import normalize_provider_name
 from .semantics import CodeGraphSemanticsCatalog
@@ -126,47 +127,56 @@ class CodeGraphService:
         progress_callback: Callable[[dict[str, object]], None] | None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None,
     ) -> CodeGraphReference:
-        selected_files = self._selected_files(seed_file=seed_file)
-        fingerprint = self._fingerprint(selected_files)
         store = self._store_instance()
-        reference = store.reference_for_fingerprint(
-            fingerprint,
-            codebase_path=self._config.codebase_path,
-        )
-        if reference is not None and not reference.failed_files:
-            _replay_diagnostics(reference, diagnostic_callback)
-            return reference
-        built = self._build(
-            selected_files,
-            progress_callback=progress_callback,
-            diagnostic_callback=diagnostic_callback,
-        )
-        semantics_failed_files, semantics_diagnostics = annotate_graph(
-            built.graph,
-            semantics_for_path={
-                node.file_path: self._semantics_registration_name(node.file_path)
-                for node in built.graph.nodes.values()
-            },
-            semantics=self._semantics,
-            annotation_settings=self._annotation_settings,
-            progress_callback=progress_callback,
-        )
-        for diagnostic in semantics_diagnostics:
-            if diagnostic_callback is not None:
-                diagnostic_callback(diagnostic)
-        return store.save(
-            fingerprint=fingerprint,
-            producer_version=METIS_VERSION,
-            graph=built.graph,
-            processed_files=built.processed_files,
-            failed_files=tuple(
-                dict.fromkeys((*built.failed_files, *semantics_failed_files))
-            ),
-            diagnostics=(
-                *built.diagnostics,
-                *semantics_diagnostics,
-            ),
-        )
+        while True:
+            selected_files = self._selected_files(seed_file=seed_file)
+            fingerprint = self._fingerprint(selected_files)
+            reference = store.reference_for_fingerprint(
+                fingerprint,
+                codebase_path=self._config.codebase_path,
+            )
+            if reference is not None and not reference.failed_files:
+                _replay_diagnostics(reference, diagnostic_callback)
+                if progress_callback is not None:
+                    progress_callback({"event": CODEGRAPH_REUSED})
+                return reference
+            built = self._build(
+                selected_files,
+                progress_callback=progress_callback,
+                diagnostic_callback=diagnostic_callback,
+            )
+            semantics_failed_files, semantics_diagnostics = annotate_graph(
+                built.graph,
+                semantics_for_path={
+                    node.file_path: self._semantics_registration_name(node.file_path)
+                    for node in built.graph.nodes.values()
+                },
+                semantics=self._semantics,
+                annotation_settings=self._annotation_settings,
+                progress_callback=progress_callback,
+            )
+            for diagnostic in semantics_diagnostics:
+                if diagnostic_callback is not None:
+                    diagnostic_callback(diagnostic)
+            current_files = self._selected_files(seed_file=seed_file)
+            if (
+                current_files != selected_files
+                or self._fingerprint(current_files) != fingerprint
+            ):
+                continue
+            return store.save(
+                fingerprint=fingerprint,
+                producer_version=METIS_VERSION,
+                graph=built.graph,
+                processed_files=built.processed_files,
+                failed_files=tuple(
+                    dict.fromkeys((*built.failed_files, *semantics_failed_files))
+                ),
+                diagnostics=(
+                    *built.diagnostics,
+                    *semantics_diagnostics,
+                ),
+            )
 
     def _selected_files(
         self,
