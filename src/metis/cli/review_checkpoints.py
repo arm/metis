@@ -59,11 +59,14 @@ def _sqlite_records(path: Path) -> dict[str, dict[str, object]] | None:
                 (METIS_VERSION,),
             )
             for key, payload in rows:
-                record = json.loads(payload)
+                try:
+                    record = json.loads(payload)
+                except (TypeError, ValueError):
+                    continue
                 if not isinstance(record, dict):
-                    raise ValueError(f"checkpoint record {key!r} is not an object")
+                    continue
                 records[str(key)] = record
-    except (OSError, sqlite3.Error, TypeError, ValueError):
+    except (OSError, sqlite3.Error):
         _discard_checkpoint(path)
         return None
     return records or None
