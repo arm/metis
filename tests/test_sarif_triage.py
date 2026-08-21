@@ -151,9 +151,9 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
     assert [event["event"] for event in triage_events] == [
         "start",
         "progress",
+        "done",
         "start",
         "progress",
-        "done",
         "error",
     ]
     assert [

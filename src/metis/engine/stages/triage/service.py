@@ -241,6 +241,8 @@ class TriageService:
     ) -> tuple[int, set[tuple[int, int]]]:
         handled: set[tuple[int, int]] = set()
         scheduled = list(enumerate(findings, start=1))
+        outcomes: dict[int, tuple] = {}
+        progress_base = processed
 
         def invoke(item):
             idx, finding = item
@@ -258,26 +260,25 @@ class TriageService:
                     debug_callback=debug_callback,
                     memory_service=memory_service,
                 )
-                return idx, finding, decision, None
+                outcome = idx, finding, decision, None
             except Exception as exc:
-                return idx, finding, None, exc
+                outcome = idx, finding, None, exc
+            outcomes[idx] = outcome
+            return outcome
 
-        def report_completion(_item, completed: int, _scheduled_total: int) -> None:
+        def report_completion(item, completed: int, _scheduled_total: int) -> None:
+            nonlocal processed
             self._emit_triage_progress(
                 progress_callback,
                 total,
                 "progress",
-                completed=processed + completed,
+                completed=progress_base + completed,
             )
-
-        outcomes = jobs.run(
-            scheduled,
-            invoke,
-            label=None,
-            result_key=lambda item: item[0],
-            on_complete=report_completion,
-        )
-        for idx, finding, decision, error in outcomes:
+            idx, finding = item
+            outcome = outcomes.pop(idx, None)
+            if outcome is None:
+                return
+            _idx, _finding, decision, error = outcome
             processed, was_handled = self._handle_finding_result(
                 triaged_payload=triaged_payload,
                 finding=finding,
@@ -291,6 +292,14 @@ class TriageService:
             )
             if was_handled:
                 handled.add((finding.run_index, finding.result_index))
+
+        jobs.run(
+            scheduled,
+            invoke,
+            label=None,
+            result_key=lambda item: item[0],
+            on_complete=report_completion,
+        )
         return processed, handled
 
     def triage_run(
