@@ -309,7 +309,13 @@ class MetisEngine:
     ):
         model = model or self._config.llama_query_model
         cache_key = (index is not None, model)
-        if cache_key not in self._state.review_graphs:
+        cached = self._state.review_graphs.get(cache_key)
+        if cached is not None:
+            return cached
+        with self._state.review_graph_lock:
+            cached = self._state.review_graphs.get(cache_key)
+            if cached is not None:
+                return cached
             model_tools = (
                 index_model_tools(
                     index,
@@ -336,7 +342,7 @@ class MetisEngine:
                     else None
                 ),
             )
-        return self._state.review_graphs[cache_key]
+            return self._state.review_graphs[cache_key]
 
     def _chat_model_kwargs(self) -> dict:
         return merge_chat_model_kwargs(

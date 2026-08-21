@@ -51,3 +51,4 @@ class EngineState:
     retriever_docs: Any | None = None
     pending_nodes: tuple[Any, Any] | None = None
     retriever_lock: Lock = field(default_factory=Lock)
+    review_graph_lock: Lock = field(default_factory=Lock)
