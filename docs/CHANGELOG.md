@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.6.0](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v1.6.0) (2026-08-21)
+
+
+### Features
+
+* **codegraph:** reduce review input tokens ([#300](https://github.com/arm/metis/issues/300)) ([a26dfda](https://github.com/arm/metis/commit/a26dfda48ebba493d4f34fe164470decbdcb3458))
+* **codegraph:** strengthen deterministic reachability review ([#296](https://github.com/arm/metis/issues/296)) ([c7c2735](https://github.com/arm/metis/commit/c7c27359413c940cf3f0c23a73654952f228869a))
+* **engine:** add execution node foundation ([#285](https://github.com/arm/metis/issues/285)) ([c2bfb29](https://github.com/arm/metis/commit/c2bfb29769812b093e769283113d9c41bc550519))
+* **engine:** improve scan execution, progress, and recovery ([#309](https://github.com/arm/metis/issues/309)) ([eaa5c71](https://github.com/arm/metis/commit/eaa5c712eb631be7525d47efda4e88f315714911))
+* **execution:** modularize execution graph ([#290](https://github.com/arm/metis/issues/290)) ([cafa73f](https://github.com/arm/metis/commit/cafa73feacd892be62044e7c008a2e92d0fc5b75))
+* **execution:** support per-node LLM models ([#310](https://github.com/arm/metis/issues/310)) ([6cb0085](https://github.com/arm/metis/commit/6cb0085c8ede8e383052275819b11929c935e97f))
+* **memory:** add advisory git-history context ([#283](https://github.com/arm/metis/issues/283)) ([5925e4d](https://github.com/arm/metis/commit/5925e4dafd5473ee092d96840f298e2bf3242324))
+* **memory:** apply threat-model context to review and triage ([#282](https://github.com/arm/metis/issues/282)) ([6153ea0](https://github.com/arm/metis/commit/6153ea0beb2301be6ccd92f8bb683fcd9e7abfd1))
+* **memory:** initialize threat-model repository memory ([#281](https://github.com/arm/metis/issues/281)) ([49d6f5a](https://github.com/arm/metis/commit/49d6f5a6730a9df118c3b9f341e8f32668b4df8c))
+* **plugins:** add AArch64 assembly .hs extension ([#266](https://github.com/arm/metis/issues/266)) ([e5320d7](https://github.com/arm/metis/commit/e5320d77ea02db3e9a078c24f4e67b25f0948640))
+* **prompts:** externalize engine prompt resources ([#284](https://github.com/arm/metis/issues/284)) ([4d52b9d](https://github.com/arm/metis/commit/4d52b9da17decb25e0a61ce9a9dfb8eb6108adf9))
+* Qdrant Vector Search ([#291](https://github.com/arm/metis/issues/291)) ([933ca31](https://github.com/arm/metis/commit/933ca312ecf2bc03ef5f24cc192e5f5a00332e03))
+* **runlog:** add explainable workflow tracing for CLI and engine runs ([#292](https://github.com/arm/metis/issues/292)) ([ea6b4ed](https://github.com/arm/metis/commit/ea6b4edc5cdd0af4f17c2a0e8a55834c4376434c))
+* **stages:** support external execution stages ([3d94992](https://github.com/arm/metis/commit/3d9499271b415d9818b80b7415d54a2c51397a4b))
+
+
+### Bug Fixes
+
+* Fix:  ([403e1e1](https://github.com/arm/metis/commit/403e1e1cd49da7b8462522c295eebe17267dc7fa))
+* **checkpoints:** preserve review checkpoint on transient write errors ([#312](https://github.com/arm/metis/issues/312)) ([e0d8dea](https://github.com/arm/metis/commit/e0d8deaaad5abef5e3219ced373713ec5cd43fc7))
+* **checkpoints:** skip unparseable rows instead of discarding all ([#313](https://github.com/arm/metis/issues/313)) ([4263238](https://github.com/arm/metis/commit/4263238fdd8bffc26b89c2080e8287ed8f1fe556))
+* **engine:** serialize review graph lazy initialization ([#314](https://github.com/arm/metis/issues/314)) ([ad7c127](https://github.com/arm/metis/commit/ad7c127e975091c33137864e6e910aea3be81414))
+* **plugins:** restore Solidity manifest ([#301](https://github.com/arm/metis/issues/301)) ([36d495c](https://github.com/arm/metis/commit/36d495c6ba99c521193a3e1571091245e2598199))
+* **triage:** checkpoint per finding during parallel classification ([#311](https://github.com/arm/metis/issues/311)) ([985ad22](https://github.com/arm/metis/commit/985ad22acd62014e6d5bb496f3f5429486dafd6e))
+* **triage:** stop repeated tool retries ([#297](https://github.com/arm/metis/issues/297)) ([eb74b70](https://github.com/arm/metis/commit/eb74b704ca004e883f0823f99cd25dde98fad292))
+
 ## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)
 
 
