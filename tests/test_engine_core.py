@@ -611,6 +611,15 @@ def test_review_graph_cache_is_scoped_to_the_index_grant(engine, index_first):
     assert first is not second
 
 
+def test_review_graph_cache_is_scoped_to_model(engine):
+    first = engine._get_review_graph(model="first-model")
+    second = engine._get_review_graph(model="second-model")
+
+    assert first.llama_query_model == "first-model"
+    assert second.llama_query_model == "second-model"
+    assert first is not second
+
+
 def test_engine_reuses_injected_runtime_and_backend_embed_models(
     tmp_path, capability_settings
 ):

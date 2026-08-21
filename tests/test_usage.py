@@ -108,7 +108,7 @@ def test_review_code_propagates_usage_context_into_worker_threads(capability_set
     service = SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda index: engine._get_review_graph(index),
+        lambda index, model: engine._get_review_graph(index, model),
     )
     service._review_file_standard = _review_file
 

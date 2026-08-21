@@ -81,8 +81,8 @@ class AzureOpenAIProvider(ChatProvider):
                 "Azure calls must specify a deployment model."
             )
 
-    def count_tokens(self, text: str) -> int:
-        return tiktoken_token_count(text, self.chat_deployment_model)
+    def count_tokens(self, text: str, model: str | None = None) -> int:
+        return tiktoken_token_count(text, model or self.chat_deployment_model)
 
     def get_chat_model(
         self,
@@ -90,15 +90,25 @@ class AzureOpenAIProvider(ChatProvider):
         callbacks: Callbacks = None,
         **kwargs: object,
     ) -> AzureChatOpenAI:
+        requested_model = kwargs.pop("model", None)
         requested_deployment = kwargs.pop("deployment_name", None)
         positional_deployment = args[0] if args else None
-        deployment = requested_deployment or positional_deployment or self.engine
+        model_name = requested_model or self.chat_deployment_model
+        deployment = (
+            requested_deployment
+            or positional_deployment
+            or (
+                self.engine
+                if requested_model in (None, self.chat_deployment_model)
+                else requested_model
+            )
+        )
         params: dict[str, object] = {
             "api_key": self.api_key,
             "azure_endpoint": self.azure_endpoint,
             "api_version": self.api_version,
             "azure_deployment": deployment,
-            "model": self.chat_deployment_model,
+            "model": model_name,
             "max_retries": self.max_retries,
         }
         if self.use_responses_api is not None:

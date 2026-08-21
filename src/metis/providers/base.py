@@ -39,14 +39,14 @@ class ChatProvider(ABC):
         """Return a LangChain chat model instance."""
         pass
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, text: str, model: str | None = None) -> int:
         """Estimate token count for ``text`` under this provider's tokenizer.
 
         The base implementation is a chars-per-token heuristic suitable for
         providers without a published offline tokenizer; override when an
         exact encoder is available (e.g. tiktoken for OpenAI).
         """
-        return heuristic_token_count(text)
+        return heuristic_token_count(text, model=model)
 
     def cache_identity(self) -> Mapping[str, object]:
         config = getattr(self, "config", None)

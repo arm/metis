@@ -191,6 +191,10 @@ class ReviewGraph:
         self.chat_model_kwargs = chat_model_kwargs or {}
         self.model_tools = tuple(model_tools or ())
         self.model_tool_max_rounds = model_tool_max_rounds
+        self._token_counter = partial(
+            self.llm_provider.count_tokens,
+            model=self.llama_query_model,
+        )
         self._schema_prompt_section = review_schema_prompt()
 
         self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
@@ -296,7 +300,7 @@ class ReviewGraph:
         return split_snippet(
             snippet,
             self.max_token_length,
-            self.llm_provider.count_tokens,
+            self._token_counter,
         )
 
     def review(self, request: ReviewRequest):

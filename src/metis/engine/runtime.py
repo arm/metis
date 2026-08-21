@@ -45,7 +45,7 @@ class EngineConfig:
 class EngineState:
     splitter_cache: dict[str, Any] = field(default_factory=dict)
     doc_splitter: Any | None = None
-    review_graphs: dict[bool, Any] = field(default_factory=dict)
+    review_graphs: dict[tuple[bool, str], Any] = field(default_factory=dict)
     ask_graph: Any | None = None
     retriever_code: Any | None = None
     retriever_docs: Any | None = None

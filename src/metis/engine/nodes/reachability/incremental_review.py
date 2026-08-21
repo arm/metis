@@ -8,6 +8,7 @@ import logging
 import os
 from collections import defaultdict
 from collections import deque
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -484,6 +485,7 @@ class IncrementalGraphReviewer:
             )
             threat_sections = self._threat_sections(memory_service, file_path)
             model = options.confirmation_model or self._config.llama_query_model
+            token_counter = partial(self._llm_provider.count_tokens, model=model)
             response_schema_json = self._discovery_schema_json
             pending_groups: deque[list[FunctionNode]] = deque((file_nodes,))
             while pending_groups:
@@ -503,6 +505,7 @@ class IncrementalGraphReviewer:
                         system_prompt,
                         body_template,
                         response_schema_json,
+                        token_counter,
                     )
                 except RuntimeError as exc:
                     overflow_error = exc
@@ -512,7 +515,7 @@ class IncrementalGraphReviewer:
                             self._config.codebase_path,
                             group_nodes,
                             max_tokens=source_token_budget,
-                            token_counter=self._llm_provider.count_tokens,
+                            token_counter=token_counter,
                         )
                     except ValueError as exc:
                         overflow_error = exc
@@ -552,6 +555,7 @@ class IncrementalGraphReviewer:
                             system_prompt,
                             body_text,
                             response_schema_json,
+                            token_counter,
                         )
                         > self._config.max_token_length
                     ):
@@ -657,6 +661,7 @@ class IncrementalGraphReviewer:
         system_prompt: str,
         body_template: str,
         response_schema_json: str,
+        token_counter: Callable[[str], int],
     ) -> int:
         prefix, marker, suffix = body_template.rpartition(_SOURCE_PLACEHOLDER)
         if not marker:
@@ -665,6 +670,7 @@ class IncrementalGraphReviewer:
             system_prompt,
             f"{prefix}{suffix}",
             response_schema_json,
+            token_counter,
         )
         available = self._config.max_token_length - fixed_tokens
         if available <= 0:
@@ -678,13 +684,14 @@ class IncrementalGraphReviewer:
         system_prompt: str,
         body_text: str,
         response_schema_json: str,
+        token_counter: Callable[[str], int],
     ) -> int:
         return rendered_prompt_token_count(
-            self._llm_provider.count_tokens,
+            token_counter,
             system_prompt=system_prompt,
             user_prompt="{body_text}",
             variables={"body_text": body_text},
-        ) + self._llm_provider.count_tokens(response_schema_json)
+        ) + token_counter(response_schema_json)
 
     def _render_discovery_body(
         self,

@@ -224,7 +224,9 @@ def test_review_patch_respects_metisignore_allowlist(
     import metis.engine.nodes.simple_llm_review.service as review_service_mod
 
     monkeypatch.setattr(
-        engine, "_get_review_graph", lambda _index=None: _DummyReviewGraph()
+        engine,
+        "_get_review_graph",
+        lambda _index=None, _model=None: _DummyReviewGraph(),
     )
     monkeypatch.setattr(
         review_service_mod, "summarize_changes", lambda *args, **kwargs: "summary"
@@ -233,7 +235,7 @@ def test_review_patch_respects_metisignore_allowlist(
     service = SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda index: engine._get_review_graph(index),
+        lambda index, model: engine._get_review_graph(index, model),
     )
     result = service.review_patch(str(patch_file))
 

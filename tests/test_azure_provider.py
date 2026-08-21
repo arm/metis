@@ -52,6 +52,15 @@ def test_chat_model_uses_configured_deployment() -> None:
     assert llm.max_tokens is None
 
 
+def test_chat_model_can_override_deployment_with_model() -> None:
+    provider = AzureOpenAIProvider(_chat_config())
+
+    llm = provider.get_chat_model(model="gpt-5", response_format=None)
+
+    assert llm.deployment_name == "gpt-5"
+    assert llm.model_name == "gpt-5"
+
+
 def test_chat_model_can_use_responses_api() -> None:
     provider = AzureOpenAIProvider(_chat_config(use_responses_api=True))
 

@@ -34,7 +34,7 @@ class AnthropicProvider(ChatProvider):
                 "ANTHROPIC_API_KEY environment variable is required for Anthropic provider but not set."
             )
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, text: str, model: str | None = None) -> int:
         return anthropic_token_count(text)
 
     def get_chat_model(

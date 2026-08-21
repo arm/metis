@@ -56,6 +56,7 @@ def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
         review = review_service.run_review(
             cast(ReviewCommand, invocation.inputs["request"]),
             jobs=invocation.context.jobs,
+            model=invocation.context.runtime.model,
             codegraph=invocation.context.codegraphs.load(reference),
             codegraph_diagnostics=reference.diagnostics,
             codegraph_failed_files=reference.failed_files,
@@ -109,6 +110,7 @@ class ReachabilityReviewService:
         command: ReviewCommand,
         *,
         jobs: NodeJobs,
+        model: str | None = None,
         codegraph,
         codegraph_diagnostics=(),
         codegraph_failed_files=(),
@@ -188,6 +190,7 @@ class ReachabilityReviewService:
                 self._run_reachability_review(
                     command,
                     supported,
+                    model=model,
                     codegraph=codegraph,
                     jobs=jobs,
                     memory_service=memory_service,
@@ -213,6 +216,7 @@ class ReachabilityReviewService:
                     index=index,
                     progress_callback=progress_callback,
                     checkpoint_session=checkpoint_session,
+                    model=model,
                 )
             )
         if not reviews:
@@ -227,6 +231,7 @@ class ReachabilityReviewService:
         command: ReviewCommand,
         files: tuple[str, ...],
         *,
+        model: str | None,
         codegraph,
         jobs: NodeJobs,
         memory_service: MemoryService | None,
@@ -235,11 +240,15 @@ class ReachabilityReviewService:
         checkpoint_session: ReviewCheckpointSession | None,
     ) -> ReviewRun:
         provider_diagnostics: list[CodeGraphDiagnostic] = []
+        settings = {
+            **self._settings,
+            "confirmation_model": model or self._config.llama_query_model,
+        }
         try:
             if command.mode == "file":
                 reviewed, analysis = self.file_review(
                     files[0],
-                    settings=self._settings,
+                    settings=settings,
                     jobs=jobs,
                     progress_callback=progress_callback,
                     diagnostic_callback=provider_diagnostics.append,
@@ -251,7 +260,7 @@ class ReachabilityReviewService:
             else:
                 codebase_groups, analysis = self.codebase_reviews(
                     files=files,
-                    settings=self._settings,
+                    settings=settings,
                     jobs=jobs,
                     progress_callback=progress_callback,
                     diagnostic_callback=provider_diagnostics.append,

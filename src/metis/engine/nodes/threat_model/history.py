@@ -148,7 +148,7 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
     chunks = split_snippet(
         evidence,
         int(config.max_token_length),
-        llm_provider.count_tokens,
+        lambda text: llm_provider.count_tokens(text, model=model),
     )
     lessons: list[dict[str, Any]] = []
     for chunk, _ in chunks:

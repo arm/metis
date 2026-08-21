@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from collections.abc import Mapping
+from functools import partial
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
@@ -278,6 +279,10 @@ class ExecutionGraphService:
         callbacks: Mapping[str, object] | None = None,
     ) -> NodeContext:
         llm_provider = self._engine_config.llm_provider
+
+        def token_counter_for_model(model: str):
+            return partial(llm_provider.count_tokens, model=model)
+
         return NodeContext(
             stage=stage,
             codebase_path=self._engine_config.codebase_path,
@@ -289,10 +294,13 @@ class ExecutionGraphService:
                 model=self._engine_config.llama_query_model,
                 max_workers=self._engine_config.max_workers,
                 max_token_length=self._engine_config.max_token_length,
-                token_counter=(
-                    llm_provider.count_tokens
-                    if llm_provider is not None
-                    else count_tokens
+                token_counter=token_counter_for_model(
+                    self._engine_config.llama_query_model
+                )
+                if llm_provider is not None
+                else count_tokens,
+                token_counter_for_model=(
+                    token_counter_for_model if llm_provider is not None else None
                 ),
                 model_tool_max_rounds=(
                     self._engine_config.capability_settings.model_tools.max_rounds

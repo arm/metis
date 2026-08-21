@@ -453,7 +453,7 @@ def _model_distilled_source_claims(
         for chunk, _ in split_snippet(
             text,
             int(config.max_token_length),
-            llm_provider.count_tokens,
+            lambda value: llm_provider.count_tokens(value, model=model),
         )
     ]
     if not evidence_chunks:

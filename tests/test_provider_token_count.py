@@ -29,6 +29,9 @@ def test_openai_compatible_provider_uses_tiktoken():
 
     provider = OpenAICompatibleChatProvider({"api_key": "k", "model": "gpt-4o"})
     assert provider.count_tokens(TEXT) == tiktoken_token_count(TEXT, "gpt-4o")
+    assert provider.count_tokens(TEXT, model="gpt-5") == tiktoken_token_count(
+        TEXT, "gpt-5"
+    )
 
 
 def test_azure_openai_provider_uses_tiktoken():

@@ -90,8 +90,9 @@ metis_engine:
 
 Execution topology describes what runs and how values flow. Deterministic graph
 annotations live under `metis_engine.codegraph`; reachability tuning lives under
-`metis_engine.reachability`. Model and reasoning settings come from the shared
-provider and query configuration. Reachability first covers selected function
+`metis_engine.reachability`. Model and reasoning settings default to the shared
+provider and query configuration. A node may override the model within that
+provider with its `model` field. Reachability first covers selected function
 source with the language plugin's normal security-review prompt, batching
 nearby functions from the same file in source order. The prompt includes
 deterministic CodeGraph evidence and syntax-derived direct-callee return
@@ -667,6 +668,7 @@ metis_engine:
       review:
         nodes:
           simple_llm_review:
+            model: gpt-5-mini
             capabilities:
               - index
               - memory
@@ -686,6 +688,10 @@ metis_engine:
         private_policy:
           policy: strict
 ```
+
+Omitting `model` uses `query.model`, then `llm_provider.model`. A model override
+uses the configured provider and credentials; it does not select another
+provider. For Azure OpenAI, the override names the model deployment.
 
 A handler receives validated inputs and a small context containing its granted
 capabilities together with the repository lookup contract, CodeGraph

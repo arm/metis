@@ -61,6 +61,7 @@ class TriageClassifierService:
         navigation: NavigationCapability,
         codegraph: CodeGraph | None = None,
         unavailable_files: tuple[str, ...] = (),
+        model: str | None = None,
         model_tool_max_rounds: int | None = None,
     ) -> dict | None:
         normalized_path = self._normalize_path(finding.file_path)
@@ -84,7 +85,7 @@ class TriageClassifierService:
             context = _codegraph_context(codegraph, normalized_path, finding.line)
             if context:
                 request["codegraph_context"] = context
-        return self._workflow(navigation, model_tool_max_rounds).triage(request)
+        return self._workflow(navigation, model_tool_max_rounds, model).triage(request)
 
     def close(self) -> None:
         self._local = threading.local()
@@ -93,9 +94,11 @@ class TriageClassifierService:
         self,
         navigation: NavigationCapability,
         model_tool_max_rounds: int | None,
+        model: str | None = None,
     ) -> TriageWorkflow:
+        model = model or self._model
         workflow = getattr(self._local, "workflow", None)
-        workflow_key = (id(navigation), model_tool_max_rounds)
+        workflow_key = (id(navigation), model_tool_max_rounds, model)
         if (
             workflow is None
             or getattr(self._local, "workflow_key", None) != workflow_key
@@ -110,7 +113,7 @@ class TriageClassifierService:
             )
             workflow = TriageWorkflow(
                 llm_provider=self._llm_provider,
-                llama_query_model=self._model,
+                llama_query_model=model,
                 toolbox=navigation,
                 plugin_config=self._plugin_config,
                 chat_model_kwargs=merge_chat_model_kwargs(

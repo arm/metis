@@ -93,7 +93,7 @@ def test_initialize_threat_model_memory_preserves_source_on_invalid_model_respon
     tmp_path, monkeypatch
 ):
     config = _config(tmp_path)
-    config.llm_provider = SimpleNamespace(count_tokens=lambda _text: 1)
+    config.llm_provider = SimpleNamespace(count_tokens=lambda _text, model=None: 1)
     config.llama_query_model = "test-model"
     repo = tmp_path / "repo"
     (repo / "SECURITY.md").write_text(
@@ -145,7 +145,7 @@ def test_initialize_threat_model_memory_preserves_snapshot_on_provider_exception
     security = tmp_path / "repo" / "SECURITY.md"
     security.write_text("# Security\n\nKnown-good policy.\n", encoding="utf-8")
     initialize_threat_model_memory(config)
-    config.llm_provider = SimpleNamespace(count_tokens=lambda _text: 1)
+    config.llm_provider = SimpleNamespace(count_tokens=lambda _text, model=None: 1)
     config.llama_query_model = "test-model"
     security.write_text("# Security\n\nReplacement policy.\n", encoding="utf-8")
 
@@ -175,7 +175,9 @@ def test_history_memory_is_advisory_and_path_scoped(tmp_path, monkeypatch):
         "enabled": True,
         "max_commits": 50,
     }
-    config.llm_provider = SimpleNamespace(count_tokens=lambda text: len(text))
+    config.llm_provider = SimpleNamespace(
+        count_tokens=lambda text, model=None: len(text)
+    )
     config.llama_query_model = "test-model"
     commits = [
         {

@@ -143,6 +143,7 @@ class NodeRuntime:
     chat_model_kwargs: Mapping[str, object]
     model_tool_max_rounds: int = 0
     token_counter: Callable[[str], int] = count_tokens
+    token_counter_for_model: Callable[[str], Callable[[str], int]] | None = None
     jobs: NodeJobs | None = None
     is_cancelled: Callable[[], bool] = _not_cancelled
 

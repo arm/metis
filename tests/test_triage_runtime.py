@@ -48,7 +48,7 @@ def test_triage_adds_available_codegraph_evidence(engine, monkeypatch):
     monkeypatch.setattr(
         engine._triage_classifier,
         "_workflow",
-        lambda _navigation, _rounds: workflow,
+        lambda _navigation, _rounds, _model=None: workflow,
     )
 
     engine._triage_classifier.classify(
