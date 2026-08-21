@@ -94,15 +94,33 @@ def _write_sqlite_record_once(path: Path, record: ReviewCheckpointRecord) -> Non
         connection.commit()
 
 
+_TRANSIENT_SQLITE_CODES = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
+
+def _should_discard_on(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.Error):
+        return False
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code in _TRANSIENT_SQLITE_CODES:
+        return False
+    if code is None:
+        message = str(exc).lower()
+        if "locked" in message or "busy" in message:
+            return False
+    return True
+
+
 def _write_sqlite_record(path: Path, record: ReviewCheckpointRecord) -> None:
     try:
         _write_sqlite_record_once(path, record)
-    except (OSError, sqlite3.Error):
-        _discard_checkpoint(path)
+    except (OSError, sqlite3.Error) as exc:
+        if _should_discard_on(exc):
+            _discard_checkpoint(path)
         try:
             _write_sqlite_record_once(path, record)
-        except (OSError, sqlite3.Error):
-            _discard_checkpoint(path)
+        except (OSError, sqlite3.Error) as retry_exc:
+            if _should_discard_on(retry_exc):
+                _discard_checkpoint(path)
 
 
 def review_checkpoint_callbacks(
