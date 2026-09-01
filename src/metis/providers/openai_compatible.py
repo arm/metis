@@ -106,6 +106,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
 class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
     DEFAULT_BASE_URL: str | None = None
     DEFAULT_API_KEY: str | None = None
+    DEFAULT_CHECK_EMBEDDING_CTX_LENGTH: bool | None = None
 
     def __init__(self, config: OpenAICompatibleEmbeddingConfig) -> None:
         self.config = config
@@ -154,6 +155,10 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             params["base_url"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if self.DEFAULT_CHECK_EMBEDDING_CTX_LENGTH is not None:
+            params["check_embedding_ctx_length"] = (
+                self.DEFAULT_CHECK_EMBEDDING_CTX_LENGTH
+            )
         if extra_kwargs:
             params.update(extra_kwargs)
 

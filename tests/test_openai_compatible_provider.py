@@ -6,6 +6,7 @@ from typing import Any, cast
 from langchain_openai import ChatOpenAI
 
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
+from metis.providers.llamacpp import LlamaCppEmbeddingProvider
 from metis.providers.openai_compatible import OpenAICompatibleChatConfig
 from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingConfig
@@ -103,3 +104,10 @@ def test_embedding_provider_builds_separate_code_and_docs_models() -> None:
     assert code_client.openai_api_base == "https://example.test/v1"
     assert code_client.default_headers == {"X-Test-Header": "test"}
     assert code_client.dimensions == 1536
+    assert code_client.check_embedding_ctx_length is True
+    llama_provider = LlamaCppEmbeddingProvider(_embedding_config())
+    for embedding in (
+        llama_provider.get_embed_model_code(),
+        llama_provider.get_embed_model_docs(),
+    ):
+        assert cast(Any, embedding._client).check_embedding_ctx_length is False
