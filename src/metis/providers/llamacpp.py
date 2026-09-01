@@ -62,6 +62,7 @@ class LlamaCppProvider(OpenAICompatibleChatProvider):
 class LlamaCppEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
     DEFAULT_BASE_URL = LlamaCppProvider.DEFAULT_BASE_URL
     DEFAULT_API_KEY = LlamaCppProvider.DEFAULT_API_KEY
+    DEFAULT_CHECK_EMBEDDING_CTX_LENGTH = False
     CONFIG_SPEC = ProviderConfigSpec(
         display_name="llama.cpp embeddings",
         required_keys=("code_embedding_model", "docs_embedding_model"),
@@ -75,6 +76,3 @@ class LlamaCppEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
             "docs_extra_kwargs",
         ),
     )
-
-    def __init__(self, config):
-        super().__init__(config)
