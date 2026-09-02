@@ -9,7 +9,6 @@ from typing import Any
 
 from metis.utils import resolve_path_within_root
 
-
 _IDENTIFIER_CALL = re.compile(rb"\b[A-Za-z_][A-Za-z0-9_]*[ \t\r\n]*\(")
 _IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*")
 _Span = tuple[int, int]
@@ -76,18 +75,24 @@ class TreeSitterRuntime:
     def init_error(self) -> str:
         return self._init_error
 
-    def parse_file(self, codebase_path: str, rel_path: str) -> ParsedUnit:
+    def parse_file(
+        self,
+        codebase_path: str,
+        rel_path: str,
+        *,
+        source: bytes | None = None,
+    ) -> ParsedUnit:
         if not self.is_available:
             raise RuntimeError(
                 f"Tree-sitter parser unavailable for '{self.language_name}': {self._init_error or 'unknown error'}"
             )
         from tree_sitter_language_pack import get_parser
 
-        full = resolve_path_within_root(codebase_path, rel_path)
-        if not full.is_file():
-            raise FileNotFoundError(str(full))
-
-        source = full.read_bytes()
+        if source is None:
+            full = resolve_path_within_root(codebase_path, rel_path)
+            if not full.is_file():
+                raise FileNotFoundError(str(full))
+            source = full.read_bytes()
         parser = get_parser(self.language_name)
         diagnostic_tree = parser.parse_bytes(source)
         parse_source, tree, macro_function_masks = (
@@ -95,6 +100,12 @@ class TreeSitterRuntime:
             if self.language_name == "c"
             else (source, diagnostic_tree, ())
         )
+        if self.language_name == "c":
+            parse_source, tree = _recover_declaration_annotations(
+                parser,
+                parse_source,
+                tree,
+            )
         return ParsedUnit(
             parse_source=parse_source,
             tree=tree,
@@ -106,6 +117,90 @@ class TreeSitterRuntime:
                 else ()
             ),
         )
+
+
+def _recover_declaration_annotations(
+    parser: Any,
+    source: bytes,
+    original_tree: Any,
+) -> tuple[bytes, Any]:
+    if not original_tree.root_node().has_error():
+        return source, original_tree
+    spans = _declaration_annotation_spans(original_tree, source)
+    if not spans:
+        return source, original_tree
+
+    parse_source = bytearray(source)
+    for start, end in spans:
+        _mask_non_newlines(parse_source, source, start, end)
+    recovered_source = bytes(parse_source)
+    recovered_tree = parser.parse_bytes(recovered_source)
+    # Only retain masks in a valid declaration prefix, never in signatures or
+    # expressions swallowed by the original error node.
+    root = recovered_tree.root_node()
+    nodes = iter(root.child(index) for index in range(root.child_count()))
+    node = next(nodes, None)
+    for start, end in spans:
+        while node is not None and node.end_byte() <= start:
+            node = next(nodes, None)
+        declarator = (
+            node.child_by_field_name("declarator") if node is not None else None
+        )
+        if (
+            node is not None
+            and node.kind() == "declaration"
+            and not node.has_error()
+            and declarator is not None
+            and end <= declarator.start_byte()
+        ):
+            continue
+        parse_source[start:end] = source[start:end]
+    if parse_source == source:
+        return source, original_tree
+    if parse_source != recovered_source:
+        recovered_source = bytes(parse_source)
+        recovered_tree = parser.parse_bytes(recovered_source)
+    original_functions = _function_anchors(original_tree, source)
+    recovered_functions = _function_anchors(recovered_tree, recovered_source)
+    if original_functions < recovered_functions:
+        return recovered_source, recovered_tree
+    return source, original_tree
+
+
+def _declaration_annotation_spans(
+    tree: Any,
+    source: bytes,
+) -> tuple[_Span, ...]:
+    lexical_source = _mask_c_comments_and_literals(source)
+    spans: list[_Span] = []
+    root = tree.root_node()
+    for index in range(root.child_count()):
+        node = root.child(index)
+        if (
+            node is None
+            or not node.has_error()
+            or node.kind() not in {"declaration", "function_definition", "ERROR"}
+        ):
+            continue
+        start, end = node.start_byte(), node.end_byte()
+        brace_depth = 0
+        scanned_until = start
+        for match in _IDENTIFIER_CALL.finditer(lexical_source, start, end):
+            # A top-level ERROR can also contain subsequent function bodies.
+            brace_depth += lexical_source.count(b"{", scanned_until, match.start())
+            brace_depth -= lexical_source.count(b"}", scanned_until, match.start())
+            scanned_until = match.start()
+            if brace_depth:
+                continue
+            open_parenthesis = lexical_source.find(b"(", match.start(), match.end())
+            invocation = _scan_invocation(lexical_source, open_parenthesis)
+            if invocation is None or invocation[0] > end:
+                continue
+            invocation_end = invocation[0]
+            following = _skip_whitespace(lexical_source, invocation_end)
+            if _IDENTIFIER.match(lexical_source, following, end) is not None:
+                spans.append((match.start(), invocation_end))
+    return tuple(spans)
 
 
 def _recover_macro_function_wrappers(
@@ -333,6 +428,19 @@ def _mask_c_comments_and_literals(source: bytes) -> bytes:
             _mask_non_newlines(masked, source, index, end)
             index = end
             continue
+        if source.startswith(b'R"', index):
+            delimiter_start = index + 2
+            opening = source.find(
+                b"(", delimiter_start, min(len(source), delimiter_start + 17)
+            )
+            if opening >= 0:
+                delimiter = source[delimiter_start:opening]
+                closing = source.find(b")" + delimiter + b'"', opening + 1)
+                if closing >= 0:
+                    end = closing + len(delimiter) + 2
+                    _mask_non_newlines(masked, source, index, end)
+                    index = end
+                    continue
         if source[index] in {ord('"'), ord("'")}:
             quote = source[index]
             end = index + 1

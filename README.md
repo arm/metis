@@ -63,6 +63,8 @@ Metis includes support for the following languages:
 For the current review graph and SARIF triage flow, see
 [docs/execution-graph.md](docs/execution-graph.md) and
 [docs/triage-flow.md](docs/triage-flow.md).
+Optional compilation-database filtering for C/C++ review is documented in
+[docs/config/compilation_profile.md](docs/config/compilation_profile.md).
 
 Metis uses a plugin-based language system, making it easy to extend support to additional languages.
 

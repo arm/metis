@@ -10,23 +10,37 @@ from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
-from metis.engine.stages.review.models import ReviewCommand
+from metis.engine.source import ProfiledSourceReference
 
 
 def execute(invocation: NodeInvocation) -> NodeResult:
-    command = cast(ReviewCommand, invocation.inputs["request"])
+    profiled = cast(
+        ProfiledSourceReference | None, invocation.inputs.get("profiled_source")
+    )
+    if (
+        profiled is not None
+        and profiled.fingerprint
+        != invocation.context.repository.profiled_source_fingerprint
+    ):
+        raise RuntimeError(
+            "CodeGraph source profile does not match the installed profile"
+        )
     reference = invocation.context.codegraphs.materialize(
-        seed_file=command.target if command.mode == "file" else None,
         progress_callback=invocation.context.report_progress,
     )
+    if profiled is not None and any(
+        invocation.context.repository.source_profile_applies_to_path(path)
+        for path in reference.failed_files
+    ):
+        raise RuntimeError("Profiled CodeGraph contains failed files")
     return NodeResult({"codegraph": reference})
 
 
 registration = NodeRegistration(
     name="codegraph",
-    stage="review",
+    stage="initialize",
     configuration=EmptyNodeConfiguration,
-    inputs={"request": ReviewCommand},
+    inputs={"profiled_source": ProfiledSourceReference | None},
     outputs={"codegraph": CodeGraphReference},
     execute=execute,
 )

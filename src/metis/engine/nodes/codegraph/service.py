@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from metis.engine.repository import EngineRepository
     from metis.engine.runtime import EngineConfig
 
-CODEGRAPH_FINGERPRINT_VERSION = 1
+CODEGRAPH_FINGERPRINT_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class CodeGraphService:
         self._provider_context = CodeGraphProviderContext(
             get_language_name_for_path=repository.get_language_name_for_path,
             has_language_file_role=repository.has_language_file_role,
+            source_for_path=repository.analysis_source_for_path,
         )
         self._provider_factories = {
             normalize_provider_name(name): factory
@@ -71,17 +72,14 @@ class CodeGraphService:
         self._materialize_active = False
         self._materialize_generation = 0
         self._last_materialization: CodeGraphReference | None = None
-        self._last_materialization_key: str | None = None
         self._lock = threading.RLock()
 
     def materialize(
         self,
         *,
-        seed_file: str | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
     ) -> CodeGraphReference:
-        materialization_key = seed_file
         with self._materialize_condition:
             while self._materialize_active:
                 generation = self._materialize_generation
@@ -89,33 +87,27 @@ class CodeGraphService:
                     lambda: self._materialize_generation > generation
                 )
                 completed = self._last_materialization
-                if (
-                    completed is not None
-                    and self._last_materialization_key == materialization_key
-                ):
+                if completed is not None:
                     _replay_diagnostics(completed, diagnostic_callback)
                     return completed
             self._materialize_active = True
         try:
             completed = self._materialize(
-                seed_file=seed_file,
                 progress_callback=progress_callback,
                 diagnostic_callback=diagnostic_callback,
             )
         except Exception:
-            self._finish_materialization(None, materialization_key)
+            self._finish_materialization(None)
             raise
-        self._finish_materialization(completed, materialization_key)
+        self._finish_materialization(completed)
         return completed
 
     def _finish_materialization(
         self,
         reference: CodeGraphReference | None,
-        materialization_key: str | None,
     ) -> None:
         with self._materialize_condition:
             self._last_materialization = reference
-            self._last_materialization_key = materialization_key
             self._materialize_generation += 1
             self._materialize_active = False
             self._materialize_condition.notify_all()
@@ -123,13 +115,12 @@ class CodeGraphService:
     def _materialize(
         self,
         *,
-        seed_file: str | None,
         progress_callback: Callable[[dict[str, object]], None] | None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None,
     ) -> CodeGraphReference:
         store = self._store_instance()
         while True:
-            selected_files = self._selected_files(seed_file=seed_file)
+            selected_files = self._selected_files()
             fingerprint = self._fingerprint(selected_files)
             reference = store.reference_for_fingerprint(
                 fingerprint,
@@ -158,7 +149,7 @@ class CodeGraphService:
             for diagnostic in semantics_diagnostics:
                 if diagnostic_callback is not None:
                     diagnostic_callback(diagnostic)
-            current_files = self._selected_files(seed_file=seed_file)
+            current_files = self._selected_files()
             if (
                 current_files != selected_files
                 or self._fingerprint(current_files) != fingerprint
@@ -178,32 +169,10 @@ class CodeGraphService:
                 ),
             )
 
-    def _selected_files(
-        self,
-        *,
-        seed_file: str | None,
-    ) -> tuple[str, ...]:
-        if seed_file is None:
-            candidates = self._repository.get_code_files(include_suffixed_sources=True)
-        else:
-            relative_seed = os.path.normpath(
-                os.path.relpath(seed_file, self._config.codebase_path)
-                if os.path.isabs(seed_file)
-                else seed_file
-            )
-            candidates = (
-                (os.path.join(self._config.codebase_path, relative_seed),)
-                if self._repository.is_code_file_selected(
-                    relative_seed, include_suffixed_sources=True
-                )
-                else ()
-            )
+    def _selected_files(self) -> tuple[str, ...]:
+        candidates = self._repository.get_code_files(include_suffixed_sources=True)
         return tuple(
-            sorted(
-                dict.fromkeys(
-                    str(path) for path in candidates if self.supports_file(str(path))
-                )
-            )
+            sorted({str(path) for path in candidates if self.supports_file(str(path))})
         )
 
     def load(self, reference: CodeGraphReference) -> CodeGraph:
@@ -329,13 +298,12 @@ class CodeGraphService:
                     "errors": [diagnostic.message for diagnostic in diagnostics],
                 }
             )
-        built = CodeGraphResult(
+        return CodeGraphResult(
             graph=graph,
             processed_files=processed_file_tuple,
             diagnostics=tuple(diagnostics),
             failed_files=tuple(failed_files),
         )
-        return built
 
     def supports_file(self, path: str) -> bool:
         provider_name = self._registration_name(path)
@@ -358,7 +326,13 @@ class CodeGraphService:
                 else os.path.join(self._config.codebase_path, path)
             )
             identity = os.path.normcase(os.path.abspath(absolute))
-            content_identity = _file_identity(identity)
+            # The profile fingerprints its source views and verifies the snapshot.
+            # Files outside that profile must not invalidate an unchanged graph.
+            content_identity = (
+                {"profiled": True}
+                if self._repository.analysis_source_for_path(identity) is not None
+                else _file_identity(identity)
+            )
             provider_name = self._registration_name(path)
             semantics_name = self._semantics_registration_name(path)
             entries.append(
@@ -379,6 +353,9 @@ class CodeGraphService:
             "producer_version": METIS_VERSION,
             "fingerprint_version": CODEGRAPH_FINGERPRINT_VERSION,
         }
+        profile = self._repository.profiled_source_fingerprint
+        if profile is not None:
+            payload["profiled_source"] = profile
         encoded = json.dumps(
             payload,
             sort_keys=True,

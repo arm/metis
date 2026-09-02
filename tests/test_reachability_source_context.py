@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from unittest.mock import Mock
 
 import pytest
 
-from metis.engine.codegraph import CallSite, FunctionNode
+from metis.engine.codegraph import CallSite
+from metis.engine.codegraph import FunctionNode
 from metis.engine.nodes.reachability.source_context import (
     _build_file_grouped_node_chunks,
 )
@@ -58,7 +60,8 @@ def test_function_chunks_cover_every_source_line_and_callsite(tmp_path):
     assert {call.line for call in target.call_sites} <= _rendered_lines(chunks)
 
 
-def test_function_chunks_never_cross_files_and_follow_source_order(tmp_path):
+@pytest.mark.parametrize("profiled", (False, True))
+def test_function_chunks_never_cross_files_and_follow_source_order(tmp_path, profiled):
     (tmp_path / "a.c").write_text(
         "void first(void) {}\nvoid second(void) {}\n",
         encoding="utf-8",
@@ -67,12 +70,14 @@ def test_function_chunks_never_cross_files_and_follow_source_order(tmp_path):
     first = FunctionNode("a.c::first", "a.c", "first", 1, end_line=1)
     second = FunctionNode("a.c::second", "a.c", "second", 2, end_line=2)
     third = FunctionNode("b.c::third", "b.c", "third", 1, end_line=1)
+    lookup = Mock(side_effect=lambda path: (tmp_path / path).read_bytes())
 
     chunks = _build_file_grouped_node_chunks(
         str(tmp_path),
         [third, second, first],
         max_tokens=10_000,
         token_counter=_character_count,
+        source_for_path=lookup if profiled else None,
     )
 
     assert [[node.unique_name for node in nodes] for nodes, _text in chunks] == [
@@ -82,6 +87,9 @@ def test_function_chunks_never_cross_files_and_follow_source_order(tmp_path):
     assert all(len({node.file_path for node in nodes}) == 1 for nodes, _text in chunks)
     assert all("Function a.c::" not in text for _nodes, text in chunks)
     assert all("===== FILE:" not in text for _nodes, text in chunks)
+    assert [call.args[0] for call in lookup.call_args_list] == (
+        ["a.c", "b.c"] if profiled else []
+    )
 
 
 def test_function_chunks_reject_unlabelled_line_fragments(tmp_path):

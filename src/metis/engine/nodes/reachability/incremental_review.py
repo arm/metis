@@ -516,6 +516,7 @@ class IncrementalGraphReviewer:
                             group_nodes,
                             max_tokens=source_token_budget,
                             token_counter=token_counter,
+                            source_for_path=self._repository.analysis_source_for_path,
                         )
                     except ValueError as exc:
                         overflow_error = exc
@@ -714,6 +715,7 @@ class IncrementalGraphReviewer:
             codebase_path=self._config.codebase_path,
             file_path=file_path,
             source_text=source_text,
+            source_for_path=self._repository.analysis_source_for_path,
         )
         return "\n".join(
             (
@@ -815,7 +817,16 @@ class IncrementalGraphReviewer:
         packet: _FrontierPacket,
         item: dict[str, Any],
     ) -> tuple[FunctionNode, Any] | None:
-        source_map = SourceMap.for_file(self._config.codebase_path, packet.file_path)
+        source_view = self._repository.source_view_for_path(packet.file_path)
+        source_map = (
+            SourceMap.for_bytes(
+                packet.file_path,
+                source_view.canonical,
+                anchor_source=source_view.raw,
+            )
+            if source_view is not None
+            else SourceMap.for_file(self._config.codebase_path, packet.file_path)
+        )
         if source_map is None or not packet.shown_lines:
             return None
         hint = range(min(packet.shown_lines), max(packet.shown_lines) + 1)
@@ -827,8 +838,17 @@ class IncrementalGraphReviewer:
             context_text=f"{item.get('issue') or ''} {item.get('reasoning') or ''}",
         )
         shown_span = range(anchor.start_line, anchor.end_line + 1)
-        if anchor.start_line <= 0 or any(
-            line not in packet.shown_lines for line in shown_span
+        if (
+            anchor.start_line <= 0
+            or not {
+                anchor.start_line,
+                anchor.end_line,
+            }
+            <= packet.shown_lines
+            or any(
+                line not in packet.shown_lines and source_map.lines[line - 1].strip()
+                for line in shown_span
+            )
         ):
             return None
         matching_nodes = [

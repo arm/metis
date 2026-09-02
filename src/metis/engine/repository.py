@@ -10,8 +10,12 @@ from threading import Lock
 import pathspec
 from llama_index.core.node_parser import SentenceSplitter
 
+from metis.utils import resolve_path_within_root
+
 from .runtime import EngineConfig
 from .runtime import EngineState
+from .source import ProfiledSourceArtifact
+from .source import SourceView
 
 logger = logging.getLogger("metis")
 
@@ -31,6 +35,54 @@ class EngineRepository:
         self._metisignore_loaded = False
         self._metisignore_spec: pathspec.GitIgnoreSpec | None = None
         self._metisignore_lock = Lock()
+        self._profiled_source: ProfiledSourceArtifact | None = None
+
+    def install_profiled_source(self, artifact: ProfiledSourceArtifact) -> None:
+        self._profiled_source = artifact
+
+    @property
+    def profiled_source_fingerprint(self) -> str | None:
+        artifact = self._profiled_source
+        return artifact.reference.fingerprint if artifact is not None else None
+
+    def source_view_for_path(self, path: str) -> SourceView | None:
+        artifact = self._profiled_source
+        if (
+            artifact is None
+            or self.get_language_name_for_path(path) not in artifact.languages
+        ):
+            return None
+        view = artifact.view_for_path(self._config.codebase_path, path)
+        if view is not None:
+            try:
+                current = resolve_path_within_root(
+                    self._config.codebase_path,
+                    path,
+                ).read_bytes()
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Unable to verify profiled source {path!r}"
+                ) from exc
+            if current != view.raw:
+                raise RuntimeError(
+                    f"Profiled source changed after initialization: {path}"
+                )
+            return view
+        return SourceView(b"", b"")
+
+    def source_profile_applies_to_path(self, path: str) -> bool:
+        artifact = self._profiled_source
+        return (
+            artifact is not None
+            and self.get_language_name_for_path(path) in artifact.languages
+        )
+
+    def analysis_source_for_path(self, path: str) -> bytes | None:
+        if self.source_view_for_path(path) is None:
+            return None
+        artifact = self._profiled_source
+        assert artifact is not None
+        return artifact.analysis_for_path(self._config.codebase_path, path) or b""
 
     def get_plugin_for_extension(self, extension):
         registry = self._config.language_registry

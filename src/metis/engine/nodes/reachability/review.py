@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 from typing import cast
 
+from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import CapabilityRequirement
@@ -98,12 +100,15 @@ class ReachabilityReviewService:
         reachability_service,
         simple_llm_review: SimpleLlmReviewService | None,
         settings: dict[str, object] | None = None,
+        *,
+        supports_file: Callable[[str], bool],
     ) -> None:
         self._config = config
         self._repository = repository
         self._service = reachability_service
         self._simple_llm_review = simple_llm_review
         self._settings = dict(settings or {})
+        self._supports_file = supports_file
 
     def run_review(
         self,
@@ -139,6 +144,10 @@ class ReachabilityReviewService:
         selected_match_paths = {
             self._repository.normalize_match_path(path) for path in files
         }
+        graph_files = {
+            self._repository.normalize_match_path(node.file_path)
+            for node in codegraph.nodes.values()
+        }
         supported_files: list[str] = []
         fallback_files: list[str] = []
         outside_codebase: list[str] = []
@@ -150,9 +159,12 @@ class ReachabilityReviewService:
                 outside_codebase.append(path)
             else:
                 resolved_path = str(resolved)
-                if self._repository.normalize_match_path(
-                    resolved_path
-                ) not in unavailable and self.supports_file(resolved_path):
+                normalized = self._repository.normalize_match_path(resolved_path)
+                if (
+                    normalized not in unavailable
+                    and normalized in graph_files
+                    and self._supports_file(resolved_path)
+                ):
                     supported_files.append(resolved_path)
                 else:
                     fallback_files.append(resolved_path)
@@ -263,7 +275,6 @@ class ReachabilityReviewService:
                     settings=settings,
                     jobs=jobs,
                     progress_callback=progress_callback,
-                    diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
                     memory_service=memory_service,
                     checkpoint_session=checkpoint_session,
@@ -311,9 +322,6 @@ class ReachabilityReviewService:
         status = ReviewStatus.INCONCLUSIVE if diagnostics else ReviewStatus.SUCCEEDED
         return ReviewRun(status, result, tuple(diagnostics))
 
-    def supports_file(self, file_path):
-        return self._service.supports_file(str(file_path))
-
     def review_options(
         self,
         *,
@@ -335,8 +343,7 @@ class ReachabilityReviewService:
         files=None,
         settings=None,
         progress_callback=None,
-        diagnostic_callback=None,
-        codegraph=None,
+        codegraph: CodeGraph,
         memory_service: MemoryService | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[list[dict[str, object]], ReachabilityAnalysis]:
@@ -350,7 +357,6 @@ class ReachabilityReviewService:
             options=options,
             files=files,
             codegraph=codegraph,
-            diagnostic_callback=diagnostic_callback,
             memory_service=memory_service,
         )
         return (
@@ -369,7 +375,7 @@ class ReachabilityReviewService:
         settings=None,
         progress_callback=None,
         diagnostic_callback=None,
-        codegraph=None,
+        codegraph: CodeGraph,
         memory_service: MemoryService | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[dict[str, object] | None, ReachabilityAnalysis | None]:

@@ -61,8 +61,8 @@ BUILTIN_STAGE_CONTRACTS: Mapping[StageName, _ResolvedStageContract] = MappingPro
     {
         "initialize": _ResolvedStageContract({}, {}),
         "review": _ResolvedStageContract(
-            {"request": ReviewCommand},
-            {},
+            {"request": ReviewCommand, "codegraph": CodeGraphReference},
+            {"codegraph": CodeGraphReference | None},
             required_execution_inputs=frozenset({"review_request"}),
             required_outputs={
                 "formats": tuple[ResultFormat, ...],
@@ -187,6 +187,25 @@ class ExecutionConfiguration(BaseModel):
                 raise ValueError(
                     f"Execution stage {name!r} depends on unavailable stages: "
                     f"{unavailable}"
+                )
+        initialize = self.stages.initialize
+        if (
+            initialize is not None
+            and "compilation_profile" in initialize.nodes
+            and "codegraph" in initialize.nodes
+            and "compilation_profile" not in initialize.nodes["codegraph"].depends_on
+        ):
+            raise ValueError("Initialize codegraph must depend on compilation_profile")
+        review = self.stages.review
+        if review is not None and "reachability" in review.nodes:
+            source = review.inputs.get("codegraph", "")
+            source_stage, separator, _output = source.partition(".")
+            if not separator or source_stage != "initialize":
+                raise ValueError("Reachability requires a CodeGraph from Initialize")
+            binding = review.nodes["reachability"].inputs.get("codegraph")
+            if binding not in (None, "$inputs.codegraph"):
+                raise ValueError(
+                    "Reachability must consume the Review stage CodeGraph input"
                 )
         for name, stage in configured_stages:
             configured_filenames = [

@@ -12,6 +12,7 @@ import pytest
 from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.engine import MetisEngine
 from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph import FunctionNode
 from metis.engine.execution.contracts import NodeCallbacks
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import ModelProviderConfigurationError
@@ -20,9 +21,12 @@ from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.engine.nodes.simple_llm_review.service import TraditionalReviewOutcome
+from metis.engine.source import ProfiledSourceArtifact
+from metis.engine.source import ProfiledSourceReference
+from metis.engine.source import SourceMap
 from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
-from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewCheckpointRecord
+from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
@@ -35,6 +39,12 @@ def _simple_llm_review(engine: MetisEngine) -> SimpleLlmReviewService:
         engine.repository,
         lambda index, model: engine._get_review_graph(index, model),
     )
+
+
+def _covered_graph(path: str) -> CodeGraph:
+    graph = CodeGraph()
+    graph.add_node(FunctionNode(f"{path}::entry", path, "entry", 1))
+    return graph
 
 
 def _prompt_json_section(request: JsonPromptRequest, label: str) -> Any:
@@ -122,6 +132,112 @@ def test_simple_review_orders_results_by_selected_file(engine):
         "first.c",
         "second.c",
     ]
+    assert all(
+        "anchor_source_hash" not in call.args[0] for call in graph.review.call_args_list
+    )
+
+
+def test_simple_review_uses_profile_bytes_and_anchors_raw_source(engine) -> None:
+    raw = (
+        b"int marker; /* \xff\f */\n"
+        b"void active(void) {\n    risky();\n    inactive_bug();\n}\n"
+    )
+    canonical = raw.replace(b"    inactive_bug();", b"                   ")
+    assert len(raw) == len(canonical)
+    target = Path(engine.codebase_path) / "profiled.c"
+    target.write_bytes(raw)
+    engine.repository.install_profiled_source(
+        ProfiledSourceArtifact(
+            reference=ProfiledSourceReference(
+                fingerprint="review-profile",
+                compile_commands_path="compile_commands.json",
+                compile_commands_sha256="0" * 64,
+                translation_units=1,
+                source_views=1,
+                profiled_files=1,
+                ambiguous_files=0,
+                active_line_count=3,
+            ),
+            languages=frozenset({"c", "cpp"}),
+            raw_sources={target.name: raw},
+            canonical_sources={target.name: canonical},
+        )
+    )
+    graph = engine._get_review_graph(None, None)
+
+    def model_response(request):
+        body = request.variables["body_text"]
+        assert "risky();" in body
+        assert "3:     risky();" in body
+        assert "inactive_bug();" not in body
+        return request.parse(
+            {
+                "reviews": [
+                    {
+                        "issue": "Active issue",
+                        "code_snippet": "risky();\n\n}",
+                        "start_line": 2,
+                        "end_line": 4,
+                        "reasoning": "Active path reaches risky operation.",
+                        "mitigation": "Validate input first.",
+                        "confidence": 0.9,
+                        "cwe": "CWE-20",
+                        "severity": "HIGH",
+                    }
+                ]
+            }
+        )
+
+    graph._prompt_runner.invoke = Mock(side_effect=model_response)
+    service = _simple_llm_review(engine)
+    checkpoint_session = Mock(has_records=False)
+    checkpoint_session.get.return_value = None
+    run = service.run_files(
+        (str(target),),
+        jobs=engine.execution._jobs,
+        checkpoint_session=checkpoint_session,
+    )
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result is not None
+    finding = run.result.reviews[0].reviews[0].model_dump()
+    raw_anchor = SourceMap.for_bytes(target.name, raw).anchor_for_lines(3, 5)
+    canonical_anchor = SourceMap.for_bytes(target.name, canonical).anchor_for_lines(
+        3, 5
+    )
+    assert finding["anchor"] == raw_anchor.to_dict()
+    assert finding["anchor"]["start_byte"] == raw.index(b"    risky();")
+    assert finding["anchor"]["symbol"] == "profiled.c::active"
+    assert finding["anchor"]["content_hash"] != canonical_anchor.content_hash
+    assert json.dumps(checkpoint_session.put.call_args.args[1])
+
+    other = Path(engine.codebase_path) / "other.py"
+    other.write_text("print('unchanged')\n", encoding="utf-8")
+    plugin = engine.repository.get_plugin_for_path(str(target))
+    language_for_path = engine.repository.get_language_name_for_path
+    engine.repository.get_plugin_for_path = lambda _path: plugin
+    engine.repository.get_language_name_for_path = lambda path: (
+        "python" if path == str(other) else language_for_path(path)
+    )
+    other_graph = Mock()
+    other_graph.review.return_value = None
+    service._review_file_standard(str(other), review_graph=other_graph)
+    other_request = other_graph.review.call_args.args[0]
+    assert other_request["snippet"] == "print('unchanged')\n"
+    assert "anchor_source_hash" not in other_request
+
+    review = graph.review
+
+    def change_source(request, **kwargs):
+        target.write_text("void changed(void) {}\n", encoding="utf-8")
+        return review(request, **kwargs)
+
+    graph.review = change_source
+    failed = service.run_files((str(target),), jobs=engine.execution._jobs)
+
+    assert failed.status is ReviewStatus.FAILED
+    assert "Source changed during review" in failed.diagnostics[0].message
+    graph._prompt_runner.invoke.assert_called_once()
 
 
 def test_simple_llm_review_resumes_completed_files(engine, tmp_path):
@@ -347,11 +463,11 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
         Mock(),
         fallback,
         {},
+        supports_file=lambda path: path.endswith(".c"),
     )
     c_file = str(Path(engine.codebase_path) / "supported.c")
     python_file = str(Path(engine.codebase_path) / "baseline.py")
     service._repository.get_code_files = Mock(return_value=[c_file, python_file])
-    service.supports_file = Mock(side_effect=lambda path: path.endswith(".c"))
     service.codebase_reviews = Mock(
         return_value=(
             [{"file": "supported.c", "reviews": [{"issue": "reachable"}]}],
@@ -366,7 +482,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
         run = service.run_review(
             ReviewCommand(mode="code"),
             jobs=engine.execution._jobs,
-            codegraph=CodeGraph(),
+            codegraph=_covered_graph("supported.c"),
             progress_callback=progress_events.append,
         )
 
@@ -421,9 +537,9 @@ def test_reachability_does_not_run_simple_review_for_supported_files(engine):
         Mock(),
         simple,
         {},
+        supports_file=lambda _path: True,
     )
     target = str(Path(engine.codebase_path) / "supported.c")
-    service.supports_file = Mock(return_value=True)
     service.file_review = Mock(
         side_effect=lambda *_args, **_kwargs: (
             events.append("graph")
@@ -436,47 +552,13 @@ def test_reachability_does_not_run_simple_review_for_supported_files(engine):
     run = service.run_review(
         ReviewCommand(mode="file", target=target),
         jobs=engine.execution._jobs,
-        codegraph=CodeGraph(),
+        codegraph=_covered_graph("supported.c"),
     )
 
     assert run.status is ReviewStatus.SUCCEEDED
     assert events == ["graph"]
     simple.run_files.assert_not_called()
     assert "candidate_node_names" not in service.file_review.call_args.kwargs
-
-
-def test_reachability_missing_graph_coverage_is_inconclusive(engine):
-    service = ReachabilityReviewService(
-        engine._config,
-        engine.repository,
-        Mock(),
-        Mock(spec=SimpleLlmReviewService),
-        {},
-    )
-    target = str(Path(engine.codebase_path) / "supported.c")
-    service.supports_file = Mock(return_value=True)
-    service.file_review = Mock(
-        return_value=(
-            {"file": "supported.c", "reviews": []},
-            ReachabilityAnalysis(
-                findings=(),
-                codegraph_failures=(
-                    "codegraph.target_missing:supported.c",
-                    "codegraph.target_missing:supported.c",
-                ),
-            ),
-        )
-    )
-
-    run = service.run_review(
-        ReviewCommand(mode="file", target=target),
-        jobs=engine.execution._jobs,
-        codegraph=CodeGraph(),
-    )
-
-    assert run.status is ReviewStatus.INCONCLUSIVE
-    assert run.diagnostics[0].code == "review.frontier_analysis_partial"
-    assert "1 selected target" in run.diagnostics[0].message
 
 
 def test_reachability_operational_failure_detail_survives_product_boundary(engine):
@@ -486,9 +568,9 @@ def test_reachability_operational_failure_detail_survives_product_boundary(engin
         Mock(),
         Mock(spec=SimpleLlmReviewService),
         {},
+        supports_file=lambda _path: True,
     )
     target = str(Path(engine.codebase_path) / "supported.c")
-    service.supports_file = Mock(return_value=True)
     service.file_review = Mock(
         return_value=(
             {"file": "supported.c", "reviews": []},
@@ -507,7 +589,7 @@ def test_reachability_operational_failure_detail_survives_product_boundary(engin
     run = service.run_review(
         ReviewCommand(mode="file", target=target),
         jobs=engine.execution._jobs,
-        codegraph=CodeGraph(),
+        codegraph=_covered_graph("supported.c"),
     )
 
     assert run.status is ReviewStatus.INCONCLUSIVE
@@ -528,6 +610,7 @@ def test_reachability_review_rejects_symlink_outside_codebase(engine, tmp_path):
         Mock(),
         fallback,
         {},
+        supports_file=lambda _path: False,
     )
 
     run = service.run_review(
@@ -548,11 +631,10 @@ def test_reachability_defers_fallback_to_explicit_simple_review(engine):
         Mock(),
         None,
         {},
+        supports_file=lambda _path: False,
     )
     python_file = str(Path(engine.codebase_path) / "baseline.py")
     service._repository.get_code_files = Mock(return_value=[python_file])
-    service.supports_file = Mock(return_value=False)
-
     run = service.run_review(
         ReviewCommand(mode="code"),
         jobs=engine.execution._jobs,
@@ -572,6 +654,7 @@ def test_reachability_empty_scope_is_inconclusive(engine):
         Mock(),
         Mock(spec=SimpleLlmReviewService),
         {},
+        supports_file=lambda _path: False,
     )
     service._repository.get_code_files = Mock(return_value=[])
 

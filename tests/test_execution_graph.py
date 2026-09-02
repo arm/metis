@@ -38,6 +38,7 @@ from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.service import ExecutionGraphService
 from metis.engine.stages.triage.models import TriageRun
+from metis.engine.source import ProfiledSourceReference
 from metis.execution_nodes import CapabilityRequirement
 from metis.execution_nodes import EmptyNodeConfiguration
 from metis.execution_nodes import ExecutionDiagnostic
@@ -79,15 +80,18 @@ def _configuration() -> ExecutionConfiguration:
             },
             "stages": {
                 "initialize": {
-                    "outputs": ["threat_model"],
+                    "outputs": {
+                        "threat_model": "threat_model.threat_model",
+                        "codegraph": "codegraph.codegraph",
+                    },
                     "nodes": {
                         "threat_model": {"capabilities": ["memory"]},
+                        "codegraph": {},
                     },
                 },
                 "review": {
-                    "depends_on": ["initialize"],
+                    "inputs": {"codegraph": "initialize.codegraph"},
                     "nodes": {
-                        "codegraph": {},
                         "simple_llm_review": {"capabilities": ["index", "memory"]},
                         "finding_dedup": {},
                         "result": {
@@ -98,7 +102,7 @@ def _configuration() -> ExecutionConfiguration:
                 "triage": {
                     "inputs": {
                         "sarif": "review.sarif",
-                        "codegraph": "review.codegraph",
+                        "codegraph": "initialize.codegraph",
                     },
                     "nodes": {
                         "triage": {"capabilities": ["memory", "navigation"]},
@@ -137,13 +141,69 @@ def test_builtin_stage_order_is_stable_when_yaml_is_reordered() -> None:
         {
             "inputs": {"review_request": {"mode": "code"}},
             "stages": {
-                "review": {"nodes": {"result": {}}},
-                "initialize": {"nodes": {"init": {}}},
+                "review": {
+                    "inputs": {"codegraph": "initialize.codegraph"},
+                    "nodes": {"result": {}},
+                },
+                "initialize": {
+                    "outputs": {"codegraph": "init.codegraph"},
+                    "nodes": {"init": {}},
+                },
             },
         }
     )
 
     assert configuration.stage_order() == ("initialize", "review")
+
+
+def test_simple_review_does_not_require_codegraph() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"] = {"review": raw["stages"]["review"]}
+    raw["stages"]["review"]["inputs"] = {}
+    raw["stages"]["review"]["nodes"]["result"]["formats"] = ["sarif"]
+
+    _service(ExecutionConfiguration.model_validate(raw))
+
+
+def test_reachability_requires_initialized_codegraph() -> None:
+    with pytest.raises(ValueError, match="CodeGraph from Initialize"):
+        ExecutionConfiguration.model_validate(
+            {
+                "inputs": {"review_request": {"mode": "code"}},
+                "stages": {
+                    "review": {
+                        "nodes": {"reachability": {}, "result": {"formats": ["sarif"]}}
+                    }
+                },
+            }
+        )
+
+
+def test_reachability_rejects_review_time_codegraph_binding() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["review"]["nodes"]["reachability"] = {
+        "inputs": {"codegraph": "producer.codegraph"}
+    }
+
+    with pytest.raises(ValueError, match="Review stage CodeGraph input"):
+        ExecutionConfiguration.model_validate(raw)
+
+
+def test_reachability_accepts_explicit_review_stage_codegraph_binding() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["review"]["nodes"]["reachability"] = {
+        "inputs": {"codegraph": "$inputs.codegraph"}
+    }
+
+    _service(ExecutionConfiguration.model_validate(raw))
+
+
+def test_profiled_codegraph_requires_profile_dependency() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["initialize"]["nodes"]["compilation_profile"] = {}
+
+    with pytest.raises(ValueError, match="must depend on compilation_profile"):
+        ExecutionConfiguration.model_validate(raw)
 
 
 def test_finding_dedup_combines_producers_before_result() -> None:
@@ -637,6 +697,7 @@ def _service(
     configuration: ExecutionConfiguration | None = None,
     *,
     entry_points: tuple[Any, ...] = (),
+    extra_registrations: tuple[NodeRegistration, ...] = (),
     review_run: ReviewRun | None = None,
     review_commands: list[ReviewCommand] | None = None,
     triage_options: TriageOptions | None = None,
@@ -683,6 +744,21 @@ def _service(
         return replace(run, remaining=(), processed=run.total)
 
     triage.triage_run.side_effect = triage_run
+    initialized_threat_model = threat_model_node.InitializedThreatModelResult(
+        status="ok",
+        records_written=0,
+        records_deleted=0,
+        authoritative_sources=[],
+    )
+    threat_model_registration = NodeRegistration(
+        "threat_model",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"threat_model": threat_model_node.InitializedThreatModelResult},
+        lambda _invocation: NodeResult({"threat_model": initialized_threat_model}),
+        {"memory": CapabilityRequirement.REQUIRED},
+    )
     service = ExecutionGraphService(
         configuration or _configuration(),
         engine_config=engine_config,
@@ -697,7 +773,7 @@ def _service(
         triage_adjudicator=triage,
         triage_options=triage_options or TriageOptions(),
         registrations=(
-            threat_model_node.create_node(engine_config, Mock()),
+            threat_model_registration,
             index_node.registration,
             codegraph_node.registration,
             review_node.create_node(review),
@@ -706,6 +782,7 @@ def _service(
             review_results_node.registration,
             triage_node.create_node(triage_classifier),
             triage_results_node.registration,
+            *extra_registrations,
         ),
         entry_points=entry_points,
     )
@@ -738,18 +815,9 @@ def test_configured_include_triaged_can_be_overridden_per_run() -> None:
     assert [run.total for run in runs] == [1, 0]
 
 
-def test_default_graph_runs_fixed_stages_and_passes_review_sarif(monkeypatch):
+def test_default_graph_runs_fixed_stages_and_passes_review_sarif():
     configuration = ExecutionConfiguration.model_validate(load_execution_config())
     service, calls = _service(configuration)
-    monkeypatch.setattr(
-        "metis.engine.nodes.threat_model.registration.initialize_threat_model_memory",
-        lambda *_args: {
-            "status": "ok",
-            "records_written": 0,
-            "records_deleted": 0,
-            "authoritative_sources": [],
-        },
-    )
 
     result = service.execute_graph()
 
@@ -759,46 +827,112 @@ def test_default_graph_runs_fixed_stages_and_passes_review_sarif(monkeypatch):
     assert result.outputs["triage"]["sarif"] == result.outputs["review"]["sarif"]
 
 
-def test_codegraph_node_seeds_file_review_from_target():
+@pytest.mark.parametrize(
+    "stage_inputs",
+    ({}, {"codegraph": "$inputs.codegraph"}),
+    ids=("omitted", "unset-execution-input"),
+)
+def test_required_external_review_input_must_be_configured(stage_inputs) -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["review"]["inputs"] = stage_inputs
+    raw["stages"]["review"]["nodes"]["requires_graph"] = {}
+    configuration = ExecutionConfiguration.model_validate(raw)
+    requires_graph = NodeRegistration(
+        "requires_graph",
+        "review",
+        EmptyNodeConfiguration,
+        {"codegraph": CodeGraphReference},
+        {},
+        lambda _invocation: NodeResult({}),
+    )
+
+    with pytest.raises(ValueError, match="unbound inputs: codegraph"):
+        _service(configuration, extra_registrations=(requires_graph,))
+
+
+def test_required_review_input_rejects_nullable_stage_output() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["initialize"]["outputs"]["codegraph"] = "maybe.codegraph"
+    raw["stages"]["initialize"]["nodes"]["maybe"] = {}
+    del raw["stages"]["initialize"]["nodes"]["codegraph"]
+    raw["stages"]["review"]["nodes"]["reachability"] = {}
+    maybe = NodeRegistration(
+        "maybe",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"codegraph": CodeGraphReference | None},
+        lambda _invocation: NodeResult({"codegraph": None}),
+    )
+
+    with pytest.raises(ValueError, match="input 'codegraph' is incompatible"):
+        _service(
+            ExecutionConfiguration.model_validate(raw),
+            extra_registrations=(maybe,),
+        )
+
+
+def test_direct_review_skips_unrelated_initialize_stage() -> None:
+    raw = _configuration().model_dump(mode="json")
+    raw["stages"]["review"]["inputs"] = {}
+    configuration = ExecutionConfiguration.model_validate(raw)
+    service, calls = _service(configuration)
+
+    result = service.execute_review(ReviewCommand(mode="code"))
+
+    assert result.status is ExecutionStatus.OK
+    assert calls == ["review"]
+
+
+def test_profiled_codegraph_fails_when_source_graph_is_incomplete():
     codegraphs = Mock()
-    reference = CodeGraphReference(
+    codegraphs.materialize.return_value = CodeGraphReference(
         revision=1,
         fingerprint="fingerprint",
         producer_version="test",
+        failed_files=("source.c",),
     )
-    codegraphs.materialize.return_value = reference
-    context = replace(
-        _node_context(),
-        stage="review",
-        codegraphs=codegraphs,
+    context = replace(_node_context(), stage="initialize", codegraphs=codegraphs)
+    context.repository.profiled_source_fingerprint = "profile"
+    context.repository.source_profile_applies_to_path.side_effect = lambda path: (
+        path.endswith(".c")
+    )
+    profile = ProfiledSourceReference(
+        fingerprint="profile",
+        compile_commands_path="compile_commands.json",
+        compile_commands_sha256="0" * 64,
+        translation_units=1,
+        source_views=1,
+        profiled_files=1,
+        ambiguous_files=0,
+        active_line_count=1,
+    )
+    invocation = NodeInvocation(
+        EmptyNodeConfiguration(), {"profiled_source": profile}, context
     )
 
-    result = codegraph_node.registration.execute(
-        NodeInvocation(
-            EmptyNodeConfiguration(),
-            {"request": ReviewCommand(mode="file", target="src/target.c")},
-            context,
+    with pytest.raises(RuntimeError, match="contains failed files"):
+        codegraph_node.registration.execute(invocation)
+
+    codegraphs.materialize.return_value = (
+        codegraphs.materialize.return_value.model_copy(
+            update={"failed_files": ("module.py",)},
         )
     )
+    result = codegraph_node.registration.execute(invocation)
+    assert result.outputs["codegraph"].failed_files == ("module.py",)
 
-    assert result.outputs == {"codegraph": reference}
-    codegraphs.materialize.assert_called_once()
-    assert codegraphs.materialize.call_args.kwargs["seed_file"] == "src/target.c"
-    assert callable(codegraphs.materialize.call_args.kwargs["progress_callback"])
+    for installed in (None, "different-profile"):
+        context.repository.profiled_source_fingerprint = installed
+        codegraphs.materialize.reset_mock()
+        with pytest.raises(RuntimeError, match="does not match the installed profile"):
+            codegraph_node.registration.execute(invocation)
+        codegraphs.materialize.assert_not_called()
 
 
-def test_inconclusive_review_still_feeds_triage(monkeypatch):
+def test_inconclusive_review_still_feeds_triage():
     service, calls = _service(
         review_run=_review_run(ReviewStatus.INCONCLUSIVE),
-    )
-    monkeypatch.setattr(
-        "metis.engine.nodes.threat_model.registration.initialize_threat_model_memory",
-        lambda *_args: {
-            "status": "ok",
-            "records_written": 0,
-            "records_deleted": 0,
-            "authoritative_sources": [],
-        },
     )
 
     result = service.execute_graph()
@@ -851,18 +985,9 @@ def test_patch_review_publishes_the_canonical_codegraph_reference():
     assert result.outputs["review"]["codegraph"].fingerprint == "test"
 
 
-def test_failed_review_stops_before_triage(monkeypatch):
+def test_failed_review_stops_before_triage():
     service, calls = _service(
         review_run=ReviewRun(ReviewStatus.FAILED, None),
-    )
-    monkeypatch.setattr(
-        "metis.engine.nodes.threat_model.registration.initialize_threat_model_memory",
-        lambda *_args: {
-            "status": "ok",
-            "records_written": 0,
-            "records_deleted": 0,
-            "authoritative_sources": [],
-        },
     )
 
     result = service.execute_graph()
@@ -1639,19 +1764,23 @@ def test_private_registration_must_match_selected_stage():
         {
             "inputs": {"review_request": {"mode": "code"}},
             "stages": {
+                "initialize": {
+                    "outputs": {"codegraph": "codegraph.codegraph"},
+                    "nodes": {"codegraph": {}},
+                },
                 "review": {
+                    "inputs": {"codegraph": "initialize.codegraph"},
                     "nodes": {
-                        "codegraph": {},
                         "private_node": {},
                         "result": {
                             "inputs": {
                                 "reviews": ["private_node"],
-                                "codegraph": "codegraph",
+                                "codegraph": "$inputs.codegraph",
                             },
                             "formats": ["sarif"],
                         },
-                    }
-                }
+                    },
+                },
             },
         }
     )

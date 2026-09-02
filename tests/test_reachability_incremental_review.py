@@ -35,6 +35,8 @@ from metis.engine.nodes.reachability.state import NormalExit
 from metis.engine.nodes.reachability.state import ReturnSubject
 from metis.engine.nodes.reachability.state import StateEffect
 from metis.engine.nodes.reachability.state import TrackedObjectSubject
+from metis.engine.source import SourceMap
+from metis.engine.source import SourceView
 from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.providers.base import ChatProvider
 
@@ -69,6 +71,8 @@ def _reviewer(tmp_path: Path) -> IncrementalGraphReviewer:
     }
     repository = Mock()
     repository.get_plugin_for_path.return_value = plugin
+    repository.analysis_source_for_path.return_value = None
+    repository.source_view_for_path.return_value = None
     config = SimpleNamespace(
         codebase_path=str(tmp_path),
         plugin_config={"general_prompts": {"security_review_report": "Report."}},
@@ -85,24 +89,26 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     tmp_path: Path,
     node_jobs,
 ) -> None:
-    (tmp_path / "graph.c").write_text(
-        "void root(void) { sink(); }\nvoid sink(void) {}\n",
-        encoding="utf-8",
-    )
+    raw = b"/* \xff */ void root(void) { /* \f */\n\f  sink();\n  sink();\n}\nvoid sink(void) {}\n"
+    canonical = raw.replace(b"  sink();\n  sink();", b"  sink();\n         ", 1)
+    (tmp_path / "graph.c").write_bytes(raw)
     call = CallSite(
         "sink",
-        1,
+        2,
         0,
-        start_byte=18,
-        end_byte=24,
+        start_byte=raw.index(b"sink()"),
+        end_byte=raw.index(b"sink()") + len(b"sink()"),
         target_ids=("graph.c::sink",),
     )
     root = _function("root", 1, source=True)
+    root.end_line = 4
     root.call_sites = [call]
     root.calls = ["sink"]
-    sink = _function("sink", 2)
+    sink = _function("sink", 5)
     sink.set_tag("control.noreturn", value="_Noreturn", reason="test fact")
     reviewer = _reviewer(tmp_path)
+    reviewer._repository.analysis_source_for_path.return_value = canonical
+    reviewer._repository.source_view_for_path.return_value = SourceView(raw, canonical)
     seen_bodies: list[str] = []
     progress_events: list[dict[str, object]] = []
 
@@ -114,23 +120,43 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
         )
         body = request.variables["body_text"]
         assert isinstance(body, str)
+        assert "2: \f  sink();" in body
+        assert "3:   sink();" not in body
         seen_bodies.append(body)
         evidence_text = body.partition("CODEGRAPH_EVIDENCE (untrusted JSON):\n")[2]
         evidence, _end = json.JSONDecoder().raw_decode(evidence_text)
         contract = evidence["direct_function_contracts"][0]
         assert evidence["function_ids"][contract["function"]] == "::sink"
         assert contract["normal_exit"] == {
-            "line": 2,
+            "line": 5,
             "origin": "observed",
             "status": "impossible",
         }
-        parsed = request.parse({"reviews": []})
+        parsed = request.parse(
+            {
+                "reviews": [
+                    {
+                        "issue": "Reachable sink",
+                        "code_snippet": "void root(void) { /* \f */\n\f  sink();\n\n}",
+                        "start_line": 1,
+                        "end_line": 4,
+                        "reasoning": "Root reaches sink.",
+                        "mitigation": "Validate before calling sink.",
+                        "confidence": 0.9,
+                        "cwe": "CWE-20",
+                        "severity": "HIGH",
+                        "necessary_condition_alternatives": [],
+                    }
+                ]
+            }
+        )
         assert parsed is not None
         return parsed
 
     reviewer._runner.invoke = Mock(side_effect=invoke)
+    graph = _graph(root, sink)
     outcome = reviewer.review(
-        _graph(root, sink),
+        graph,
         jobs=node_jobs,
         options=ReachabilityReviewOptions(
             domain_profiles=(" GPU ",),
@@ -140,6 +166,32 @@ def test_review_runs_one_discovery_pass_with_deterministic_contracts(
     )
 
     assert len(seen_bodies) == 1
+    reviewer._repository.analysis_source_for_path.assert_called_with("graph.c")
+    expected_anchor = SourceMap.for_bytes("graph.c", raw).anchor_for_lines(1, 4)
+    assert outcome.findings[0].primary_anchor == expected_anchor.to_dict()
+    assert (
+        outcome.findings[0].primary_anchor
+        != SourceMap.for_bytes("graph.c", canonical).anchor_for_lines(1, 4).to_dict()
+    )
+    packets, failures = reviewer._build_packets(
+        graph,
+        (root.unique_name,),
+        options=ReachabilityReviewOptions(),
+        memory_service=None,
+    )
+    hidden_active_line = replace(packets[0], shown_lines=frozenset({1, 4}))
+    assert not failures
+    assert (
+        reviewer._review_anchor(
+            hidden_active_line,
+            {
+                "code_snippet": "void root(void) { /* \f */\n\f  sink();\n\n}",
+                "start_line": 1,
+                "end_line": 4,
+            },
+        )
+        is None
+    )
     assert "CONTRACT_MANIFEST" not in seen_bodies[0]
     assert "STATE_REVIEW_CASES" not in seen_bodies[0]
     assert outcome.stats.packet_count == 1

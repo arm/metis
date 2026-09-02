@@ -3,6 +3,8 @@
 
 import logging
 from functools import partial
+from hashlib import sha256
+from pathlib import Path
 from typing import Any
 from typing import cast
 
@@ -25,6 +27,7 @@ from metis.memory.fingerprints import stable_json_hash
 from metis.runlog.workflow import traced_step
 from metis.usage import usage_operation
 from metis.utils import parse_json_output
+from metis.utils import source_lines
 from metis.utils import split_snippet
 
 from .schema import ReviewResponseModel
@@ -279,7 +282,7 @@ class ReviewGraph:
         }
         return stable_json_hash(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "provider": self.llm_provider.cache_identity(),
                 "model": self.llama_query_model,
                 "max_token_length": self.max_token_length,
@@ -303,7 +306,7 @@ class ReviewGraph:
             self._token_counter,
         )
 
-    def review(self, request: ReviewRequest):
+    def review(self, request: ReviewRequest, *, source_map: SourceMap | None = None):
         file_path = request["file_path"]
         snippet = request["snippet"]
         language_prompts = request["language_prompts"]
@@ -315,7 +318,21 @@ class ReviewGraph:
 
         rel_path = relative_file or file_path
         if mode == "file":
-            smap = SourceMap.for_text(rel_path, snippet)
+            expected_hash = request.get("anchor_source_hash")
+            if expected_hash is None:
+                smap = SourceMap.for_text(rel_path, snippet)
+            else:
+                try:
+                    anchor_source = Path(file_path).read_bytes()
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Source changed during review: {file_path}"
+                    ) from exc
+                if sha256(anchor_source).hexdigest() != expected_hash:
+                    raise RuntimeError(f"Source changed during review: {file_path}")
+                smap = source_map or SourceMap(
+                    rel_path, snippet, anchor_source=anchor_source
+                )
         elif original_file:
             smap = SourceMap.for_text(rel_path, original_file)
         else:
@@ -324,7 +341,7 @@ class ReviewGraph:
         accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key)
         for chunk, chunk_start in chunks:
-            chunk_end = chunk_start + len(chunk.splitlines()) - 1
+            chunk_end = chunk_start + len(source_lines(chunk)) - 1
             state = {
                 "file_path": file_path,
                 "snippet": chunk,

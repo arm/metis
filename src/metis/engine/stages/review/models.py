@@ -26,6 +26,7 @@ class ReviewRequest(TypedDict):
     relative_file: NotRequired[str | None]
     mode: NotRequired[str]
     original_file: NotRequired[str | None]
+    anchor_source_hash: NotRequired[str]
     threat_model_context: NotRequired[list[dict[str, Any]]]
     debug_callback: NotRequired[Any]
 

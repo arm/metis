@@ -3,17 +3,17 @@
 
 
 import logging
-import os
 from collections.abc import Callable
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.execution.contracts import NodeJobs
-from metis.engine.nodes.codegraph import CodeGraphService
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_scope_policy
+from metis.utils import resolve_path_within_root
 
 from .domain import ReachabilityAnalysis
 from .domain import VulnerabilityFinding
@@ -37,7 +37,6 @@ class ReachabilityService:
         repository,
         llm_provider,
         usage_runtime,
-        codegraphs: CodeGraphService,
     ):
         self._config = config
         self._frontier_reviewer = IncrementalGraphReviewer(
@@ -46,7 +45,6 @@ class ReachabilityService:
             llm_provider,
             usage_runtime,
         )
-        self._codegraphs = codegraphs
 
     def analyze_file(
         self,
@@ -54,16 +52,12 @@ class ReachabilityService:
         *,
         jobs: NodeJobs,
         options: ReachabilityReviewOptions,
-        codegraph: CodeGraph | None = None,
+        codegraph: CodeGraph,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
         memory_service=None,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
-        graph = codegraph or self._load_graph(
-            options=options,
-            diagnostic_callback=diagnostic_callback,
-        )
-        if graph.node_count() == 0:
+        if codegraph.node_count() == 0:
             if diagnostic_callback is not None:
                 diagnostic_callback(
                     CodeGraphDiagnostic(
@@ -81,7 +75,7 @@ class ReachabilityService:
                 codegraph_failures=(f"codegraph.empty:{relative_target}",),
             )
         focus = FileFocusBuilder(
-            graph,
+            codegraph,
             max_path_length=options.max_path_length,
         ).build(relative_target)
         if not focus.target_nodes:
@@ -101,13 +95,13 @@ class ReachabilityService:
                 target_path=abs_target,
                 codegraph_failures=(f"codegraph.target_missing:{relative_target}",),
             )
-        analysis_graph = _copy_graph_nodes(graph, focus.node_names)
+        analysis_graph = _copy_graph_nodes(codegraph, focus.node_names)
         outcome = self._frontier_reviewer.review(
             analysis_graph,
             jobs=jobs,
             options=options,
             memory_service=memory_service,
-            evidence_graph=graph,
+            evidence_graph=codegraph,
         )
         scoped_findings = self._filter_authoritative_scope(
             outcome.findings,
@@ -146,31 +140,26 @@ class ReachabilityService:
         *,
         jobs: NodeJobs,
         options: ReachabilityReviewOptions,
+        codegraph: CodeGraph,
         files=None,
-        codegraph: CodeGraph | None = None,
-        diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
         memory_service=None,
     ):
-        graph = codegraph or self._load_graph(
-            options=options,
-            diagnostic_callback=diagnostic_callback,
-        )
         selected_files = None
         if files is not None:
             selected_files = {
                 self._normalize_target_file(path)[1] for path in dict.fromkeys(files)
             }
-        if graph.node_count() == 0:
+        if codegraph.node_count() == 0:
             return ReachabilityAnalysis(
                 findings=(),
                 codegraph_failures=("codegraph.empty",),
             )
-        analysis_graph = graph
+        analysis_graph = codegraph
         missing_selected_files: list[str] = []
         if selected_files is not None:
             focus_nodes: set[str] = set()
             focus_builder = FileFocusBuilder(
-                graph,
+                codegraph,
                 max_path_length=options.max_path_length,
             )
             ordered_files = sorted(selected_files)
@@ -188,7 +177,7 @@ class ReachabilityService:
                     completed,
                     len(ordered_files),
                 )
-            analysis_graph = _copy_graph_nodes(graph, focus_nodes)
+            analysis_graph = _copy_graph_nodes(codegraph, focus_nodes)
         if analysis_graph.node_count() == 0:
             return ReachabilityAnalysis(
                 findings=(),
@@ -203,7 +192,7 @@ class ReachabilityService:
             jobs=jobs,
             options=options,
             memory_service=memory_service,
-            evidence_graph=graph,
+            evidence_graph=codegraph,
         )
         findings = self._filter_authoritative_scope(
             outcome.findings,
@@ -248,36 +237,6 @@ class ReachabilityService:
             review_failures=outcome.failures,
         )
 
-    def supports_file(self, file_path) -> bool:
-        _abs_target, relative_target = self._normalize_target_file(file_path)
-        return self._codegraphs.supports_file(
-            relative_target
-        ) and self._codegraphs.supports_semantics(relative_target)
-
-    def analysis_graph(
-        self,
-        *,
-        options: ReachabilityReviewOptions,
-        codegraph: CodeGraph | None = None,
-        diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
-    ) -> CodeGraph:
-        return codegraph or self._load_graph(
-            options=options,
-            diagnostic_callback=diagnostic_callback,
-        )
-
-    def _load_graph(
-        self,
-        *,
-        options: ReachabilityReviewOptions,
-        diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
-    ) -> CodeGraph:
-        reference = self._codegraphs.materialize(
-            progress_callback=options.progress_callback,
-            diagnostic_callback=diagnostic_callback,
-        )
-        return self._codegraphs.load(reference)
-
     def _filter_authoritative_scope(
         self,
         findings: Sequence[VulnerabilityFinding],
@@ -308,12 +267,6 @@ class ReachabilityService:
         return kept
 
     def _normalize_target_file(self, file_path):
-        base_path = os.path.abspath(self._config.codebase_path)
-        full = (
-            file_path
-            if os.path.isabs(str(file_path))
-            else os.path.join(base_path, str(file_path))
-        )
-        abs_target = os.path.abspath(full)
-        rel_target = os.path.relpath(abs_target, base_path).replace("\\", "/")
-        return abs_target, rel_target
+        root = Path(self._config.codebase_path).expanduser().resolve()
+        resolved = resolve_path_within_root(root, file_path)
+        return str(resolved), resolved.relative_to(root).as_posix()

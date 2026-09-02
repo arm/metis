@@ -7,6 +7,7 @@ import math
 import os
 from collections.abc import Callable
 from functools import lru_cache
+from io import StringIO
 from pathlib import Path
 
 import tiktoken
@@ -138,6 +139,16 @@ def count_tokens(text: str, model: str | None = None) -> int:
     return tiktoken_token_count(text, model)
 
 
+def source_lines(text: str, *, keepends: bool = False) -> list[str]:
+    """Split on LF/CRLF without treating source characters as extra line breaks."""
+    lines = list(StringIO(text))
+    return (
+        lines
+        if keepends
+        else [line.removesuffix("\r\n").removesuffix("\n") for line in lines]
+    )
+
+
 def split_snippet(
     snippet: str,
     max_tokens: int,
@@ -147,7 +158,7 @@ def split_snippet(
     if max_tokens <= 0:
         raise ValueError("max_tokens must be positive")
     counter = token_counter or count_tokens
-    lines = snippet.splitlines(keepends=True)
+    lines = source_lines(snippet, keepends=True)
     parts: list[tuple[str, int]] = []
     for line_number, line in enumerate(lines, start=1):
         parts.extend(

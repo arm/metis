@@ -389,15 +389,19 @@ def test_explicit_review_producers_run_independently(engine, monkeypatch):
         {
             "inputs": {"review_request": {"mode": "code"}},
             "stages": {
+                "initialize": {
+                    "outputs": {"codegraph": "codegraph.codegraph"},
+                    "nodes": {"codegraph": {}},
+                },
                 "review": {
+                    "inputs": {"codegraph": "initialize.codegraph"},
                     "nodes": {
-                        "codegraph": {},
                         "simple_llm_review": {},
                         "reachability": {},
                         "finding_dedup": {},
                         "result": {},
-                    }
-                }
+                    },
+                },
             },
         }
     )

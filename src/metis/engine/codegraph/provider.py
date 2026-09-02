@@ -60,6 +60,7 @@ class CodeGraphProvider(Protocol):
 class CodeGraphProviderContext:
     get_language_name_for_path: Callable[[str], str | None]
     has_language_file_role: Callable[[str, str], bool]
+    source_for_path: Callable[[str], bytes | None] | None = None
 
 
 CodeGraphProviderFactory = Callable[

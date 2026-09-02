@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,8 +26,10 @@ from metis.engine.codegraph import NullFact
 from metis.engine.codegraph import ReturnSite
 from metis.engine.codegraph import ValueAssignment
 from metis.engine.source import SourceMap
+from metis.utils import source_lines
 
 from .graph_utils import _node_sort_key
+from .source_context import _source_map
 from .state import FunctionContract
 from .state import GuardedTransfer
 from .state import ParameterSubject
@@ -34,7 +37,7 @@ from .state import ReturnSubject
 from .state import SecuritySubject
 from .state import TrackedObjectSubject
 
-_NUMBERED_LINE = re.compile(r"^\s*(\d+):", re.MULTILINE)
+_NUMBERED_LINE = re.compile(r"^[ \t]*(\d+):[^\S\n]*\S", re.MULTILINE)
 _EXPRESSION_MARKERS = frozenset(
     {"text", "span", "ids", "fields", "direct_id", "direct_field", "cols"}
 )
@@ -322,12 +325,13 @@ def _compact_source_evidence(
     codebase_path: str,
     file_path: str,
     source_text: str,
+    source_for_path: Callable[[str], bytes | None] | None = None,
 ) -> object:
-    source_map = SourceMap.for_file(codebase_path, file_path)
+    source_map = _source_map(codebase_path, file_path, source_for_path)
     if source_map is None:
         return value
     complete_line_numbers: set[int] = set()
-    for rendered_line in source_text.splitlines():
+    for rendered_line in source_lines(source_text):
         match = re.fullmatch(r"\s*(\d+): (.*)", rendered_line)
         if match is None:
             continue
