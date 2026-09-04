@@ -1,0 +1,12 @@
+name: perl
+aliases:
+- perl
+extensions:
+- .pl
+- .pm
+- .t
+- .psgi
+filename_patterns: []
+config_resource: languages/perl.yaml
+capabilities: {}
+priority: 0
