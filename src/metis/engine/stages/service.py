@@ -107,13 +107,36 @@ class ExecutionGraphService:
         stage = self.configuration.stages.review
         if stage is None:
             return _unavailable_stage("review")
-        run = run_stage(
-            "review",
-            self._plans["review"],
-            self._context("review", callbacks=callbacks),
-            {"request": command},
+        requires_initialize = "initialize" in stage.depends_on or any(
+            source.startswith("initialize.") for source in stage.inputs.values()
         )
-        return ExecutionResult(run.status, {"review": run.outputs}, run.diagnostics)
+        if not requires_initialize:
+            return self._execute_configured_stage(
+                "review", {}, callbacks=callbacks, initial_inputs={"request": command}
+            )
+        initialized = self.execute_initialize(callbacks=callbacks)
+        if initialized.status is ExecutionStatus.ERROR:
+            return ExecutionResult(
+                initialized.status,
+                {},
+                initialized.diagnostics,
+            )
+        reviewed = self._execute_configured_stage(
+            "review",
+            initialized.outputs,
+            callbacks=callbacks,
+            initial_inputs={"request": command},
+        )
+        return ExecutionResult(
+            (
+                ExecutionStatus.INCONCLUSIVE
+                if initialized.status is ExecutionStatus.INCONCLUSIVE
+                and reviewed.status is ExecutionStatus.OK
+                else reviewed.status
+            ),
+            reviewed.outputs,
+            (*initialized.diagnostics, *reviewed.diagnostics),
+        )
 
     def execute_triage(
         self,
@@ -169,9 +192,13 @@ class ExecutionGraphService:
             if stage_name == "initialize":
                 result = self.execute_initialize(callbacks=callbacks)
             elif stage_name == "review":
-                result = self.execute_review(
-                    cast(ReviewCommand, self.configuration.inputs.review_request),
+                result = self._execute_configured_stage(
+                    stage_name,
+                    outputs,
                     callbacks=callbacks,
+                    initial_inputs={
+                        "request": self.configuration.inputs.review_request
+                    },
                 )
             elif stage_name == "triage":
                 result = self._execute_configured_triage(
@@ -199,6 +226,7 @@ class ExecutionGraphService:
         outputs: Mapping[str, Any],
         *,
         callbacks: Mapping[str, object] | None,
+        initial_inputs: Mapping[str, Any] | None = None,
     ) -> ExecutionResult:
         stage = self.configuration.stages.get(stage_name)
         if stage is None:
@@ -211,7 +239,7 @@ class ExecutionGraphService:
             stage_name,
             self._plans[stage_name],
             self._context(stage_name, callbacks=callbacks),
-            inputs,
+            {**(initial_inputs or {}), **inputs},
         )
         return ExecutionResult(run.status, {stage_name: run.outputs}, run.diagnostics)
 
@@ -224,12 +252,34 @@ class ExecutionGraphService:
         for stage_name in stage_order:
             contract = self._contracts[stage_name]
             stage = cast(StageConfiguration, self.configuration.stages.get(stage_name))
+            initial_inputs = dict(contract.initial_inputs)
+            for name in contract.stage_inputs:
+                source = stage.inputs.get(name)
+                if source is None:
+                    initial_inputs.pop(name, None)
+                elif source.startswith("$inputs."):
+                    value = getattr(
+                        self.configuration.inputs, source.removeprefix("$inputs.")
+                    )
+                    if value is None:
+                        initial_inputs.pop(name, None)
+                    else:
+                        initial_inputs[name] = type(value)
+                else:
+                    source_stage, _, source_output = source.partition(".")
+                    source_plan = self._plans.get(source_stage)
+                    if source_plan is not None and source_output in (
+                        source_plan.output_annotations
+                    ):
+                        initial_inputs[name] = source_plan.output_annotations[
+                            source_output
+                        ]
             self._plans[stage_name] = compile_stage(
                 catalog,
                 stage_name,
                 stage,
                 self.configuration.node_configuration.get(stage_name, {}),
-                contract.initial_inputs,
+                initial_inputs,
                 capabilities,
             )
             plan = self._plans[stage_name]

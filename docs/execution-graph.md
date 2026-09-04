@@ -46,16 +46,17 @@ metis_engine:
     stages:
       initialize:
         outputs:
-          - threat_model
+          threat_model: threat_model.threat_model
+          codegraph: codegraph.codegraph
         nodes:
           threat_model:
             capabilities:
               - memory
-      review:
-        depends_on:
-          - initialize
-        nodes:
           codegraph: {}
+      review:
+        inputs:
+          codegraph: initialize.codegraph
+        nodes:
           simple_llm_review:
             capabilities:
               - memory
@@ -69,7 +70,7 @@ metis_engine:
       triage:
         inputs:
           sarif: review.sarif
-          codegraph: review.codegraph
+          codegraph: initialize.codegraph
         nodes:
           triage:
             capabilities:
@@ -121,8 +122,17 @@ are rejected when the YAML is loaded.
 - `threat_model` updates threat-model memory and returns its initialization
   status.
 
+- `codegraph` uses language providers such as Tree-sitter to build, validate,
+  annotate, and persist the complete project graph at
+  `<codebase>/.metis/codegraph.sqlite3`.
+
 - `index` builds the configured repository index when explicitly included in
   the graph. The packaged graph omits it.
+
+- [`compilation_profile`](config/compilation_profile.md) optionally runs before
+  `codegraph`. It uses a C/C++ compilation database and the recorded compiler
+  preprocessor to install an active-line source view. `codegraph` then builds
+  the usual Tree-sitter graph from that view.
 
 Enable index construction by adding it to `initialize`. The example below is
 an Initialize fragment; because a project execution section replaces the
@@ -135,20 +145,21 @@ metis_engine:
     stages:
       initialize:
         outputs:
-          - threat_model
-          - index
+          threat_model: threat_model.threat_model
+          codegraph: codegraph.codegraph
+          index: index.index
         nodes:
           threat_model:
             capabilities:
               - memory
+          codegraph: {}
           index:
             capabilities:
               - index
 ```
 
-Initialize lists the nodes whose status values it publishes. Each listed node
-must have one output. A graph that replaces its nodes must list the
-corresponding stage outputs explicitly.
+Initialize explicitly maps the node outputs it publishes. A graph that replaces
+its nodes must list the corresponding stage outputs.
 
 The `capabilities` list is the complete allowlist for a node. Required and
 optional capabilities are declared by the node registration. Omitting an
@@ -167,23 +178,15 @@ Nodes without a row do not declare engine capabilities.
 
 ### Review
 
-The review request supports `code`, `dir`, `file`, and `patch` modes.
-
-`codegraph` groups the selected source files by language manifest, invokes the
-corresponding providers, validates exact file coverage, composes their outputs
-into one `CodeGraph`, and adds deterministic entrypoint, source, and sink
-annotations. File review selects only the requested file; other review modes
-select the project's supported source files.
-It persists fingerprinted canonical graphs at
-`<codebase>/.metis/codegraph.sqlite3` and publishes a typed reference to the
-selected revision. An unchanged source set, language mapping, annotation
-configuration, and Metis version reuse that revision.
+The review request supports `code`, `dir`, `file`, and `patch` modes. When
+configured, Review receives the persisted graph reference from Initialize;
+it does not build or modify the graph.
 
 `simple_llm_review` is the generic review node. It reviews every file in the
 selected scope with the language plugin's prompts and does not require a
 CodeGraph.
 
-`reachability` resolves the declared CodeGraph reference and reviews selected
+`reachability` resolves the initialized CodeGraph reference and reviews selected
 function source with the normal language security-review prompt. The evidence
 includes deterministic function, call, control-flow, assignment, loop, return,
 and direct-callee contract facts. The model must identify every
@@ -193,12 +196,10 @@ source facts; missing, ambiguous, or incomplete evidence remains fail-open.
 
 Same-file functions are batched in source order. Invalid or output-limited
 multi-function batches are split immediately and their children are reviewed
-in the same run. Batch results and split decisions are not persisted. The
-language plugin supplies deterministic CodeGraph semantics during
-materialization.
-Directory review derives an in-memory analysis scope from the persisted project
-graph. File review materializes and persists a graph for the requested file
-only. Neither mode replaces or mutates another fingerprinted graph revision.
+in the same run. Batch results and split decisions are not persisted. Language
+plugins supply deterministic CodeGraph semantics during initialization.
+Directory and file review derive in-memory scopes from the same persisted
+project graph; neither mode rebuilds or mutates it.
 Patch review is supported by `simple_llm_review`. If `reachability` is selected
 for a patch request, it publishes an inconclusive warning rather than silently
 running another node. For code, directory, and file review, Reachability sends
@@ -220,9 +221,8 @@ unchanged.
 Its `formats` list declares
 the representations written for that execution. Every listed format is saved.
 Review publishes canonical `findings` for JSON, HTML, and CSV renderers and
-always publishes `sarif` in memory for downstream stages. It also publishes a
-CodeGraph reference when the selected stage has one compatible CodeGraph
-output.
+always publishes `sarif` in memory for downstream stages. It also republishes
+the initialized CodeGraph reference when one is provided.
 Omitting `sarif` from `formats` prevents a SARIF file from being written; it
 does not remove the in-memory SARIF contract.
 
@@ -321,9 +321,9 @@ materializes a graph itself.
 Normal review-to-triage execution does not deduplicate twice: `triage` receives
 SARIF generated from the `FinalReviewRun` already produced by `finding_dedup`.
 
-The stage bindings `sarif: review.sarif` and `codegraph: review.codegraph`
-transfer those values and make Review a
-data dependency. Do not repeat that relationship in `depends_on`.
+The bindings `sarif: review.sarif` and `codegraph: initialize.codegraph`
+transfer those values and make both earlier stages data dependencies. Do not
+repeat those relationships in `depends_on`.
 
 Triage has its own `result` node because its SARIF represents a later state.
 
@@ -558,9 +558,15 @@ and execution inputs in the complete graph:
 metis_engine:
   execution:
     stages:
-      review:
+      initialize:
+        outputs:
+          codegraph: codegraph.codegraph
         nodes:
           codegraph: {}
+      review:
+        inputs:
+          codegraph: initialize.codegraph
+        nodes:
           reachability: {}
           new_analysis: {}
           finding_dedup: {}
@@ -697,8 +703,9 @@ A handler receives validated inputs and a small context containing its granted
 capabilities together with the repository lookup contract, CodeGraph
 materialize/load API, model runner, runtime limits, shared job scheduler, and
 callbacks. Dependency-ready nodes run concurrently. For example,
-`codegraph` and `simple_llm_review` start together, then `reachability` starts
-as soon as `codegraph` completes while `simple_llm_review` may continue.
+`threat_model` and `codegraph` run together in Initialize. After its barrier,
+`simple_llm_review` and `reachability` may run together over the initialized
+graph.
 `max_concurrency` limits that node's active jobs; omitted values use the global
 `metis_engine.max_workers` limit. All nodes on one engine share that job pool,
 so their combined active jobs never exceed the global limit and newly active

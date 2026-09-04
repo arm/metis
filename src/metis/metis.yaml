@@ -42,16 +42,17 @@ metis_engine:
     stages:
       initialize:
         outputs:
-          - threat_model
+          threat_model: threat_model.threat_model
+          codegraph: codegraph.codegraph
         nodes:
           threat_model:
             capabilities:
               - memory
-      review:
-        depends_on:
-          - initialize
-        nodes:
           codegraph: {}
+      review:
+        inputs:
+          codegraph: initialize.codegraph
+        nodes:
           simple_llm_review:
             capabilities:
               - memory
@@ -65,7 +66,7 @@ metis_engine:
       triage:
         inputs:
           sarif: review.sarif
-          codegraph: review.codegraph
+          codegraph: initialize.codegraph
         nodes:
           triage:
             capabilities:

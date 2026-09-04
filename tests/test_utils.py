@@ -168,7 +168,7 @@ def test_split_snippet_default_counter():
 
 
 def test_split_snippet_splits_one_overlong_line_without_data_loss():
-    text = "abcdefghijkl\nok\n"
+    text = "abc\fdef\u2028ghijkl\nok\n"
     chunks = split_snippet(text, max_tokens=4, token_counter=len)
 
     assert "".join(chunk for chunk, _start in chunks) == text

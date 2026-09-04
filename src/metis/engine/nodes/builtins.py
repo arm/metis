@@ -18,6 +18,7 @@ from ..stages.service import ExecutionGraphService
 from ..stages.triage.service import TriageService
 from .codegraph import CodeGraphService
 from .codegraph import registration as codegraph_node
+from .compilation_profile import registration as compilation_profile_node
 from .finding_dedup import registration as finding_dedup_node
 from .index import registration as index_node
 from .reachability import review as reachability_node
@@ -71,6 +72,8 @@ def build_builtin_execution(
 
     if ("initialize", "threat_model") in selected_nodes:
         registrations.append(threat_model_node.create_node(engine_config, repository))
+    if ("initialize", "compilation_profile") in selected_nodes:
+        registrations.append(compilation_profile_node.create_node(repository))
 
     simple_llm_review = None
     simple_review_selected = ("review", "simple_llm_review") in selected_nodes
@@ -94,7 +97,6 @@ def build_builtin_execution(
             repository=repository,
             llm_provider=engine_config.llm_provider,
             usage_runtime=engine_config.usage_runtime,
-            codegraphs=codegraphs,
         )
         if reachability_selected
         else None
@@ -107,6 +109,9 @@ def build_builtin_execution(
             reachability,
             None if simple_review_selected else simple_llm_review,
             reachability_settings,
+            supports_file=lambda path: (
+                codegraphs.supports_file(path) and codegraphs.supports_semantics(path)
+            ),
         )
         registrations.append(reachability_node.create_node(reachability_review))
 

@@ -64,6 +64,10 @@ class ParsedFileGraph:
 
 
 class CFamilyCodeGraphProvider:
+    __metis_cache_identity__ = (
+        "metis.plugins.c_family.codegraph:CFamilyCodeGraphProvider:3"
+    )
+
     def __init__(self, context: CodeGraphProviderContext) -> None:
         self._extractor = CFamilyTreeSitterExtractor(context)
 
@@ -184,7 +188,12 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             )
 
         try:
-            parsed = runtime.parse_file(codebase_path, rel_path)
+            source = (
+                self._context.source_for_path(file_path)
+                if self._context.source_for_path is not None
+                else None
+            )
+            parsed = runtime.parse_file(codebase_path, rel_path, source=source)
         except Exception as exc:
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 

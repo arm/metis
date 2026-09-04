@@ -10,6 +10,8 @@ import threading
 from collections import OrderedDict, defaultdict
 from typing import Any
 
+from metis.utils import source_lines
+
 from .anchor import (
     CONFIDENCE_DISAMBIGUATED,
     CONFIDENCE_EXACT,
@@ -51,7 +53,7 @@ def _without_consistent_line_numbers(
 ) -> str:
     if not isinstance(start_line, int) or not isinstance(end_line, int):
         return snippet
-    lines = snippet.splitlines()
+    lines = source_lines(snippet)
     expected_numbers = range(start_line, end_line + 1)
     if len(lines) != len(expected_numbers):
         return snippet
@@ -74,11 +76,23 @@ class SourceMap:
     pipeline that needs to attribute a finding to a location.
     """
 
-    def __init__(self, rel_path: str, text: str):
+    def __init__(
+        self,
+        rel_path: str,
+        text: str,
+        source: bytes | None = None,
+        anchor_source: bytes | None = None,
+    ):
         self.rel_path = normalize_path(rel_path)
         self.text = text
-        self.lines: list[str] = text.splitlines()
-        self.line_offsets: list[int] = self._compute_line_offsets(text)
+        self._source = text.encode("utf-8") if source is None else bytes(source)
+        self._anchor_source = (
+            self._source if anchor_source is None else bytes(anchor_source)
+        )
+        if len(self._anchor_source) != len(self._source):
+            raise ValueError("Analysis and anchor sources must have equal byte length")
+        self.lines: list[str] = source_lines(text)
+        self.line_offsets: list[int] = self._compute_line_offsets(self._source)
         # (start_line, end_line, name) for each top-level function
         self._functions: list[tuple[int, int, str]] | None = None
 
@@ -90,13 +104,24 @@ class SourceMap:
     def for_text(cls, rel_path: str, text: str) -> "SourceMap":
         return cls(rel_path, text)
 
+    @classmethod
+    def for_bytes(
+        cls,
+        rel_path: str,
+        source: bytes,
+        *,
+        anchor_source: bytes | None = None,
+    ) -> "SourceMap":
+        return cls(
+            rel_path,
+            source.decode("utf-8", errors="ignore"),
+            source,
+            anchor_source,
+        )
+
     @staticmethod
-    def _compute_line_offsets(text: str) -> list[int]:
-        offsets = [0]
-        for index, byte in enumerate(text.encode("utf-8")):
-            if byte == ord("\n"):
-                offsets.append(index + 1)
-        return offsets
+    def _compute_line_offsets(source: bytes) -> list[int]:
+        return [0, *(match.end() for match in re.finditer(b"\n", source))]
 
     @property
     def line_count(self) -> int:
@@ -114,15 +139,18 @@ class SourceMap:
 
     def line_end_byte(self, line: int) -> int:
         if line < len(self.line_offsets):
-            return self.line_offsets[line] - 1
-        return len(self.text.encode("utf-8"))
+            end = self.line_offsets[line] - 1
+            return end - 1 if self._source[end - 1 : end] == b"\r" else end
+        return len(self._source)
 
     def byte_slice(self, start_byte: int, end_byte: int) -> str:
         """Return text for a UTF-8 byte span such as a tree-sitter node range."""
-        encoded = self.text.encode("utf-8")
-        start = max(0, min(int(start_byte), len(encoded)))
-        end = max(start, min(int(end_byte), len(encoded)))
-        return encoded[start:end].decode("utf-8")
+        start = max(0, min(int(start_byte), len(self._source)))
+        end = max(start, min(int(end_byte), len(self._source)))
+        return self._source[start:end].decode("utf-8", errors="ignore")
+
+    def _anchor_slice(self, start_byte: int, end_byte: int) -> str:
+        return self._anchor_source[start_byte:end_byte].decode("utf-8", errors="ignore")
 
     def numbered_slice(
         self, start_line: int, end_line: int, *, max_lines: int | None = None
@@ -162,7 +190,7 @@ class SourceMap:
         if len(rendered) <= max_chars:
             return rendered
 
-        lines = rendered.splitlines()
+        lines = source_lines(rendered)
         selected: list[str] = []
         rendered_chars = 0
         for line in lines:
@@ -194,7 +222,7 @@ class SourceMap:
 
     @staticmethod
     def number_text(text: str, start_line: int) -> str:
-        lines = text.splitlines()
+        lines = source_lines(text)
         if not lines:
             return ""
         end = start_line + len(lines) - 1
@@ -228,7 +256,7 @@ class SourceMap:
             end_byte=eb,
             symbol=symbol,
             kind=kind,
-            content_hash=content_hash(self.byte_slice(sb, eb)),
+            content_hash=content_hash(self._anchor_slice(sb, eb)),
             confidence=confidence,
         )
 
@@ -255,7 +283,7 @@ class SourceMap:
             end_byte=end_byte,
             symbol=symbol,
             kind=kind,
-            content_hash=content_hash(self.byte_slice(start_byte, end_byte)),
+            content_hash=content_hash(self._anchor_slice(start_byte, end_byte)),
             confidence=confidence,
         )
 
@@ -276,11 +304,13 @@ class SourceMap:
         if not (1 <= start_line <= end_line <= self.line_count):
             return None
         actual = [_norm_line(ln) for ln in self.lines[start_line - 1 : end_line]]
-        wanted = [_norm_line(ln) for ln in snippet.splitlines() if _norm_line(ln)]
+        wanted = [_norm_line(ln) for ln in source_lines(snippet) if _norm_line(ln)]
         if not wanted:
             return None
         joined_actual = " ".join(a for a in actual if a)
         joined_wanted = " ".join(wanted)
+        if not joined_actual:
+            return None
         if joined_wanted in joined_actual or joined_actual in joined_wanted:
             return self.anchor_for_lines(
                 start_line, end_line, confidence=CONFIDENCE_EXACT
@@ -337,7 +367,7 @@ class SourceMap:
         if not snippet or not self.lines:
             return None
 
-        snippet_lines = [ln.rstrip() for ln in snippet.splitlines()]
+        snippet_lines = [ln.rstrip() for ln in source_lines(snippet)]
         while snippet_lines and not snippet_lines[0].strip():
             snippet_lines.pop(0)
         while snippet_lines and not snippet_lines[-1].strip():
@@ -471,13 +501,13 @@ class SourceMap:
                 _node_line,
             )
 
-            tree = get_parser(language).parse(self.text)
+            tree = get_parser(language).parse_bytes(self._source)
         except Exception:
             return []
         if tree is None:
             return []
 
-        source = self.text.encode("utf-8")
+        source = self._source
         out: list[tuple[int, int, str]] = []
         stack = [tree.root_node()]
         while stack:
@@ -511,10 +541,8 @@ class SourceMap:
                 elif ch == "}":
                     depth -= 1
                 i += 1
-            start_byte = len(self.text[: m.start(1)].encode("utf-8"))
-            end_byte = len(self.text[: max(0, i - 1)].encode("utf-8"))
-            start_line = self.byte_to_line(start_byte)
-            end_line = self.byte_to_line(end_byte)
+            start_line = self.text.count("\n", 0, m.start(1)) + 1
+            end_line = self.text.count("\n", 0, max(0, i - 1)) + 1
             out.append((start_line, end_line, name))
         return out
 

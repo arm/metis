@@ -61,6 +61,8 @@ def test_codegraph_store_closes_connections(tmp_path, monkeypatch):
 
 def _repository(files, registration_for_path):
     return SimpleNamespace(
+        analysis_source_for_path=lambda _path: None,
+        profiled_source_fingerprint=None,
         get_code_files=lambda **_kwargs: files,
         get_codegraph_registration=registration_for_path,
         get_language_name_for_path=lambda path: (
@@ -531,37 +533,6 @@ def test_concurrent_materialize_serializes_canonical_builds(tmp_path):
 
     assert first_reference == second_reference
     assert builds == ["build"]
-
-
-def test_concurrent_different_file_seeds_keep_both_graphs(tmp_path):
-    for name in ("first.py", "second.py"):
-        (tmp_path / name).write_text(f"def {name[:-3]}(): pass\n", encoding="utf-8")
-
-    def build_graph(**kwargs):
-        graph = CodeGraph()
-        path = os.path.basename(kwargs["files"][0])
-        name = path[:-3]
-        graph.add_node(FunctionNode(f"{path}::{name}", path, name, 1))
-        return CodeGraphResult(graph, kwargs["files"])
-
-    repository = _repository((), lambda _path: "python")
-    repository.is_code_file_selected = lambda path, **_kwargs: (
-        tmp_path / path
-    ).is_file()
-    service = CodeGraphService(
-        SimpleNamespace(codebase_path=str(tmp_path)),
-        repository,
-        {"python": lambda _context: SimpleNamespace(build_graph=build_graph)},
-    )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        first_future = executor.submit(service.materialize, seed_file="first.py")
-        second_future = executor.submit(service.materialize, seed_file="second.py")
-        first = first_future.result()
-        second = second_future.result()
-
-    assert service.load(first).get_node("first.py::first") is not None
-    assert service.load(second).get_node("second.py::second") is not None
 
 
 def test_concurrent_materialize_shares_an_incomplete_attempt(tmp_path):

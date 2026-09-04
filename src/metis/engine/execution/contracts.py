@@ -42,6 +42,9 @@ def annotation_allows_none(annotation: Any) -> bool:
 
 
 class NodeRepository(Protocol):
+    @property
+    def profiled_source_fingerprint(self) -> str | None: ...
+
     def get_code_files(
         self,
         *,
@@ -50,6 +53,8 @@ class NodeRepository(Protocol):
     ) -> list[str]: ...
 
     def get_language_name_for_path(self, path: str) -> str | None: ...
+
+    def source_profile_applies_to_path(self, path: str) -> bool: ...
 
 
 class NodePromptRunner(Protocol):
@@ -60,7 +65,6 @@ class NodeCodeGraphs(Protocol):
     def materialize(
         self,
         *,
-        seed_file: str | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
     ) -> CodeGraphReference: ...

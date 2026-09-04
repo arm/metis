@@ -7,34 +7,36 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from hashlib import sha256
 from typing import TYPE_CHECKING
+from typing import Any
 
 import unidiff
 from pydantic import ValidationError
 
 from metis import runlog
-from metis.engine.execution.contracts import NodeJobs
-from metis.engine.llm_runner import ModelProviderConfigurationError
-from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
-from metis.utils import read_file_content
-
 from metis.engine.diff_utils import process_diff_file
+from metis.engine.execution.contracts import NodeJobs
+from metis.engine.helpers import apply_custom_guidance
+from metis.engine.helpers import summarize_changes
+from metis.engine.llm_runner import ModelProviderConfigurationError
 from metis.engine.nodes.reachability.progress import emit_progress
-from metis.engine.helpers import apply_custom_guidance, summarize_changes
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
-from metis.engine.threat_context_retrieval import get_threat_model_context
-
+from metis.engine.source import SourceMap
+from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.models import PatchReviewResult
-from metis.engine.stages.review.models import ReviewCommand, ReviewRequest
+from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewGroup
+from metis.engine.stages.review.models import ReviewRequest
 from metis.engine.stages.review.models import ReviewResult
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.scope import select_review_targets
+from metis.engine.threat_context_retrieval import get_threat_model_context
+from metis.utils import read_file_content
 
 logger = logging.getLogger("metis")
 
@@ -275,9 +277,14 @@ class SimpleLlmReviewService:
         checkpoint_session: ReviewCheckpointSession | None = None,
         cache_only: bool = False,
     ) -> dict[str, Any] | None:
-        base_path = os.path.abspath(self._config.codebase_path)
-        snippet = read_file_content(file_path)
-        if not snippet:
+        source_view = self._repository.source_view_for_path(file_path)
+        if source_view is None:
+            snippet = read_file_content(file_path)
+            anchor_source_hash = None
+        else:
+            snippet = source_view.canonical.decode("utf-8", errors="ignore")
+            anchor_source_hash = sha256(source_view.raw).hexdigest()
+        if not snippet.strip():
             return None
 
         plugin = self._repository.get_plugin_for_path(file_path)
@@ -285,7 +292,7 @@ class SimpleLlmReviewService:
             return None
 
         language_prompts = plugin.get_prompts()
-        relative_path = os.path.relpath(file_path, base_path)
+        relative_path = self._repository.normalize_match_path(file_path)
         threat_model_context = get_threat_model_context(
             memory_service,
             path=relative_path,
@@ -300,6 +307,8 @@ class SimpleLlmReviewService:
             "mode": "file",
             "threat_model_context": threat_model_context,
         }
+        if anchor_source_hash is not None:
+            req["anchor_source_hash"] = anchor_source_hash
         graph = review_graph or self._review_graph_factory(None, None)
         checkpoint_key = (
             graph.checkpoint_key(req) if checkpoint_session is not None else None
@@ -320,7 +329,18 @@ class SimpleLlmReviewService:
         if cache_only:
             return None
 
-        result = graph.review(req)
+        if source_view is None:
+            result = graph.review(req)
+        else:
+            result = graph.review(
+                req,
+                source_map=SourceMap(
+                    relative_path,
+                    snippet,
+                    source=source_view.canonical,
+                    anchor_source=source_view.raw,
+                ),
+            )
         if result:
             group = ReviewGroup.model_validate(result)
             result = _review_group_payload(

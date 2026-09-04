@@ -1,22 +1,21 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from concurrent.futures import ThreadPoolExecutor
 import gc
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from metis.engine.source import CodeAnchor, SourceMap, SourceRepository
-from metis.engine.source.anchor import (
-    CONFIDENCE_DISAMBIGUATED,
-    CONFIDENCE_EXACT,
-    CONFIDENCE_FUZZY,
-    CONFIDENCE_UNRESOLVED,
-    content_hash,
-)
-
+from metis.engine.source import CodeAnchor
+from metis.engine.source import SourceMap
+from metis.engine.source import SourceRepository
+from metis.engine.source.anchor import CONFIDENCE_DISAMBIGUATED
+from metis.engine.source.anchor import CONFIDENCE_EXACT
+from metis.engine.source.anchor import CONFIDENCE_FUZZY
+from metis.engine.source.anchor import CONFIDENCE_UNRESOLVED
+from metis.engine.source.anchor import content_hash
 
 C_FIXTURE = textwrap.dedent(
     """\
@@ -90,6 +89,9 @@ def test_numbered_slice_max_lines(smap):
 def test_number_text_static():
     out = SourceMap.number_text("a\nb\nc", start_line=10)
     assert out.splitlines() == ["10: a", "11: b", "12: c"]
+    assert SourceMap.number_text("a\finside\r\nb\vinside\n", 1) == (
+        "1: a\finside\n2: b\vinside"
+    )
 
 
 def test_byte_line_round_trip(smap):
@@ -162,6 +164,8 @@ def test_verify_lines_mismatch(smap):
     assert smap.verify_lines(3, 3, "memcpy(tmp, buf, len);") is None
     assert smap.verify_lines(0, 0, "x") is None
     assert smap.verify_lines(1, 9999, "x") is None
+    blank = SourceMap.for_text("source.c", "             \n")
+    assert blank.verify_lines(1, 1, "inactive_bug();") is None
 
 
 def test_enclosing_symbol(smap):
@@ -254,6 +258,44 @@ def test_repository_caches_by_mtime(tmp_path):
     m2 = repo.get(str(tmp_path), "f.c")
     assert m1 is m2
     assert repo.get(str(tmp_path), "missing.c") is None
+
+
+def test_source_map_preserves_crlf_byte_offsets() -> None:
+    source_map = SourceMap.for_bytes("crlf.c", b"a\r\nb\r\n")
+
+    assert source_map.line_to_byte(2) == 3
+    anchor = source_map.anchor_for_lines(1, 1)
+    assert (anchor.end_byte, anchor.end_col) == (1, 1)
+    assert source_map.byte_slice(anchor.start_byte, anchor.end_byte) == "a"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [b"", b"\n", b"\r", b"a\r\nb\n", "αé\n尾".encode(), bytes(range(256))],
+)
+def test_source_map_offsets_match_byte_newlines(source: bytes) -> None:
+    source_map = SourceMap.for_bytes("source.txt", source)
+
+    assert source_map.line_count == source.count(b"\n") + bool(
+        source and not source.endswith(b"\n")
+    )
+    assert source_map.line_offsets == [
+        0,
+        *(index + 1 for index, byte in enumerate(source) if byte == 10),
+    ]
+
+
+@pytest.mark.parametrize("fallback", (False, True))
+def test_symbol_disambiguation_keeps_invalid_utf8_byte_positions(monkeypatch, fallback):
+    raw = b"/* " + b"\xff" * 64 + b" */\n"
+    raw += b"void first(void) { operation(); }\nvoid second(void) { operation(); }\n"
+    source_map = SourceMap.for_bytes("source.c", raw)
+    if fallback:
+        monkeypatch.setattr(source_map, "_spans_from_tree", lambda: [])
+    anchor = source_map.resolve_issue(snippet="operation();", context_text="second")
+    assert (anchor.start_line, anchor.end_line) == (3, 3)
+    assert anchor.start_byte == raw.index(b"void second")
+    assert anchor.symbol == "source.c::second"
 
 
 def test_repository_lru_eviction(tmp_path):

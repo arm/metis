@@ -2,11 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
+from collections.abc import Sequence
 
 from metis.engine.codegraph import FunctionNode
 from metis.engine.source import SourceMap
+from metis.utils import source_lines
 from metis.utils import split_snippet
+
+
+def _source_map(
+    codebase_path: str,
+    file_path: str,
+    source_for_path: Callable[[str], bytes | None] | None,
+) -> SourceMap | None:
+    source = source_for_path(file_path) if source_for_path is not None else None
+    if source is None:
+        return SourceMap.for_file(codebase_path, file_path)
+    return SourceMap.for_bytes(file_path, source)
 
 
 def _build_file_grouped_node_chunks(
@@ -15,6 +28,7 @@ def _build_file_grouped_node_chunks(
     *,
     max_tokens: int,
     token_counter: Callable[[str], int],
+    source_for_path: Callable[[str], bytes | None] | None = None,
 ) -> list[tuple[list[FunctionNode], str]]:
     by_file: dict[str, list[FunctionNode]] = defaultdict(list)
     for function in sorted(
@@ -42,10 +56,10 @@ def _build_file_grouped_node_chunks(
 
     for file_path in sorted(by_file):
         flush_current()
+        source_map = _source_map(codebase_path, file_path, source_for_path)
+        if source_map is None:
+            continue
         for function in by_file[file_path]:
-            source_map = SourceMap.for_file(codebase_path, function.file_path)
-            if source_map is None:
-                continue
             body = source_map.numbered_slice(
                 function.line_number,
                 function.end_line or function.line_number,
@@ -54,7 +68,7 @@ def _build_file_grouped_node_chunks(
                 continue
             if any(
                 token_counter(line) > max_tokens
-                for line in body.splitlines(keepends=True)
+                for line in source_lines(body, keepends=True)
             ):
                 raise ValueError("max_tokens cannot hold one numbered source line")
             for body_part, _start_line in split_snippet(

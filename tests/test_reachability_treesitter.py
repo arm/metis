@@ -30,11 +30,12 @@ from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
 from metis.engine.nodes.reachability.service import ReachabilityService
 from metis.engine.nodes.reachability.state import ParameterSubject
 from metis.engine.nodes.reachability.state import augment_function_contracts
+from metis.plugins.base import ConfigBackedLanguagePlugin
 from metis.plugins.c_family.ast import CFamilyAstMixin
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.codegraph import CFamilyTreeSitterExtractor
+from metis.plugins.c_family.runtime import TreeSitterRuntime
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
-from metis.plugins.base import ConfigBackedLanguagePlugin
 
 
 class _Point:
@@ -100,6 +101,8 @@ class _Node:
 def _codegraph_service(codebase_path, *, files=(), annotation_settings=None):
     plugin = ConfigBackedLanguagePlugin(plugin_config={"plugins": {}}, name="c")
     repository = SimpleNamespace(
+        analysis_source_for_path=lambda _path: None,
+        profiled_source_fingerprint=None,
         get_code_files=lambda **_kwargs: list(files),
         is_code_file_selected=lambda path, **_kwargs: (
             Path(codebase_path) / path
@@ -355,6 +358,100 @@ def test_c_codegraph_recovers_generic_macro_wrapped_function_definitions(tmp_pat
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         "codegraph.partial_parse"
     ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        "before();",
+        "if (ready()) before();",
+        "while (ready()) before();",
+        "for (; ready(); ) before();",
+    ),
+)
+def test_c_codegraph_recovers_after_declaration_annotation_macro(tmp_path, body):
+    source = tmp_path / "annotation.c"
+    source.write_text(
+        "static void before(void) {}\n"
+        "static int ready(void) { return 1; }\n"
+        "static __ALIGNED(4) uint8_t buffer[4];\n"
+        f"static void after(void) {{ {body} }}\n"
+        "static __ALIGNED(8) uint8_t second[8];\n"
+        "static void last(void) { after(); }\n",
+        encoding="utf-8",
+    )
+    original = source.read_bytes()
+    runtime = TreeSitterRuntime("c")
+
+    parsed = runtime.parse_file(str(tmp_path), source.name)
+
+    assert len(parsed.parse_source) == len(original)
+    assert parsed.parse_source.index(b"before") == original.index(b"before")
+    assert parsed.parse_source.index(b"after") == original.index(b"after")
+    annotation = slice(original.index(b"__ALIGNED"), original.index(b"uint8_t"))
+    assert parsed.parse_source[annotation].strip() == b""
+    function = slice(
+        original.index(b"static void after"), original.index(b"static __ALIGNED(8)")
+    )
+    assert parsed.parse_source[function] == original[function]
+
+    service = _codegraph_service(str(tmp_path), files=(str(source),))
+    graph = service.load(service.materialize())
+    assert graph.get_node("annotation.c::before") is not None
+    after = graph.get_node("annotation.c::after")
+    assert after is not None
+    assert after.start_byte == original.index(b"static void after")
+    expected_calls = {"annotation.c::before"}
+    if "ready()" in body:
+        expected_calls.add("annotation.c::ready")
+    if body.startswith("if"):
+        assert next(
+            call for call in after.call_sites if call.symbol == "before"
+        ).conditions
+    elif body.startswith(("while", "for")):
+        assert len(after.loops) == 1
+        assert after.loops[0].condition.text == "ready()"
+    assert set(after.resolved_calls) == expected_calls
+    assert graph.get_node("annotation.c::last").resolved_calls == [
+        "annotation.c::after"
+    ]
+
+
+@pytest.mark.parametrize(
+    "signature",
+    (
+        "(__typeof__(1) value)",
+        "(_Atomic(int) value)",
+        "(int value) __attribute__((noinline))",
+    ),
+)
+def test_declaration_recovery_preserves_signatures_and_graph_facts(tmp_path, signature):
+    source = tmp_path / "annotation.c"
+    original = (
+        "#define ALIGN(n) __attribute__((aligned(n)))\n"
+        "static void before(void) {}\n"
+        "static ALIGN(4) unsigned char buffer[4];\n"
+        f"void target{signature} {{ before(); }}\n"
+        "void after(void) { target(0); }\n"
+    ).encode()
+    source.write_bytes(original)
+    annotation = b"ALIGN(4)"
+    expected = original.replace(annotation, b" " * len(annotation))
+
+    parsed = TreeSitterRuntime("c").parse_file(str(tmp_path), source.name)
+    assert parsed.parse_source == expected
+    service = _codegraph_service(str(tmp_path), files=(str(source),))
+    recovered = service.load(service.materialize())
+    assert recovered.get_node("annotation.c::target").resolved_calls == [
+        "annotation.c::before"
+    ]
+    assert recovered.get_node("annotation.c::after").resolved_calls == [
+        "annotation.c::target"
+    ]
+
+    source.write_bytes(expected)
+    control = service.load(service.materialize())
+    assert recovered.nodes == control.nodes
 
 
 def test_c_codegraph_resolves_wrapper_annotations_across_files(tmp_path):
@@ -1111,6 +1208,8 @@ def test_codegraph_service_preserves_provider_resolution_without_cross_links(tmp
     python_graph = _graph(_fn("module.py::open", 1))
     progress_events = []
     repository = SimpleNamespace(
+        analysis_source_for_path=lambda _path: None,
+        profiled_source_fingerprint=None,
         get_code_files=lambda **_kwargs: ["caller.c", "module.py"],
         get_codegraph_registration=lambda path: (
             "c_family" if path.endswith(".c") else "python"

@@ -80,11 +80,16 @@ def test_packaged_execution_graph_omits_index_initialization():
     triage = execution["stages"]["triage"]
     assert "index" not in initialize["nodes"]
     assert "index" not in initialize["outputs"]
+    assert initialize["outputs"]["codegraph"] == "codegraph.codegraph"
+    assert "codegraph" in initialize["nodes"]
     assert "outputs" not in review
+    assert review["inputs"]["codegraph"] == "initialize.codegraph"
+    assert "codegraph" not in review["nodes"]
     assert "inputs" not in review["nodes"]["simple_llm_review"]
     assert "inputs" not in review["nodes"]["finding_dedup"]
     assert "inputs" not in review["nodes"]["result"]
     assert "outputs" not in triage
+    assert triage["inputs"]["codegraph"] == "initialize.codegraph"
     assert set(triage["nodes"]) == {"triage", "result"}
     assert "inputs" not in triage["nodes"]["triage"]
     assert "inputs" not in triage["nodes"]["result"]
