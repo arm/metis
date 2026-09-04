@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.2](https://github.com/arm/metis/compare/metis-v1.5.1...metis-v1.5.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **reachability:** bound file-focus path expansion ([68d0d4f](https://github.com/arm/metis/commit/68d0d4f0ed0d55899840e6fe4b3affe6d07913e5))
+
+
 ## [1.5.1](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v1.5.1) (2026-09-04)
 
 
