@@ -16,6 +16,7 @@ from llama_index.core.schema import Document
 
 from metis.configuration import load_plugin_config
 from metis.engine.capabilities.indexing import IndexingService
+from metis.plugins.base import ConfigBackedLanguagePlugin
 
 REQUIRED_PROMPT_KEYS = (
     "security_review",
@@ -332,6 +333,36 @@ def test_manifest_without_implementation_uses_cached_config_backed_plugin() -> N
     assert "security_review" in plugin.get_prompts()
 
 
+def test_builtin_perl_manifest_matches_only_supported_extensions() -> None:
+    registry_module = _import_registry_api()
+    registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
+
+    for path in (
+        "bin/audit.PL",
+        "lib/Security.pm",
+        "t/authorization.t",
+        "app/service.psgi",
+    ):
+        assert registry.language_name_for_path(path) == "perl"
+
+    for path in ("cgi/legacy.cgi", "docs/Guide.pod", "bin/extensionless"):
+        assert registry.language_name_for_path(path) is None
+
+
+def test_builtin_perl_plugin_is_config_backed_and_cached() -> None:
+    registry_module = _import_registry_api()
+    registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
+
+    plugin = registry.get_plugin_for_path("lib/Security.pm")
+
+    assert isinstance(plugin, ConfigBackedLanguagePlugin)
+    assert plugin is registry.get_plugin("perl")
+    assert plugin.get_supported_extensions() == [".pl", ".pm", ".t", ".psgi"]
+    assert set(REQUIRED_PROMPT_KEYS) <= set(plugin.get_prompts())
+    assert "snippet_security_summary" in plugin.get_prompts()
+    assert "triage_navigation" in plugin.get_prompts()
+
+
 def test_startup_plugin_config_excludes_language_prompt_configs():
     plugin_config = load_plugin_config()
 
@@ -367,6 +398,7 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
         "java",
         "javascript",
         "kotlin",
+        "perl",
         "php",
         "python",
         "rust",

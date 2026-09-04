@@ -71,6 +71,10 @@ def test_ipynb_splitter_extracts_code_cells_without_console_output(capsys):
         ("java", "class Main { public static void main(String[] args) {} }\n"),
         ("javascript", "function main() { return 0; }\n"),
         ("kotlin", "fun main() {}\n"),
+        (
+            "perl",
+            "use strict;\nuse warnings;\nsub main { return 0; }\nmain();\n",
+        ),
         ("php", "<?php function main() { return 0; }\n"),
         ("python", "def main():\n    return 0\n"),
         ("rust", "fn main() { }\n"),
