@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v1.5.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **triage:** stop repeated tool retries ([2ce771b](https://github.com/arm/metis/commit/2ce771b468313e1817a01a98d75dd8de925378c7))
+
+
 ## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)
 
 
