@@ -62,6 +62,7 @@ def test_runtime_configuration_rejects_invalid_memory_values(tmp_path, value):
     path = tmp_path / "metis.yaml"
     path.write_text(
         f"memory: {value}\nllm_provider:\n  name: openai\n  model: gpt-test\n"
+        "  api_key: test-key\n"
     )
     with pytest.raises(ValidationError):
         load_runtime_config(path)
