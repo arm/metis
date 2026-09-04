@@ -15,6 +15,7 @@ def _build_engine(
     dummy_backend,
     dummy_llm,
     capability_settings,
+    **kwargs,
 ):
     class _EmbeddingProvider:
         def get_embed_model_code(self, **_kwargs):
@@ -33,6 +34,7 @@ def _build_engine(
         llama_query_model="gpt-test",
         similarity_top_k=3,
         capability_settings=capability_settings,
+        **kwargs,
     )
 
 
@@ -63,6 +65,39 @@ def test_direct_code_file_selection_respects_metisignore(
 
     assert engine.repository.is_code_file_selected("keep.py") is True
     assert engine.repository.is_code_file_selected("drop.py") is False
+
+
+def test_perl_files_follow_repository_review_selection_rules(
+    tmp_path, dummy_backend, dummy_llm, capability_settings
+):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "keep.pl").write_text("print qq(keep\\n);\n", encoding="utf-8")
+    (tmp_path / "src" / "app.psgi").write_text(
+        "sub { [200, [], ['ok']] };\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "ignored.pm").write_text("package Ignored;\n", encoding="utf-8")
+    (tmp_path / "src" / "excluded.t").write_text("use Test::More;\n", encoding="utf-8")
+    (tmp_path / "src" / "legacy.cgi").write_text(
+        "print qq(legacy);\n", encoding="utf-8"
+    )
+    (tmp_path / "outside.pm").write_text("package Outside;\n", encoding="utf-8")
+    (tmp_path / ".metisignore").write_text("src/ignored.pm\n", encoding="utf-8")
+
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_include_paths=["src/"],
+        review_code_exclude_paths=["src/excluded.t"],
+    )
+
+    files = sorted(
+        Path(path).relative_to(tmp_path).as_posix()
+        for path in engine.repository.get_code_files(include_suffixed_sources=True)
+    )
+
+    assert files == ["src/app.psgi", "src/keep.pl"]
 
 
 def test_concurrent_metisignore_load_waits_for_initialized_spec(
