@@ -147,6 +147,7 @@ def compile_stage(
                         input_name,
                         initial_inputs[stage_input],
                         registration.inputs[input_name],
+                        collection=collection,
                     )
                     continue
                 producer_name, _, _output_name = source.partition(".")
@@ -314,9 +315,15 @@ def _validate_input_annotation(
     input_name: str,
     source: Any,
     target: Any,
+    *,
+    collection: bool = False,
 ) -> None:
-    target_origin = get_origin(target)
-    if target_origin is tuple:
+    if collection:
+        if get_origin(target) is not tuple:
+            raise ValueError(
+                f"Execution node {stage_name}.{node_name} input {input_name!r} "
+                "does not accept multiple sources"
+            )
         target = get_args(target)[0]
     if not _annotations_compatible(source, target):
         raise ValueError(

@@ -6,7 +6,6 @@ from __future__ import annotations
 from contextlib import suppress
 
 from llama_index.core import StorageContext
-from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance
@@ -15,21 +14,7 @@ from qdrant_client.models import VectorParams
 from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
 
 
-class QdrantVectorStoreIndex(VectorStoreIndex):
-    """Vector index that updates documents stored in Qdrant."""
-
-    def refresh_ref_docs(self, documents, **update_kwargs):
-        for document in documents:
-            self.update_ref_doc(
-                document,
-                **update_kwargs.get("update_kwargs", {}),
-            )
-        return [True] * len(documents)
-
-
 class QdrantStore(LlamaIndexVectorBackend):
-    index_class = QdrantVectorStoreIndex
-
     def __init__(
         self,
         *,
@@ -54,7 +39,12 @@ class QdrantStore(LlamaIndexVectorBackend):
         if self._client is not None:
             return
         client = QdrantClient(url=self.url, api_key=self.api_key)
-        components = self._build_store_components(client)
+        try:
+            components = self._build_store_components(client)
+        except Exception:
+            with suppress(Exception):
+                client.close()
+            raise
 
         (
             self.vector_store_code,

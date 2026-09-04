@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Tuple
 
+from metis.json_io import write_json_atomic
 from metis.sarif.writer import generate_sarif
 
 
@@ -35,8 +36,7 @@ def export_sarif(
         sarif_payload if sarif_payload is not None else generate_sarif(report_data)
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=4)
+    write_json_atomic(output_path, payload, indent=4)
     return output_path, payload
 
 

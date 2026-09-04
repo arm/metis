@@ -269,6 +269,21 @@ def test_source_map_preserves_crlf_byte_offsets() -> None:
     assert source_map.byte_slice(anchor.start_byte, anchor.end_byte) == "a"
 
 
+def test_repository_preserves_source_bytes_and_relative_paths(tmp_path):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    source = b"a\xff\r\nb\r\n"
+    (nested / "source.txt").write_bytes(source)
+    repo = SourceRepository()
+    outer = repo.get(str(tmp_path), "nested/source.txt")
+    inner = repo.get(str(nested), "source.txt")
+
+    assert outer.rel_path == "nested/source.txt"
+    assert inner.rel_path == "source.txt"
+    anchor = inner.anchor_for_lines(2, 2)
+    assert (anchor.start_byte, anchor.end_byte) == (4, 5)
+
+
 @pytest.mark.parametrize(
     "source",
     [b"", b"\n", b"\r", b"a\r\nb\n", "αé\n尾".encode(), bytes(range(256))],

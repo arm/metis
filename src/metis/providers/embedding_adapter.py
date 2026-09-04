@@ -33,10 +33,10 @@ class LangChainEmbeddingAdapter(BaseEmbedding):
         return await self._client.aembed_query(query)
 
     def _get_text_embedding(self, text: str) -> Embedding:
-        return self._client.embed_query(text)
+        return self._client.embed_documents([text])[0]
 
     async def _aget_text_embedding(self, text: str) -> Embedding:
-        return await self._client.aembed_query(text)
+        return (await self._client.aembed_documents([text]))[0]
 
     def _get_text_embeddings(self, texts: list[str]) -> list[Embedding]:
         return self._client.embed_documents(texts)

@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from contextlib import suppress
 from threading import RLock
 
 from chromadb import PersistentClient
 from chromadb.config import Settings
+from chromadb.errors import NotFoundError
 from llama_index.core import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
@@ -35,6 +37,7 @@ class ChromaStore(LlamaIndexVectorBackend):
         with self._init_lock:
             if self._initialized:
                 return
+            client = None
             try:
                 settings = Settings(anonymized_telemetry=False)
                 # Ensure this local store always uses Chroma's embedded backend.
@@ -51,8 +54,11 @@ class ChromaStore(LlamaIndexVectorBackend):
                 logger.info("Chroma vector components initialized.")
 
             except Exception as e:
+                if client is not None:
+                    with suppress(Exception):
+                        client.close()
                 logger.error(f"Error initializing ChromaStore: {e}")
-                raise VectorStoreInitError()
+                raise VectorStoreInitError() from e
 
     def get_retrievers(
         self,
@@ -67,25 +73,17 @@ class ChromaStore(LlamaIndexVectorBackend):
                 self.query_config,
                 callbacks=callbacks,
             )
-            retriever_code = QueryAnswerRetriever(
-                ChromaCollectionRetriever(
-                    self.collection_code,
-                    self.embed_model_code,
-                    k=top_k,
-                ),
-                llm_provider,
-                chat_model_kwargs=chat_model_kwargs,
+            return tuple(
+                QueryAnswerRetriever(
+                    ChromaCollectionRetriever(collection, embed_model, k=top_k),
+                    llm_provider,
+                    chat_model_kwargs=chat_model_kwargs,
+                )
+                for collection, embed_model in (
+                    (self.collection_code, self.embed_model_code),
+                    (self.collection_docs, self.embed_model_docs),
+                )
             )
-            retriever_docs = QueryAnswerRetriever(
-                ChromaCollectionRetriever(
-                    self.collection_docs,
-                    self.embed_model_docs,
-                    k=top_k,
-                ),
-                llm_provider,
-                chat_model_kwargs=chat_model_kwargs,
-            )
-            return (retriever_code, retriever_docs)
         except Exception as e:
             logger.error(f"Error creating Chroma retrievers: {e}")
             raise RetrieverInitError()
@@ -115,7 +113,7 @@ class ChromaStore(LlamaIndexVectorBackend):
         for name in ("code", "docs"):
             try:
                 self._client.delete_collection(name)
-            except Exception:
+            except NotFoundError:
                 logger.debug("Chroma collection '%s' did not exist during reset", name)
         code_collection = self._client.get_or_create_collection("code")
         docs_collection = self._client.get_or_create_collection("docs")

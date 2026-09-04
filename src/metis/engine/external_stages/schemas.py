@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, constr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, constr
 
 from metis.engine.stages.triage.models import TriageDecisionModel
 
@@ -57,39 +57,9 @@ class ValidationRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ExternalValidationDecisionModel(BaseModel):
+class ExternalValidationDecisionModel(TriageDecisionModel):
     run_index: int = Field(ge=0)
     result_index: int = Field(ge=0)
-    status: Literal["valid", "invalid", "inconclusive"]
-    reason: constr(strip_whitespace=True, min_length=1)
-    evidence: list[constr(strip_whitespace=True, min_length=1)] = Field(
-        default_factory=list
-    )
-    resolution_chain: list[constr(strip_whitespace=True, min_length=1)] = Field(
-        default_factory=list
-    )
-    unresolved_hops: list[constr(strip_whitespace=True, min_length=1)] = Field(
-        default_factory=list
-    )
-
-    model_config = ConfigDict(extra="forbid")
-
-    @field_validator("unresolved_hops", mode="after")
-    @classmethod
-    def _validate_decision_shape(cls, value, info):
-        payload = dict(info.data)
-        payload["unresolved_hops"] = value
-        if "status" in payload and "reason" in payload:
-            TriageDecisionModel.model_validate(
-                {
-                    "status": payload.get("status"),
-                    "reason": payload.get("reason"),
-                    "evidence": payload.get("evidence") or [],
-                    "resolution_chain": payload.get("resolution_chain") or [],
-                    "unresolved_hops": payload.get("unresolved_hops") or [],
-                }
-            )
-        return value
 
     def triage_decision_metadata(self) -> dict[str, Any]:
         return {

@@ -228,7 +228,6 @@ class RunLogSession:
         created_ndjson = False
         try:
             self.output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self.output_dir.chmod(0o700)
             self._file = self.ndjson_path.open("x", encoding="utf-8", buffering=1)
             created_ndjson = True
             self.ndjson_path.chmod(0o600)

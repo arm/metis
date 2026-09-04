@@ -15,7 +15,6 @@
         body.light-theme .meta { color: #4b5565; }
         body.light-theme .chart-card { background: #ffffff; border-color: #d0d5e0; box-shadow: 0 12px 30px -18px rgba(15, 23, 42, 0.15); }
         body.light-theme .chart-card.selected { border-color: #2563eb; box-shadow: 0 18px 38px -18px rgba(37, 99, 235, 0.35); }
-        body.light-theme .chart-card.selected { border-color: #2563eb; box-shadow: 0 18px 38px -18px rgba(37, 99, 235, 0.35); }
         body.light-theme .chart-card h2 { color: #111827; }
         body.light-theme .chart-card .echart { cursor: pointer; }
         body.light-theme .chart-button { color: #1e293b; border-color: rgba(148, 163, 184, 0.4); background: rgba(148, 163, 184, 0.18); }
@@ -45,7 +44,6 @@
         .charts.maximized-active { grid-template-columns: 1fr; }
         .charts.maximized-active .chart-card:not(.maximized) { display: none; }
         .chart-card { position: relative; background: #0d1a33; border: 1px solid #1f2c4d; border-radius: 12px; padding: 1rem 1.25rem 1.5rem; box-shadow: 0 10px 30px -15px rgba(15, 23, 42, 0.8); min-height: 320px; display: flex; flex-direction: column; transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
-        .chart-card.selected { border-color: #3b82f6; box-shadow: 0 20px 45px -18px rgba(59, 130, 246, 0.45); }
         .chart-card.selected { border-color: #3b82f6; box-shadow: 0 20px 45px -18px rgba(59, 130, 246, 0.45); }
         .chart-card h2 { font-size: 1.05rem; margin-bottom: 0.75rem; color: #f4f5f7; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
         .chart-actions { display: inline-flex; gap: 0.5rem; }
@@ -683,7 +681,7 @@
                 backgroundColor: 'transparent',
                 tooltip: {
                     trigger: 'item',
-                    formatter: params => `${params.name}: ${params.value}`
+                    formatter: params => `${echarts.format.encodeHTML(params.name)}: ${params.value}`
                 },
                 legend: {
                     orient: 'vertical',
@@ -768,12 +766,12 @@
                         const severityLines = Object.entries(counts)
                             .filter(([, value]) => value > 0)
                             .sort((a, b) => (severityRank[b[0]] || 0) - (severityRank[a[0]] || 0))
-                            .map(([severity, value]) => `${severity}: ${value}`);
+                            .map(([severity, value]) => `${echarts.format.encodeHTML(severity)}: ${value}`);
                         const path = data.isFile ? data.fullPath : data.fullPath || data.name;
                         const severity = data.severity || 'Unknown';
                         const details = [
-                            `<strong>${path}</strong>`,
-                            `Severity: ${severity}`,
+                            `<strong>${echarts.format.encodeHTML(path)}</strong>`,
+                            `Severity: ${echarts.format.encodeHTML(severity)}`,
                             `Total issues: ${total}`
                         ];
                         if (severityLines.length) {

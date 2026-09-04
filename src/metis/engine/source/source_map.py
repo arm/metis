@@ -548,14 +548,16 @@ class SourceMap:
 
 
 class SourceRepository:
-    """Process-wide LRU cache of :class:`SourceMap` keyed by (path, mtime, size)."""
+    """Process-wide LRU cache of source maps and their repository-relative paths."""
 
     _instance: "SourceRepository | None" = None
     _instance_lock = threading.Lock()
 
     def __init__(self, capacity: int = 256):
         self._capacity = capacity
-        self._cache: "OrderedDict[tuple[str, float, int], SourceMap]" = OrderedDict()
+        self._cache: "OrderedDict[tuple[str, str, float, int], SourceMap]" = (
+            OrderedDict()
+        )
         self._lock = threading.Lock()
 
     @classmethod
@@ -579,18 +581,18 @@ class SourceRepository:
             st = os.stat(full)
         except OSError:
             return None
-        key = (os.path.abspath(full), st.st_mtime, st.st_size)
+        key = (os.path.abspath(full), normalize_path(rel), st.st_mtime, st.st_size)
         with self._lock:
             smap = self._cache.get(key)
             if smap is not None:
                 self._cache.move_to_end(key)
                 return smap
         try:
-            with open(full, "r", encoding="utf-8", errors="ignore") as f:
-                text = f.read()
+            with open(full, "rb") as f:
+                source = f.read()
         except OSError:
             return None
-        smap = SourceMap(rel, text)
+        smap = SourceMap.for_bytes(rel, source)
         with self._lock:
             self._cache[key] = smap
             self._cache.move_to_end(key)

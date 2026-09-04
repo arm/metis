@@ -94,6 +94,10 @@ class UsageLlamaIndexHandler(BaseCallbackHandler):
         event_id: str = "",
         **kwargs: Any,
     ) -> None:
+        pending_model = "unknown"
+        if event_type == CBEventType.EMBEDDING and event_id:
+            with self._embedding_models_lock:
+                pending_model = self._embedding_models.pop(event_id, "unknown")
         scope_id = current_scope()
         if not scope_id:
             return
@@ -118,12 +122,8 @@ class UsageLlamaIndexHandler(BaseCallbackHandler):
         if not isinstance(chunks, list) or not chunks:
             return
         model_name = _extract_embedding_model(payload)
-        if model_name == "unknown" and event_id:
-            with self._embedding_models_lock:
-                model_name = self._embedding_models.pop(event_id, "unknown")
-        elif event_id:
-            with self._embedding_models_lock:
-                self._embedding_models.pop(event_id, None)
+        if model_name == "unknown":
+            model_name = pending_model
         input_tokens = 0
         for chunk in chunks:
             text = str(chunk or "")

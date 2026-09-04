@@ -392,6 +392,22 @@ def test_parallel_jobs_are_traced_with_compact_keys(tmp_path):
     runlog.validate_runlog(session.ndjson_path)
 
 
+def test_scheduler_accepts_none_jobs_without_losing_worker_capacity() -> None:
+    scheduler = JobScheduler(1)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        try:
+            result = caller.submit(
+                scheduler.limit(1).run,
+                [None, 2],
+                lambda value: value,
+                label=None,
+                result_key=str,
+            )
+            assert result.result(timeout=2) == [None, 2]
+        finally:
+            scheduler.close()
+
+
 def test_scheduler_shares_global_workers_across_node_limits() -> None:
     scheduler = JobScheduler(2)
     state_lock = threading.Lock()
@@ -896,3 +912,16 @@ def test_runtime_write_failure_disables_logging_without_failing_run(tmp_path):
 
     meta = json.loads(session.meta_path.read_text(encoding="utf-8"))
     assert meta["complete"] is False
+
+
+def test_runlog_preserves_existing_output_directory_permissions(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    output_dir.chmod(0o750)
+
+    with runlog.open_runlog(
+        runlog.RunLogConfig(path=output_dir / "run.ndjson")
+    ) as session:
+        assert output_dir.stat().st_mode & 0o777 == 0o750
+        assert session.ndjson_path.stat().st_mode & 0o777 == 0o600
+        assert session.meta_path.stat().st_mode & 0o777 == 0o600

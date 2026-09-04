@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import model_validator
@@ -18,12 +20,20 @@ class MemoryCapabilityConfiguration(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_store(cls, value: object) -> dict[str, str]:
-        configured = value if isinstance(value, dict) else {}
-        spec = parse_memory_store_spec(
-            str(configured.get("location") or cls.model_fields["location"].default),
-            backend=str(
-                configured.get("backend") or cls.model_fields["backend"].default
-            ),
-        )
-        return {"backend": spec.backend, "location": spec.location}
+    def normalize_store(cls, value: object) -> object:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            return value
+        configured = value.copy()
+        for name in ("backend", "location"):
+            if configured.get(name) is None or configured[name] == "":
+                configured[name] = cls.model_fields[name].default
+        if isinstance(configured["backend"], str) and isinstance(
+            configured["location"], (str, Path)
+        ):
+            spec = parse_memory_store_spec(
+                configured["location"], backend=configured["backend"]
+            )
+            configured.update(backend=spec.backend, location=spec.location)
+        return configured

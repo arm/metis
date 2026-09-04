@@ -3,12 +3,55 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 
+from metis.engine.external_stages.schemas import ExternalValidationDecisionModel
+from metis.engine.external_stages.schemas import ExternalStageCommandModel
+from metis.engine.external_stages.runner import ExternalStageRunner
 from metis.engine.external_stages.service import ExternalStageService
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        {"status": "valid"},
+        {"status": "valid", "evidence": ["source.c:1"]},
+        {"status": "inconclusive"},
+    ),
+)
+def test_external_validation_decision_validates_missing_evidence(fields):
+    payload = {"run_index": 0, "result_index": 0, "reason": "Checked.", **fields}
+
+    with pytest.raises(ValidationError):
+        ExternalValidationDecisionModel.model_validate(payload)
+
+
+@pytest.mark.parametrize("already_exited", (False, True))
+def test_external_stage_cancellation_reaps_process(monkeypatch, already_exited):
+    process = Mock(returncode=-9)
+    process.communicate = AsyncMock(side_effect=[asyncio.CancelledError(), (b"", b"")])
+    if already_exited:
+        process.kill.side_effect = ProcessLookupError()
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            ExternalStageRunner().run(
+                ExternalStageCommandModel(command=["local-test"]), bindings={}
+            )
+        )
+
+    process.kill.assert_called_once_with()
+    assert process.communicate.await_count == 2
 
 
 def test_external_stage_pipeline_invokes_black_boxes_and_applies_decisions(tmp_path):

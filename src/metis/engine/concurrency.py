@@ -220,9 +220,7 @@ class JobScheduler:
         future: Future[Any],
     ) -> None:
         with self._condition:
-            job = run.active.pop(future, None)
-            if job is None:
-                return
+            job = run.active.pop(future)
             self._active_workers -= 1
             run.completed.append((job, future))
             self._condition.notify_all()

@@ -297,7 +297,7 @@ def _fts_query(query: str) -> str:
 
 
 def _query_terms(query: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"[A-Za-z0-9_]+", query)]
+    return [term.lower() for term in re.findall(r"\w+", query)]
 
 
 def _parse_datetime(value: str) -> datetime:

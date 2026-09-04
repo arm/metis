@@ -217,6 +217,6 @@ class IndexingService:
                         nodes = doc_splitter.get_nodes_from_documents([doc])
                     target_index.insert_nodes(nodes)
                 else:
-                    target_index.refresh_ref_docs([doc])
+                    target_index.update_ref_doc(doc)
                 target_index.docstore.set_document_hash(doc.id_, doc.hash)
         logger.info("Index update complete based on the provided patch diff.")

@@ -66,7 +66,7 @@ def test_sqlite_memory_store_search_filter_namespaces_and_delete(tmp_path):
             "memory_type": "semantic",
             "metadata": {"authority": "documented"},
             "summary_text": "CLI accepts untrusted SARIF files",
-            "search_text": "cli sarif trust boundary",
+            "search_text": "cli sarif trust boundary 安全",
         },
     )
     store.put(
@@ -92,6 +92,9 @@ def test_sqlite_memory_store_search_filter_namespaces_and_delete(tmp_path):
 
     assert [(item.namespace, item.key) for item in results] == [
         (("metis", "profiles", "repo1"), "target_profile")
+    ]
+    assert [item.key for item in store.search(("metis",), query="安全")] == [
+        "target_profile"
     ]
     assert store.list_namespaces(prefix=("metis",), max_depth=2) == [
         ("metis", "history"),

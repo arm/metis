@@ -52,7 +52,7 @@ def build_provider_config(
     if api_key:
         config["api_key"] = api_key
 
-    return _compact_provider_config(config)
+    return config
 
 
 def _provider_config_spec(
@@ -172,14 +172,6 @@ def _optional_condition_matches(
         return False
     key, expected_value = optional_when
     return provider_config.get(key) == expected_value
-
-
-def _compact_provider_config(config: Mapping[str, object]) -> dict[str, object]:
-    return {
-        key: value
-        for key, value in config.items()
-        if value is not None and value != "" and value != {}
-    }
 
 
 def _is_missing(value: object) -> bool:

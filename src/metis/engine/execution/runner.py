@@ -404,6 +404,8 @@ def _validate_outputs(
 
 
 def _validate_value(annotation: Any, value: object) -> object:
+    if annotation is Any:
+        return value
     if get_origin(annotation) is None and isinstance(annotation, type):
         if not isinstance(value, annotation):
             raise ValueError(

@@ -1,54 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from llama_index.core.node_parser import CodeSplitter, SentenceSplitter
+from llama_index.core.node_parser import SentenceSplitter
 
 from metis.plugins.base import ConfigBackedLanguagePlugin
-
-
-class _AsmNodeAdapter:
-    def __init__(self, node):
-        self._node = node
-
-    @property
-    def children(self):
-        return [
-            _AsmNodeAdapter(self._node.child(index))
-            for index in range(self._node.child_count())
-        ]
-
-    @property
-    def type(self):
-        return self._node.kind()
-
-    @property
-    def start_byte(self):
-        return self._node.start_byte()
-
-    @property
-    def end_byte(self):
-        return self._node.end_byte()
-
-
-class _AsmTreeAdapter:
-    def __init__(self, tree):
-        self._tree = tree
-
-    @property
-    def root_node(self):
-        return _AsmNodeAdapter(self._tree.root_node())
-
-
-class _AsmParserAdapter:
-    """Adapt py-tree-sitter style parsers to the interface CodeSplitter expects."""
-
-    def __init__(self, parser):
-        self._parser = parser
-
-    def parse(self, source):
-        if isinstance(source, bytes):
-            source = source.decode("utf-8", errors="ignore")
-        return _AsmTreeAdapter(self._parser.parse(source))
+from metis.plugins.base import build_code_splitter
 
 
 class AArch64AssemblyPlugin(ConfigBackedLanguagePlugin):
@@ -63,14 +19,13 @@ class AArch64AssemblyPlugin(ConfigBackedLanguagePlugin):
         max_chars = splitting_cfg.get("max_chars") or 2500
 
         try:
-            from tree_sitter_language_pack import get_parser
-
-            return CodeSplitter(
-                language="asm",
-                chunk_lines=chunk_lines,
-                chunk_lines_overlap=chunk_lines_overlap,
-                max_chars=max_chars,
-                parser=_AsmParserAdapter(get_parser("asm")),
+            return build_code_splitter(
+                "asm",
+                {
+                    "chunk_lines": chunk_lines,
+                    "chunk_lines_overlap": chunk_lines_overlap,
+                    "max_chars": max_chars,
+                },
             )
         except Exception:
             return SentenceSplitter(

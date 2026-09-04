@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -338,9 +339,9 @@ def _run_stage_and_log(
         result = runner.run_sync(stage, bindings=bindings)
     except ExternalStageExecutionError as exc:
         if exc.result is not None:
-            _write_process_log(log_path, exc.result)
+            _write_json(log_path, asdict(exc.result))
         raise
-    _write_process_log(log_path, result)
+    _write_json(log_path, asdict(result))
     return result
 
 
@@ -362,18 +363,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
-
-
-def _write_process_log(path: Path, result: ExternalStageProcessResult) -> None:
-    _write_json(
-        path,
-        {
-            "argv": list(result.argv),
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-        },
-    )
 
 
 def _require_file(path: Path, label: str) -> None:

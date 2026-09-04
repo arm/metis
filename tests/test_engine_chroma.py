@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
+from chromadb.errors import NotFoundError
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
 from llama_index.core.settings import Settings
 
 from metis.cli.utils import build_chroma_backend
 from metis.engine import MetisEngine
+from metis.exceptions import VectorStoreInitError
 from metis.vector_store.chroma_store import ChromaStore
 
 
@@ -86,6 +89,7 @@ def test_chroma_store_reset_recreates_collections(tmp_path):
 
     with patch("metis.vector_store.chroma_store.PersistentClient") as client_ctor:
         client = client_ctor.return_value
+        client.delete_collection.side_effect = [None, NotFoundError("missing")]
         collections = [object(), object(), object(), object()]
         client.get_or_create_collection.side_effect = collections
 
@@ -107,6 +111,10 @@ def test_chroma_store_reset_recreates_collections(tmp_path):
     client.delete_collection.assert_any_call("code")
     client.delete_collection.assert_any_call("docs")
     assert client.get_or_create_collection.call_count == 4
+    client.delete_collection.side_effect = RuntimeError("storage failure")
+    with pytest.raises(RuntimeError, match="storage failure"):
+        backend.reset_index()
+    assert client.get_or_create_collection.call_count == 4
 
 
 def test_build_chroma_backend_receives_retriever_query_config(tmp_path):
@@ -122,10 +130,37 @@ def test_build_chroma_backend_receives_retriever_query_config(tmp_path):
     class _Args:
         chroma_dir = str(tmp_path / "chroma_test")
 
-    backend = build_chroma_backend(_Args(), runtime, embed, embed)
+    docs_embed = MockEmbedding(embed_dim=16)
+    backend = build_chroma_backend(_Args(), runtime, embed, docs_embed)
 
     assert backend.query_config == {
         "llama_query_model": "gpt-test",
         "chat_model_kwargs": {"reasoning_effort": "low"},
         "similarity_top_k": 7,
     }
+    backend.collection_code, backend.collection_docs = object(), object()
+    assert [
+        (item._retriever._collection, item._retriever._embed_model, item._retriever._k)
+        for item in backend.get_retrievers(Mock())
+    ] == [
+        (backend.collection_code, embed, 7),
+        (backend.collection_docs, docs_embed, 7),
+    ]
+
+
+def test_chroma_failed_init_closes_client_without_masking_error(tmp_path):
+    backend = ChromaStore(str(tmp_path), Mock(), Mock(), {})
+    failure = RuntimeError("component failure")
+    with (
+        patch("metis.vector_store.chroma_store.PersistentClient") as client_constructor,
+        patch.object(backend, "_set_collections", side_effect=failure),
+    ):
+        client = client_constructor.return_value
+        client.close.side_effect = RuntimeError("close failure")
+        with pytest.raises(VectorStoreInitError) as raised:
+            backend.init()
+
+    assert raised.value.__cause__ is failure
+    client.close.assert_called_once_with()
+    assert backend._client is None
+    assert not backend._initialized

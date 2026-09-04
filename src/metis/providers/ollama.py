@@ -48,6 +48,7 @@ class OllamaProvider(OpenAICompatibleChatProvider):
 class OllamaEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
     DEFAULT_BASE_URL = OllamaProvider.DEFAULT_BASE_URL
     DEFAULT_API_KEY = OllamaProvider.DEFAULT_API_KEY
+    DEFAULT_CHECK_EMBEDDING_CTX_LENGTH = False
     CONFIG_SPEC = ProviderConfigSpec(
         display_name="Ollama embeddings",
         required_keys=("code_embedding_model", "docs_embedding_model"),
@@ -60,6 +61,3 @@ class OllamaEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
             "docs_extra_kwargs",
         ),
     )
-
-    def __init__(self, config):
-        super().__init__(config)

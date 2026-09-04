@@ -13,8 +13,6 @@ from metis.vector_store.retrievers import query_chat_model_kwargs
 class LlamaIndexVectorBackend(BaseVectorStore):
     """Shared behavior for backends exposed through LlamaIndex vector stores."""
 
-    index_class = VectorStoreIndex
-
     def get_retrievers(
         self,
         llm_provider,
@@ -56,7 +54,7 @@ class LlamaIndexVectorBackend(BaseVectorStore):
             (embed_model_code, embed_model_docs),
             strict=True,
         ):
-            self.index_class(
+            VectorStoreIndex(
                 nodes,
                 storage_context=storage_context,
                 embed_model=embed_model,
@@ -87,7 +85,7 @@ class LlamaIndexVectorBackend(BaseVectorStore):
             self.embed_model_docs,
         )
         return tuple(
-            self.index_class.from_vector_store(
+            VectorStoreIndex.from_vector_store(
                 vector_store,
                 storage_context=storage_context,
                 embed_model=embed_model,
