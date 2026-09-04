@@ -401,7 +401,7 @@ def test_file_focus_prefers_source_to_reviewed_file_paths():
     assert "src/sink.c::danger" in focus.node_names
 
 
-def test_file_focus_dedupes_near_duplicate_source_target_paths():
+def test_file_focus_uses_deterministic_shortest_source_path():
     graph = _graph(
         _fn("src/main.c::main", 1, source=True, calls=["wrap_a", "wrap_b", "wrap_c"]),
         _fn("src/a.c::wrap_a", 10, calls=["reviewed"]),
@@ -414,9 +414,42 @@ def test_file_focus_dedupes_near_duplicate_source_target_paths():
         "src/review.c"
     )
 
-    assert len(focus.incoming_paths) == 2
-    assert all(path.source == "src/main.c::main" for path in focus.incoming_paths)
-    assert all(path.sink == "src/review.c::reviewed" for path in focus.incoming_paths)
+    assert [path.path for path in focus.incoming_paths] == [
+        ["src/main.c::main", "src/a.c::wrap_a", "src/review.c::reviewed"]
+    ]
+
+
+def test_file_focus_bounds_repeated_paths(monkeypatch):
+    layers = (
+        [["start"]]
+        + [[f"node_{depth}_{branch}" for branch in range(3)] for depth in range(8)]
+        + [["end"]]
+    )
+    graph = _graph(
+        *[
+            _fn(
+                f"graph.c::{name}",
+                depth + 1,
+                calls=layers[depth + 1] if depth + 1 < len(layers) else [],
+            )
+            for depth, names in enumerate(layers)
+            for name in names
+        ]
+    )
+    builder = FileFocusBuilder(graph, max_path_length=len(layers))
+    target = graph.get_node("graph.c::end")
+    get_node = graph.get_node
+    lookups = 0
+
+    def bounded_get_node(name):
+        nonlocal lookups
+        lookups += 1
+        assert lookups <= 1000, "path search repeatedly expands the same nodes"
+        return get_node(name)
+
+    monkeypatch.setattr(graph, "get_node", bounded_get_node)
+
+    assert builder._incoming_paths_for_target(target) == []
 
 
 @pytest.mark.parametrize("external", [False, True])

@@ -99,7 +99,6 @@ class FileFocusBuilder:
             self._paths_for_target(
                 target_node,
                 reverse=True,
-                max_per_target=self._max_incoming_paths_per_target,
             ),
             max_total=self._max_incoming_paths_per_target,
         )
@@ -121,33 +120,22 @@ class FileFocusBuilder:
             self._paths_for_target(
                 target_node,
                 reverse=False,
-                max_per_target=self._max_outgoing_paths_per_target,
             ),
             max_total=self._max_outgoing_paths_per_target,
         )
 
     def _paths_for_target(
-        self, target_node, *, reverse: bool, max_per_target: int
+        self, target_node, *, reverse: bool
     ) -> list[ReachabilityPath]:
-        paths: list[ReachabilityPath] = []
         target_name = target_node.unique_name
-        if target_node.is_source if reverse else target_node.is_sink:
-            paths.append(
-                ReachabilityPath(
-                    target_name,
-                    target_name,
-                    [target_name],
-                    target_node.sink_type
-                    or ("target_file_function" if reverse else ""),
-                )
-            )
-
-        queue = deque([[target_name]])
-        while queue and len(paths) < max_per_target:
-            path = queue.popleft()
-            current_name = path[-1]
+        distances = {target_name: 0}
+        parents: dict[str, str | None] = {target_name: None}
+        queue = deque([target_name])
+        while queue:
+            current_name = queue.popleft()
             current = self._graph.get_node(current_name)
-            if not current or len(path) >= self._max_path_length:
+            distance = distances[current_name]
+            if current is None:
                 continue
             next_names = (
                 self._reverse_edges.get(current_name, [])
@@ -155,30 +143,67 @@ class FileFocusBuilder:
                 else sorted(current.resolved_calls or [], key=self._node_sort_key)
             )
             for next_name in next_names:
-                if next_name in path:
+                if self._graph.get_node(next_name) is None:
                     continue
-                next_node = self._graph.get_node(next_name)
-                if not next_node:
-                    continue
-                next_path = path + [next_name]
-                if next_node.is_source if reverse else next_node.is_sink:
-                    forward_path = list(reversed(next_path)) if reverse else next_path
-                    paths.append(
-                        ReachabilityPath(
-                            next_name if reverse else target_name,
-                            target_name if reverse else next_name,
-                            forward_path,
-                            (
-                                target_node.sink_type or "target_file_function"
-                                if reverse
-                                else next_node.sink_type
-                            ),
-                        )
-                    )
-                    if len(paths) >= max_per_target:
-                        break
-                queue.append(next_path)
+                next_distance = distance + 1
+                known_distance = distances.get(next_name)
+                if known_distance is None:
+                    distances[next_name] = next_distance
+                    parents[next_name] = current_name
+                    queue.append(next_name)
+                elif known_distance == next_distance:
+                    selected_parent = parents[next_name]
+                    if selected_parent is None or self._node_sort_key(
+                        current_name
+                    ) < self._node_sort_key(selected_parent):
+                        parents[next_name] = current_name
+
+        boundary_names = [
+            name
+            for name in distances
+            if (
+                (node := self._graph.get_node(name)) is not None
+                and (node.is_source if reverse else node.is_sink)
+            )
+        ]
+        paths: list[ReachabilityPath] = []
+        for boundary_name in sorted(boundary_names, key=self._node_sort_key):
+            boundary_node = self._graph.get_node(boundary_name)
+            if boundary_node is None:
+                continue
+            route = self._shortest_route(boundary_name, target_name, parents)
+            if len(route) > self._max_path_length:
+                continue
+            forward_path = route if reverse else list(reversed(route))
+            paths.append(
+                ReachabilityPath(
+                    boundary_name if reverse else target_name,
+                    target_name if reverse else boundary_name,
+                    forward_path,
+                    (
+                        target_node.sink_type or "target_file_function"
+                        if reverse
+                        else boundary_node.sink_type
+                    ),
+                )
+            )
         return paths
+
+    def _shortest_route(
+        self,
+        boundary_name: str,
+        target_name: str,
+        parents: dict[str, str | None],
+    ) -> list[str]:
+        route = [boundary_name]
+        current_name = boundary_name
+        while current_name != target_name:
+            parent = parents[current_name]
+            if parent is None:
+                raise RuntimeError("shortest-path predecessor chain is incomplete")
+            current_name = parent
+            route.append(current_name)
+        return route
 
     def _focus_node_names(
         self, target_nodes, incoming_paths, outgoing_paths
