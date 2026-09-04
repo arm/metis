@@ -10,6 +10,7 @@ from metis.configuration import build_embedding_provider_config
 from metis.configuration import load_execution_config
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
+from metis.configuration import pgvector_use_halfvec_setting
 from metis.runtime_settings import CapabilityRuntimeSettings
 from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import TriageOptions
@@ -371,6 +372,8 @@ llm_provider:
     ("path", "value", "message"),
     [
         (("model_tools", "max_contract_chars"), 0, "max_contract_chars"),
+        (("model_tools",), "disabled", "model_tools must be a mapping"),
+        (("model_tools",), False, "model_tools must be a mapping"),
     ],
 )
 def test_load_runtime_config_rejects_invalid_tool_limits(
@@ -427,6 +430,12 @@ llm_provider:
         "enabled": True,
         "max_commits": 75,
     }
+
+
+@pytest.mark.parametrize("value", (2, [], "invalid"))
+def test_pgvector_halfvec_rejects_invalid_flags(value):
+    with pytest.raises(ValueError, match="pgvector_use_halfvec"):
+        pgvector_use_halfvec_setting(value, 3072)
 
 
 def test_load_runtime_config_accepts_pgvector_halfvec_flag(tmp_path, monkeypatch):

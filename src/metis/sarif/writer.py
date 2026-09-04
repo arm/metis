@@ -128,12 +128,18 @@ def generate_sarif(
             anchor = (
                 issue.get("anchor") if isinstance(issue.get("anchor"), dict) else None
             )
-            anchor_start = (
-                int(anchor["start_line"]) if anchor and anchor.get("start_line") else 0
-            )
-            anchor_end = (
-                int(anchor["end_line"]) if anchor and anchor.get("end_line") else 0
-            )
+            anchor_start = anchor_end = 0
+            anchor_fp = None
+            if anchor:
+                try:
+                    anchor_start = int(anchor["start_line"])
+                    anchor_end = int(anchor["end_line"])
+                    if anchor_start < 0 or anchor_end < anchor_start:
+                        raise ValueError("Invalid anchor line range")
+                    anchor_fp = anchor_fingerprint(anchor)
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    anchor = None
+                    anchor_start = anchor_end = 0
             reported_line_num = _normalise_line_number(
                 anchor_start or issue.get("line_number", 1)
             )
@@ -148,7 +154,6 @@ def generate_sarif(
             fingerprint = create_fingerprint(
                 file_path or artifact_uri, line_num, RULES[0]["id"]
             )
-            anchor_fp = anchor_fingerprint(anchor) if anchor else None
 
             # Prefer model-provided snippet; fall back to file content if available
             if snippet_override:

@@ -99,6 +99,52 @@ def test_execute_command_allows_interactive_ask_with_global_triage_flag(monkeypa
     assert calls == [("ask", ["hi"])]
 
 
+def test_interactive_output_override_does_not_replace_global_output(monkeypatch):
+    args = SimpleNamespace(quiet=True, output_file=["global.json"])
+    engine = SimpleNamespace(usage_command=lambda *_args, **_kwargs: None)
+    outputs = []
+    monkeypatch.setattr(
+        command_registry.CommandSpec,
+        "invoke",
+        lambda self, engine, cmd_args, command_args, runtime: outputs.append(
+            command_args.output_file
+        ),
+    )
+
+    entry.execute_command(
+        engine, "review_file", ["source.py", "--output-file", "override.json"], args
+    )
+    entry.execute_command(engine, "review_file", ["source.py"], args)
+
+    assert outputs == [["override.json"], ["global.json"]]
+    assert args.output_file == ["global.json"]
+
+
+def test_interactive_loop_parses_quoted_paths_and_recovers_from_bad_quotes(monkeypatch):
+    inputs = iter(
+        [
+            "review_file 'unterminated",
+            r'review_file "source file.py" --output-file report\ file.json',
+            "exit",
+        ]
+    )
+    monkeypatch.setattr(entry, "prompt", lambda *_args, **_kwargs: next(inputs))
+    monkeypatch.setattr(entry, "PG_SUPPORTED", False)
+    calls = []
+
+    def execute(engine, cmd, cmd_args, args):
+        calls.append((cmd, cmd_args))
+        return entry.EXIT_REQUESTED if cmd == "exit" else None
+
+    monkeypatch.setattr(entry, "execute_command", execute)
+
+    assert entry.run_interactive_loop(None, SimpleNamespace(quiet=True), None)
+    assert calls == [
+        ("review_file", ["source file.py", "--output-file", "report file.json"]),
+        ("exit", []),
+    ]
+
+
 def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     def fail_load_runtime_config(*_args, **_kwargs):
         raise AssertionError("runtime config should not be loaded for --version")

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+from copy import copy
 from datetime import datetime
 import logging
 from pathlib import Path
+import shlex
 from typing import Any
 from typing import cast
 
@@ -299,6 +301,7 @@ def _execute_command(engine, cmd, cmd_args, args):
     spec = COMMANDS[cmd]
     if cmd == "exit":
         return EXIT_REQUESTED
+    args = copy(args)
     runtime = CommandRuntime(command=cmd, command_args=list(cmd_args))
 
     if spec.prepares_output_file:
@@ -343,7 +346,7 @@ def run_interactive_loop(engine, args, vector_backend):
             user_input = prompt("> ", completer=completer, history=history).strip()
             if not user_input:
                 continue
-            parts = user_input.split()
+            parts = shlex.split(user_input)
             cmd, cmd_args = parts[0], parts[1:]
 
             if PG_SUPPORTED and isinstance(vector_backend, PGVectorStoreImpl):

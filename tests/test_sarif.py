@@ -4,6 +4,8 @@
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from metis.sarif.writer import generate_sarif
 from metis.sarif.utils import read_file_lines, create_fingerprint
 from metis.sarif.triage import METIS_FINDING_ID_KEY
@@ -317,3 +319,32 @@ def test_anchor_fingerprint_line_independent():
     assert (
         anchor_fingerprint({"file_path": "f.c", "start_line": 1, "end_line": 1}) is None
     )
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        {"file_path": "code.c", "start_line": "unknown", "end_line": 4},
+        {"file_path": "code.c", "start_line": 1, "end_line": [4]},
+        {"file_path": "code.c", "start_line": float("inf"), "end_line": 4},
+        {"start_line": 1, "end_line": 4, "content_hash": "abc"},
+        {"file_path": "code.c", "start_line": 4, "end_line": 1},
+    ],
+)
+def test_generate_sarif_ignores_malformed_optional_anchor(anchor):
+    finding = {
+        "issue": "Example issue",
+        "line_number": 7,
+        "code_snippet": "first line\nsecond line",
+        "anchor": anchor,
+    }
+    sarif = generate_sarif({"reviews": [{"file": "code.c", "reviews": [finding]}]})
+
+    entry = sarif["runs"][0]["results"][0]
+    region = entry["locations"][0]["physicalLocation"]["region"]
+    assert region == {
+        "startLine": 7,
+        "endLine": 8,
+        "snippet": {"text": "first line\nsecond line"},
+    }
+    assert "anchor" not in entry["properties"]

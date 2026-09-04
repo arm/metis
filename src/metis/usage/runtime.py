@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator
@@ -15,6 +14,7 @@ from .collector import UsageCollector
 from .context import usage_operation, usage_scope
 from .langchain import UsageCallbackHandler
 from .llamaindex import UsageLlamaIndexHandler
+from metis.json_io import write_json_atomic
 from metis.runlog.langchain import RUNLOG_CALLBACK_HANDLER
 
 from metis.providers.base import (
@@ -159,5 +159,5 @@ class UsageRuntime:
         target = Path(output_path or self.default_output_path())
         payload = self.build_persisted_payload()
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        write_json_atomic(target, payload, indent=2)
         return str(target)

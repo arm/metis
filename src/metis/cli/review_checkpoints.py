@@ -66,8 +66,9 @@ def _sqlite_records(path: Path) -> dict[str, dict[str, object]] | None:
                 if not isinstance(record, dict):
                     continue
                 records[str(key)] = record
-    except (OSError, sqlite3.Error):
-        _discard_checkpoint(path)
+    except (OSError, sqlite3.Error) as exc:
+        if _should_discard_on(exc):
+            _discard_checkpoint(path)
         return None
     return records or None
 

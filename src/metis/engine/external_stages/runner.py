@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 from string import Formatter
 from typing import Mapping
@@ -81,9 +82,12 @@ class ExternalStageRunner:
                 proc.communicate(),
                 timeout=stage.timeout_seconds,
             )
-        except TimeoutError as exc:
-            proc.kill()
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            with suppress(ProcessLookupError):
+                proc.kill()
             stdout_bytes, stderr_bytes = await proc.communicate()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             result = ExternalStageProcessResult(
                 argv=argv,
                 returncode=proc.returncode if proc.returncode is not None else -1,

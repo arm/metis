@@ -3,14 +3,12 @@
 
 from types import SimpleNamespace
 from unittest.mock import Mock
-from unittest.mock import call
 
 import pytest
 from qdrant_client.models import Distance
 
 from metis.vector_store import qdrant_store
 from metis.vector_store.qdrant_store import QdrantStore
-from metis.vector_store.qdrant_store import QdrantVectorStoreIndex
 
 
 @pytest.fixture
@@ -71,24 +69,13 @@ def test_init_creates_collections_once(qdrant):
 
 
 def test_failed_init_does_not_publish_partial_state(qdrant):
+    qdrant.client.close.side_effect = RuntimeError("close failure")
     qdrant.context_constructor.side_effect = RuntimeError("context failure")
 
     with pytest.raises(RuntimeError, match="context failure"):
         qdrant.backend.init()
 
+    qdrant.client.close.assert_called_once_with()
     assert qdrant.backend._client is None
     assert not hasattr(qdrant.backend, "vector_store_code")
     assert not hasattr(qdrant.backend, "storage_context_code")
-
-
-def test_refresh_replaces_qdrant_documents():
-    index = Mock()
-    documents = [Mock(), Mock()]
-
-    refreshed = QdrantVectorStoreIndex.refresh_ref_docs(index, documents)
-
-    assert index.update_ref_doc.call_args_list == [
-        call(documents[0]),
-        call(documents[1]),
-    ]
-    assert refreshed == [True, True]

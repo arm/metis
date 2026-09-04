@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 from typing import Literal
 from unittest.mock import Mock
+from unittest.mock import sentinel
 
 import pytest
 from pydantic import BaseModel
@@ -1428,6 +1429,76 @@ def test_explicit_input_resolves_an_implicit_binding_ambiguity():
     result = run_stage("initialize", plan, _node_context(), {})
 
     assert result.outputs["consumer"] == "first"
+
+
+@pytest.mark.parametrize(
+    ("bindings", "source_annotation", "target_annotation", "value", "expected"),
+    (
+        ({}, Any, Any, sentinel.value, sentinel.value),
+        (
+            {},
+            tuple[str, ...],
+            tuple[str, ...],
+            ("first", "second"),
+            ("first", "second"),
+        ),
+        ({"values": ["$inputs.values"]}, str, tuple[str, ...], "first", ("first",)),
+    ),
+)
+def test_stage_inputs_preserve_any_and_tuple_values(
+    bindings, source_annotation, target_annotation, value, expected
+):
+    registration = NodeRegistration(
+        "echo",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"values": target_annotation},
+        {"values": target_annotation},
+        lambda invocation: NodeResult({"values": invocation.inputs["values"]}),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"echo": {"inputs": bindings}}})
+    plan = compile_stage(
+        NodeCatalog((registration,), ()),
+        "initialize",
+        stage,
+        {},
+        {"values": source_annotation},
+    )
+
+    result = run_stage("initialize", plan, _node_context(), {"values": value})
+
+    assert result.status is ExecutionStatus.OK
+    assert result.outputs["echo"] == expected
+
+
+@pytest.mark.parametrize(
+    ("bindings", "target_annotation"),
+    (
+        ({"values": "$inputs.values"}, tuple[str, ...]),
+        ({"values": ["$inputs.values"]}, str),
+    ),
+)
+def test_stage_inputs_reject_scalar_and_collection_mismatches(
+    bindings, target_annotation
+):
+    registration = NodeRegistration(
+        "echo",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"values": target_annotation},
+        {"values": target_annotation},
+        lambda invocation: NodeResult({"values": invocation.inputs["values"]}),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"echo": {"inputs": bindings}}})
+
+    with pytest.raises(ValueError, match="incompatible|multiple sources"):
+        compile_stage(
+            NodeCatalog((registration,), ()),
+            "initialize",
+            stage,
+            {},
+            {"values": str},
+        )
 
 
 def test_collection_input_collects_all_compatible_producers():

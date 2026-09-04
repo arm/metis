@@ -1,12 +1,19 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from typing import Any, cast
+from unittest.mock import Mock
 
+import pytest
+
+from langchain_core.embeddings import Embeddings
 from langchain_openai import ChatOpenAI
 
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.llamacpp import LlamaCppEmbeddingProvider
+from metis.providers.ollama import OllamaEmbeddingProvider
+from metis.providers.vllm import VLLMProvider, VLLMEmbeddingProvider
 from metis.providers.openai_compatible import OpenAICompatibleChatConfig
 from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingConfig
@@ -111,3 +118,41 @@ def test_embedding_provider_builds_separate_code_and_docs_models() -> None:
         llama_provider.get_embed_model_docs(),
     ):
         assert cast(Any, embedding._client).check_embedding_ctx_length is False
+
+
+@pytest.mark.parametrize(
+    "provider_cls", [OllamaEmbeddingProvider, VLLMEmbeddingProvider]
+)
+def test_local_embeddings_allow_overriding_raw_text_default(provider_cls) -> None:
+    provider = provider_cls(
+        _embedding_config(
+            base_url="http://localhost:8000/v1",
+            code_extra_kwargs={"check_embedding_ctx_length": True},
+        )
+    )
+    assert provider.get_embed_model_code()._client.check_embedding_ctx_length is True
+    assert provider.get_embed_model_docs()._client.check_embedding_ctx_length is False
+
+
+def test_vllm_accepts_missing_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    chat = VLLMProvider(
+        _chat_config(api_key=None, base_url="http://localhost:8000/v1")
+    ).get_chat_model()
+    embedding = VLLMEmbeddingProvider(
+        _embedding_config(api_key=None, base_url="http://localhost:8000/v1")
+    ).get_embed_model_code()
+    assert chat.openai_api_key.get_secret_value() == "sk-no-key-required"
+    assert embedding._client.openai_api_key.get_secret_value() == "sk-no-key-required"
+
+
+def test_single_text_embeddings_use_document_mode() -> None:
+    client = Mock(spec=Embeddings)
+    client.embed_documents.return_value = [[2.0]]
+    client.aembed_documents.return_value = [[2.0]]
+    adapter = LangChainEmbeddingAdapter(client, model_name="test-model")
+
+    assert adapter.get_text_embedding("text") == [2.0]
+    assert asyncio.run(adapter.aget_text_embedding("text")) == [2.0]
+    client.embed_documents.assert_called_once_with(["text"])
+    client.aembed_documents.assert_awaited_once_with(["text"])

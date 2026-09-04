@@ -36,12 +36,18 @@ def test_save_output_propagates_export_failure(
         save_output(tmp_path / f"report{suffix}", {"reviews": []}, quiet=True)
 
 
-def test_save_output_replaces_json_only_after_serialization_succeeds(tmp_path):
-    output_path = tmp_path / "report.json"
+@pytest.mark.parametrize("suffix", ("json", "sarif"))
+def test_save_output_replaces_json_only_after_serialization_succeeds(tmp_path, suffix):
+    output_path = tmp_path / f"report.{suffix}"
     output_path.write_text('{"original": true}', encoding="utf-8")
 
     with pytest.raises(TypeError):
-        save_output(output_path, {"invalid": object()}, quiet=True)
+        save_output(
+            output_path,
+            {"invalid": object()},
+            quiet=True,
+            sarif_payload={"invalid": object()},
+        )
 
     assert output_path.read_text(encoding="utf-8") == '{"original": true}'
 

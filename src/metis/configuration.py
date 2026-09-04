@@ -108,7 +108,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
         "review_code_exclude_paths", []
     )
     runtime["capability_settings"] = _capability_runtime_settings(engine_cfg)
-    memory_cfg = cfg.get("memory") or {}
+    memory_cfg = cfg.get("memory")
     runtime["memory"] = _memory_config(memory_cfg)
     runtime["threat_model_config"] = _threat_model_config(
         engine_cfg.get("threat_model")
@@ -155,11 +155,9 @@ def load_runtime_config(config_path=None, enable_psql=False):
     llm_provider_config["max_retries"] = runtime["llm_max_retries"]
     runtime["llm_provider"] = llm_provider_config
 
-    embedding_provider_raw_config = dict(cfg.get("embedding_provider") or {})
-    if not embedding_provider_raw_config:
-        runtime["embedding_provider_raw_config"] = None
-    else:
-        runtime["embedding_provider_raw_config"] = embedding_provider_raw_config
+    runtime["embedding_provider_raw_config"] = (
+        dict(cfg.get("embedding_provider") or {}) or None
+    )
 
     return runtime
 
@@ -240,8 +238,10 @@ def _capability_runtime_settings(
     engine = _required_mapping(engine_config, section="metis_engine")
     model = _load_engine_mapping("model_tools", None)
     configured_model = engine.get("model_tools")
-    if isinstance(configured_model, dict):
-        model.update(configured_model)
+    if configured_model is not None:
+        model.update(
+            _required_mapping(configured_model, section="metis_engine.model_tools")
+        )
     capabilities = _load_engine_mapping("capabilities", engine.get("capabilities"))
     configurations: dict[str, dict[str, Any]] = {}
     for name, value in capabilities.items():
@@ -274,15 +274,15 @@ def pgvector_use_halfvec_setting(value: object, embed_dim: object) -> bool:
     if isinstance(value, (int, float)) and value in (0, 1):
         return bool(value)
     if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "on", "1"}:
+        value = value.strip().lower()
+        if value in {"true", "yes", "on", "1"}:
             return True
-        if normalized in {"false", "no", "off", "0"}:
+        if value in {"false", "no", "off", "0"}:
             return False
-        if normalized != "auto":
-            raise ValueError(
-                "metis_engine.pgvector_use_halfvec must be true, false, or auto."
-            )
+    if value is not None and value != "auto":
+        raise ValueError(
+            "metis_engine.pgvector_use_halfvec must be true, false, or auto."
+        )
     try:
         parsed_embed_dim = int(cast(Any, embed_dim))
     except (TypeError, ValueError):

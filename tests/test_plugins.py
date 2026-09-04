@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from unittest.mock import Mock
 
 import pytest
 from llama_index.core.schema import Document
@@ -12,7 +13,13 @@ from metis.plugins.ipynb_plugin import IpynbPlugin
 from metis.plugins.registry import LanguagePluginRegistry
 
 
-def test_aarch64_assembly_splitter_parses_source_text():
+@pytest.mark.parametrize("parser_available", (True, False))
+def test_aarch64_assembly_splitter_parses_source_text(monkeypatch, parser_available):
+    if not parser_available:
+        monkeypatch.setattr(
+            "metis.plugins.aarch64_assembly_plugin.build_code_splitter",
+            Mock(side_effect=RuntimeError("parser unavailable")),
+        )
     plugin = AArch64AssemblyPlugin(plugin_config={"plugins": {}})
     splitter = plugin.get_splitter()
 

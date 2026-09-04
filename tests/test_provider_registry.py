@@ -66,6 +66,29 @@ def test_registry_rejects_embedding_for_chat_only_providers(name):
 def test_registry_reuses_loaded_provider(get_provider) -> None:
     provider_cls = get_provider("openai")
 
-    with patch("metis.providers.registry.import_module") as import_module:
+    with patch("metis.providers.registry.metadata.EntryPoint.load") as load:
         assert get_provider("OPENAI") is provider_cls
-    import_module.assert_not_called()
+    load.assert_not_called()
+
+
+def test_registry_loads_nested_entry_point_with_extras(monkeypatch):
+    from types import SimpleNamespace
+
+    from metis.providers import registry
+    from metis.providers.base import ChatProvider
+
+    monkeypatch.setattr(
+        registry, "example", SimpleNamespace(Provider=ChatProvider), raising=False
+    )
+    monkeypatch.setattr(registry, "_PROVIDER_LOADERS_DISCOVERED", True)
+    monkeypatch.setattr(registry, "_CHAT_PROVIDERS", {})
+    monkeypatch.setattr(
+        registry,
+        "_PROVIDER_LOADERS",
+        {
+            "example": registry.ProviderLoader(
+                chat="metis.providers.registry:example.Provider [extra]"
+            )
+        },
+    )
+    assert get_chat_provider("example") is ChatProvider

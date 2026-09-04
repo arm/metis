@@ -1,19 +1,24 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from llama_index.core.vector_stores import SimpleVectorStore
 
 from metis.engine import MetisEngine
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.usage.collector import UsageCollector
-from metis.usage.context import current_operation, current_scope
+from metis.usage.context import current_operation, current_scope, usage_scope
+from metis.usage.llamaindex import UsageLlamaIndexHandler
 from metis.usage.runtime import UsageRuntime
 
 
@@ -47,7 +52,7 @@ def test_usage_collector_aggregates_by_scope_model_and_operation():
     assert scoped["output_tokens"] == 35
 
 
-def test_usage_runtime_command_summary_and_persistence(tmp_path):
+def test_usage_runtime_command_summary_and_persistence(tmp_path, monkeypatch):
     runtime = UsageRuntime(tmp_path)
 
     with runtime.command("index") as command:
@@ -66,7 +71,7 @@ def test_usage_runtime_command_summary_and_persistence(tmp_path):
     assert record["summary"]["total_tokens"] == 80
     assert record["cumulative"]["total_tokens"] == 80
 
-    output_path = Path(runtime.save_run_summary())
+    output_path = Path(runtime.save_run_summary(str(tmp_path / "summary.json")))
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert payload["totals"]["total_tokens"] == 80
@@ -74,6 +79,14 @@ def test_usage_runtime_command_summary_and_persistence(tmp_path):
 
     fresh_runtime = UsageRuntime(tmp_path)
     assert fresh_runtime.snapshot_total()["total_tokens"] == 0
+
+    monkeypatch.setattr(
+        "metis.json_io.os.replace", Mock(side_effect=OSError("replace failed"))
+    )
+    with pytest.raises(OSError, match="replace failed"):
+        runtime.save_run_summary(str(output_path))
+    assert json.loads(output_path.read_text(encoding="utf-8")) == payload
+    assert list(tmp_path.iterdir()) == [output_path]
 
 
 def test_review_code_propagates_usage_context_into_worker_threads(capability_settings):
@@ -248,3 +261,27 @@ def test_index_codebase_records_embedding_usage(tmp_path, capability_settings):
     assert record["summary"]["total_tokens"] > 0
     assert record["summary"]["by_operation"]["index"]["input_tokens"] > 0
     assert record["summary"]["by_model"]["dummy"]["input_tokens"] > 0
+
+
+@pytest.mark.parametrize(
+    ("scoped", "payload"),
+    [
+        (False, {EventPayload.CHUNKS: ["hello"]}),
+        (True, None),
+        (True, {}),
+    ],
+)
+def test_embedding_event_cleans_pending_model_when_usage_is_skipped(scoped, payload):
+    collector = UsageCollector()
+    handler = UsageLlamaIndexHandler(collector)
+    handler.on_event_start(
+        CBEventType.EMBEDDING,
+        {EventPayload.MODEL_NAME: "embedding-model"},
+        event_id="embedding-event",
+    )
+
+    with usage_scope("index") if scoped else nullcontext():
+        handler.on_event_end(CBEventType.EMBEDDING, payload, event_id="embedding-event")
+
+    assert handler._embedding_models == {}
+    assert collector.snapshot()["total_tokens"] == 0

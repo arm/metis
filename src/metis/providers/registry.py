@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import metadata
-from importlib import import_module
 from typing import Literal, Type, TypeVar
 
 from metis.providers.base import ChatProvider
@@ -69,15 +68,17 @@ def _get_provider(
     if not dotted_path:
         raise ValueError(f"Unsupported {surface} provider: {name}")
 
-    module_path, class_name = dotted_path.split(":", 1)
     try:
-        module = import_module(module_path)
+        provider_cls = metadata.EntryPoint(
+            name=f"{name}.{surface}",
+            value=dotted_path,
+            group=_PROVIDER_ENTRY_POINT_GROUP,
+        ).load()
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             f"{surface.capitalize()} provider '{name}' is registered but required "
             "dependencies are missing."
         ) from exc
-    provider_cls = getattr(module, class_name)
     providers[key] = provider_cls
     return provider_cls
 

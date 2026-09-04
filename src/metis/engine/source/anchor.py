@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 
 KIND_FUNCTION = "function"
 KIND_STATEMENT = "statement"
@@ -54,15 +54,8 @@ class CodeAnchor:
     content_hash: str = ""
     confidence: str = CONFIDENCE_EXACT
 
-    _FIELD_NAMES: frozenset[str] = field(
-        default=frozenset(), init=False, repr=False, compare=False
-    )
-
     def __post_init__(self):
         object.__setattr__(self, "file_path", normalize_path(self.file_path))
-        object.__setattr__(
-            self, "_FIELD_NAMES", frozenset(f.name for f in fields(self) if f.init)
-        )
 
     def display_id(self) -> str:
         sym = self.symbol or ""
@@ -73,9 +66,7 @@ class CodeAnchor:
         return f"{self.file_path}#{sym}~{self.content_hash}"
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        d.pop("_FIELD_NAMES", None)
-        return d
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "CodeAnchor | None":

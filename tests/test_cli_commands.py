@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from metis.cli import commands
+from metis.cli import review_checkpoints
 from metis.cli.command_runtime import CommandRuntime
 from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.cli.review_progress import ExecutionGraphProgressReporter
@@ -391,6 +392,35 @@ def test_review_producers_keep_separate_resumable_outputs(tmp_path):
     assert other_output["review_resume_callback"]("simple_llm_review") == {
         "file:key": simple.record,
         "file:next": {"reviews": [{"issue": "next"}]},
+    }
+
+
+def test_review_checkpoint_reader_preserves_locked_database(monkeypatch, tmp_path):
+    callbacks = review_checkpoint_callbacks(codebase_path=tmp_path, enabled=True)
+    record = ReviewCheckpointRecord(
+        metis_version=METIS_VERSION,
+        producer="simple_llm_review",
+        key="file:key",
+        record={"reviews": []},
+    )
+    callbacks["review_checkpoint_callback"](record.model_dump(mode="json"), 1, 1)
+    checkpoint_path = (
+        tmp_path / ".metis" / "checkpoints" / "review.simple_llm_review.sqlite3"
+    )
+    connect = review_checkpoints._connect_checkpoint
+
+    def connect_without_wait(path):
+        connection = connect(path)
+        connection.execute("PRAGMA busy_timeout = 0")
+        return connection
+
+    monkeypatch.setattr(review_checkpoints, "_connect_checkpoint", connect_without_wait)
+    with closing(sqlite3.connect(checkpoint_path)) as blocker:
+        blocker.execute("BEGIN EXCLUSIVE")
+        assert callbacks["review_resume_callback"]("simple_llm_review") is None
+
+    assert callbacks["review_resume_callback"]("simple_llm_review") == {
+        "file:key": record.record
     }
 
 
