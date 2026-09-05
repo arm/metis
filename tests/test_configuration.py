@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from copy import deepcopy
+from importlib.resources import as_file
+from importlib.resources import files
 
 import pytest
 import yaml
@@ -15,41 +16,10 @@ from metis.runtime_settings import CapabilityRuntimeSettings
 from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import TriageOptions
 
-_TOOL_CONFIG = {
-    "model_tools": {"max_rounds": 6, "max_contract_chars": 6000},
-    "capabilities": {
-        "index": {
-            "search": {
-                "max_top_k": 4,
-                "code_top_k": 1,
-                "docs_top_k": 4,
-                "docs_char_ratio": 1.0,
-                "default_max_chars": 5000,
-                "max_chars": 7000,
-            }
-        },
-        "navigation": {"timeout_seconds": 8, "max_chars": 16000},
-    },
-}
 
-
-def _write_config(tmp_path, content: str, *, complete_tool_config: bool = True):
+def _write_config(tmp_path, content: str):
     config_path = tmp_path / "metis.yaml"
-    config = yaml.safe_load(content)
-    if complete_tool_config:
-        engine = config.setdefault("metis_engine", {})
-        model_tools = engine.setdefault("model_tools", {})
-        for key, value in _TOOL_CONFIG["model_tools"].items():
-            model_tools.setdefault(key, value)
-        capabilities = engine.setdefault("capabilities", {})
-        index = capabilities.setdefault("index", {})
-        search = index.setdefault("search", {})
-        for key, value in _TOOL_CONFIG["capabilities"]["index"]["search"].items():
-            search.setdefault(key, value)
-        navigation = capabilities.setdefault("navigation", {})
-        for key, value in _TOOL_CONFIG["capabilities"]["navigation"].items():
-            navigation.setdefault(key, value)
-    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    config_path.write_text(content, encoding="utf-8")
     return config_path
 
 
@@ -131,26 +101,6 @@ llm_provider:
     assert runtime["triage_options"] == TriageOptions(include_triaged=True)
 
 
-@pytest.mark.parametrize("max_workers", (0, -1, True, "2"))
-def test_runtime_rejects_invalid_max_workers(tmp_path, monkeypatch, max_workers):
-    config_path = _write_config(
-        tmp_path,
-        yaml.safe_dump(
-            {
-                "metis_engine": {"max_workers": max_workers},
-                "llm_provider": {"name": "openai", "model": "test-model"},
-            }
-        ),
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    with pytest.raises(
-        ValueError,
-        match="metis_engine.max_workers must be a positive integer",
-    ):
-        load_runtime_config(config_path)
-
-
 @pytest.mark.parametrize("enabled", (True, False))
 def test_runtime_loads_review_checkpoint_setting(tmp_path, monkeypatch, enabled):
     config_path = _write_config(
@@ -167,67 +117,6 @@ def test_runtime_loads_review_checkpoint_setting(tmp_path, monkeypatch, enabled)
     runtime = load_runtime_config(config_path)
 
     assert runtime["review_checkpoints_enabled"] is enabled
-
-
-@pytest.mark.parametrize(
-    "review_checkpoints",
-    ([], "false"),
-)
-def test_runtime_rejects_invalid_review_checkpoint_setting(
-    tmp_path,
-    monkeypatch,
-    review_checkpoints,
-):
-    config_path = _write_config(
-        tmp_path,
-        yaml.safe_dump(
-            {
-                "metis_engine": {"review_checkpoints": review_checkpoints},
-                "llm_provider": {"name": "openai", "model": "test-model"},
-            }
-        ),
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    with pytest.raises(ValueError, match="metis_engine.review_checkpoints"):
-        load_runtime_config(config_path)
-
-
-def test_runtime_passes_language_replacements_from_selected_yaml(tmp_path, monkeypatch):
-    config_path = _write_config(
-        tmp_path,
-        """
-language_plugins:
-  verilog:
-    implementation: vendor:VerilogPlugin
-llm_provider:
-  name: openai
-  model: test-model
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["plugin_config"]["language_plugins"] == {
-        "verilog": {"implementation": "vendor:VerilogPlugin"}
-    }
-
-
-def test_runtime_rejects_non_mapping_language_replacements(tmp_path, monkeypatch):
-    config_path = _write_config(
-        tmp_path,
-        """
-language_plugins: []
-llm_provider:
-  name: openai
-  model: test-model
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    with pytest.raises(ValueError, match="language_plugins must be a mapping"):
-        load_runtime_config(config_path)
 
 
 def test_load_runtime_config_accepts_chat_provider_without_embeddings(
@@ -264,9 +153,9 @@ query:
     }
     assert runtime["llm_max_retries"] == 5
     assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
-    assert runtime["capability_settings"] == CapabilityRuntimeSettings(
-        model_tools=ModelToolSettings(max_rounds=9, max_contract_chars=4200),
-        configurations=deepcopy(_TOOL_CONFIG["capabilities"]),
+    assert runtime["capability_settings"].model_tools == ModelToolSettings(
+        max_rounds=9,
+        max_contract_chars=4200,
     )
     assert runtime["memory"] == {
         "backend": "sqlite",
@@ -368,38 +257,6 @@ llm_provider:
     assert runtime["execution_config"] == {"stages": {}}
 
 
-@pytest.mark.parametrize(
-    ("path", "value", "message"),
-    [
-        (("model_tools", "max_contract_chars"), 0, "max_contract_chars"),
-        (("model_tools",), "disabled", "model_tools must be a mapping"),
-        (("model_tools",), False, "model_tools must be a mapping"),
-    ],
-)
-def test_load_runtime_config_rejects_invalid_tool_limits(
-    tmp_path, monkeypatch, path, value, message
-):
-    engine_config = deepcopy(_TOOL_CONFIG)
-    target = engine_config
-    for key in path[:-1]:
-        target = target[key]
-    target[path[-1]] = value
-    config_path = _write_config(
-        tmp_path,
-        yaml.safe_dump(
-            {
-                "metis_engine": engine_config,
-                "llm_provider": {"name": "openai", "model": "gpt-test"},
-            }
-        ),
-        complete_tool_config=False,
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    with pytest.raises(ValueError, match=message):
-        load_runtime_config(config_path)
-
-
 def test_load_runtime_config_accepts_threat_model_sources(tmp_path, monkeypatch):
     config_path = _write_config(
         tmp_path,
@@ -438,33 +295,24 @@ def test_pgvector_halfvec_rejects_invalid_flags(value):
         pgvector_use_halfvec_setting(value, 3072)
 
 
-def test_load_runtime_config_accepts_pgvector_halfvec_flag(tmp_path, monkeypatch):
-    config_path = _write_config(
-        tmp_path,
-        """
-metis_engine:
-  pgvector_use_halfvec: true
-llm_provider:
-  name: openai
-  model: gpt-test
-  base_url: https://example.test/openai/v1
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["pgvector_use_halfvec"] is True
-
-
-def test_load_runtime_config_auto_enables_pgvector_halfvec_for_large_embeddings(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "settings,expected",
+    [
+        ("pgvector_use_halfvec: true", True),
+        ("embed_dim: 3072", True),
+        ("embed_dim: 1536", False),
+        ("embed_dim: 3072\n  pgvector_use_halfvec: false", False),
+    ],
+    ids=["explicit-on", "auto-large", "auto-small", "explicit-off"],
+)
+def test_load_runtime_config_resolves_pgvector_halfvec(
+    tmp_path, monkeypatch, settings, expected
 ):
     config_path = _write_config(
         tmp_path,
-        """
+        f"""
 metis_engine:
-  embed_dim: 3072
+  {settings}
 llm_provider:
   name: openai
   model: gpt-test
@@ -472,51 +320,7 @@ llm_provider:
 """,
     )
     monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["pgvector_use_halfvec"] is True
-
-
-def test_load_runtime_config_auto_keeps_pgvector_full_precision_for_small_embeddings(
-    tmp_path, monkeypatch
-):
-    config_path = _write_config(
-        tmp_path,
-        """
-metis_engine:
-  embed_dim: 1536
-llm_provider:
-  name: openai
-  model: gpt-test
-  base_url: https://example.test/openai/v1
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["pgvector_use_halfvec"] is False
-
-
-def test_load_runtime_config_allows_forcing_pgvector_halfvec_off(tmp_path, monkeypatch):
-    config_path = _write_config(
-        tmp_path,
-        """
-metis_engine:
-  embed_dim: 3072
-  pgvector_use_halfvec: false
-llm_provider:
-  name: openai
-  model: gpt-test
-  base_url: https://example.test/openai/v1
-""",
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-
-    runtime = load_runtime_config(config_path)
-
-    assert runtime["pgvector_use_halfvec"] is False
+    assert load_runtime_config(config_path)["pgvector_use_halfvec"] is expected
 
 
 def test_build_embedding_provider_config_resolves_openai_embedding_provider(
@@ -790,3 +594,360 @@ embedding_provider:
     assert "api_key" not in runtime["llm_provider"]
     assert "api_key" not in embedding_provider_config
     assert embedding_provider_config["code_embedding_model"] == "nomic-embed-text:v1.5"
+
+
+@pytest.mark.parametrize(
+    ("content", "key"),
+    [
+        ("metis_engine: {}\nmetis_engine: {}\n", "metis_engine"),
+        ("metis_engine: {execution: {stages: {custom: {}, custom: {}}}}", "custom"),
+        (
+            "metis_engine: {execution: {stages: {custom: {nodes: {task: {}, task: {}}}}}}",
+            "task",
+        ),
+        ("metis_engine: {<<: {max_workers: 1, max_workers: 2}}", "max_workers"),
+        ('{=: first, "=": second}', "="),
+        ('{<<: {=: first, "=": second}}', "="),
+    ],
+)
+def test_raw_yaml_rejects_duplicate_keys_including_merged_maps(tmp_path, content, key):
+    config_path = _write_config(tmp_path, content)
+
+    with pytest.raises(
+        yaml.constructor.ConstructorError, match=f"duplicate key '{key}'"
+    ) as failure:
+        load_metis_config(config_path)
+
+    assert str(config_path) in str(failure.value)
+    assert "line" in str(failure.value)
+
+
+@pytest.mark.parametrize("key", ("=", '"="'))
+def test_raw_yaml_allows_value_keys_in_merge_overrides(tmp_path, key):
+    config_path = _write_config(
+        tmp_path,
+        f"defaults: &defaults {{=: inherited}}\nmerged: {{<<: *defaults, {key}: explicit}}",
+    )
+
+    loaded = load_metis_config(config_path)
+
+    assert loaded == {"defaults": {"=": "inherited"}, "merged": {"=": "explicit"}}
+
+
+def test_raw_yaml_allows_nested_merge_overrides_and_literal_merge_key(tmp_path):
+    config_path = _write_config(
+        tmp_path,
+        """
+first:
+  nested: &overrides
+    <<: &defaults {max_workers: 1}
+    max_workers: 2
+later:
+  <<: *overrides
+literal:
+  <<: *defaults
+  "<<": preserved
+""",
+    )
+
+    loaded = load_metis_config(config_path)
+
+    assert loaded["first"]["nested"] == loaded["later"] == {"max_workers": 2}
+    assert loaded["literal"] == {"max_workers": 1, "<<": "preserved"}
+
+
+@pytest.mark.parametrize("content", ("", "[]", "false", "42"))
+def test_runtime_rejects_non_mapping_document(tmp_path, content):
+    with pytest.raises(ValueError, match="configuration must be a mapping"):
+        load_runtime_config(_write_config(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    ("configured", "message"),
+    [
+        ("metis_engine: null", "metis_engine must be a mapping"),
+        ("metis_engine: {max_worker: 2}", "Unknown metis_engine settings: max_worker"),
+        ("metis_engine: {max_workers: 0}", "max_workers must be a positive integer"),
+        ("metis_engine: {max_workers: -1}", "max_workers must be a positive integer"),
+        ("metis_engine: {max_workers: true}", "max_workers must be a positive integer"),
+        ('metis_engine: {max_workers: "2"}', "max_workers must be a positive integer"),
+        (
+            "metis_engine: {max_token_length: .inf}",
+            "max_token_length must be a positive integer",
+        ),
+        (
+            "metis_engine: {doc_chunk_size: 20, doc_chunk_overlap: 20}",
+            "doc_chunk_overlap must be less",
+        ),
+        (
+            "metis_engine: {triage_checkpoint_every: -1}",
+            "triage_checkpoint_every must be a non-negative integer",
+        ),
+        (
+            "metis_engine: {review_checkpoints: []}",
+            "review_checkpoints must be a boolean",
+        ),
+        (
+            'metis_engine: {review_checkpoints: "false"}',
+            "review_checkpoints must be a boolean",
+        ),
+        (
+            "metis_engine: {model_tools: {max_contract_chars: 0}}",
+            "max_contract_chars must be a positive integer",
+        ),
+        ("metis_engine: {model_tools: disabled}", "model_tools must be a mapping"),
+        ("metis_engine: {model_tools: false}", "model_tools must be a mapping"),
+        ("metis_engine: {codegraph: false}", "codegraph must be a mapping"),
+        ("metis_engine: {capabilities: []}", "capabilities must be a mapping"),
+        ("language_plugins: []", "language_plugins must be a mapping"),
+        ("query: {max_token: 20}", "Unknown query settings: max_token"),
+        *[
+            (f"query: {{{key}: {value}}}", f"query.{key} must be a positive integer")
+            for key in ("max_tokens", "similarity_top_k")
+            for value in ("true", "false", "0", "-1", "1.5", '"2"', "[]", "{}")
+        ],
+        (
+            "query: {similarity_top_k: null}",
+            "similarity_top_k must be a positive integer",
+        ),
+        *[
+            (
+                f"metis_engine: {{{key}: {value}}}",
+                f"metis_engine.{key} must be a list of strings",
+            )
+            for key in ("review_code_include_paths", "review_code_exclude_paths")
+            for value in ("false", "null", '"src/"', "{}", "[src/, 2]", "[null]")
+        ],
+        *[
+            (
+                f"metis_engine: {{metisignore_file: {value}}}",
+                "metisignore_file must be a string or null",
+            )
+            for value in ("true", "1", "[]", "{}")
+        ],
+    ],
+)
+def test_runtime_rejects_invalid_raw_configuration(tmp_path, configured, message):
+    config_path = _write_config(
+        tmp_path, configured + "\nllm_provider: {name: ollama, model: test-model}\n"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_runtime_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "metisignore_file"),
+    [(None, None), (1, ""), (5000, "config/.metisignore")],
+)
+def test_runtime_preserves_valid_query_and_path_values(
+    tmp_path, max_tokens, metisignore_file
+):
+    runtime = load_runtime_config(
+        _write_config(
+            tmp_path,
+            yaml.safe_dump(
+                {
+                    "llm_provider": {"name": "ollama", "model": "test-model"},
+                    "query": {"max_tokens": max_tokens, "similarity_top_k": 3},
+                    "metis_engine": {
+                        "metisignore_file": metisignore_file,
+                        "review_code_include_paths": ["src/", "!src/generated/"],
+                        "review_code_exclude_paths": ["tests/"],
+                        "capabilities": {"CustomCapability": {"opaque": [None, False]}},
+                    },
+                }
+            ),
+        )
+    )
+
+    assert runtime["llama_query_max_tokens"] == max_tokens
+    assert runtime["similarity_top_k"] == 3
+    assert runtime["metisignore_file"] == metisignore_file
+    assert runtime["review_code_include_paths"] == ["src/", "!src/generated/"]
+    assert runtime["review_code_exclude_paths"] == ["tests/"]
+    assert runtime["capability_settings"].configurations["CustomCapability"] == {
+        "opaque": [None, False]
+    }
+
+
+def test_runtime_inherits_packaged_defaults_and_respects_explicit_replacements(
+    tmp_path,
+):
+    with as_file(files("metis") / "metis.yaml") as packaged_path:
+        defaults = load_metis_config(packaged_path)["metis_engine"]
+    provider = "llm_provider: {name: ollama, model: test-model}\n"
+    minimal = load_runtime_config(_write_config(tmp_path, provider))
+
+    assert minimal["llama_query_max_tokens"] is None
+    assert minimal["similarity_top_k"] == 5
+    assert minimal["metisignore_file"] is None
+    assert minimal["review_code_include_paths"] == []
+    assert minimal["review_code_exclude_paths"] == []
+
+    for key in ("max_workers", "max_token_length", "embed_dim"):
+        assert minimal[key] == defaults[key]
+    assert minimal["threat_model_config"] == defaults["threat_model"]
+    assert minimal["capability_settings"].configurations == defaults["capabilities"]
+
+    changed = load_runtime_config(
+        _write_config(
+            tmp_path,
+            provider
+            + """
+metis_engine:
+  capabilities:
+    navigation: {timeout_seconds: 2}
+    CustomCapability: {own_setting: 7}
+  execution: {stages: {}}
+  threat_model: {source_patterns: []}
+  codegraph: {source_functions: []}
+  triage_checkpoint_every: 0
+  llm_max_retries: 0
+""",
+        )
+    )
+    capabilities = changed["capability_settings"].configurations
+    assert capabilities["navigation"] == {
+        **defaults["capabilities"]["navigation"],
+        "timeout_seconds": 2,
+    }
+    assert capabilities["index"] == defaults["capabilities"]["index"]
+    assert capabilities["CustomCapability"] == {"own_setting": 7}
+    assert changed["execution_config"] == {"stages": {}}
+    assert changed["threat_model_config"]["source_patterns"] == []
+    assert changed["codegraph_config"] == {"source_functions": []}
+    assert changed["triage_checkpoint_every"] == changed["llm_max_retries"] == 0
+
+    empty = load_runtime_config(
+        _write_config(
+            tmp_path, provider + "metis_engine: {capabilities: {}, execution: {}}\n"
+        )
+    )
+    assert empty["capability_settings"].configurations == {}
+    assert empty["execution_config"] == {}
+
+
+@pytest.mark.parametrize("name", ["max_active_nodes", "max_concurrent_executions"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "2", []])
+def test_runtime_rejects_invalid_concurrency_budgets(tmp_path, name, value):
+    config = {"metis_engine": {name: value}}
+    with pytest.raises(ValueError, match=f"{name} must be a positive integer"):
+        load_runtime_config(_write_config(tmp_path, yaml.safe_dump(config)))
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {},
+        {"max_active_nodes": None, "max_concurrent_executions": None},
+        {"max_active_nodes": 1, "max_concurrent_executions": 4},
+    ],
+)
+def test_runtime_resolves_independent_concurrency_budgets(tmp_path, limits):
+    runtime = load_runtime_config(
+        _write_config(
+            tmp_path,
+            yaml.safe_dump(
+                {
+                    "llm_provider": {"name": "ollama", "model": "unused"},
+                    "metis_engine": {"max_workers": 3, **limits},
+                }
+            ),
+        )
+    )
+    assert runtime["max_workers"] == 3
+    assert runtime["max_active_nodes"] == (limits.get("max_active_nodes") or 3)
+    assert runtime["max_concurrent_executions"] == (
+        limits.get("max_concurrent_executions") or 3
+    )
+
+
+@pytest.mark.parametrize(
+    ("configured", "message"),
+    [
+        *[
+            (f"query: {{temperature: {value}}}", "query.temperature")
+            for value in (
+                "true",
+                '"warm"',
+                "[]",
+                ".nan",
+                ".inf",
+                "-.inf",
+                "-0.1",
+                str(10**400),
+            )
+        ],
+        *[
+            (f"metis_engine: {{hnsw_kwargs: {{{key}: {value}}}}}", key)
+            for key in ("hnsw_m", "hnsw_ef_construction", "hnsw_ef_search")
+            for value in ("true", "null", "0", "1.5", '"16"')
+        ],
+        ("metis_engine: {review_checkpoints: falsehood}", "review_checkpoints"),
+        ("memory: invalid-shape", "MemoryCapabilityConfiguration"),
+        (
+            "metis_engine: {codegraph: {source_functions: [{name: ' '}]}}",
+            "source_functions",
+        ),
+        (
+            "metis_engine: {reachability: {max_path_length: 0}}",
+            "max_path_length",
+        ),
+    ],
+)
+def test_invalid_shared_settings_fail_before_provider_lookup(
+    tmp_path, monkeypatch, configured, message
+):
+    def unexpected_provider(**_kwargs):
+        pytest.fail("invalid shared settings reached provider lookup")
+
+    monkeypatch.setattr("metis.configuration._get_provider_cls", unexpected_provider)
+    with pytest.raises(ValueError, match=message):
+        load_runtime_config(_write_config(tmp_path, configured))
+
+
+@pytest.mark.parametrize("temperature", [None, 0, 0.5, 100, 1e100])
+def test_valid_temperature_and_partial_hnsw_settings(tmp_path, temperature):
+    runtime = load_runtime_config(
+        _write_config(
+            tmp_path,
+            yaml.safe_dump(
+                {
+                    "llm_provider": {"name": "ollama", "model": "inert"},
+                    "query": {"temperature": temperature},
+                    "metis_engine": {"hnsw_kwargs": {"hnsw_m": 16}},
+                }
+            ),
+        )
+    )
+    assert runtime["hnsw_kwargs"] == {"hnsw_m": 16}
+    if temperature is None:
+        assert "temperature" not in runtime["chat_model_kwargs"]
+    else:
+        assert runtime["chat_model_kwargs"]["temperature"] == temperature
+
+
+def test_blank_environment_credentials_allow_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("METIS_TEST_EMPTY_KEY", " \t")
+    monkeypatch.setenv("OPENAI_API_KEY", "inert-fallback")
+    config = (
+        "llm_provider: {name: openai, model: inert, api_key_env: METIS_TEST_EMPTY_KEY}"
+    )
+    runtime = load_runtime_config(_write_config(tmp_path, config))
+    assert runtime["llm_provider"]["api_key"] == "inert-fallback"
+    monkeypatch.setenv("OPENAI_API_KEY", " ")
+    with pytest.raises(RuntimeError, match="required.*not set"):
+        load_runtime_config(_write_config(tmp_path, config))
+
+
+@pytest.mark.parametrize("value", ["2026-02-30", "!!int nope", "!!float nope"])
+def test_invalid_yaml_scalars_preserve_source_location_and_recover(tmp_path, value):
+    path = _write_config(tmp_path, f"metis_engine:\n  max_workers: {value}\n")
+    with pytest.raises(yaml.constructor.ConstructorError) as caught:
+        load_metis_config(path)
+    assert caught.value.problem_mark.name == str(path)
+    assert (caught.value.problem_mark.line, caught.value.problem_mark.column) == (1, 15)
+    assert isinstance(caught.value.__cause__, ValueError)
+    path.write_text("metis_engine: {max_workers: 2}\n", encoding="utf-8")
+    assert load_metis_config(path)["metis_engine"]["max_workers"] == 2

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator
+from uuid import uuid4
 
 from llama_index.core.callbacks import CallbackManager
 from langchain_core.callbacks import BaseCallbackHandler
@@ -134,17 +136,19 @@ class UsageRuntime:
         }
         with self._lock:
             self._completed_commands.append(record)
-        return record
+        return deepcopy(record)
 
     def completed_commands(self) -> list[dict[str, Any]]:
         with self._lock:
-            return list(self._completed_commands)
+            return deepcopy(self._completed_commands)
 
     def default_output_path(self) -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return str(Path("results") / f"metis_usage_{timestamp}.json")
+        return str(Path("results") / f"metis_usage_{timestamp}_{uuid4().hex}.json")
 
     def build_persisted_payload(self) -> dict[str, Any]:
+        # Read commands first so concurrently completed work cannot exceed totals.
+        commands = self.completed_commands()
         return {
             "schema_version": 1,
             "project_name": Path(self.codebase_path).resolve().name,
@@ -152,7 +156,7 @@ class UsageRuntime:
             "started_at": self.started_at,
             "ended_at": _utc_now(),
             "totals": self.snapshot_total(),
-            "commands": self.completed_commands(),
+            "commands": commands,
         }
 
     def save_run_summary(self, output_path: str | None = None) -> str:

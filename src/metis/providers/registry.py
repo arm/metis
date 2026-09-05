@@ -27,6 +27,7 @@ class ProviderLoader:
 
 
 _PROVIDER_LOADERS: dict[str, ProviderLoader] = {}
+_PROVIDER_LOADER_ERRORS: dict[str, str] = {}
 
 
 def _register_provider_loader(
@@ -63,6 +64,8 @@ def _get_provider(
     if provider_cls := providers.get(key):
         return provider_cls
     _discover_provider_loaders()
+    if key in _PROVIDER_LOADER_ERRORS:
+        raise ValueError(_PROVIDER_LOADER_ERRORS[key])
     loader = _PROVIDER_LOADERS.get(key)
     dotted_path = getattr(loader, surface) if loader else None
     if not dotted_path:
@@ -79,6 +82,11 @@ def _get_provider(
             f"{surface.capitalize()} provider '{name}' is registered but required "
             "dependencies are missing."
         ) from exc
+    expected = ChatProvider if surface == "chat" else EmbeddingProvider
+    if not isinstance(provider_cls, type) or not issubclass(provider_cls, expected):
+        raise TypeError(
+            f"{surface.capitalize()} provider {name!r} must be a {expected.__name__} subclass"
+        )
     providers[key] = provider_cls
     return provider_cls
 
@@ -91,11 +99,15 @@ def _discover_provider_loaders() -> None:
     for entry_point in metadata.entry_points().select(
         group=_PROVIDER_ENTRY_POINT_GROUP
     ):
-        provider_name, surface = _parse_provider_entry_point_name(entry_point.name)
-        if surface == "chat":
-            _register_provider_loader(provider_name, chat=entry_point.value)
-        else:
-            _register_provider_loader(provider_name, embedding=entry_point.value)
+        provider_name = entry_point.name.rpartition(".")[0] or entry_point.name
+        try:
+            provider_name, surface = _parse_provider_entry_point_name(entry_point.name)
+            if surface == "chat":
+                _register_provider_loader(provider_name, chat=entry_point.value)
+            else:
+                _register_provider_loader(provider_name, embedding=entry_point.value)
+        except ValueError as exc:
+            _PROVIDER_LOADER_ERRORS[provider_name.lower()] = str(exc)
 
     _PROVIDER_LOADERS_DISCOVERED = True
 

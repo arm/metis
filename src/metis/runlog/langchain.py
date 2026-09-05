@@ -233,6 +233,6 @@ def _response_payload(response: Any) -> dict[str, Any]:
 def _positive_int(value: Any) -> int:
     try:
         parsed = int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return parsed if parsed > 0 else 0

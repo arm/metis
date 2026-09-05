@@ -103,17 +103,19 @@ with `Authorization: Bearer $VLLM_API_KEY`.
 
 ## 4. Configure Metis
 
-Point Metis at the LiteLLM proxy by updating `metis.yaml`:
+Point Metis at the LiteLLM proxy by updating `metis.yaml`. Replace
+`<llm-host-ip>` with your host address; Metis does not expand environment
+variables inside YAML values:
 
 ```yaml
 llm_provider:
   name: "vllm"
-  base_url: "http://${LLM_HOST_IP}:8888/v1"
+  base_url: "http://<llm-host-ip>:8888/v1"
   model: "<chat-model-id>"
 
 embedding_provider:
   name: "vllm"
-  base_url: "http://${LLM_HOST_IP}:8888/v1"
+  base_url: "http://<llm-host-ip>:8888/v1"
   code_embedding_model: "<embedding-model-id>"
   docs_embedding_model: "<embedding-model-id>"
 

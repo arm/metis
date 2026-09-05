@@ -266,13 +266,82 @@ def test_graph_progress_hands_review_rows_to_triage() -> None:
     assert progress.rules == ["Init", "Review", "Triage"]
     assert progress.removed == [1, 2, 3, 4]
     assert progress.renderables == 2
-    assert "[green]✓ review.result complete[/green]" in progress.messages
-    assert "[green]✓ triage.result complete[/green]" in progress.messages
+    assert "[yellow]! review.result inconclusive[/yellow]" in progress.messages
+    assert "[yellow]! triage.result inconclusive[/yellow]" in progress.messages
     assert any(
         "[green]Valid: 1[/green] [red]Invalid: 1[/red]"
         in str(update.get("description"))
         for update in progress.updates
     )
+
+
+@pytest.mark.parametrize("node", ("result", "collect"))
+def test_graph_progress_uses_status_for_generic_node_names(node) -> None:
+    progress = _Progress()
+    reporter = ExecutionGraphProgressReporter(progress)
+    reporter({"event": "execution_stage_start", "stage": "archive"})
+    reporter(
+        {
+            "event": "execution_node_end",
+            "stage": "archive",
+            "node": node,
+            "status": "inconclusive",
+        }
+    )
+    assert f"[yellow]! archive.{node} inconclusive[/yellow]" in progress.messages
+
+
+@pytest.mark.parametrize(
+    ("status", "description"),
+    (
+        ("error", "[red]Triage failed[/red]"),
+        ("ok", "[green]No findings[/green]"),
+    ),
+)
+def test_graph_progress_preserves_triage_terminal_row(status, description) -> None:
+    progress = _Progress()
+    reporter = ExecutionGraphProgressReporter(progress)
+    reporter({"event": "execution_stage_start", "stage": "triage"})
+    reporter(
+        {
+            "event": "execution_node_end",
+            "stage": "triage",
+            "node": "triage",
+            "status": status,
+        }
+    )
+    assert progress.updates[-1]["description"] == description
+
+    reporter({"event": "execution_stage_end", "stage": "triage", "status": status})
+    assert progress.updates[-1]["description"] == description
+    for _ in range(2):
+        reporter.finish()
+        assert progress.updates[-1]["description"] == description
+
+
+@pytest.mark.parametrize("status", ("ok", "error"))
+def test_graph_progress_retires_triage_before_custom_stage(status) -> None:
+    progress = _Progress()
+    reporter = ExecutionGraphProgressReporter(progress)
+    reporter({"event": "execution_stage_start", "stage": "triage"})
+    reporter(
+        {
+            "event": "execution_node_end",
+            "stage": "triage",
+            "node": "triage",
+            "status": status,
+        }
+    )
+    terminal_description = progress.updates[-1]["description"]
+    reporter({"event": "execution_stage_start", "stage": "archive"})
+
+    assert progress.updates[-1]["description"] == terminal_description
+    assert progress.removed == [1]
+    assert progress.renderables == 1
+    update_count = len(progress.updates)
+    reporter.finish()
+    assert len(progress.updates) == update_count
+    assert progress.renderables == 1
 
 
 @pytest.mark.parametrize(
@@ -434,12 +503,12 @@ def test_review_checkpoints_can_be_disabled(tmp_path):
     assert not (tmp_path / ".metis").exists()
 
 
-def test_review_checkpoints_replace_incompatible_database(tmp_path):
+def test_review_checkpoints_write_legacy_schema(tmp_path):
     checkpoint_path = (
         tmp_path / ".metis" / "checkpoints" / "review.simple_llm_review.sqlite3"
     )
     checkpoint_path.parent.mkdir(parents=True)
-    with sqlite3.connect(checkpoint_path) as connection:
+    with closing(sqlite3.connect(checkpoint_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE review_checkpoint_records (
@@ -666,3 +735,26 @@ def test_run_review_code_preserves_review_output_when_triage_fails(monkeypatch):
     commands.run_review_code(_Engine(), args, runtime)
 
     assert saved == [{"version": "2.1.0", "runs": [{"results": []}]}]
+
+
+@pytest.mark.parametrize(
+    "producers",
+    [("Example", "example"), ("Café", "Cafe\u0301"), ("x" * 300, "x" * 301)],
+)
+def test_checkpoint_filenames_preserve_exact_producer_identity(tmp_path, producers):
+    callbacks = review_checkpoint_callbacks(codebase_path=tmp_path, enabled=True)
+    for index, producer in enumerate(producers):
+        record = ReviewCheckpointRecord(
+            metis_version=METIS_VERSION,
+            producer=producer,
+            key="shared",
+            record={"value": index},
+        )
+        callbacks["review_checkpoint_callback"](record.model_dump(mode="json"), 1, 1)
+    for index, producer in enumerate(producers):
+        assert callbacks["review_resume_callback"](producer) == {
+            "shared": {"value": index}
+        }
+    paths = list((tmp_path / ".metis" / "checkpoints").glob("*.sqlite3"))
+    assert len(paths) == 2
+    assert len({path.name.casefold() for path in paths}) == 2

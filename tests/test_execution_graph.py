@@ -2,17 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import threading
+from collections import UserString
+from collections.abc import Mapping
+from collections.abc import Sequence
+from concurrent.futures import CancelledError
+from dataclasses import dataclass
 import time
 from dataclasses import replace
 from typing import Any
+from typing import Annotated
 from typing import Literal
+from typing import NewType
+from typing import Tuple
 from unittest.mock import Mock
 from unittest.mock import sentinel
 
 import pytest
 from pydantic import BaseModel
+from pydantic import AfterValidator
 from pydantic import ConfigDict
 from pydantic import ValidationError
+from pydantic import Field
+from pydantic import PrivateAttr
+from pydantic import field_validator
 
 from metis.configuration import load_execution_config
 from metis.engine.codegraph import CodeGraph
@@ -50,8 +62,6 @@ from metis.execution_nodes import NodeRegistration
 from metis.execution_nodes import NodeResult
 from metis.execution_nodes import NodeRuntime
 from metis.execution_nodes import ReviewCommand
-from metis.execution_stages import StageContract
-from metis.execution_stages import StageRegistration
 from metis.runtime_settings import TriageOptions
 
 
@@ -166,28 +176,31 @@ def test_simple_review_does_not_require_codegraph() -> None:
     _service(ExecutionConfiguration.model_validate(raw))
 
 
-def test_reachability_requires_initialized_codegraph() -> None:
-    with pytest.raises(ValueError, match="CodeGraph from Initialize"):
-        ExecutionConfiguration.model_validate(
-            {
-                "inputs": {"review_request": {"mode": "code"}},
-                "stages": {
-                    "review": {
-                        "nodes": {"reachability": {}, "result": {"formats": ["sarif"]}}
-                    }
-                },
-            }
-        )
+def test_reachability_requires_typed_codegraph_input() -> None:
+    configuration = ExecutionConfiguration.model_validate(
+        {
+            "inputs": {"review_request": {"mode": "code"}},
+            "stages": {
+                "review": {
+                    "nodes": {"reachability": {}, "result": {"formats": ["sarif"]}}
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="unbound inputs: codegraph"):
+        _service(configuration)
 
 
-def test_reachability_rejects_review_time_codegraph_binding() -> None:
+def test_reachability_rejects_unavailable_codegraph_producer() -> None:
     raw = _configuration().model_dump(mode="json")
     raw["stages"]["review"]["nodes"]["reachability"] = {
         "inputs": {"codegraph": "producer.codegraph"}
     }
+    configuration = ExecutionConfiguration.model_validate(raw)
 
-    with pytest.raises(ValueError, match="Review stage CodeGraph input"):
-        ExecutionConfiguration.model_validate(raw)
+    with pytest.raises(ValueError, match="unavailable nodes: producer"):
+        _service(configuration)
 
 
 def test_reachability_accepts_explicit_review_stage_codegraph_binding() -> None:
@@ -199,12 +212,28 @@ def test_reachability_accepts_explicit_review_stage_codegraph_binding() -> None:
     _service(ExecutionConfiguration.model_validate(raw))
 
 
-def test_profiled_codegraph_requires_profile_dependency() -> None:
+def test_profiled_codegraph_infers_required_profile_dependency() -> None:
     raw = _configuration().model_dump(mode="json")
-    raw["stages"]["initialize"]["nodes"]["compilation_profile"] = {}
+    raw["stages"]["initialize"]["nodes"]["custom_profile"] = {}
+    profile = NodeRegistration(
+        "custom_profile",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"profiled_source": ProfiledSourceReference},
+        lambda _invocation: NodeResult({}, ExecutionStatus.ERROR),
+    )
+    service, calls = _service(
+        ExecutionConfiguration.model_validate(raw),
+        extra_registrations=(profile,),
+    )
+    try:
+        result = service.execute_initialize()
 
-    with pytest.raises(ValueError, match="must depend on compilation_profile"):
-        ExecutionConfiguration.model_validate(raw)
+        assert result.status is ExecutionStatus.ERROR
+        assert "codegraph" not in calls
+    finally:
+        service.close()
 
 
 def test_finding_dedup_combines_producers_before_result() -> None:
@@ -710,6 +739,8 @@ def _service(
         llm_provider=Mock(count_tokens=lambda _text, model=None: 1),
         llama_query_model="test",
         max_workers=2,
+        max_active_nodes=2,
+        max_concurrent_executions=2,
         max_token_length=1000,
         chat_model_kwargs={},
     )
@@ -1435,6 +1466,8 @@ def test_explicit_input_resolves_an_implicit_binding_ambiguity():
     ("bindings", "source_annotation", "target_annotation", "value", "expected"),
     (
         ({}, Any, Any, sentinel.value, sentinel.value),
+        ({}, tuple[str, ...], tuple[str, ...], (), ()),
+        ({"values": "$inputs.values"}, tuple[str, ...], tuple[str, ...], (), ()),
         (
             {},
             tuple[str, ...],
@@ -1709,60 +1742,6 @@ class _SharedEntryPoint:
         )
 
 
-class _StageEntryPoints:
-    def __init__(self, entries: tuple[object, ...]) -> None:
-        self._entries = entries
-
-    def select(self, *, group: str) -> tuple[object, ...]:
-        return self._entries if group == "metis.execution_stages" else ()
-
-
-class _AuditStageEntryPoint:
-    name = "audit"
-
-    def load(self) -> StageRegistration:
-        return StageRegistration(
-            "audit",
-            StageContract({}, required_outputs={"value": str}),
-        )
-
-
-class _AuditNodeEntryPoint:
-    name = "audit.audit_node"
-
-    def load(self) -> NodeRegistration:
-        return NodeRegistration(
-            "audit_node",
-            "audit",
-            EmptyNodeConfiguration,
-            {},
-            {"value": str},
-            lambda _invocation: NodeResult({"value": "private"}),
-        )
-
-
-def test_external_stage_registration_runs_generic_stage(monkeypatch):
-    monkeypatch.setattr(
-        "metis.engine.stages.catalog.metadata.entry_points",
-        lambda: _StageEntryPoints((_AuditStageEntryPoint(),)),
-    )
-    configuration = ExecutionConfiguration.model_validate(
-        {
-            "stages": {
-                "audit": {
-                    "outputs": {"value": "audit_node.value"},
-                    "nodes": {"audit_node": {}},
-                }
-            }
-        }
-    )
-    service, _calls = _service(configuration, entry_points=(_AuditNodeEntryPoint(),))
-
-    result = service.execute_graph()
-
-    assert result.outputs == {"audit": {"value": "private"}}
-
-
 @pytest.mark.parametrize(
     ("node_name", "entry_points"),
     (
@@ -1859,3 +1838,772 @@ def test_private_registration_must_match_selected_stage():
     with pytest.raises(ValueError, match="not registered for stage 'review'"):
         _service(configuration, entry_points=(entry_point,))
     assert loads == []
+
+
+_PortUserId = NewType("_PortUserId", int)
+_PortOtherId = NewType("_PortOtherId", int)
+_PortStaffId = NewType("_PortStaffId", _PortUserId)
+
+
+type _OptionalIntegerPort = int | None
+type _OptionalCollectionPort = tuple[int, ...] | None
+
+
+class _ExternalPortResource:
+    pass
+
+
+@dataclass
+class _ExternalPortPayload:
+    value: _ExternalPortResource
+
+
+@pytest.mark.parametrize(
+    ("source_annotation", "target_annotation", "value"),
+    (
+        (Literal[1, None], int | None, None),
+        (_PortUserId, _PortUserId, _PortUserId(3)),
+        (_PortUserId, int, _PortUserId(3)),
+        (_PortStaffId, _PortUserId, _PortStaffId(_PortUserId(3))),
+        (list[_PortUserId], list[_PortUserId], [_PortUserId(3)]),
+        (list[_PortUserId], list[int], [_PortUserId(3)]),
+        (_OptionalIntegerPort, int | None, None),
+        (type(None), Literal[None], None),
+        (dict[str, int], Mapping[str, int], {"value": 3}),
+        (list[int], Sequence[int], [3]),
+        (tuple[int, ...], Sequence[int], (1, 2)),
+        (tuple[int, ...], tuple[int, ...], ()),
+        (tuple[int, str], Sequence[object], (1, "two")),
+        (tuple[int, str], tuple[object, ...], (1, "two")),
+        (tuple[()], tuple[()], ()),
+        (Tuple[()], tuple[()], ()),
+        (tuple[()], Tuple[()], ()),
+        (Tuple[()], Sequence[int], ()),
+        (tuple, tuple, (1, "two")),
+        (Tuple, tuple, (1, "two")),
+        (tuple, Tuple, (1, "two")),
+        (
+            Annotated[_ExternalPortPayload, "external"],
+            _ExternalPortPayload | None,
+            _ExternalPortPayload(_ExternalPortResource()),
+        ),
+        (
+            list[_ExternalPortPayload],
+            Sequence[_ExternalPortPayload],
+            [_ExternalPortPayload(_ExternalPortResource())],
+        ),
+    ),
+)
+def test_typed_node_ports_round_trip_without_coercion(
+    source_annotation, target_annotation, value
+):
+    registrations = (
+        NodeRegistration(
+            "source",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": source_annotation},
+            lambda _invocation: NodeResult({"value": value}),
+        ),
+        NodeRegistration(
+            "consumer",
+            "initialize",
+            EmptyNodeConfiguration,
+            {"value": target_annotation},
+            {"value": target_annotation},
+            lambda invocation: NodeResult(dict(invocation.inputs)),
+        ),
+    )
+    stage = StageConfiguration.model_validate(
+        {
+            "nodes": {"source": {}, "consumer": {"inputs": {"value": "source.value"}}},
+            "outputs": {"value": "consumer.value"},
+        }
+    )
+
+    result = run_stage(
+        "initialize", _compile(registrations, stage), _node_context(), {}
+    )
+
+    assert result.status is ExecutionStatus.OK
+    assert result.outputs["value"] == value
+
+
+@pytest.mark.parametrize("explicit", (False, True))
+@pytest.mark.parametrize(
+    "annotation,source_annotation,value",
+    (
+        (tuple[int, ...] | None, int, 3),
+        (Annotated[tuple[int, ...] | None, "values"], int, 3),
+        (tuple[int, ...] | Literal[None], int, 3),
+        (_OptionalCollectionPort, int, 3),
+        (tuple[None, ...], None, None),
+        (tuple[type(None), ...], type(None), None),
+        (tuple[None, ...] | None, type(None), None),
+    ),
+)
+def test_homogeneous_tuple_collects_producer_values(
+    annotation, source_annotation, value, explicit
+):
+    registrations = (
+        NodeRegistration(
+            "source",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": source_annotation},
+            lambda _invocation: NodeResult({"value": value}),
+        ),
+        NodeRegistration(
+            "consumer",
+            "initialize",
+            EmptyNodeConfiguration,
+            {"value": annotation},
+            {"value": annotation},
+            lambda invocation: NodeResult(dict(invocation.inputs)),
+        ),
+    )
+    stage = StageConfiguration.model_validate(
+        {
+            "nodes": {
+                "source": {},
+                "consumer": {"inputs": {"value": ["source.value"]}} if explicit else {},
+            },
+            "outputs": {"value": "consumer.value"},
+        }
+    )
+
+    result = run_stage(
+        "initialize", _compile(registrations, stage), _node_context(), {}
+    )
+
+    assert result.status is ExecutionStatus.OK
+    assert result.outputs["value"] == (value,)
+
+
+@pytest.mark.parametrize("annotation", (str, tuple[int, str], tuple[()]))
+def test_even_empty_multiple_source_binding_requires_homogeneous_tuple(annotation):
+    registration = NodeRegistration(
+        "consumer",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"value": annotation},
+        {},
+        lambda _invocation: NodeResult({}),
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"consumer": {"inputs": {"value": []}}}}
+    )
+
+    with pytest.raises(ValueError, match="does not accept multiple sources"):
+        _compile((registration,), stage)
+
+
+@pytest.mark.parametrize(
+    "annotation", (type(None), Literal[None], Annotated[int | None, "optional"])
+)
+@pytest.mark.parametrize("explicit", (False, True))
+def test_absent_optional_stage_input_is_none_for_explicit_and_implicit_binding(
+    annotation, explicit
+):
+    registration = NodeRegistration(
+        "consumer",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"value": annotation},
+        {"value": annotation},
+        lambda invocation: NodeResult(dict(invocation.inputs)),
+    )
+    stage = StageConfiguration.model_validate(
+        {
+            "nodes": {
+                "consumer": {"inputs": {"value": "$inputs.value"}} if explicit else {}
+            }
+        }
+    )
+    plan = compile_stage(
+        NodeCatalog((registration,), ()), "initialize", stage, {}, {"value": annotation}
+    )
+
+    result = run_stage("initialize", plan, _node_context(), {})
+
+    assert result.status is ExecutionStatus.OK
+    assert result.outputs["consumer"] is None
+
+
+@pytest.mark.parametrize(
+    "annotation,value",
+    (
+        (int, "3"),
+        (int | None, "3"),
+        (Annotated[int | None, "strict"], "3"),
+        (_PortUserId, "3"),
+        (list[_PortUserId], ["3"]),
+    ),
+)
+def test_node_port_rejects_string_instead_of_coercing_integer(annotation, value):
+    handler = Mock(return_value=NodeResult({}))
+    registration = NodeRegistration(
+        "consumer",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"value": annotation},
+        {},
+        handler,
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"consumer": {}}})
+    plan = compile_stage(
+        NodeCatalog((registration,), ()), "initialize", stage, {}, {"value": annotation}
+    )
+
+    result = run_stage("initialize", plan, _node_context(), {"value": value})
+
+    assert result.status is ExecutionStatus.ERROR
+    assert result.diagnostics[0].code == "execution.node_failed"
+    handler.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "source_annotation,target_annotation,value",
+    (
+        (bool, int, True),
+        (Literal[True], int, True),
+        (Tuple, tuple[int, ...], ("wrong",)),
+        (tuple[int, ...], Tuple[()], (1,)),
+        (int, _PortUserId, 3),
+        (_PortUserId, _PortOtherId, _PortUserId(3)),
+        (list[int], list[_PortUserId], [3]),
+        (list[_PortUserId], list[_PortOtherId], [_PortUserId(3)]),
+    ),
+)
+def test_incompatible_port_annotations_reject_explicit_binding(
+    source_annotation, target_annotation, value
+):
+    registrations = (
+        NodeRegistration(
+            "source",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {"value": source_annotation},
+            lambda _invocation: NodeResult({"value": value}),
+        ),
+        NodeRegistration(
+            "consumer",
+            "initialize",
+            EmptyNodeConfiguration,
+            {"value": target_annotation},
+            {},
+            lambda _invocation: NodeResult({}),
+        ),
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"source": {}, "consumer": {"inputs": {"value": "source.value"}}}}
+    )
+
+    with pytest.raises(ValueError, match="not compatible"):
+        _compile(registrations, stage)
+
+
+@pytest.mark.parametrize(
+    "invalid_result",
+    (
+        {},
+        NodeResult({}, "ok"),
+        NodeResult(None),
+        NodeResult({}, diagnostics=None),
+        NodeResult({}, diagnostics=("bad",)),
+        NodeResult({}, diagnostics=(ExecutionDiagnostic("bad", "bad", "invalid"),)),
+        *(
+            NodeResult(
+                {}, status, (ExecutionDiagnostic("bad", "bad", UserString(severity)),)
+            )
+            for status in (ExecutionStatus.OK, ExecutionStatus.ERROR)
+            for severity in ("warning", "error")
+        ),
+    ),
+)
+def test_invalid_node_result_is_contained_and_independent_output_survives(
+    invalid_result,
+):
+    registrations = (
+        NodeRegistration(
+            "invalid",
+            "initialize",
+            EmptyNodeConfiguration,
+            {},
+            {},
+            lambda _invocation: invalid_result,
+        ),
+        _value_node("independent", "kept"),
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"invalid": {}, "independent": {}}}
+    )
+
+    result = run_stage(
+        "initialize", _compile(registrations, stage), _node_context(), {}
+    )
+
+    assert result.status is ExecutionStatus.ERROR
+    assert result.outputs == {"independent": "kept"}
+    assert len(result.diagnostics) == 1
+    assert result.diagnostics[0].code == "execution.node_failed"
+
+
+def test_pre_cancelled_stage_does_not_execute_handler():
+    handler = Mock(return_value=NodeResult({}))
+    node = NodeRegistration(
+        "cancelled", "initialize", EmptyNodeConfiguration, {}, {}, handler
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"cancelled": {}}})
+    context = _node_context()
+    context = replace(
+        context, runtime=replace(context.runtime, is_cancelled=lambda: True)
+    )
+
+    with pytest.raises(CancelledError):
+        run_stage("initialize", _compile((node,), stage), context, {})
+
+    handler.assert_not_called()
+
+
+def test_node_cancelled_error_propagates_instead_of_becoming_failure_diagnostic():
+    handler = Mock(side_effect=CancelledError("cancelled"))
+    node = NodeRegistration(
+        "cancelled", "initialize", EmptyNodeConfiguration, {}, {}, handler
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"cancelled": {}}})
+
+    with pytest.raises(CancelledError, match="cancelled"):
+        run_stage("initialize", _compile((node,), stage), _node_context(), {})
+
+
+def test_node_configuration_mutation_does_not_leak_into_next_invocation():
+    class Configuration(BaseModel):
+        values: list[int] = []
+
+    seen = []
+
+    def execute(invocation):
+        seen.append(tuple(invocation.configuration.values))
+        invocation.configuration.values.append(1)
+        return NodeResult({})
+
+    node = NodeRegistration("configured", "initialize", Configuration, {}, {}, execute)
+    stage = StageConfiguration.model_validate({"nodes": {"configured": {}}})
+    plan = _compile((node,), stage)
+
+    for _ in range(2):
+        assert (
+            run_stage("initialize", plan, _node_context(), {}).status
+            is ExecutionStatus.OK
+        )
+
+    assert seen == [(), ()]
+
+
+@pytest.mark.parametrize(
+    "annotation,value",
+    (
+        (_ExternalPortPayload, _ExternalPortPayload(_ExternalPortResource())),
+        (_PortUserId, _PortUserId(3)),
+    ),
+)
+def test_annotated_output_keeps_custom_validation(annotation, value):
+    checked = []
+
+    def validate(payload):
+        checked.append(payload)
+        return payload
+
+    node = NodeRegistration(
+        "payload",
+        "initialize",
+        EmptyNodeConfiguration,
+        {},
+        {"value": Annotated[annotation, AfterValidator(validate)]},
+        lambda _invocation: NodeResult({"value": value}),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"payload": {}}})
+
+    result = run_stage("initialize", _compile((node,), stage), _node_context(), {})
+
+    assert result.status is ExecutionStatus.OK
+    assert result.outputs["payload"] is value
+    assert checked == [value]
+
+
+@pytest.mark.parametrize("annotation", (123, list[123]))
+def test_compiler_rejects_malformed_stage_input_annotation_even_for_any_consumer(
+    annotation,
+):
+    node = NodeRegistration(
+        "consumer",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"value": Any},
+        {},
+        lambda _invocation: NodeResult({}),
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"consumer": {}}})
+
+    with pytest.raises(TypeError, match="unsupported annotation"):
+        compile_stage(
+            NodeCatalog((node,), ()), "initialize", stage, {}, {"value": annotation}
+        )
+
+
+@pytest.mark.parametrize("configured", (False, True), ids=("defaults", "yaml-values"))
+def test_configuration_snapshot_rebuilds_private_state_without_revalidating_normalized_values(
+    configured,
+):
+    class NestedConfiguration(BaseModel):
+        values: list[int] = Field(alias="items")
+        _lock: object = PrivateAttr(default_factory=threading.Lock)
+
+        @field_validator("values")
+        @classmethod
+        def increment(cls, values):
+            return [value + 1 for value in values]
+
+    class Configuration(BaseModel):
+        nested: NestedConfiguration = Field(
+            default_factory=lambda: NestedConfiguration(items=[2])
+        )
+
+    seen, locks = [], []
+
+    def execute(invocation):
+        configuration = invocation.configuration.nested
+        locks.append(configuration._lock)
+        with configuration._lock:
+            seen.append(tuple(configuration.values))
+            configuration.values.append(99)
+        return NodeResult({})
+
+    registration = NodeRegistration(
+        "configured", "initialize", Configuration, {}, {}, execute
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"configured": {}}})
+    raw = {"nested": {"items": [2]}} if configured else {}
+    plan = compile_stage(
+        NodeCatalog((registration,), ()),
+        "initialize",
+        stage,
+        {"configured": raw},
+        {},
+    )
+    if configured:
+        raw["nested"]["items"].append(500)
+
+    for _ in range(2):
+        assert (
+            run_stage("initialize", plan, _node_context(), {}).status
+            is ExecutionStatus.OK
+        )
+
+    assert seen == [(3,), (3,)]
+    assert locks[0] is not locks[1]
+
+
+@pytest.mark.parametrize("port", ("input", "output"))
+@pytest.mark.parametrize("as_model", (False, True), ids=("mapping", "model"))
+def test_concrete_model_ports_require_instances(port, as_model):
+    class Payload(BaseModel):
+        value: int
+
+    value = Payload(value=1) if as_model else {"value": 1}
+    handler = Mock(
+        return_value=NodeResult({"value": value} if port == "output" else {})
+    )
+    registration = NodeRegistration(
+        "model",
+        "initialize",
+        EmptyNodeConfiguration,
+        {"value": Payload} if port == "input" else {},
+        {"value": Payload} if port == "output" else {},
+        handler,
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"model": {}}})
+    plan = compile_stage(
+        NodeCatalog((registration,), ()),
+        "initialize",
+        stage,
+        {},
+        {"value": Payload} if port == "input" else {},
+    )
+    result = run_stage(
+        "initialize", plan, _node_context(), {"value": value} if port == "input" else {}
+    )
+
+    assert result.status is (ExecutionStatus.OK if as_model else ExecutionStatus.ERROR)
+    if port == "input" and not as_model:
+        handler.assert_not_called()
+    else:
+        handler.assert_called_once()
+    if not as_model:
+        assert result.diagnostics[0].code == "execution.node_failed"
+        assert "Input should be an instance of Payload" in result.diagnostics[0].message
+
+
+@pytest.mark.parametrize(
+    "boundary", ["handler", "progress", "diagnostic", "job_failure"]
+)
+def test_node_cancellation_is_checked_before_publishing_success(boundary):
+    captured = []
+
+    def execute(invocation):
+        captured.append(invocation.context)
+        if boundary == "handler":
+            invocation.context.jobs.cancel()
+        if boundary == "job_failure":
+
+            def fail(_value):
+                raise ValueError("ordinary job failure")
+
+            invocation.context.jobs.run([1], fail, label=None, result_key=str)
+        return NodeResult(
+            {"value": "must not publish"},
+            diagnostics=(ExecutionDiagnostic("note", "note", "warning"),),
+        )
+
+    def progress(event):
+        if boundary == "progress" and event["event"] == "execution_node_end":
+            captured[0].jobs.cancel()
+
+    def diagnostic(_value):
+        if boundary == "diagnostic":
+            captured[0].jobs.cancel()
+
+    node = NodeRegistration(
+        "cancel", "initialize", EmptyNodeConfiguration, {}, {"value": str}, execute
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"cancel": {}}})
+    context = _node_context()
+    scheduler = JobScheduler(1)
+    context = replace(
+        context,
+        runtime=replace(context.runtime, jobs=scheduler.limit(1)),
+        callbacks=NodeCallbacks(progress=progress, diagnostic=diagnostic),
+    )
+    try:
+        if boundary == "job_failure":
+            result = run_stage("initialize", _compile((node,), stage), context, {})
+            assert result.status is ExecutionStatus.ERROR
+            assert "ordinary job failure" in result.diagnostics[0].message
+        else:
+            with pytest.raises(CancelledError, match="node was cancelled"):
+                run_stage("initialize", _compile((node,), stage), context, {})
+        assert captured[0].runtime.is_cancelled()
+    finally:
+        scheduler.close()
+
+
+def test_shared_stage_drain_retries_an_interrupted_wait_before_returning(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from metis.engine.execution import runner
+
+    started = threading.Event()
+    release = threading.Event()
+    retried = threading.Event()
+    submit = runner.submit_with_current_context
+
+    def observe_submit(executor, function, stage_name, node, *args):
+        future = submit(executor, function, stage_name, node, *args)
+        if node.name == "waiter":
+            result = future.result
+            interrupted = False
+
+            def interrupt_wait(*args, **kwargs):
+                nonlocal interrupted
+                if not interrupted:
+                    interrupted = True
+                    assert not future.done()
+                    raise KeyboardInterrupt("interrupt while draining")
+                retried.set()
+                return result(*args, **kwargs)
+
+            future.result = interrupt_wait
+        return future
+
+    def wait_for_release(_invocation):
+        started.set()
+        assert release.wait(5)
+        return NodeResult({"value": "drained"})
+
+    def interrupt(_invocation):
+        assert started.wait(5)
+        raise KeyboardInterrupt("initial stage interrupt")
+
+    registrations = tuple(
+        NodeRegistration(
+            name, "initialize", EmptyNodeConfiguration, {}, {"value": str}, execute
+        )
+        for name, execute in (("waiter", wait_for_release), ("interrupt", interrupt))
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"waiter": {}, "interrupt": {}}}
+    )
+    monkeypatch.setattr(runner, "submit_with_current_context", observe_submit)
+    with ThreadPoolExecutor(max_workers=2) as nodes:
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            execution = caller.submit(
+                run_stage,
+                "initialize",
+                _compile(registrations, stage),
+                _node_context(),
+                {},
+                executor=nodes,
+            )
+            try:
+                assert retried.wait(2), "An interrupted wait skipped the active node"
+                assert not execution.done()
+            finally:
+                release.set()
+            with pytest.raises(KeyboardInterrupt, match="initial stage interrupt"):
+                execution.result(timeout=5)
+
+
+@pytest.mark.parametrize("boundary", ["node", "stage"])
+@pytest.mark.parametrize("status", [ExecutionStatus.OK, ExecutionStatus.INCONCLUSIVE])
+def test_cancellation_during_output_logging_rejects_success(
+    boundary, status, node_jobs, tmp_path
+):
+    from pydantic import model_serializer
+
+    from metis import runlog
+
+    caller = threading.current_thread()
+    cancellation = threading.Event()
+    captured = []
+
+    class Payload(BaseModel):
+        value: str
+
+        @model_serializer
+        def serialize(self):
+            if threading.current_thread() is caller:
+                if boundary == "stage":
+                    cancellation.set()
+            elif boundary == "node":
+                captured[0].jobs.cancel()
+            return {"value": self.value}
+
+    def execute(invocation):
+        captured.append(invocation.context)
+        return NodeResult({"value": Payload(value="must not publish")}, status)
+
+    node = NodeRegistration(
+        "late", "initialize", EmptyNodeConfiguration, {}, {"value": Payload}, execute
+    )
+    stage = StageConfiguration.model_validate({"nodes": {"late": {}}})
+    context = _node_context()
+    context = replace(
+        context,
+        runtime=replace(
+            context.runtime,
+            jobs=node_jobs.with_cancellation(cancellation),
+            is_cancelled=cancellation.is_set,
+        ),
+    )
+    with runlog.open_runlog(runlog.RunLogConfig(path=tmp_path / "trace.ndjson")):
+        with pytest.raises(CancelledError, match=f"Execution {boundary} was cancelled"):
+            run_stage("initialize", _compile((node,), stage), context, {})
+    assert captured[0].runtime.is_cancelled()
+
+
+@pytest.mark.parametrize("stage_fails", [False, True])
+def test_owned_stage_retries_shutdown_and_preserves_first_error(
+    monkeypatch, node_jobs, stage_fails
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from metis.engine.execution import runner
+
+    started = threading.Event()
+    release = threading.Event()
+    draining = threading.Event()
+    initial = KeyboardInterrupt("initial stage interrupt")
+    shutdown_error = KeyboardInterrupt("first shutdown interrupt")
+    owned_executors = []
+    captured = []
+    shutdown_attempts = 0
+
+    class InterruptedExecutor(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            owned_executors.append(self)
+
+        def shutdown(self, *args, **kwargs):
+            nonlocal shutdown_attempts
+            shutdown_attempts += 1
+            if shutdown_attempts == 1:
+                raise shutdown_error
+            if shutdown_attempts == 2:
+                assert captured[0].runtime.is_cancelled()
+                raise KeyboardInterrupt("second shutdown interrupt")
+            return super().shutdown(*args, **kwargs)
+
+    submit = runner.submit_with_current_context
+
+    def observe_submit(executor, function, stage_name, node, *args):
+        future = submit(executor, function, stage_name, node, *args)
+        if stage_fails and node.name == "waiter":
+            result = future.result
+
+            def observe_drain(*args, **kwargs):
+                draining.set()
+                return result(*args, **kwargs)
+
+            future.result = observe_drain
+        return future
+
+    def waiter(invocation):
+        captured.append(invocation.context)
+        started.set()
+        if stage_fails:
+            assert release.wait(5)
+        return NodeResult({"value": "drained"})
+
+    def interrupt(_invocation):
+        assert started.wait(5)
+        if stage_fails:
+            raise initial
+        return NodeResult({"value": "done"})
+
+    registrations = tuple(
+        NodeRegistration(
+            name, "initialize", EmptyNodeConfiguration, {}, {"value": str}, execute
+        )
+        for name, execute in (("waiter", waiter), ("interrupt", interrupt))
+    )
+    stage = StageConfiguration.model_validate(
+        {"nodes": {"waiter": {}, "interrupt": {}}}
+    )
+    context = _node_context()
+    context = replace(
+        context, runtime=replace(context.runtime, max_workers=2, jobs=node_jobs)
+    )
+    monkeypatch.setattr(runner, "ThreadPoolExecutor", InterruptedExecutor)
+    monkeypatch.setattr(runner, "submit_with_current_context", observe_submit)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        execution = caller.submit(
+            run_stage, "initialize", _compile(registrations, stage), context, {}
+        )
+        try:
+            if stage_fails:
+                assert draining.wait(2), "Owned cleanup skipped its active handler"
+                assert not execution.done()
+        finally:
+            release.set()
+        with pytest.raises(KeyboardInterrupt) as raised:
+            execution.result(timeout=5)
+    assert raised.value is (initial if stage_fails else shutdown_error)
+    assert shutdown_attempts == 3
+    assert captured[0].runtime.is_cancelled()
+    assert not any(
+        thread.is_alive() for pool in owned_executors for thread in pool._threads
+    )

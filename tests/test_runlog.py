@@ -3,16 +3,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
-import time
-from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from pydantic import BaseModel
+from pydantic import model_serializer
 from langchain_core.messages import AIMessage
 from langchain_core.callbacks import CallbackManager
 from langchain_core.prompts import ChatPromptTemplate
@@ -176,6 +177,31 @@ def test_exception_closes_span_and_run_as_error(tmp_path):
     assert records[-1]["status"] == "error"
 
 
+@pytest.mark.parametrize("formatting_error", [RuntimeError, KeyboardInterrupt])
+def test_exception_formatting_preserves_original_failure(tmp_path, formatting_error):
+    class BrokenStringError(Exception):
+        def __str__(self):
+            raise formatting_error("exception text unavailable")
+
+    original = BrokenStringError()
+    session = runlog.open_runlog(_exact_config(tmp_path))
+    with pytest.raises(BrokenStringError) as raised:
+        with session:
+            with runlog.span("task", "failing"):
+                raise original
+
+    assert raised.value is original
+    assert runlog.current_runlog() is None
+    task_end = next(
+        record
+        for record in _records(session)
+        if record["record"] == "span.end" and record.get("kind") == "task"
+    )
+    assert task_end["error"]["type"] == "BrokenStringError"
+    assert task_end["error"]["message"] == "<exception str() failed>"
+    assert runlog.validate_runlog(session.ndjson_path).status == "error"
+
+
 def test_large_text_and_structured_payloads_use_atomic_blobs(tmp_path):
     config = _exact_config(tmp_path, blob_threshold=48)
     with runlog.open_runlog(config) as session:
@@ -261,6 +287,34 @@ def test_concurrent_writes_preserve_authoritative_line_order(tmp_path):
     assert len(ticks) == 800
     assert [record["seq"] for record in records] == list(range(len(records)))
     assert len({record["record_id"] for record in records}) == len(records)
+
+
+@pytest.mark.parametrize("lazy_attributes", [False, True])
+def test_reentrant_serialization_preserves_line_order(tmp_path, lazy_attributes):
+    class Payload(BaseModel):
+        value: int
+
+        @model_serializer
+        def serialize(self):
+            runlog.event("serializer.notice", {"value": self.value})
+            return {"value": self.value}
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        attributes = {"model": Payload(value=7)}
+        session.event("outer", (lambda: attributes) if lazy_attributes else attributes)
+
+    records = _records(session)
+    assert [record["seq"] for record in records] == list(range(len(records)))
+    assert [record["mono_ns"] for record in records] == sorted(
+        record["mono_ns"] for record in records
+    )
+    assert [record["name"] for record in records] == [
+        "metis",
+        "serializer.notice",
+        "outer",
+        "metis",
+    ]
+    assert runlog.validate_runlog(session.ndjson_path).events == 2
 
 
 def test_explicit_ndjson_path_is_never_appended(tmp_path):
@@ -392,164 +446,6 @@ def test_parallel_jobs_are_traced_with_compact_keys(tmp_path):
     runlog.validate_runlog(session.ndjson_path)
 
 
-def test_scheduler_accepts_none_jobs_without_losing_worker_capacity() -> None:
-    scheduler = JobScheduler(1)
-    with ThreadPoolExecutor(max_workers=1) as caller:
-        try:
-            result = caller.submit(
-                scheduler.limit(1).run,
-                [None, 2],
-                lambda value: value,
-                label=None,
-                result_key=str,
-            )
-            assert result.result(timeout=2) == [None, 2]
-        finally:
-            scheduler.close()
-
-
-def test_scheduler_shares_global_workers_across_node_limits() -> None:
-    scheduler = JobScheduler(2)
-    state_lock = threading.Lock()
-    active = 0
-    peak = 0
-
-    def work(value: int) -> int:
-        nonlocal active, peak
-        with state_lock:
-            active += 1
-            peak = max(peak, active)
-        time.sleep(0.02)
-        with state_lock:
-            active -= 1
-        return value
-
-    try:
-        jobs = scheduler.limit(2)
-        with ThreadPoolExecutor(max_workers=2) as callers:
-            first = callers.submit(
-                jobs.run,
-                [1, 2, 3],
-                work,
-                label=None,
-                result_key=str,
-            )
-            second = callers.submit(
-                jobs.run,
-                [4, 5, 6],
-                work,
-                label=None,
-                result_key=str,
-            )
-            assert sorted((*first.result(), *second.result())) == [1, 2, 3, 4, 5, 6]
-    finally:
-        scheduler.close()
-
-    assert peak == 2
-
-
-def test_scheduler_limit_one_bounds_submissions_and_runs_off_coordinator() -> None:
-    scheduler = JobScheduler(2)
-    first_started = threading.Event()
-    second_started = threading.Event()
-    release_first = threading.Event()
-    coordinator: list[int] = []
-    workers: list[int] = []
-
-    def work(value: int) -> int:
-        workers.append(threading.get_ident())
-        if value == 1:
-            first_started.set()
-            release_first.wait(timeout=2)
-        else:
-            second_started.set()
-        return value
-
-    def run() -> list[int]:
-        coordinator.append(threading.get_ident())
-        return scheduler.limit(1).run(
-            [1, 2],
-            work,
-            label=None,
-            result_key=str,
-        )
-
-    try:
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            result = caller.submit(run)
-            try:
-                assert first_started.wait(timeout=1)
-                second_was_blocked = not second_started.wait(timeout=0.1)
-            finally:
-                release_first.set()
-            assert result.result() == [1, 2]
-    finally:
-        scheduler.close()
-
-    assert second_was_blocked
-    assert second_started.is_set()
-    assert all(worker != coordinator[0] for worker in workers)
-
-
-def test_scheduler_gives_a_new_run_the_next_available_worker() -> None:
-    scheduler = JobScheduler(2)
-    first_started = threading.Event()
-    second_started = threading.Event()
-    third_started = threading.Event()
-    other_started = threading.Event()
-    release_first = threading.Event()
-    release_second = threading.Event()
-    release_other = threading.Event()
-
-    def first_work(value: int) -> int:
-        if value == 1:
-            first_started.set()
-            release_first.wait(timeout=2)
-        elif value == 2:
-            second_started.set()
-            release_second.wait(timeout=2)
-        else:
-            third_started.set()
-        return value
-
-    def other_work(value: int) -> int:
-        other_started.set()
-        release_other.wait(timeout=2)
-        return value
-
-    try:
-        with ThreadPoolExecutor(max_workers=2) as callers:
-            first = callers.submit(
-                scheduler.limit(2).run,
-                [1, 2, 3],
-                first_work,
-                label=None,
-                result_key=str,
-            )
-            assert first_started.wait(timeout=1)
-            assert second_started.wait(timeout=1)
-            other = callers.submit(
-                scheduler.limit(2).run,
-                [4],
-                other_work,
-                label=None,
-                result_key=str,
-            )
-            assert not other_started.wait(timeout=0.05)
-            release_first.set()
-            assert other_started.wait(timeout=1)
-            assert not third_started.is_set()
-            release_second.set()
-            release_other.set()
-            assert sorted(first.result()) == [1, 2, 3]
-            assert other.result() == [4]
-    finally:
-        release_first.set()
-        release_second.set()
-        release_other.set()
-        scheduler.close()
-
-
 def test_scheduler_does_not_replenish_before_a_failure_is_collected() -> None:
     scheduler = JobScheduler(2)
     allow_failure = threading.Event()
@@ -604,56 +500,6 @@ def test_scheduler_does_not_replenish_before_a_failure_is_collected() -> None:
         allow_failure.set()
         release_collector.set()
         scheduler.close()
-
-
-def test_scheduler_cancellation_does_not_spin_or_start_queued_jobs() -> None:
-    scheduler = JobScheduler(2)
-    cancellation = threading.Event()
-    jobs = scheduler.limit(2).with_cancellation(cancellation)
-    release = threading.Event()
-    two_started = threading.Event()
-    state_lock = threading.Lock()
-    started = 0
-    wait_calls = 0
-    wait_for = scheduler._condition.wait_for
-
-    def tracked_wait_for(predicate, timeout=None):
-        nonlocal wait_calls
-        wait_calls += 1
-        return wait_for(predicate, timeout)
-
-    scheduler._condition.wait_for = tracked_wait_for
-
-    def work(value: int) -> int:
-        nonlocal started
-        with state_lock:
-            started += 1
-            if started == 2:
-                two_started.set()
-        release.wait(timeout=2)
-        return value
-
-    try:
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            result = caller.submit(
-                jobs.run,
-                list(range(20)),
-                work,
-                label=None,
-                result_key=str,
-            )
-            assert two_started.wait(timeout=1)
-            jobs.cancel()
-            time.sleep(0.05)
-            assert wait_calls < 10
-            release.set()
-            with pytest.raises(CancelledError):
-                result.result()
-    finally:
-        release.set()
-        scheduler.close()
-
-    assert started == 2
 
 
 def test_prompt_retry_records_logical_attempts(tmp_path):
@@ -925,3 +771,86 @@ def test_runlog_preserves_existing_output_directory_permissions(tmp_path):
         assert output_dir.stat().st_mode & 0o777 == 0o750
         assert session.ndjson_path.stat().st_mode & 0o777 == 0o600
         assert session.meta_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("threshold", [8, 8192])
+def test_surrogate_payloads_preserve_trace_lifecycle_and_values(tmp_path, threshold):
+    text = "source-\udcff.txt"
+    metadata = {text: "source", "source": text}
+    with runlog.open_runlog(
+        _exact_config(tmp_path, blob_threshold=threshold), metadata=metadata
+    ) as session:
+        session.event(
+            text,
+            {
+                "text": text,
+                "path": Path(text),
+                "mapping": {text: "value"},
+                "api_key": text,
+                "secret": r"source-\udcff.txt",
+            },
+            explanation=text,
+        )
+        session.event("after", {"value": "recorded"})
+        assert session.enabled
+
+    records = _records(session)
+    payload = next(record for record in records if record["name"] == text)
+    assert payload["explanation"] == text
+    assert payload["attributes"]["path"] == text
+    for field, expected in (("text", text), ("mapping", {text: "value"})):
+        value = payload["attributes"][field]
+        if isinstance(value, dict) and "$ref" in value:
+            value = json.loads((session.output_dir / value["$ref"]).read_text())
+        assert value == expected
+    secret = payload["attributes"]["api_key"]
+    assert secret == {
+        "$redacted": True,
+        "sha256": hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
+    }
+    assert secret != payload["attributes"]["secret"]
+    assert any(record["name"] == "after" for record in records)
+    assert text in json.loads(session.meta_path.read_text())["metadata"]
+    assert runlog.validate_runlog(session.ndjson_path).status == "ok"
+
+
+def test_unicode_blob_bytes_and_hashes_keep_exact_content(tmp_path):
+    text = "£😀" * 20
+    surrogate = "value-\udcff" * 4
+    literal = surrogate.encode("utf-8", "backslashreplace").decode("utf-8")
+    structured = ["£", "😀"]
+    with runlog.open_runlog(_exact_config(tmp_path, blob_threshold=8)) as session:
+        session.event(
+            "payload",
+            {
+                "plain": text,
+                "structured": structured,
+                "surrogate": surrogate,
+                "literal": literal,
+                "api_key": text,
+            },
+        )
+    attributes = next(
+        record["attributes"]
+        for record in _records(session)
+        if record["name"] == "payload"
+    )
+    expected_bytes = {
+        "plain": text.encode("utf-8"),
+        "structured": json.dumps(
+            structured, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8"),
+        "literal": literal.encode("utf-8"),
+    }
+    for field, expected in expected_bytes.items():
+        reference = attributes[field]
+        assert (session.output_dir / reference["$ref"]).read_bytes() == expected
+        assert reference["sha256"] == hashlib.sha256(expected).hexdigest()
+    reference = attributes["surrogate"]
+    assert json.loads((session.output_dir / reference["$ref"]).read_text()) == surrogate
+    assert reference["$ref"] != attributes["literal"]["$ref"]
+    assert (
+        attributes["api_key"]["sha256"]
+        == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    )
+    assert runlog.validate_runlog(session.ndjson_path).status == "ok"

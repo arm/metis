@@ -7,9 +7,8 @@ from unittest.mock import Mock
 import pytest
 
 
-@pytest.mark.postgres
 def test_pg_vectorstore_mocked_init(monkeypatch):
-    from metis.vector_store import pgvector_store
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
 
     code_store = Mock()
@@ -40,9 +39,8 @@ def test_pg_vectorstore_mocked_init(monkeypatch):
     assert from_params.call_args_list[1].kwargs["use_halfvec"] is False
 
 
-@pytest.mark.postgres
 def test_pg_vectorstore_passes_halfvec_and_rewrites_hnsw_dist_method(monkeypatch):
-    from metis.vector_store import pgvector_store
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
 
     from_params = Mock(side_effect=[Mock(), Mock()])
@@ -76,9 +74,8 @@ def test_pg_vectorstore_passes_halfvec_and_rewrites_hnsw_dist_method(monkeypatch
         assert call.kwargs["hnsw_kwargs"]["hnsw_dist_method"] == "halfvec_cosine_ops"
 
 
-@pytest.mark.postgres
 def test_pg_vectorstore_preserves_none_hnsw_kwargs(monkeypatch):
-    from metis.vector_store import pgvector_store
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
 
     from_params = Mock(side_effect=[Mock(), Mock()])
@@ -105,7 +102,6 @@ def test_pg_vectorstore_preserves_none_hnsw_kwargs(monkeypatch):
     assert from_params.call_args_list[1].kwargs["hnsw_kwargs"] is None
 
 
-@pytest.mark.postgres
 def test_build_pg_backend_passes_halfvec_runtime_flag(monkeypatch):
     from metis.cli import utils
 
@@ -116,7 +112,9 @@ def test_build_pg_backend_passes_halfvec_runtime_flag(monkeypatch):
             constructed.update(kwargs)
 
     monkeypatch.setattr(utils, "PG_SUPPORTED", True)
-    monkeypatch.setattr(utils, "PGVectorStoreImpl", FakePGVectorStoreImpl)
+    monkeypatch.setattr(
+        utils, "PGVectorStoreImpl", FakePGVectorStoreImpl, raising=False
+    )
 
     backend = utils.build_pg_backend(
         SimpleNamespace(project_schema="test_schema"),

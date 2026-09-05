@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from metis.sarif.triage import apply_triage_result
 from metis.sarif.triage import load_sarif_file
@@ -116,6 +117,10 @@ class ExternalStageService:
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
         codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
         output_sarif = resolved_run_dir / "analysis.sarif"
+        if output_sarif.exists():
+            raise FileExistsError(
+                f"External stage output already exists: {output_sarif}"
+            )
         request_path = resolved_run_dir / "analysis-request.json"
         request = AnalysisRequestModel(
             run_id=resolved_run_dir.name,
@@ -125,7 +130,7 @@ class ExternalStageService:
             prompt=prompt,
             output_sarif=str(output_sarif),
         )
-        _write_json(request_path, request.model_dump(mode="json"))
+        _write_json(request_path, request.model_dump(mode="json"), exclusive=True)
         bindings = {
             "codebase_path": codebase,
             "request_path": request_path,
@@ -165,6 +170,9 @@ class ExternalStageService:
         validate_metis_sarif(load_sarif_file(input_sarif_path))
         output_decision = resolved_run_dir / "validation-decision.json"
         validated_sarif = resolved_run_dir / "validated.sarif"
+        for output in (output_decision, validated_sarif):
+            if output.exists():
+                raise FileExistsError(f"External stage output already exists: {output}")
         request_path = resolved_run_dir / "validation-request.json"
         request = ValidationRequestModel(
             run_id=resolved_run_dir.name,
@@ -173,7 +181,7 @@ class ExternalStageService:
             commit=None,
             output_decision=str(output_decision),
         )
-        _write_json(request_path, request.model_dump(mode="json"))
+        _write_json(request_path, request.model_dump(mode="json"), exclusive=True)
         bindings = {
             "codebase_path": codebase,
             "input_sarif": input_sarif_path,
@@ -356,12 +364,16 @@ def _resolve_run_dir(run_dir: str | Path | None) -> Path:
     if run_dir is not None:
         return Path(run_dir).resolve()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return (Path.cwd() / "results" / "external_stages" / stamp).resolve()
+    return (
+        Path.cwd() / "results" / "external_stages" / f"{stamp}_{uuid4().hex}"
+    ).resolve()
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(
+    path: Path, payload: dict[str, Any], *, exclusive: bool = False
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    with path.open("x" if exclusive else "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 

@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
+from copy import deepcopy
 from types import MappingProxyType
-from types import UnionType
 from typing import Any
-from typing import Union
+from typing import Literal
+from typing import NewType
+from typing import Tuple
 from typing import get_args
 from typing import get_origin
 
@@ -19,6 +22,9 @@ from .contracts import CapabilityRequirement
 from .contracts import NodeRegistration
 from .contracts import StageName
 from .contracts import annotation_allows_none
+from .contracts import annotation_adapter
+from .contracts import annotation_members
+from .contracts import collection_item_annotation
 from .graph import ConfiguredNode
 from .graph import InputBinding
 from .graph import StageConfiguration
@@ -31,6 +37,7 @@ class _PlannedNode:
     definition: ConfiguredNode
     registration: NodeRegistration
     configuration: BaseModel
+    configuration_values: Mapping[str, object]
     input_bindings: Mapping[str, InputBinding]
     dependencies: frozenset[str]
     required_dependencies: frozenset[str]
@@ -52,6 +59,14 @@ def compile_stage(
     initial_inputs: Mapping[str, Any],
     capabilities: Mapping[str, object] | None = None,
 ) -> StagePlan:
+    for input_name, annotation in initial_inputs.items():
+        try:
+            annotation_adapter(annotation)
+        except Exception as exc:
+            raise TypeError(
+                f"Execution stage {stage_name!r} input {input_name!r} has an "
+                f"unsupported annotation: {annotation!r}"
+            ) from exc
     available_capabilities = capabilities or MappingProxyType({})
     unknown_configuration = set(configuration) - set(stage.nodes)
     if unknown_configuration:
@@ -91,8 +106,9 @@ def compile_stage(
                 f"Execution node {stage_name}.{name} requested unavailable "
                 f"capabilities: {names}"
             )
+        configuration_values = deepcopy(dict(configuration.get(name, {})))
         node_configuration = registration.configuration.model_validate(
-            configuration.get(name, {})
+            deepcopy(configuration_values)
         )
         unknown_inputs = set(definition.inputs) - set(registration.inputs)
         if unknown_inputs:
@@ -111,7 +127,10 @@ def compile_stage(
             input_name
             for input_name, annotation in registration.inputs.items()
             if input_name not in input_bindings
-            and input_name not in initial_inputs
+            and (
+                input_name not in initial_inputs
+                or initial_inputs[input_name] is type(None)
+            )
             and not annotation_allows_none(annotation)
         }
         if missing_inputs:
@@ -133,6 +152,14 @@ def compile_stage(
         required_dependencies = set(definition.depends_on)
         for input_name, binding in input_bindings.items():
             collection = isinstance(binding, tuple)
+            if (
+                collection
+                and collection_item_annotation(registration.inputs[input_name]) is None
+            ):
+                raise ValueError(
+                    f"Execution node {stage_name}.{name} input {input_name!r} "
+                    "does not accept multiple sources"
+                )
             for source in _sources(binding):
                 if source.startswith("$inputs."):
                     stage_input = source.removeprefix("$inputs.")
@@ -152,8 +179,9 @@ def compile_stage(
                     continue
                 producer_name, _, _output_name = source.partition(".")
                 dependencies.add(producer_name)
-                if not collection and not annotation_allows_none(
-                    registration.inputs[input_name]
+                if input_name in registration.required_when_bound or (
+                    not collection
+                    and not annotation_allows_none(registration.inputs[input_name])
                 ):
                     required_dependencies.add(producer_name)
         planned[name] = _PlannedNode(
@@ -161,6 +189,7 @@ def compile_stage(
             definition,
             registration,
             node_configuration,
+            MappingProxyType(configuration_values),
             MappingProxyType(input_bindings),
             frozenset(dependencies),
             frozenset(required_dependencies),
@@ -184,13 +213,14 @@ def compile_stage(
             for source in _sources(binding):
                 if source.startswith("$inputs."):
                     continue
-                _validate_reference(
+                _validate_input_annotation(
                     stage_name,
                     name,
                     input_name,
-                    source,
-                    registrations,
+                    _reference_annotation(stage_name, source, registrations),
+                    registrations[name].inputs[input_name],
                     collection=isinstance(binding, tuple),
+                    source_name=source,
                 )
     output_bindings = (
         dict(stage.outputs)
@@ -236,8 +266,9 @@ def _infer_input_bindings(
     for input_name, annotation in registration.inputs.items():
         if input_name in bindings or input_name in initial_inputs:
             continue
-        collection = get_origin(annotation) is tuple
-        target = get_args(annotation)[0] if collection else annotation
+        item = collection_item_annotation(annotation)
+        collection = item is not None
+        target = item if collection else annotation
         compatible = tuple(
             f"{producer_name}.{output_name}"
             for producer_name, producer in registrations.items()
@@ -256,31 +287,6 @@ def _infer_input_bindings(
                 f"matches multiple outputs: {sources}"
             )
     return bindings
-
-
-def _validate_reference(
-    stage_name: StageName,
-    node_name: str,
-    input_name: str,
-    source: str,
-    registrations: Mapping[str, NodeRegistration],
-    *,
-    collection: bool = False,
-) -> None:
-    source_annotation = _reference_annotation(stage_name, source, registrations)
-    target = registrations[node_name].inputs[input_name]
-    if collection:
-        if get_origin(target) is not tuple:
-            raise ValueError(
-                f"Execution node {stage_name}.{node_name} input {input_name!r} "
-                "does not accept multiple sources"
-            )
-        target = get_args(target)[0]
-    if not _annotations_compatible(source_annotation, target):
-        raise ValueError(
-            f"Execution node {stage_name}.{node_name} input {input_name!r} is not "
-            f"compatible with {source!r}"
-        )
 
 
 def _reference_annotation(
@@ -317,18 +323,24 @@ def _validate_input_annotation(
     target: Any,
     *,
     collection: bool = False,
+    source_name: str | None = None,
 ) -> None:
     if collection:
-        if get_origin(target) is not tuple:
+        item = collection_item_annotation(target)
+        if item is None:
             raise ValueError(
                 f"Execution node {stage_name}.{node_name} input {input_name!r} "
                 "does not accept multiple sources"
             )
-        target = get_args(target)[0]
+        target = item
     if not _annotations_compatible(source, target):
-        raise ValueError(
-            f"Execution node {stage_name}.{node_name} input {input_name!r} "
+        reason = (
             "is incompatible with the stage input"
+            if source_name is None
+            else f"is not compatible with {source_name!r}"
+        )
+        raise ValueError(
+            f"Execution node {stage_name}.{node_name} input {input_name!r} {reason}"
         )
 
 
@@ -336,47 +348,101 @@ def _sources(binding: str | tuple[str, ...]) -> tuple[str, ...]:
     return binding if isinstance(binding, tuple) else (binding,)
 
 
-def _annotations_compatible(source: Any, target: Any) -> bool:
-    if target is Any:
+def _annotations_compatible(
+    source: Any,
+    target: Any,
+    _active_pairs: tuple[tuple[Any, Any], ...] = (),
+) -> bool:
+    pair = (source, target)
+    if pair in _active_pairs:
+        # Close this recursive branch; its other members still need checking.
         return True
-    if source is Any:
-        return False
-    source_members = (
-        get_args(source) if get_origin(source) in {Union, UnionType} else (source,)
-    )
-    target_members = (
-        get_args(target) if get_origin(target) in {Union, UnionType} else (target,)
-    )
-    return all(
-        any(_member_compatible(s, t) for t in target_members) for s in source_members
-    )
+    active_pairs = (*_active_pairs, pair)
+    source_members = annotation_members(source)
+    target_members = annotation_members(target)
+    for member in source_members:
+        if get_origin(member) is Literal:
+            for value in get_args(member):
+                if not any(
+                    any(
+                        type(value) is type(candidate) and value == candidate
+                        for candidate in get_args(target)
+                    )
+                    if get_origin(target) is Literal
+                    else _member_compatible(type(value), target, active_pairs)
+                    for target in target_members
+                ):
+                    return False
+        elif not any(
+            _member_compatible(member, target, active_pairs)
+            for target in target_members
+        ):
+            return False
+    return True
 
 
-def _member_compatible(source: Any, target: Any) -> bool:
+def _member_compatible(
+    source: Any, target: Any, active_pairs: tuple[tuple[Any, Any], ...]
+) -> bool:
+    source = tuple if source is Tuple else tuple[()] if source == Tuple[()] else source
+    target = tuple if target is Tuple else tuple[()] if target == Tuple[()] else target
     if source == target or target is Any:
         return True
+    if isinstance(source, NewType):
+        return _annotations_compatible(source.__supertype__, target, active_pairs)
     if source is Any:
         return False
     source_origin = get_origin(source)
     target_origin = get_origin(target)
-    if source_origin is None and target_origin is None:
-        return (
-            isinstance(source, type)
-            and isinstance(target, type)
-            and issubclass(source, target)
-        )
-    if target_origin is None:
-        return (
-            isinstance(target, type)
-            and isinstance(source_origin, type)
-            and (issubclass(source_origin, target))
-        )
-    if source_origin is not target_origin:
-        return False
     source_args = get_args(source)
     target_args = get_args(target)
+    if target_origin is Literal:
+        return source is type(None) and None in target_args
+    if source is bool and target in (int, float):
+        return False
+    source_type = source_origin or source
+    target_type = target_origin or target
+    if not isinstance(source_type, type) or not isinstance(target_type, type):
+        return False
+    try:
+        if not issubclass(source_type, target_type):
+            return False
+    except TypeError:
+        return False
+    if target == tuple[()]:
+        return source == tuple[()]
+    if target_origin is None or not target_args:
+        return True
+    if source_origin is None:
+        return False
+    if source_origin is tuple and target_origin is Sequence:
+        values = (
+            source_args[:1]
+            if len(source_args) == 2 and source_args[1] is Ellipsis
+            else source_args
+        )
+        return (
+            bool(source_args)
+            and all(
+                _annotations_compatible(item, target_args[0], active_pairs)
+                for item in values
+            )
+            or source == tuple[()]
+        )
+    if source_origin is tuple and target_origin is tuple:
+        source_collection = len(source_args) == 2 and source_args[1] is Ellipsis
+        target_collection = len(target_args) == 2 and target_args[1] is Ellipsis
+        if target_collection:
+            values = source_args[:1] if source_collection else source_args
+            return all(
+                _annotations_compatible(item, target_args[0], active_pairs)
+                for item in values
+            )
+        if source_collection:
+            return False
     if len(source_args) != len(target_args):
         return False
-    if source_origin is not tuple:
-        return source_args == target_args
-    return all(_annotations_compatible(s, t) for s, t in zip(source_args, target_args))
+    return all(
+        _annotations_compatible(s, t, active_pairs)
+        for s, t in zip(source_args, target_args)
+    )

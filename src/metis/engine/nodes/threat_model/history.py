@@ -21,7 +21,10 @@ from metis.utils import parse_json_output
 from metis.utils import split_snippet
 
 logger = logging.getLogger("metis")
-_PROMPTS = get_engine_prompts("threat_context")
+_PROMPTS = get_engine_prompts(
+    "threat_context",
+    required=("history_distillation_system", "history_distillation_user"),
+)
 
 
 class _HistoryLessonModel(BaseModel):

@@ -11,7 +11,10 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 import sys
+from tempfile import NamedTemporaryFile
+from unicodedata import normalize
 from importlib.resources import files
+from uuid import uuid4
 
 from rich.console import Console
 from rich.errors import MarkupError
@@ -55,30 +58,34 @@ except ImportError:
     PG_SUPPORTED = False
 
 
+def print_execution_diagnostic(diagnostic, quiet):
+    color = "yellow" if diagnostic.severity == "warning" else "red"
+    print_console(f"[{color}]{escape(diagnostic.message)}[/{color}]", quiet)
+
+
 def configure_logger(logger, args):
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    default_level = logging.ERROR
     requested_level = getattr(args, "log_level", None)
-    if isinstance(requested_level, str):
-        level = logging._nameToLevel.get(requested_level.upper(), default_level)
-    else:
-        level = default_level
-
+    level = (
+        requested_level.upper() if isinstance(requested_level, str) else logging.ERROR
+    )
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
+    level = console_handler.level
+    handlers = [console_handler]
     if getattr(args, "log_file", None):
         file_handler = logging.FileHandler(args.log_file)
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        handlers.append(file_handler)
 
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+    for handler in handlers:
+        logger.addHandler(handler)
     logger.setLevel(level)
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -305,6 +312,24 @@ def output_format(output_file: str | Path) -> str:
     return suffix.removeprefix(".") if suffix in {".html", ".csv", ".sarif"} else "json"
 
 
+def output_path_identity(output_file: str | Path) -> Path:
+    """Compare destinations using their filesystem's case and Unicode rules."""
+    path = Path(output_file).resolve()
+    parent = path.parent
+    while not parent.exists():
+        parent = parent.parent
+    # Volumes on the same host can have different case rules. Probe the actual
+    # destination volume; the temporary file is removed before publication.
+    with NamedTemporaryFile(prefix=".metis-é-", dir=parent) as probe:
+        probe_path = Path(probe.name)
+        case_insensitive = probe_path.with_name(probe_path.name.swapcase()).exists()
+        normalizes_unicode = probe_path.with_name(
+            normalize("NFD", probe_path.name)
+        ).exists()
+    identity = str(path).casefold() if case_insensitive else str(path)
+    return Path(normalize("NFC", identity) if normalizes_unicode else identity)
+
+
 def output_files_for_formats(
     output_files: list[str] | None,
     formats: tuple[str, ...],
@@ -316,16 +341,16 @@ def output_files_for_formats(
     configured = tuple(dict.fromkeys(formats))
     provided = list(output_files or ())
     if provided:
-        base = Path(provided[0]).with_suffix("")
+        base = Path(provided[0])
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = Path("results") / f"{command}_{timestamp}"
+        base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
 
     selected = [] if generated_output else provided
-    selected_paths = {Path(path).resolve() for path in selected}
+    selected_paths = {output_path_identity(path) for path in selected}
     if len(selected_paths) != len(selected):
         raise ValueError("Output paths must be unique")
-    reserved = {path.resolve() for path in reserved_paths or set()}
+    reserved = {output_path_identity(path) for path in reserved_paths or set()}
     if selected_paths & reserved:
         raise ValueError("Output paths for graph stages must be distinct")
     for path in selected:
@@ -339,15 +364,17 @@ def output_files_for_formats(
         if format_name in selected_formats:
             continue
         candidate = base.with_suffix(f".{format_name}")
-        if candidate.resolve() in reserved:
+        identity = output_path_identity(candidate)
+        if identity in reserved:
             if fallback_base is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fallback_base = Path("results") / f"{command}_{timestamp}"
+                fallback_base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
             candidate = fallback_base.with_suffix(f".{format_name}")
-        if candidate.resolve() in reserved or candidate.resolve() in selected_paths:
+            identity = output_path_identity(candidate)
+        if identity in reserved or identity in selected_paths:
             raise ValueError("Output paths for graph stages must be distinct")
         selected.append(str(candidate))
-        selected_paths.add(candidate.resolve())
+        selected_paths.add(identity)
     return selected
 
 
@@ -387,52 +414,34 @@ def save_output(
     )
     sarif_payload_local = sarif_payload
 
-    def _write_payload(path: Path, payload: object, label: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(path, payload, indent=4)
-        _record_output_artifact(path, output_format(path))
-        print_console(
-            f"[blue]{label} saved to {escape(str(path))}[/blue]",
-            quiet,
-        )
-
     for file_entry in files:
         output_path = Path(file_entry)
-        suffix = output_path.suffix.lower()
+        format_name = output_format(output_path)
 
-        if suffix == ".html":
-            html_path = export_html(
+        if format_name == "html":
+            report_path = export_html(
                 json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
             )
-            print_console(
-                f"[blue]HTML report saved to {escape(str(html_path))}[/blue]",
-                quiet,
-            )
-            _record_output_artifact(html_path, "html")
-            continue
-
-        if suffix == ".sarif":
-            sarif_path, sarif_payload_local = export_sarif(
+        elif format_name == "sarif":
+            report_path, sarif_payload_local = export_sarif(
                 data, output_path, sarif_payload_local
             )
+        elif format_name == "csv":
+            report_path = export_csv(json_payload, output_path)
+        else:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(output_path, json_payload, indent=4)
+            _record_output_artifact(output_path, format_name)
             print_console(
-                f"[blue]SARIF report saved to {escape(str(sarif_path))}[/blue]",
-                quiet,
+                f"[blue]Results saved to {escape(str(output_path))}[/blue]", quiet
             )
-            _record_output_artifact(sarif_path, "sarif")
             continue
 
-        if suffix == ".csv":
-            csv_path = export_csv(json_payload, output_path)
-            print_console(
-                f"[blue]CSV report saved to {escape(str(csv_path))}[/blue]",
-                quiet,
-            )
-            _record_output_artifact(csv_path, "csv")
-            continue
-
-        # default to JSON
-        _write_payload(output_path, json_payload, "Results")
+        print_console(
+            f"[blue]{format_name.upper()} report saved to {escape(str(report_path))}[/blue]",
+            quiet,
+        )
+        _record_output_artifact(report_path, format_name)
 
 
 def check_file_exists(file_path, quiet=False):

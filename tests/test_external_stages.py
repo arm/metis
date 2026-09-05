@@ -200,3 +200,88 @@ elif mode == "validation":
 else:
     raise SystemExit(f"unknown mode: {mode}")
 """
+
+
+@pytest.mark.parametrize("command", [[], [""], ["   "]])
+def test_external_command_rejects_missing_executable(command):
+    with pytest.raises(ValidationError):
+        ExternalStageCommandModel(command=command)
+
+
+@pytest.mark.parametrize("argument", ["", "  payload  "])
+def test_external_command_preserves_literal_arguments(argument):
+    stage = ExternalStageCommandModel(
+        command=[sys.executable, "-c", "import sys; print(repr(sys.argv[1]))", argument]
+    )
+    result = ExternalStageRunner().run_sync(stage, bindings={})
+    assert result.stdout.strip() == repr(argument)
+
+
+@pytest.mark.parametrize("stage", ["analysis", "validation"])
+@pytest.mark.parametrize("occupied", ["output", "request"])
+def test_external_stage_rejects_previous_artifacts_before_launch(
+    tmp_path, stage, occupied
+):
+    runner = Mock()
+    service = ExternalStageService(
+        codebase_path=str(tmp_path),
+        config={stage: {"inert": {"command": ["local-test", "{request_path}"]}}},
+        runner=runner,
+    )
+    directory = tmp_path / "run"
+    directory.mkdir()
+    output = "analysis.sarif" if stage == "analysis" else "validation-decision.json"
+    previous = directory / (output if occupied == "output" else f"{stage}-request.json")
+    previous.write_text("old artifact", encoding="utf-8")
+    input_path = tmp_path / "empty.sarif"
+    input_path.write_text(json.dumps({"version": "2.1.0", "runs": []}))
+    with pytest.raises(FileExistsError):
+        if stage == "analysis":
+            service.run_analysis(
+                "inert", prompt="echo local metadata", run_dir=directory
+            )
+        else:
+            service.run_validation("inert", input_sarif=input_path, run_dir=directory)
+    runner.run_sync.assert_not_called()
+    assert previous.read_text() == "old artifact"
+
+
+def test_concurrent_external_requests_cannot_share_artifacts(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from metis.engine.external_stages.runner import ExternalStageProcessResult
+
+    started, release = Event(), Event()
+    runner = Mock()
+
+    def run(stage, *, bindings):
+        started.set()
+        assert release.wait(5)
+        bindings["output_sarif"].write_text(
+            json.dumps({"version": "2.1.0", "runs": []})
+        )
+        return ExternalStageProcessResult(("inert",), 0, "", "")
+
+    runner.run_sync.side_effect = run
+    service = ExternalStageService(
+        codebase_path=str(tmp_path),
+        config={"analysis": {"inert": {"command": ["local-test", "{request_path}"]}}},
+        runner=runner,
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(
+            service.run_analysis,
+            "inert",
+            prompt="local metadata",
+            run_dir=tmp_path / "run",
+        )
+        try:
+            assert started.wait(5)
+            with pytest.raises(FileExistsError):
+                service.run_analysis(
+                    "inert", prompt="other metadata", run_dir=tmp_path / "run"
+                )
+        finally:
+            release.set()
+        assert first.result(timeout=5).output_sarif.is_file()
+    runner.run_sync.assert_called_once()

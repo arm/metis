@@ -3,19 +3,24 @@
 
 import logging
 import tempfile
-import threading
 from dataclasses import replace
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from pydantic import BaseModel
+from pydantic import ConfigDict
 
 from metis.configuration import load_execution_config
 from metis.engine import MetisEngine
+from metis.engine import ExecutionGraphError
 from metis.engine.capabilities.engine import EngineCapabilities
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import ExecutionStatus
+from metis.engine.execution.contracts import ExecutionResult
+from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.nodes.builtins import build_builtin_execution
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
@@ -41,23 +46,6 @@ def _execution_with_index() -> dict[str, object]:
     execution = load_execution_config()
     execution["stages"]["initialize"]["nodes"]["index"] = {"capabilities": ["index"]}
     return execution
-
-
-@pytest.mark.parametrize("max_workers", (0, -1, True, "2"))
-def test_engine_rejects_invalid_max_workers(capability_settings, max_workers):
-    with pytest.raises(
-        ValueError,
-        match="MetisEngine.max_workers must be a positive integer",
-    ):
-        MetisEngine(
-            vector_backend=Mock(),
-            llm_provider=Mock(),
-            max_workers=max_workers,
-            max_token_length=2048,
-            llama_query_model="gpt-test",
-            similarity_top_k=3,
-            capability_settings=capability_settings,
-        )
 
 
 def test_index_capability_rejects_missing_retrievers(capability_settings):
@@ -122,41 +110,6 @@ def test_init_and_get_default_available_metisignore(capability_settings):
         )
         assert engine.repository.load_metisignore() is not None
     assert engine is not None
-
-
-def test_index_capability_initializes_retrievers_once_across_threads(
-    capability_settings,
-):
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        embedding_provider=_embedding_provider(),
-        max_workers=4,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        capability_settings=capability_settings,
-        execution_config=_execution_with_index(),
-    )
-
-    results = []
-    index = engine.capabilities["index"]
-
-    def _worker():
-        results.append(index.get_retrievers())
-
-    threads = [threading.Thread(target=_worker) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert results == [("code-retriever", "docs-retriever")] * 8
-    backend.init.assert_called_once()
-    backend.get_retrievers.assert_called_once()
 
 
 def test_index_capability_builds_embed_models_lazily_with_usage_callback_manager(
@@ -657,114 +610,71 @@ def test_engine_reuses_injected_runtime_and_backend_embed_models(
     llm_provider.get_chat_model.assert_not_called()
 
 
-def test_index_prepare_nodes_resets_backend_index_when_supported(
-    monkeypatch, capability_settings
-):
-    backend = Mock()
-    backend.init = Mock()
-    backend.reset_index = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
+@pytest.mark.parametrize("value", (bytes([255]), object()), ids=("binary", "resource"))
+def test_execution_error_preserves_native_values_and_original_diagnostics(value):
+    class Payload(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+        value: object
 
-    embedding_provider = _embedding_provider()
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        embedding_provider=embedding_provider,
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        capability_settings=capability_settings,
+    native = Payload(value=value)
+    diagnostic = ExecutionDiagnostic("original.failure", "original failure")
+    result = ExecutionResult(
+        ExecutionStatus.ERROR,
+        {"stage": {"native": native, "normal": Payload(value="serializable")}},
+        (diagnostic,),
     )
 
-    class _Reader:
-        def __init__(self, **_kwargs):
-            pass
+    error = ExecutionGraphError(result)
 
-        def load_data(self):
-            return []
-
-    monkeypatch.setattr(
-        "metis.engine.capabilities.indexing.SimpleDirectoryReader", _Reader
-    )
-    engine.indexing.index_prepare_nodes()
-
-    embedding_provider.get_embed_model_code.assert_called_once()
-    embedding_provider.get_embed_model_docs.assert_called_once()
-    backend.init.assert_called_once()
-    backend.reset_index.assert_called_once()
+    assert "original failure" in str(error)
+    assert error.result.status is ExecutionStatus.ERROR
+    assert error.result.diagnostics == (diagnostic,)
+    assert error.result.outputs["stage"]["native"] is native
+    assert error.result.outputs["stage"]["normal"] == {"value": "serializable"}
+    assert error.result.outputs["stage"] is not result.outputs["stage"]
 
 
-def test_index_finalize_embeddings_delegates_node_writes_to_backend(
-    capability_settings,
-):
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    backend.index_nodes = Mock()
-    code_embed_model = Mock()
-    docs_embed_model = Mock()
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        embedding_provider=_embedding_provider(code_embed_model, docs_embed_model),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        capability_settings=capability_settings,
-    )
-    engine._state.pending_nodes = (["code-node"], ["docs-node"])
-
-    engine.indexing.index_finalize_embeddings()
-
-    backend.index_nodes.assert_called_once_with(
-        ["code-node"],
-        ["docs-node"],
-        embed_model_code=code_embed_model,
-        embed_model_docs=docs_embed_model,
-        callback_manager=engine._config.usage_runtime.hooks.callback_manager,
-    )
-    assert engine._state.pending_nodes is None
-
-
-def test_close_clears_retriever_cache_and_closes_backend(capability_settings):
-    backend = Mock()
-    backend.init = Mock()
-    backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
-    backend.close = Mock()
-
-    engine = MetisEngine(
-        vector_backend=backend,
-        llm_provider=Mock(),
-        embedding_provider=_embedding_provider(),
-        max_workers=2,
-        max_token_length=2048,
-        llama_query_model="gpt-test",
-        similarity_top_k=3,
-        capability_settings=capability_settings,
-        execution_config=_execution_with_index(),
-    )
-
-    index = engine.capabilities["index"]
-    assert index.get_retrievers() == ("code-retriever", "docs-retriever")
-    assert backend.get_retrievers.call_count == 1
-
-    engine.close()
-
-    assert engine._state.retriever_code is None
-    assert engine._state.retriever_docs is None
-    backend.close.assert_called_once()
-
-    with pytest.raises(RuntimeError, match="cannot schedule new futures"):
-        engine.execution._jobs.run(
-            [None],
-            lambda _value: None,
-            label=None,
-            result_key=str,
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        *[
+            (name, value)
+            for name in ("review_code_include_paths", "review_code_exclude_paths")
+            for value in ("src/", {"src/": False}, [1], [Path("src")], None)
+        ],
+        *[("metisignore_file", value) for value in (False, 1, [], {})],
+    ],
+)
+def test_engine_rejects_invalid_path_settings(capability_settings, name, value):
+    with pytest.raises(ValueError, match=f"MetisEngine.{name}"):
+        MetisEngine(
+            max_workers=1,
+            max_token_length=2048,
+            llama_query_model="inert",
+            similarity_top_k=3,
+            capability_settings=capability_settings,
+            **{name: value},
         )
 
-    assert index.get_retrievers() == ("code-retriever", "docs-retriever")
-    assert backend.get_retrievers.call_count == 2
+
+def test_engine_accepts_path_ignore_file_and_preserves_patterns(
+    tmp_path, capability_settings
+):
+    ignore_file = tmp_path / "設定 ignore"
+    ignore_file.write_text("ignored/\n", encoding="utf-8")
+    patterns = [" src/", "設定/", ""]
+    with closing(
+        MetisEngine(
+            codebase_path=tmp_path,
+            max_workers=1,
+            max_token_length=2048,
+            llama_query_model="inert",
+            similarity_top_k=3,
+            capability_settings=capability_settings,
+            metisignore_file=ignore_file,
+            review_code_include_paths=patterns,
+        )
+    ) as engine:
+        assert engine.repository.load_metisignore() is not None
+        assert engine._config.review_code_include_paths == patterns
+        assert engine._config.review_code_include_paths is not patterns

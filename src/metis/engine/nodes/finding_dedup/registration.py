@@ -25,7 +25,7 @@ from .core import DeduplicationDecision
 from .core import consolidate_result
 
 logger = logging.getLogger(__name__)
-SYSTEM_PROMPT = get_engine_prompts("finding_dedup")["system"]
+SYSTEM_PROMPT = get_engine_prompts("finding_dedup", required=("system",))["system"]
 USER_PROMPT = "Candidate findings JSON:\n{candidate_findings}"
 
 

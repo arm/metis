@@ -9,14 +9,17 @@ from pathlib import Path
 import shlex
 from typing import Any
 from typing import cast
+from uuid import uuid4
 
 from rich.markup import escape
 from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
+from yaml import YAMLError
 
 from metis.configuration import build_embedding_provider_config, load_runtime_config
 from metis.engine import MetisEngine
 from metis.engine.execution import ExecutionResult
+from metis.engine.execution import ExecutionStatus
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_chat_provider
@@ -41,12 +44,14 @@ from .utils import (
     build_qdrant_backend,
     build_standard_progress,
     print_console,
+    print_execution_diagnostic,
     print_usage_summary,
     print_final_usage_summary,
     check_dir_exists,
     save_output,
     output_format,
     output_files_for_formats,
+    output_path_identity,
     workflow_debug_context,
 )
 
@@ -54,14 +59,6 @@ logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
 EXIT_REQUESTED = object()
-
-
-def _print_graph_diagnostic(diagnostic, quiet):
-    color = "yellow" if diagnostic.severity == "warning" else "red"
-    print_console(
-        f"[{color}]{escape(diagnostic.message)}[/{color}]",
-        quiet,
-    )
 
 
 def _execute_graph_with_progress(
@@ -97,9 +94,35 @@ def _save_graph_outputs(
     triage_sarif = triage_result.get("sarif")
     review_formats = tuple(review.get("formats", ()))
     triage_formats = tuple(triage_result.get("formats", ()))
+    partial = result.status is ExecutionStatus.ERROR
+    if partial:
+        review_formats = tuple(
+            name
+            for name in review_formats
+            if (review_sarif is not None if name == "sarif" else findings is not None)
+        )
+        if triage_sarif is None:
+            triage_formats = ()
     review_filename = review.get("filename")
     triage_filename = triage_result.get("filename")
     explicit_output = bool(output_files) and not generated_output
+    if (
+        not explicit_output
+        and review_formats
+        and triage_formats
+        and review_filename is not None
+        and triage_filename is not None
+    ):
+        review_paths = {
+            output_path_identity(Path(review_filename).with_suffix(f".{fmt}"))
+            for fmt in review_formats
+        }
+        triage_paths = {
+            output_path_identity(Path(triage_filename).with_suffix(f".{fmt}"))
+            for fmt in triage_formats
+        }
+        if review_paths & triage_paths:
+            raise ValueError("Output paths for graph stages must be distinct")
     review_files: list[str] = []
     triage_files: list[str] = []
     explicit_files = (output_files or ()) if explicit_output else ()
@@ -112,9 +135,17 @@ def _save_graph_outputs(
         elif triage_sarif is not None:
             triage_formats = (*triage_formats, format_name)
             triage_files.append(path)
-        elif findings is not None:
+        elif (
+            review_sarif is not None if format_name == "sarif" else findings is not None
+        ):
             review_formats = (*review_formats, format_name)
             review_files.append(path)
+        elif partial:
+            print_console(
+                f"[yellow]No validated {format_name} output available for "
+                f"{escape(str(path))}.[/yellow]",
+                quiet,
+            )
         else:
             raise ValueError(f"Execution graph did not produce {format_name} output")
 
@@ -131,7 +162,9 @@ def _save_graph_outputs(
             reserved_paths={Path(path) for path in review_files},
         )
     if review_formats:
-        if findings is None or review_sarif is None:
+        if ("sarif" in review_formats and review_sarif is None) or (
+            any(name != "sarif" for name in review_formats) and findings is None
+        ):
             raise ValueError("Execution graph did not produce review results")
         review_files = output_files_for_formats(
             review_files
@@ -144,7 +177,7 @@ def _save_graph_outputs(
         )
         save_output(
             review_files,
-            findings,
+            findings if findings is not None else review_sarif,
             quiet,
             sarif_payload=review_sarif,
         )
@@ -164,8 +197,13 @@ def determine_output_file(cmd, args, cmd_args):
 
     while "--output-file" in cmd_args:
         idx = cmd_args.index("--output-file")
-        if idx + 1 < len(cmd_args):
-            overrides.append(cmd_args[idx + 1])
+        if (
+            idx + 1 >= len(cmd_args)
+            or not cmd_args[idx + 1]
+            or cmd_args[idx + 1] == "--output-file"
+        ):
+            raise ValueError("--output-file requires a filename")
+        overrides.append(cmd_args[idx + 1])
         del cmd_args[idx : idx + 2]
 
     if overrides:
@@ -183,9 +221,8 @@ def determine_output_file(cmd, args, cmd_args):
         args._metis_generated_output = False
         return
 
-    Path("results").mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.output_file = [f"results/{cmd}_{timestamp}.json"]
+    args.output_file = [f"results/{cmd}_{timestamp}_{uuid4().hex}.json"]
     args._metis_generated_output = True
 
 
@@ -216,7 +253,6 @@ def build_engine(args, runtime):
         raise RuntimeError("llm_provider configuration is required.")
     llm_provider_name = str(llm_provider_name)
     chat_provider_cls = get_chat_provider(llm_provider_name)
-    llm_provider = chat_provider_cls(cast(dict, runtime["llm_provider"]))
     engine_runtime.pop("llm_provider_name", None)
     engine_runtime.pop("llm_provider", None)
 
@@ -224,6 +260,7 @@ def build_engine(args, runtime):
     embedding_provider_config = build_embedding_provider_config(
         cast(dict | None, runtime.get("embedding_provider_raw_config"))
     )
+    llm_provider = chat_provider_cls(cast(dict, runtime["llm_provider"]))
     if embedding_provider_config is not None:
         embedding_provider_cls = get_embedding_provider(
             str(embedding_provider_config["name"])
@@ -274,11 +311,11 @@ def finalize_cli_session_and_close(engine, args, farewell):
     try:
         finalize_cli_session(engine, args)
     finally:
-        if farewell:
-            print_console(farewell, args.quiet)
         close_fn = getattr(engine, "close", None)
         if callable(close_fn):
             close_fn()
+        if farewell:
+            print_console(farewell, args.quiet)
 
 
 def execute_command(engine, cmd, cmd_args, args):
@@ -299,8 +336,6 @@ def _execute_command(engine, cmd, cmd_args, args):
         return
 
     spec = COMMANDS[cmd]
-    if cmd == "exit":
-        return EXIT_REQUESTED
     args = copy(args)
     runtime = CommandRuntime(command=cmd, command_args=list(cmd_args))
 
@@ -309,6 +344,8 @@ def _execute_command(engine, cmd, cmd_args, args):
 
     if not spec.validate(cmd, runtime.command_args, args):
         return
+    if cmd == "exit":
+        return EXIT_REQUESTED
 
     usage_command = None
     if spec.tracked:
@@ -355,10 +392,7 @@ def run_interactive_loop(engine, args, vector_backend):
                         "[red]Schema exists. Cannot re-index.[/red]", args.quiet
                     )
                     continue
-                if (
-                    cmd in {"ask", "review_code", "review_dir", "review_file"}
-                    and not vector_backend.check_project_schema_exists()
-                ):
+                if cmd == "ask" and not vector_backend.check_project_schema_exists():
                     print_console(
                         "[red]Schema missing. Did you forget to index?[/red]",
                         args.quiet,
@@ -400,7 +434,12 @@ def main():
         choices=["chroma", "postgres", "qdrant"],
     )
     parser.add_argument("--log-file", type=str)
-    parser.add_argument("--log-level", type=str, default="ERROR")
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=logging.getLevelNamesMapping(),
+        default="ERROR",
+    )
     parser.add_argument(
         "--log-workflow-debug",
         action="store_true",
@@ -457,7 +496,10 @@ def main():
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
-    graph_requested = not args.interactive
+    if args.tools is not None:
+        parser.error(
+            "--tools has been removed; configure execution nodes and capability grants in YAML"
+        )
     if args.output_files:
         if args.output_file:
             args.output_file.extend(args.output_files)
@@ -482,10 +524,17 @@ def main():
             ),
         )
         return
-    if not check_dir_exists(args.codebase_path):
-        raise SystemExit(1)
+    try:
+        if not check_dir_exists(args.codebase_path):
+            raise SystemExit(1)
+        configure_logger(logger, args)
+        _run_cli(args)
+    except (OSError, ValueError, YAMLError) as exc:
+        print_console(f"[bold red]Error:[/bold red] {escape(str(exc))}", args.quiet)
+        raise SystemExit(1) from None
 
-    configure_logger(logger, args)
+
+def _run_cli(args):
     with workflow_debug_context(args) as runlog_session:
         if runlog_session is not None:
             args._metis_runlog = runlog_session
@@ -506,7 +555,7 @@ def main():
                 "review_checkpoints_enabled", True
             )
             engine, vector_backend = build_engine(args, runtime)
-            if graph_requested:
+            if not args.interactive:
                 with runlog.span(
                     "command",
                     "execution_graph",
@@ -516,7 +565,7 @@ def main():
                         determine_output_file("graph", args, [])
                         callbacks: dict[str, object] = {
                             "diagnostic_callback": (
-                                lambda diagnostic: _print_graph_diagnostic(
+                                lambda diagnostic: print_execution_diagnostic(
                                     diagnostic, args.quiet
                                 )
                             )
@@ -543,6 +592,23 @@ def main():
                             ),
                         )
                     except Exception as exc:
+                        partial = getattr(exc, "result", None)
+                        if isinstance(partial, ExecutionResult) and partial.outputs:
+                            try:
+                                _save_graph_outputs(
+                                    args.output_file,
+                                    partial,
+                                    args.quiet,
+                                    generated_output=bool(
+                                        getattr(args, "_metis_generated_output", False)
+                                    ),
+                                )
+                            except Exception as save_error:
+                                print_console(
+                                    f"[red]Unable to save partial outputs: "
+                                    f"{escape(str(save_error))}[/red]",
+                                    args.quiet,
+                                )
                         command_span.end(status="error", exc=exc)
                         print_console(
                             f"[bold red]Error:[/bold red] {escape(str(exc))}",
@@ -550,9 +616,23 @@ def main():
                         )
                         exit_code = 1
                     else:
-                        print_console(
-                            "[green]Execution graph complete.[/green]", args.quiet
-                        )
+                        command_span.end(status=result.status.value)
+                        if runlog_session is not None:
+                            runlog_session.set_outcome(result.status.value)
+                        if result.status is ExecutionStatus.OK:
+                            print_console(
+                                "[green]Execution graph complete.[/green]", args.quiet
+                            )
+                        elif result.status is ExecutionStatus.INCONCLUSIVE:
+                            print_console(
+                                "[yellow]Execution graph finished with inconclusive results.[/yellow]",
+                                args.quiet,
+                            )
+                        else:
+                            print_console(
+                                "[red]Execution graph failed.[/red]", args.quiet
+                            )
+                            exit_code = 1
             else:
                 farewell = run_interactive_loop(engine, args, vector_backend)
         finally:

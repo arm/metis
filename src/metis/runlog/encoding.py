@@ -170,7 +170,11 @@ class PayloadEncoder:
         return value
 
     def _encode_text(self, text: str) -> Any:
-        raw = text.encode("utf-8")
+        try:
+            raw = text.encode("utf-8")
+        except UnicodeEncodeError:
+            # JSON escapes retain the text exactly, including unpaired surrogates.
+            return self._maybe_spill_json(text)
         if len(raw) <= self._config.blob_threshold:
             return text
         return self._blob_reference(
@@ -200,7 +204,7 @@ class PayloadEncoder:
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
-        ).encode("utf-8")
+        ).encode("utf-8", errors="backslashreplace")
         if len(raw) <= self._config.blob_threshold:
             return value
         preview = raw[:PREVIEW_CHARS].decode("utf-8", errors="replace")
@@ -279,11 +283,11 @@ def _redaction_bytes(value: Any) -> bytes:
     if isinstance(value, bytes):
         return value
     if isinstance(value, str):
-        return value.encode("utf-8")
+        return value.encode("utf-8", errors="surrogatepass")
     try:
         return json.dumps(value, sort_keys=True, default=_safe_repr).encode("utf-8")
     except Exception:
-        return _safe_repr(value).encode("utf-8")
+        return _safe_repr(value).encode("utf-8", errors="surrogatepass")
 
 
 def _safe_repr(value: Any) -> str:

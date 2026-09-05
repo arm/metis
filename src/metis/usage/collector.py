@@ -72,17 +72,19 @@ class UsageCollector:
         output_tokens: int,
         total_tokens: int | None = None,
     ) -> None:
+        input_tokens = max(0, int(input_tokens or 0))
+        output_tokens = max(0, int(output_tokens or 0))
         event = {
             "operation": operation or "llm",
             "model": model or "unknown",
-            "input_tokens": max(0, int(input_tokens or 0)),
-            "output_tokens": max(0, int(output_tokens or 0)),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "total_tokens": max(
                 0,
                 (
                     int(total_tokens)
                     if total_tokens is not None
-                    else int(input_tokens or 0) + int(output_tokens or 0)
+                    else input_tokens + output_tokens
                 ),
             ),
         }

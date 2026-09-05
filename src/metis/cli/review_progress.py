@@ -345,6 +345,7 @@ class ExecutionGraphProgressReporter:
         self._review: ReviewCodeProgressReporter | None = None
         self._triage: TriageProgressReporter | None = None
         self._triage_task: TaskID | None = None
+        self._triage_failed = False
 
     def __call__(self, event: Mapping[str, Any] | None) -> None:
         event = event or {}
@@ -366,12 +367,12 @@ class ExecutionGraphProgressReporter:
     def finish(self) -> None:
         if self._review is not None:
             self._review.finish()
-        if self._triage is not None:
+        if self._triage is not None and not self._triage_failed:
             self._triage.finish()
         self._snapshot_stage()
 
     def _start_stage(self, stage: str) -> None:
-        self._remove_review_tasks()
+        self._remove_stage_tasks()
         self._stage = stage
         self._progress.console.rule(
             _stage_progress_label(stage).title(),
@@ -380,6 +381,7 @@ class ExecutionGraphProgressReporter:
         if stage == "review":
             self._review = ReviewCodeProgressReporter(self._progress)
         elif stage == "triage":
+            self._triage_failed = False
             self._triage_task = self._progress.add_task(
                 "[cyan]Starting triage...[/cyan]",
                 total=1,
@@ -389,12 +391,15 @@ class ExecutionGraphProgressReporter:
                 self._triage_task,
             )
 
-    def _remove_review_tasks(self) -> None:
+    def _remove_stage_tasks(self) -> None:
+        self.finish()
         if self._review is not None:
-            self._review.finish()
-            self._snapshot_stage()
             self._review.remove()
             self._review = None
+        if self._triage_task is not None:
+            self._progress.remove_task(self._triage_task)
+            self._triage_task = None
+            self._triage = None
 
     def _snapshot_stage(self) -> None:
         if self._review is None and self._triage_task is None:
@@ -415,6 +420,7 @@ class ExecutionGraphProgressReporter:
         elif kind == "execution_node_end":
             if event.get("node") == "triage":
                 if event.get("status") == "error" and self._triage_task is not None:
+                    self._triage_failed = True
                     self._progress.update(
                         self._triage_task,
                         description="[red]Triage failed[/red]",
@@ -423,7 +429,7 @@ class ExecutionGraphProgressReporter:
                     self._triage.finish()
             else:
                 self._print_node_end(event)
-        elif kind == "execution_stage_end":
+        elif kind == "execution_stage_end" and not self._triage_failed:
             self._triage.finish()
 
     def _print_node(self, event: Mapping[str, Any]) -> None:
@@ -438,8 +444,6 @@ def _node_completion_description(event: Mapping[str, Any]) -> str:
     node = escape(str(event.get("node") or "unknown"))
     if event.get("status") == "error":
         return f"[red]✗ {stage}.{node} failed[/red]"
-    if event.get("node") == "result":
-        return f"[green]✓ {stage}.{node} complete[/green]"
     if event.get("status") == "inconclusive":
         return f"[yellow]! {stage}.{node} inconclusive[/yellow]"
     return f"[green]✓ {stage}.{node} complete[/green]"

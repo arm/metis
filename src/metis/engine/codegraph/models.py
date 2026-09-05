@@ -478,6 +478,18 @@ class CodeGraph:
                     f"Code graph node {node_id!r} belongs to unrequested file "
                     f"{node.file_path!r}"
                 )
+            if not isinstance(node.call_sites, (list, tuple)) or not all(
+                isinstance(call, CallSite) for call in node.call_sites
+            ):
+                raise ValueError(
+                    f"Code graph node {node_id!r} has invalid call metadata"
+                )
+            if not isinstance(node.references, (list, tuple)) or not all(
+                isinstance(reference, SymbolReference) for reference in node.references
+            ):
+                raise ValueError(
+                    f"Code graph node {node_id!r} has invalid reference metadata"
+                )
             expected_name_index.setdefault(node.name, []).append(node_id)
             invalid_targets = [
                 target for target in node.resolved_calls if target not in self.nodes
@@ -506,6 +518,13 @@ class CodeGraph:
             if construct.unique_name != global_id:
                 raise ValueError(
                     f"Code graph global index corruption for ID {global_id!r}"
+                )
+            if not isinstance(construct.references, (list, tuple)) or not all(
+                isinstance(reference, SymbolReference)
+                for reference in construct.references
+            ):
+                raise ValueError(
+                    f"Code graph global {global_id!r} has invalid reference metadata"
                 )
             invalid_targets = [
                 target

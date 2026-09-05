@@ -23,6 +23,7 @@ from langgraph.store.base import Result
 from langgraph.store.base import SearchItem
 from langgraph.store.base import SearchOp
 
+from .base import _validate_namespace
 from .schemas import utc_now_iso
 from .sqlite_records import fts_column_values
 from .sqlite_records import MemoryRecordsTable
@@ -45,6 +46,39 @@ class SQLiteMemoryStore(BaseStore):
                 results = [self._execute_op(conn, op) for op in ops]
                 conn.commit()
                 return results
+
+    def replace_records(
+        self,
+        namespace_prefix: tuple[str, ...],
+        records: Iterable[PutOp],
+    ) -> int:
+        _validate_namespace(namespace_prefix, allow_empty=True)
+        replacement = list(records)
+        for record in replacement:
+            _validate_namespace(record.namespace)
+            if record.value is None or not _namespace_startswith(
+                record.namespace, namespace_prefix
+            ):
+                raise ValueError("Replacement records must stay under namespace_prefix")
+        with self._lock:
+            self._ensure_schema()
+            with closing(self._connect()) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                existing = [
+                    row
+                    for row in self._records.rows(conn)
+                    if _namespace_startswith(
+                        _decode_namespace(str(row["namespace"])), namespace_prefix
+                    )
+                ]
+                for row in existing:
+                    self._delete(
+                        conn, _decode_namespace(str(row["namespace"])), str(row["key"])
+                    )
+                for record in replacement:
+                    self._execute_op(conn, record)
+                conn.commit()
+                return len(existing)
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:
         return await asyncio.to_thread(self.batch, list(ops))
@@ -104,6 +138,7 @@ class SQLiteMemoryStore(BaseStore):
         key: str,
         value: dict[str, Any],
     ) -> None:
+        _validate_namespace(namespace)
         namespace_json = _encode_namespace(namespace)
         now = utc_now_iso()
         existing_created_at = self._records.created_at(

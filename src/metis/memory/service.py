@@ -7,15 +7,25 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from datetime import datetime
 from datetime import timezone
+from threading import Lock, RLock
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from langgraph.store.base import PutOp
+from langgraph.store.memory import InMemoryStore
 
 from metis.version import __version__ as METIS_VERSION
 
 from .base import Namespace
+from .base import _validate_namespace
 from .base import StoreLike
 from .schemas import MemoryRecord
+
+
+_IN_MEMORY_REPLACEMENT_LOCKS: WeakKeyDictionary[InMemoryStore, RLock] = (
+    WeakKeyDictionary()
+)
+_IN_MEMORY_REPLACEMENT_LOCKS_GUARD = Lock()
 
 
 class MemoryService:
@@ -29,6 +39,11 @@ class MemoryService:
         self.store = store
         self.repo_root = repo_root
         self.tool_version = tool_version
+
+    def close(self) -> None:
+        close = getattr(self.store, "close", None)
+        if callable(close):
+            close()
 
     def put_record(self, record: MemoryRecord) -> None:
         self.store.put(record.namespace, record.key, record.to_store_value())
@@ -111,20 +126,30 @@ class MemoryService:
         namespace_prefix: Namespace,
         records: Iterable[MemoryRecord],
     ) -> int:
+        _validate_namespace(namespace_prefix, allow_empty=True)
         replacement = list(records)
-        if any(
-            record.namespace[: len(namespace_prefix)] != namespace_prefix
-            for record in replacement
-        ):
-            raise ValueError("Replacement records must stay under namespace_prefix")
-        existing = list(self.iter_records(namespace_prefix))
-        operations = [PutOp(record.namespace, record.key, None) for record in existing]
-        operations.extend(
+        for record in replacement:
+            _validate_namespace(record.namespace)
+            if record.namespace[: len(namespace_prefix)] != namespace_prefix:
+                raise ValueError("Replacement records must stay under namespace_prefix")
+        operations = [
             PutOp(record.namespace, record.key, record.to_store_value())
             for record in replacement
-        )
-        self.store.batch(operations)
-        return len(existing)
+        ]
+        replace = getattr(self.store, "replace_records", None)
+        if callable(replace):
+            return replace(namespace_prefix, operations)
+        if isinstance(self.store, InMemoryStore):
+            with _IN_MEMORY_REPLACEMENT_LOCKS_GUARD:
+                lock = _IN_MEMORY_REPLACEMENT_LOCKS.setdefault(self.store, RLock())
+            with lock:
+                existing = list(self.iter_records(namespace_prefix))
+                self.store.batch(
+                    [PutOp(record.namespace, record.key, None) for record in existing]
+                    + operations
+                )
+                return len(existing)
+        raise TypeError("Memory backend must support atomic namespace replacement")
 
     def delete_stale_records(
         self,

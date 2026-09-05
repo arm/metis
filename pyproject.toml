@@ -8,7 +8,8 @@ version = "1.5.0"
 description = "Metis is a command line tool for performing security code reviews using LLMs"
 readme = "README.md"
 keywords = [ "code-review", "llm", "security" ]
-license = { file = "LICENSE.md" }
+license = "Apache-2.0"
+license-files = [ "LICENSE" ]
 requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
@@ -77,6 +78,7 @@ optional-dependencies.qdrant = [
 optional-dependencies.test = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",
+  "setuptools>=82.0.1",
 ]
 scripts.metis = "metis.cli.entry:main"
 entry-points."metis.providers"."anthropic.chat" = "metis.providers.anthropic:AnthropicProvider"
@@ -111,7 +113,6 @@ package-data."metis.plugins.config" = [ "*.yaml" ]
 package-data."metis.plugins.languages" = [ "*.yaml" ]
 package-data."metis.plugins.manifests" = [ "*.yaml" ]
 package-data."metis.plugins.profiles" = [ "*.yaml" ]
-package-data."metis.schemas" = [ "*.json" ]
 package-data.metis = [ "metis.yaml" ]
 
 [tool.ruff]

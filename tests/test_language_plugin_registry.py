@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib
-import inspect
 import logging
 import sys
 import types
@@ -15,7 +14,11 @@ import pytest
 from llama_index.core.schema import Document
 
 from metis.configuration import load_plugin_config
+from metis.configuration import load_runtime_config
+from metis.configuration import load_yaml
+from metis.plugins import registry as registry_module
 from metis.engine.capabilities.indexing import IndexingService
+from metis.engine.runtime import EngineState
 from metis.plugins.base import ConfigBackedLanguagePlugin
 
 REQUIRED_PROMPT_KEYS = (
@@ -24,31 +27,6 @@ REQUIRED_PROMPT_KEYS = (
     "security_review_checks",
     "validation_review",
 )
-
-
-def _import_registry_api():
-    try:
-        module = importlib.import_module("metis.plugins.registry")
-    except ModuleNotFoundError as exc:
-        pytest.xfail(
-            f"Planned lazy language plugin registry module is not available yet: {exc}"
-        )
-
-    missing = [
-        name
-        for name in (
-            "LanguagePluginManifest",
-            "LanguagePluginHandle",
-            "LanguagePluginRegistry",
-        )
-        if not hasattr(module, name)
-    ]
-    if missing:
-        pytest.fail(
-            "metis.plugins.registry is missing planned API symbols: "
-            + ", ".join(missing)
-        )
-    return module
 
 
 def _make_manifest(registry_module, **overrides):
@@ -67,48 +45,12 @@ def _make_manifest(registry_module, **overrides):
         "prompt_profile": "c_family",
     }
     data.update(overrides)
-    manifest_cls = registry_module.LanguagePluginManifest
-    try:
-        return manifest_cls(**data)
-    except TypeError:
-        if hasattr(manifest_cls, "model_validate"):
-            return manifest_cls.model_validate(data)
-        pytest.fail(
-            "LanguagePluginManifest should accept the plan fields as keyword "
-            "arguments or expose model_validate(data)."
-        )
+    return registry_module.LanguagePluginManifest(**data)
 
 
 def _build_registry(registry_module, manifests, *, plugin_config=None):
-    registry_cls = registry_module.LanguagePluginRegistry
-
-    ctor = inspect.signature(registry_cls)
-    if "manifests" in ctor.parameters:
-        kwargs = {"manifests": manifests}
-        if plugin_config is not None and "plugin_config" in ctor.parameters:
-            kwargs["plugin_config"] = plugin_config
-        return registry_cls(**kwargs)
-
-    for factory_name in ("from_manifests", "from_config"):
-        factory = getattr(registry_cls, factory_name, None)
-        if factory is None:
-            continue
-        sig = inspect.signature(factory)
-        kwargs = {}
-        if "manifests" in sig.parameters:
-            kwargs["manifests"] = manifests
-        if "plugin_config" in sig.parameters:
-            kwargs["plugin_config"] = plugin_config or {
-                "docs": {},
-                "general_prompts": {},
-                "plugins": {},
-            }
-        if kwargs:
-            return factory(**kwargs)
-
-    pytest.fail(
-        "LanguagePluginRegistry should expose a manifest-based construction path "
-        "for unit tests, such as __init__(manifests=...) or from_manifests(...)."
+    return registry_module.LanguagePluginRegistry(
+        manifests, plugin_config=plugin_config
     )
 
 
@@ -145,7 +87,6 @@ def _install_fake_plugin_module(monkeypatch, module_name: str):
 def test_supported_language_names_comes_from_manifests_without_importing_plugins(
     monkeypatch,
 ):
-    registry_module = _import_registry_api()
     import_calls = []
     real_import_module = importlib.import_module
 
@@ -181,7 +122,6 @@ def test_supported_language_names_comes_from_manifests_without_importing_plugins
 
 
 def test_get_manifest_for_path_matches_extensions_and_systemverilog_suffix_patterns():
-    registry_module = _import_registry_api()
     registry = _build_registry(
         registry_module,
         [
@@ -212,7 +152,6 @@ def test_codegraph_provider_uses_manifest_capabilities_without_loading_plugins(
     monkeypatch,
     caplog,
 ):
-    registry_module = _import_registry_api()
     import_calls = []
     real_import_module = importlib.import_module
 
@@ -255,7 +194,6 @@ def test_codegraph_provider_uses_manifest_capabilities_without_loading_plugins(
 
 
 def test_codegraph_capability_rejects_implementation_configuration():
-    registry_module = _import_registry_api()
 
     with pytest.raises(ValueError, match="codegraph as a boolean"):
         _make_manifest(
@@ -268,7 +206,6 @@ def test_get_plugin_for_path_imports_and_instantiates_only_selected_plugin_once(
     monkeypatch,
     caplog,
 ):
-    registry_module = _import_registry_api()
     state = _install_fake_plugin_module(monkeypatch, "test_lazy_registry_plugin")
     import_calls = []
     real_import_module = importlib.import_module
@@ -318,23 +255,7 @@ def test_get_plugin_for_path_imports_and_instantiates_only_selected_plugin_once(
     )
 
 
-def test_manifest_without_implementation_uses_cached_config_backed_plugin() -> None:
-    registry_module = _import_registry_api()
-    registry = _build_registry(
-        registry_module,
-        [_make_manifest(registry_module, implementation="")],
-    )
-
-    plugin = registry.get_plugin("c")
-
-    assert plugin is registry.get_plugin_for_extension(".c")
-    assert plugin.get_name() == "c"
-    assert plugin.get_supported_extensions() == [".c", ".h"]
-    assert "security_review" in plugin.get_prompts()
-
-
 def test_builtin_perl_manifest_matches_only_supported_extensions() -> None:
-    registry_module = _import_registry_api()
     registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
 
     for path in (
@@ -350,7 +271,6 @@ def test_builtin_perl_manifest_matches_only_supported_extensions() -> None:
 
 
 def test_builtin_perl_plugin_is_config_backed_and_cached() -> None:
-    registry_module = _import_registry_api()
     registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
 
     plugin = registry.get_plugin_for_path("lib/Security.pm")
@@ -370,7 +290,6 @@ def test_startup_plugin_config_excludes_language_prompt_configs():
 
 
 def test_registry_loads_required_prompt_keys_for_supported_languages():
-    registry_module = _import_registry_api()
     registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
 
     assert registry.codegraph_registration_for_path("src/example.c") == "c"
@@ -413,7 +332,6 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
 
 
 def test_explicit_replacement_overrides_resolved_manifest_fields(monkeypatch):
-    registry_module = _import_registry_api()
     builtin = _make_manifest(
         registry_module,
         name="c",
@@ -450,7 +368,6 @@ def test_explicit_replacement_overrides_resolved_manifest_fields(monkeypatch):
 
 
 def test_entry_point_accepts_manifest_object(monkeypatch):
-    registry_module = _import_registry_api()
     manifest = _make_manifest(
         registry_module,
         name="private",
@@ -468,7 +385,6 @@ def test_entry_point_accepts_manifest_object(monkeypatch):
 
 
 def test_plugin_constructor_type_error_is_not_retried_without_config(monkeypatch):
-    registry_module = _import_registry_api()
     module = types.ModuleType("broken_language_plugin")
     calls = []
 
@@ -540,7 +456,7 @@ def test_index_prepare_nodes_includes_suffix_pattern_code_files(tmp_path, monkey
         plugin_config={"docs": {"supported_extensions": [".md"]}},
         vector_backend=vector_backend,
     )
-    state = SimpleNamespace(pending_nodes=None)
+    state = EngineState()
     monkeypatch.setattr(
         "metis.engine.capabilities.indexing.SimpleDirectoryReader", Reader
     )
@@ -556,3 +472,235 @@ def test_index_prepare_nodes_includes_suffix_pattern_code_files(tmp_path, monkey
     assert str(source) in captured["input_files"]
     assert str(ignored) not in captured["input_files"]
     assert state.pending_nodes[0] == [f"code-node:{tmp_path.name}/unit.sv.vp"]
+
+
+@pytest.mark.parametrize("profile_source", ("inherits", "manifest"))
+def test_raw_yaml_registers_config_only_language_with_external_profile(
+    tmp_path, monkeypatch, profile_source
+):
+    package_name = f"language_contract_{profile_source}"
+    package = tmp_path / package_name
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "shared.yaml").write_text(
+        "prompts: {shared: inherited, overridden: old}\n", encoding="utf-8"
+    )
+    inheritance = (
+        f"inherits: {package_name}:shared.yaml\n"
+        if profile_source == "inherits"
+        else ""
+    )
+    (package / "language.yaml").write_text(
+        inheritance + "prompts: {local: local, overridden: new}\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    profile = (
+        f"    prompt_profile: {package_name}:shared.yaml\n"
+        if profile_source == "manifest"
+        else ""
+    )
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        "llm_provider: {name: ollama, model: test-model}\n"
+        "language_plugins:\n"
+        "  contract_demo:\n"
+        "    extensions: [.contractdemo]\n"
+        f"    config_resource: {package_name}:language.yaml\n" + profile,
+        encoding="utf-8",
+    )
+
+    try:
+        runtime = load_runtime_config(config_path)
+        registry = registry_module.LanguagePluginRegistry.from_config(
+            runtime["plugin_config"]
+        )
+        assert package_name not in sys.modules
+        plugin = registry.get_plugin_for_path("sample.contractdemo")
+
+        assert isinstance(plugin, ConfigBackedLanguagePlugin)
+        assert plugin is registry.get_plugin("contract_demo")
+        assert plugin.get_supported_extensions() == [".contractdemo"]
+        assert plugin.get_prompts() == {
+            "shared": "inherited",
+            "local": "local",
+            "overridden": "new",
+        }
+        sections = plugin.plugin_config["plugins"]
+        assert list(sections) == ["contract_demo"]
+        assert len(sections) == 1
+        assert (
+            sections.copy()
+            == dict(sections)
+            == {"contract_demo": sections["CONTRACT_DEMO"]}
+        )
+
+    finally:
+        sys.modules.pop(package_name, None)
+
+
+@pytest.mark.parametrize(
+    "invalid_field",
+    (
+        "extensions: .demo",
+        "priority: true",
+        'capabilities: {codegraph: "false"}',
+        "extension: [.demo]",
+    ),
+)
+def test_language_manifest_rejects_malformed_raw_fields(tmp_path, invalid_field):
+    path = tmp_path / "manifest.yaml"
+    path.write_text(
+        "name: demo\nconfig_resource: languages/c.yaml\n" + invalid_field + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        registry_module.LanguagePluginManifest.from_mapping(load_yaml(path))
+
+
+def test_language_override_uses_manifest_name_normalization(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        "llm_provider: {name: ollama, model: test-model}\n"
+        "language_plugins:\n"
+        '  " C ": {name: " c ", extensions: [.contract-c]}\n',
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(config_path)
+    registry = registry_module.LanguagePluginRegistry.from_config(
+        runtime["plugin_config"]
+    )
+
+    manifest = registry.get_manifest_for_path("example.contract-c")
+    assert manifest.name == "c"
+    assert manifest.config_resource == "languages/c.yaml"
+
+
+def test_language_override_rejects_duplicate_normalized_names(tmp_path):
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        "llm_provider: {name: ollama, model: test-model}\n"
+        "language_plugins:\n"
+        "  C: {extensions: [.first]}\n"
+        "  c: {extensions: [.second]}\n",
+        encoding="utf-8",
+    )
+    runtime = load_runtime_config(config_path)
+
+    with pytest.raises(ValueError, match="Duplicate language plugin override 'c'"):
+        registry_module.LanguagePluginRegistry.from_config(runtime["plugin_config"])
+
+
+@pytest.mark.parametrize(
+    ("name", "nested_name"),
+    [("c", "cpp"), ("new_language", "c"), ("c", None)],
+)
+def test_language_override_cannot_change_identity(name, nested_name):
+    with pytest.raises(ValueError, match="name must"):
+        registry_module.LanguagePluginRegistry.from_config(
+            {
+                "language_plugins": {
+                    name: {
+                        "name": nested_name,
+                        "extensions": [".replacement"],
+                        "config_resource": "languages/c.yaml",
+                    }
+                }
+            }
+        )
+
+
+def test_language_registry_rejects_duplicate_normalized_names():
+    with pytest.raises(ValueError, match="Duplicate language plugin name 'c'"):
+        _build_registry(
+            registry_module,
+            [
+                _make_manifest(registry_module),
+                _make_manifest(registry_module, name=" C "),
+            ],
+        )
+
+
+@pytest.mark.parametrize("priorities", [(0, 10), (10, 10)])
+def test_language_aliases_use_priority_and_reject_ambiguity(priorities):
+    manifests = [
+        _make_manifest(
+            registry_module, name=name, aliases=["shared"], priority=priority
+        )
+        for name, priority in zip(("first", "second"), priorities)
+    ]
+    for ordered in (manifests, manifests[::-1]):
+        registry = _build_registry(registry_module, ordered)
+        if priorities[0] == priorities[1]:
+            with pytest.raises(ValueError, match="Ambiguous language plugin match"):
+                registry.get_manifest("shared")
+        else:
+            assert registry.get_manifest("SHARED").name == "second"
+        assert registry.get_manifest("first").name == "first"
+
+
+def test_canonical_language_name_precedes_alias_priority():
+    registry = _build_registry(
+        registry_module,
+        [
+            _make_manifest(registry_module, name="first"),
+            _make_manifest(
+                registry_module, name="second", aliases=["first"], priority=100
+            ),
+        ],
+    )
+    assert registry.get_manifest("first").name == "first"
+
+
+@pytest.mark.parametrize("section", ("splitting", "prompts"))
+@pytest.mark.parametrize("source", ("language", "profile"))
+def test_language_config_validates_merged_sections_before_caching(
+    tmp_path, monkeypatch, section, source
+):
+    package_name = f"language_invalid_{section}_{source}"
+    package = tmp_path / package_name
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    language_path = package / "language.yaml"
+    profile_path = package / "profile.yaml"
+    language_path.write_text(
+        f"inherits: {package_name}:profile.yaml\n", encoding="utf-8"
+    )
+    profile_path.write_text("custom_setting: {preserved: true}\n", encoding="utf-8")
+    malformed = language_path if source == "language" else profile_path
+    with malformed.open("a", encoding="utf-8") as handle:
+        handle.write(f"{section}: []\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = _build_registry(
+        registry_module,
+        [
+            _make_manifest(
+                registry_module,
+                implementation="",
+                config_resource=f"{package_name}:language.yaml",
+            )
+        ],
+    )
+    try:
+        plugin = registry.get_plugin("c")
+        for get_config in (
+            plugin.get_prompts,
+            lambda: registry.get_prompts_for_language("c"),
+        ):
+            with pytest.raises(
+                ValueError, match=f"resource .*{section} must be a mapping"
+            ):
+                get_config()
+        malformed.write_text(
+            malformed.read_text(encoding="utf-8").replace(
+                f"{section}: []", f"{section}: {{}}"
+            ),
+            encoding="utf-8",
+        )
+        assert plugin.get_prompts() == {}
+        assert plugin.plugin_config["plugins"]["c"]["custom_setting"] == {
+            "preserved": True
+        }
+    finally:
+        sys.modules.pop(package_name, None)

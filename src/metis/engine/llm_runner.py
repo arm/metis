@@ -148,6 +148,11 @@ class JsonPromptRunner:
             if request.model_tools
             else None
         )
+        # Template errors are configuration failures, not provider retry failures.
+        prompt = _json_chat_prompt(
+            request.system_prompt, request.user_prompt, request.model_tools
+        )
+        prompt.invoke(request.variables)
         for attempt in range(self._max_attempts):
             response_text: Any = None
             parsed: Any = None
@@ -184,12 +189,13 @@ class JsonPromptRunner:
                         params["temperature"] = request.temperature
                     chat = self._llm_provider.get_chat_model(**params)
                     active_tools = request.model_tools if not tool_evidence else ()
-                    prompt = _json_chat_prompt(
-                        request.system_prompt,
-                        request.user_prompt,
-                        request.model_tools,
-                        tool_evidence,
-                    )
+                    if tool_evidence:
+                        prompt = _json_chat_prompt(
+                            request.system_prompt,
+                            request.user_prompt,
+                            request.model_tools,
+                            tool_evidence,
+                        )
                     used_structured_output = False
                     structured_output = getattr(chat, "with_structured_output", None)
                     if (

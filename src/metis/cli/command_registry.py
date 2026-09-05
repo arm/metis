@@ -48,15 +48,23 @@ class CommandSpec:
         return f"{cmd} {Path(target).name}"
 
     def validate(self, cmd: str, cmd_args: list[str], args) -> bool:
-        if self.invocation_mode == "path" and not cmd_args:
+        if self.invocation_mode == "path" and len(cmd_args) != 1:
             print_console(
-                f"[red]Error:[/red] Command '{escape(cmd)}' requires a file path argument.",
+                f"[red]Error:[/red] Command '{escape(cmd)}' requires exactly one file path argument.",
                 args.quiet,
             )
             return False
-        if self.invocation_mode == "args" and cmd_args:
+        if self.invocation_mode not in {"path", "question"} and cmd_args:
             print_console(
                 f"[red]Error:[/red] Command '{escape(cmd)}' does not accept positional arguments.",
+                args.quiet,
+            )
+            return False
+        if self.invocation_mode == "question" and not any(
+            arg.strip() for arg in cmd_args
+        ):
+            print_console(
+                f"[red]Error:[/red] Command '{escape(cmd)}' requires a question.",
                 args.quiet,
             )
             return False

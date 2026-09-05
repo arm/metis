@@ -10,7 +10,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-import yaml
+from metis.configuration import load_yaml
 
 from .contracts import CapabilityRegistration
 from .manifest import CapabilityManifest
@@ -82,7 +82,7 @@ class CapabilityCatalog:
 
 def _load_yaml_mapping(resource: Any) -> dict[str, Any]:
     with resource.open("r", encoding="utf-8") as handle:
-        loaded = yaml.safe_load(handle) or {}
+        loaded = load_yaml(handle)
     if not isinstance(loaded, dict):
         raise ValueError(
             f"Capability manifest {resource.name!r} must contain a YAML mapping"

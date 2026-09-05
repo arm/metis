@@ -78,6 +78,39 @@ turning every structured field into a SQL column.
 SQLite opens the database in WAL mode and uses a busy timeout. That is enough
 for normal local read and write overlap. It is still a local store.
 
+## Custom Backend Compatibility
+
+Custom backends keep the existing `put`, `get`, `search`, `delete`, `batch`, and
+namespace-listing interface for ordinary reads and writes. Persistent backends
+additionally need this operation for namespace replacement and reset:
+
+```python
+def replace_records(namespace_prefix: tuple[str, ...], records: Iterable[PutOp]) -> int:
+    ...
+```
+
+Each `PutOp` supplies a namespace, key, and non-null record value under the given
+prefix. The backend must atomically delete the previous subtree and insert the
+replacement, returning the number of records removed. An empty replacement
+resets the subtree. Concurrent replacements must produce one complete snapshot;
+a failed replacement must preserve the previous snapshot. SQLite performs the
+entire operation in one write transaction, including its search-index updates.
+
+`MemoryService.replace_records()` and `reset_records()` raise `TypeError` with
+`Memory backend must support atomic namespace replacement` when a persistent backend lacks
+this operation. Other reads and writes remain available. Persistent backends have
+no fallback that enumerates and deletes records in separate transactions.
+
+LangGraph's `InMemoryStore`, used for temporary candidate records, remains
+supported without that extra backend method. `MemoryService` serializes its
+replacement/reset calls with one shared lock per store, including calls through
+different service instances. This only coordinates these operations within the
+current process; direct writes to the raw store bypass that lock. Persistent
+backends still require their own transaction.
+
+A backend may expose `close()` for resource cleanup. Engine shutdown delegates to
+it through `MemoryService.close()`; backends without `close()` need no change.
+
 ## Retrieval
 
 The store supports exact lookup and bounded search by namespace prefix, text

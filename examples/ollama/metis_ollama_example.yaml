@@ -53,6 +53,5 @@ embedding_provider:
 
 query:
   similarity_top_k: 5
-  response_mode: "compact"
   max_tokens: 2048
   temperature: 0.0

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import fields
@@ -59,11 +60,13 @@ class MemoryRecord:
         )
 
     def to_store_value(self) -> dict[str, Any]:
-        return {
-            field.name: getattr(self, field.name)
-            for field in fields(self)
-            if field.name not in _STORE_METADATA_FIELDS
-        }
+        return deepcopy(
+            {
+                field.name: getattr(self, field.name)
+                for field in fields(self)
+                if field.name not in _STORE_METADATA_FIELDS
+            }
+        )
 
     @classmethod
     def from_store_value(
@@ -74,11 +77,13 @@ class MemoryRecord:
         value: dict[str, Any],
         created_at: str,
     ) -> "MemoryRecord":
-        values = {
-            field.name: value[field.name]
-            for field in fields(cls)
-            if field.name not in _STORE_METADATA_FIELDS and field.name in value
-        }
+        values = deepcopy(
+            {
+                field.name: value[field.name]
+                for field in fields(cls)
+                if field.name not in _STORE_METADATA_FIELDS and field.name in value
+            }
+        )
         return cls(
             namespace=namespace,
             key=key,

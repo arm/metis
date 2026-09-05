@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, constr
+from pydantic import BaseModel, ConfigDict, Field, constr, field_validator
 
 from metis.engine.stages.triage.models import TriageDecisionModel
 
@@ -15,10 +15,18 @@ VALIDATION_RESULT_CONTRACT_VERSION = "metis.external.validation-result/v1"
 
 
 class ExternalStageCommandModel(BaseModel):
-    command: list[constr(strip_whitespace=True, min_length=1)] = Field(
-        description="Command argv template. Placeholders are expanded by Metis."
+    command: list[str] = Field(
+        min_length=1,
+        description="Command argv template. Placeholders are expanded by Metis.",
     )
     timeout_seconds: int = Field(default=3600, gt=0)
+
+    @field_validator("command")
+    @classmethod
+    def validate_executable(cls, command: list[str]) -> list[str]:
+        if not command[0].strip():
+            raise ValueError("Command executable must be nonempty")
+        return command
 
     model_config = ConfigDict(extra="forbid")
 
