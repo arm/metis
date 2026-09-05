@@ -20,7 +20,7 @@ llm_provider:
   model: "gemini-2.5-flash"
   api_key_env: "GOOGLE_API_KEY"
 
-# Optional — only needed when the index tool is enabled.
+# Optional — needed when the Index capability cannot reuse backend embeddings.
 embedding_provider:
   name: "openai"
   code_embedding_model: "text-embedding-3-large"

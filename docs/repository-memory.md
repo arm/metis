@@ -33,7 +33,8 @@ text.
 - `schema_version` and `tool_version` help callers understand compatibility
 - `repo_fingerprint` ties a record to repository state
 - `input_fingerprint` ties a record to the source input that produced it
-- `summary_text` and `search_text` are the only text used for local recall
+- `namespace`, `key`, `artifact_type`, `summary_text`, and `search_text` are the
+  fields used by local full-text recall
 - `body_json` and `body_markdown` hold the actual payload
 - `metadata` holds source specific attributes
 
@@ -78,11 +79,27 @@ turning every structured field into a SQL column.
 SQLite opens the database in WAL mode and uses a busy timeout. That is enough
 for normal local read and write overlap. It is still a local store.
 
+### Schema evolution
+
+The JSON record schema and the physical SQLite/FTS schema are separate contracts.
+`MemoryRecord.create()` currently defaults `schema_version` to `1`; reads accept
+other versions and ignore unknown fields. SQLite `PRAGMA user_version` remains
+`0`, with no physical migration path yet. A record-shape change must keep old
+records readable through defaults or add centralized upgrade/rejection logic
+before rewritten records are mutated.
+
+Physical table or FTS changes belong in `MemoryRecordsTable` and
+`SQLiteMemoryStore._ensure_schema()`. Add a `PRAGMA user_version` migration only
+when a physical schema change actually requires one. Migrations and namespace
+replacement must remain transactional, with the old snapshot readable after a
+failure.
+
 ## Custom Backend Compatibility
 
 Custom backends keep the existing `put`, `get`, `search`, `delete`, `batch`, and
-namespace-listing interface for ordinary reads and writes. Persistent backends
-additionally need this operation for namespace replacement and reset:
+namespace-listing interface for ordinary reads and writes. Every backend other
+than LangGraph's `InMemoryStore` additionally needs this operation for namespace
+replacement and reset:
 
 ```python
 def replace_records(namespace_prefix: tuple[str, ...], records: Iterable[PutOp]) -> int:
@@ -97,16 +114,14 @@ a failed replacement must preserve the previous snapshot. SQLite performs the
 entire operation in one write transaction, including its search-index updates.
 
 `MemoryService.replace_records()` and `reset_records()` raise `TypeError` with
-`Memory backend must support atomic namespace replacement` when a persistent backend lacks
-this operation. Other reads and writes remain available. Persistent backends have
-no fallback that enumerates and deletes records in separate transactions.
+`Memory backend must support atomic namespace replacement` when another backend
+lacks this operation. Other reads and writes remain available. There is no
+fallback that enumerates and deletes persistent records in separate transactions.
 
 LangGraph's `InMemoryStore`, used for temporary candidate records, remains
-supported without that extra backend method. `MemoryService` serializes its
-replacement/reset calls with one shared lock per store, including calls through
-different service instances. This only coordinates these operations within the
-current process; direct writes to the raw store bypass that lock. Persistent
-backends still require their own transaction.
+supported without that extra backend method. Only this fallback is serialized
+by `MemoryService` with one shared lock per store. SQLite uses its own lock and
+transaction; other custom backends own their concurrency and atomicity.
 
 A backend may expose `close()` for resource cleanup. Engine shutdown delegates to
 it through `MemoryService.close()`; backends without `close()` need no change.
@@ -116,11 +131,16 @@ it through `MemoryService.close()`; backends without `close()` need no change.
 The store supports exact lookup and bounded search by namespace prefix, text
 query, and exact filters.
 
-Text search uses SQLite FTS5 over `summary_text` and `search_text`. Structured
-payload fields are stored for lookup and audit. They are not implicitly indexed
-for recall.
+Text search uses SQLite FTS5 over `namespace`, `key`, `artifact_type`,
+`summary_text`, and `search_text`. Other structured payload fields are stored for
+lookup and audit but are not implicitly indexed for recall.
 
-Raw store level `search()` has no side effects.
+Raw store-level `search()` does not mutate records, although first access may
+create and initialize the local database.
+
+Freshness checks are caller-driven. `get`, `search`, and iteration do not reject
+records based on repository/input fingerprints automatically; a consumer that
+requires current data must call the freshness APIs before use.
 
 ## Engine Access
 
@@ -281,14 +301,17 @@ a finding.
 
 ## Testing
 
-Focused backend coverage is in `tests/test_memory_backend.py`.
-
-The tests cover namespace and key round trips, text search, filters, delete
-behavior, freshness checks, invalidation, and stable `created_at` metadata on
-overwrite.
+Use `tests/test_memory_contracts.py` for record shape, defensive copies, and
+backend-independent behavior; `tests/test_memory_backend.py` for SQLite CRUD and
+search; and the memory cases in `tests/test_persistence_e2e.py` for reopen,
+concurrent replacement, and rollback. A JSON-shape change needs old-record
+compatibility coverage; a physical migration needs old-database upgrade and
+rollback/reopen coverage.
 
 ## Current Limits
 
 - SQLite is the only implemented repository memory backend
 - SQLite FTS5 is required for text search
 - Vector retrieval is not part of the memory store
+- Configured backend locations are currently resolved as repository-contained
+  filesystem paths, including for custom backends

@@ -26,6 +26,7 @@ REQUIRED_PROMPT_KEYS = (
     "security_review_file",
     "security_review_checks",
     "validation_review",
+    "snippet_security_summary",
 )
 
 

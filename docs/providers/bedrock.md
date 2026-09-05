@@ -38,7 +38,8 @@ embedding_provider:
 | `endpoint_url`          | no       | Override Bedrock endpoint (e.g. VPC interface endpoint).           |
 | `supports_temperature`  | no       | Set `true` only if the target model accepts `temperature`.         |
 
-¹ Only required under `embedding_provider` when the `index` engine tool is enabled.
+¹ Required under `embedding_provider` only when the Index capability cannot
+reuse embedding models supplied by the vector backend.
 ² Only required under `llm_provider`.
 
 ## Credentials
