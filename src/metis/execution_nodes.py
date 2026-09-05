@@ -26,6 +26,8 @@ from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.contracts import NodeRuntime
 from metis.engine.execution.contracts import NodeCallbacks
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import PatchReviewResult
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewResult
@@ -49,6 +51,8 @@ __all__ = [
     "EmptyNodeConfiguration",
     "ExecutionDiagnostic",
     "ExecutionStatus",
+    "FinalReviewRun",
+    "JsonPromptRequest",
     "NodeContext",
     "NodeCodeGraphs",
     "NodeInvocation",

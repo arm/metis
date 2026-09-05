@@ -150,3 +150,14 @@ def test_shell_navigation_serializes_subprocesses(tmp_path, monkeypatch):
 
     assert results == ("match", "match")
     assert peak == 1
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\v", "\f"])
+def test_navigation_uses_canonical_source_lines(tmp_path, separator):
+    (tmp_path / "input.txt").write_text(
+        f"first{separator}fragment\nsecond\n", encoding="utf-8"
+    )
+    runner = _build_runner(tmp_path)
+    assert runner.cat("input.txt") == f"1: first{separator}fragment\n2: second"
+    assert runner.sed("input.txt", 2, 2) == "2: second"
+    assert runner.grep("second", "input.txt") == "input.txt:2:second"

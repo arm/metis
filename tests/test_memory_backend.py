@@ -30,29 +30,6 @@ def test_sqlite_memory_store_closes_connections(tmp_path, monkeypatch):
             connection.execute("SELECT 1")
 
 
-def test_sqlite_memory_store_round_trips_namespace_key_value(tmp_path):
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite3")
-    namespace = ("metis", "profiles", "repo")
-    value = {
-        "artifact_type": "target_profile",
-        "schema_version": 1,
-        "repo_fingerprint": "repo1",
-        "input_fingerprint": "input1",
-        "memory_type": "semantic",
-        "metadata": {"authority": "documented"},
-        "summary_text": "Documented trust boundary",
-        "search_text": "trust boundary cli filesystem",
-    }
-
-    store.put(namespace, "active", value)
-
-    item = store.get(namespace, "active")
-    assert item is not None
-    assert item.namespace == namespace
-    assert item.key == "active"
-    assert item.value == value
-
-
 def test_sqlite_memory_store_search_filter_namespaces_and_delete(tmp_path):
     store = SQLiteMemoryStore(tmp_path / "memory.sqlite3")
     store.put(

@@ -11,7 +11,9 @@ from metis.configuration import load_yaml
 
 
 @cache
-def get_engine_prompts(name: str) -> Mapping[str, str]:
+def get_engine_prompts(
+    name: str, *, required: tuple[str, ...] = ()
+) -> Mapping[str, str]:
     resource = files("metis.engine").joinpath("prompts", f"{name}.yaml")
     with as_file(resource) as path:
         payload = load_yaml(path)
@@ -24,5 +26,14 @@ def get_engine_prompts(name: str) -> Mapping[str, str]:
             raise TypeError(
                 f"Engine prompt resource {name!r} must map names to strings"
             )
+        if not value.strip():
+            raise ValueError(
+                f"Engine prompt resource {name!r} has blank prompt {key!r}"
+            )
         prompts[key] = value
+    missing = set(required) - prompts.keys()
+    if missing:
+        raise ValueError(
+            f"Engine prompt resource {name!r} is missing: {', '.join(sorted(missing))}"
+        )
     return MappingProxyType(prompts)

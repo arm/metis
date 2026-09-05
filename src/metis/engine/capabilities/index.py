@@ -65,33 +65,36 @@ class IndexCapability:
         self._search_configuration = search_configuration
         self._embed_model_code = self._get_backend_embed_model("embed_model_code")
         self._embed_model_docs = self._get_backend_embed_model("embed_model_docs")
-        self._retrievers_by_top_k = {}
+        self._retrievers_by_top_k: dict[int, tuple[Any, Any]] = {}
+        self._retriever_generation = 0
+        self._constructing_embeddings = False
         self._attach_embed_models_to_backend()
         self.indexing = IndexingService(
             config,
             state,
             repository,
             get_embedding_models=self.get_embedding_models,
+            clear_retriever_cache=self.clear_retriever_cache,
         )
 
     def create_retrievers(self, top_k: int):
-        self.get_embedding_models()
-        self._config.vector_backend.init()
-        retriever_code, retriever_docs = self._config.vector_backend.get_retrievers(
-            self._config.llm_provider,
-            top_k,
-            **self._config.usage_runtime.hooks.retriever_kwargs(),
-        )
-        if not retriever_code or not retriever_docs:
-            raise RetrieverInitError()
-        return retriever_code, retriever_docs
+        with self._state.retriever_lock:
+            generation = self._retriever_generation
+            self.get_embedding_models()
+            self._config.vector_backend.init()
+            retriever_code, retriever_docs = self._config.vector_backend.get_retrievers(
+                self._config.llm_provider,
+                top_k,
+                **self._config.usage_runtime.hooks.retriever_kwargs(),
+            )
+            # A backend callback may have reset the index on this thread.
+            if generation != self._retriever_generation:
+                raise RuntimeError("Index changed during retriever construction")
+            if not retriever_code or not retriever_docs:
+                raise RetrieverInitError()
+            return retriever_code, retriever_docs
 
     def get_retrievers(self):
-        if (
-            self._state.retriever_code is not None
-            and self._state.retriever_docs is not None
-        ):
-            return self._state.retriever_code, self._state.retriever_docs
         with self._state.retriever_lock:
             if (
                 self._state.retriever_code is not None
@@ -177,23 +180,36 @@ class IndexCapability:
         )
 
     def clear_retriever_cache(self) -> None:
-        self._state.retriever_code = None
-        self._state.retriever_docs = None
-        self._retrievers_by_top_k.clear()
+        with self._state.retriever_lock:
+            self._state.retriever_code = None
+            self._state.retriever_docs = None
+            self._retrievers_by_top_k.clear()
+            self._retriever_generation += 1
 
     def close(self) -> None:
-        self.clear_retriever_cache()
-        close_fn = getattr(self._config.vector_backend, "close", None)
-        if callable(close_fn):
-            close_fn()
+        try:
+            self.indexing.close()
+        finally:
+            self.clear_retriever_cache()
 
     def get_embedding_models(self):
-        if self._embed_model_code is None:
-            self._embed_model_code = self._build_embed_model("code")
-        if self._embed_model_docs is None:
-            self._embed_model_docs = self._build_embed_model("docs")
-        self._attach_embed_models_to_backend()
-        return self._embed_model_code, self._embed_model_docs
+        with self._state.retriever_lock:
+            if self._constructing_embeddings:
+                raise RuntimeError(
+                    "Index embedding models are already being constructed"
+                )
+            self._constructing_embeddings = True
+            try:
+                code, docs = self._embed_model_code, self._embed_model_docs
+                if code is None:
+                    code = self._build_embed_model("code")
+                if docs is None:
+                    docs = self._build_embed_model("docs")
+                self._embed_model_code, self._embed_model_docs = code, docs
+                self._attach_embed_models_to_backend()
+                return code, docs
+            finally:
+                self._constructing_embeddings = False
 
     def _build_embed_model(self, kind: str):
         provider = self._config.embedding_provider

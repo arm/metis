@@ -69,6 +69,7 @@ def builtin_capability_registrations(
             _required_manifest("memory"),
             MemoryCapabilityConfiguration,
             build_memory,
+            close=lambda capability: cast(MemoryService, capability).close(),
         ),
     )
 

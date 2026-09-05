@@ -123,24 +123,24 @@ def build_builtin_execution(
         else None
     )
     triage_classifier = None
-    if ("triage", "triage") in selected_nodes:
-        triage_classifier = TriageClassifierService(
-            llm_provider=engine_config.llm_provider,
-            model=engine_config.llama_query_model,
-            chat_model_kwargs=engine_config.chat_model_kwargs,
-            plugin_config=engine_config.plugin_config,
-            get_plugin_for_path=repository.get_plugin_for_path,
-            get_language_name_for_path=repository.get_language_name_for_path,
-            normalize_path=repository.normalize_match_path,
-            usage_hooks=engine_config.usage_runtime.hooks,
-            model_tool_max_contract_chars=(
-                engine_config.capability_settings.model_tools.max_contract_chars
-            ),
-            navigation_manifest=capabilities.manifest("navigation"),
-        )
-        registrations.append(triage_node.create_node(triage_classifier))
-
     try:
+        if ("triage", "triage") in selected_nodes:
+            triage_classifier = TriageClassifierService(
+                llm_provider=engine_config.llm_provider,
+                model=engine_config.llama_query_model,
+                chat_model_kwargs=engine_config.chat_model_kwargs,
+                plugin_config=engine_config.plugin_config,
+                get_plugin_for_path=repository.get_plugin_for_path,
+                get_language_name_for_path=repository.get_language_name_for_path,
+                normalize_path=repository.normalize_match_path,
+                usage_hooks=engine_config.usage_runtime.hooks,
+                model_tool_max_contract_chars=(
+                    engine_config.capability_settings.model_tools.max_contract_chars
+                ),
+                navigation_manifest=capabilities.manifest("navigation"),
+            )
+            registrations.append(triage_node.create_node(triage_classifier))
+
         execution = ExecutionGraphService(
             configuration,
             engine_config=engine_config,
@@ -155,8 +155,11 @@ def build_builtin_execution(
             triage_options=triage_options,
             registrations=registrations,
         )
-    except Exception:
+    except BaseException as exc:
         if triage_classifier is not None:
-            triage_classifier.close()
+            try:
+                triage_classifier.close()
+            except BaseException as cleanup_error:
+                exc.add_note(f"Triage classifier cleanup also failed: {cleanup_error}")
         raise
     return BuiltinExecution(execution, triage_service, triage_classifier)

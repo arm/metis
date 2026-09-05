@@ -9,6 +9,8 @@ from dataclasses import field
 from types import MappingProxyType
 from typing import Any
 
+from ..execution.contracts import annotation_adapter
+
 
 @dataclass(frozen=True, slots=True)
 class StageContract:
@@ -17,8 +19,16 @@ class StageContract:
 
     def __post_init__(self) -> None:
         for port in (*self.inputs, *self.required_outputs):
-            if not port.isidentifier():
+            if not isinstance(port, str) or not port.isidentifier():
                 raise ValueError(f"Execution stage contract has invalid port {port!r}")
+        for port, annotation in (*self.inputs.items(), *self.required_outputs.items()):
+            try:
+                annotation_adapter(annotation)
+            except Exception as exc:
+                raise TypeError(
+                    f"Execution stage contract port {port!r} has an unsupported "
+                    f"annotation: {annotation!r}"
+                ) from exc
         object.__setattr__(
             self,
             "inputs",
@@ -37,7 +47,7 @@ class StageRegistration:
     contract: StageContract
 
     def __post_init__(self) -> None:
-        if not self.name or not self.name.isidentifier():
+        if not isinstance(self.name, str) or not self.name.isidentifier():
             raise ValueError(f"Invalid execution stage name: {self.name!r}")
         if not isinstance(self.contract, StageContract):
             raise TypeError("Execution stage contract must be a StageContract")

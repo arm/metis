@@ -63,7 +63,10 @@ def apply_triage_annotations(report_data: Any, sarif_payload: Any) -> Any:
     properties_by_id: dict[str, dict[str, Any]] = {}
     ambiguous_ids: set[str] = set()
     for run in runs:
-        for result in run.get("results", ()) if isinstance(run, dict) else ():
+        results = run.get("results") if isinstance(run, dict) else None
+        if not isinstance(results, list):
+            continue
+        for result in results:
             properties = result.get("properties") if isinstance(result, dict) else None
             if not isinstance(properties, dict):
                 continue
@@ -238,13 +241,13 @@ def apply_triage_result(
     metadata: dict[str, Any] | None = None,
 ) -> bool:
     runs = payload.get("runs")
-    if not isinstance(runs, list) or run_index >= len(runs):
+    if not isinstance(runs, list) or not 0 <= run_index < len(runs):
         return False
     run = runs[run_index]
     if not isinstance(run, dict):
         return False
     results = run.get("results")
-    if not isinstance(results, list) or result_index >= len(results):
+    if not isinstance(results, list) or not 0 <= result_index < len(results):
         return False
     result = results[result_index]
     if not isinstance(result, dict):

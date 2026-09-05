@@ -228,7 +228,9 @@ class RunLogSession:
         created_ndjson = False
         try:
             self.output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self._file = self.ndjson_path.open("x", encoding="utf-8", buffering=1)
+            self._file = self.ndjson_path.open(
+                "x", encoding="utf-8", errors="backslashreplace", buffering=1
+            )
             created_ndjson = True
             self.ndjson_path.chmod(0o600)
             self._encoder = PayloadEncoder(self.blobs_dir, self.config)
@@ -468,6 +470,12 @@ class RunLogSession:
                         if record_type == "event"
                         else span_explanation(kind or "operation", name)
                     )
+                encoded_attributes = self._encoder.encode_mapping(
+                    materialized_attributes
+                )
+                encoded_error = (
+                    self._encoder.encode_mapping(error) if error is not None else None
+                )
                 record: dict[str, Any] = {
                     "v": SCHEMA_VERSION,
                     "record": record_type,
@@ -481,7 +489,7 @@ class RunLogSession:
                     "explanation": resolved_explanation,
                     "thread": threading.current_thread().name,
                     "thread_id": threading.get_ident(),
-                    "attributes": self._encoder.encode_mapping(materialized_attributes),
+                    "attributes": encoded_attributes,
                 }
                 if record_type != "event":
                     record["parent_span_id"] = parent_span_id
@@ -490,8 +498,8 @@ class RunLogSession:
                     record["status"] = status
                 if duration_ms is not None:
                     record["duration_ms"] = round(duration_ms, 3)
-                if error is not None:
-                    record["error"] = self._encoder.encode_mapping(error)
+                if encoded_error is not None:
+                    record["error"] = encoded_error
                 line = json.dumps(
                     record,
                     ensure_ascii=False,
@@ -527,7 +535,7 @@ class RunLogSession:
             self.meta_path,
             payload,
             indent=2,
-            ensure_ascii=False,
+            ensure_ascii=True,
             allow_nan=False,
             mode=0o600,
         )
@@ -690,9 +698,14 @@ def _merge_attributes(
 
 
 def _exception_payload(exc: BaseException) -> dict[str, Any]:
+    try:
+        message = str(exc)
+    except BaseException:
+        # Formatting must not replace the original failure, even with an interrupt.
+        message = "<exception str() failed>"
     return {
         "type": type(exc).__name__,
-        "message": str(exc),
+        "message": message,
         "traceback": "".join(
             traceback.format_exception(type(exc), exc, exc.__traceback__)
         ),

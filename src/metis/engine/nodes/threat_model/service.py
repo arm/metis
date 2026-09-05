@@ -37,7 +37,15 @@ from .history import write_history_records
 logger = logging.getLogger("metis")
 
 THREAT_MODEL_NAMESPACE = ("repo", "threat_model")
-_PROMPTS = get_engine_prompts("threat_context")
+_PROMPTS = get_engine_prompts(
+    "threat_context",
+    required=(
+        "source_distillation_system",
+        "source_distillation_user",
+        "source_reduction_system",
+        "source_reduction_user",
+    ),
+)
 
 
 @dataclass(frozen=True)

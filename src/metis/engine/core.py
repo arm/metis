@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from typing import Literal
 from typing import cast
@@ -13,6 +14,7 @@ from typing import cast
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
 from metis.configuration import _required_positive_int
+from metis.configuration import _required_string_list
 from metis.configuration import load_execution_config
 from metis.configuration import load_plugin_config
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
@@ -52,6 +54,22 @@ from .tools.index import index_model_tools
 logger = logging.getLogger("metis")
 
 
+class ExecutionGraphError(RuntimeError):
+    """A failed execution, including validated outputs and structured diagnostics."""
+
+    def __init__(self, result: ExecutionResult) -> None:
+        self.result = ExecutionResult(
+            status=result.status,
+            outputs={
+                name: _execution_value(value, strict=False)
+                for name, value in result.outputs.items()
+            },
+            diagnostics=result.diagnostics,
+        )
+        details = "; ".join(diagnostic.message for diagnostic in result.diagnostics)
+        super().__init__(f"Execution graph failed: {details or result.status.value}")
+
+
 class MetisEngine:
     def __init__(
         self,
@@ -64,6 +82,9 @@ class MetisEngine:
     ) -> None:
         self.codebase_path = codebase_path
         self._runlog = runlog
+        self._close_lock = RLock()
+        self._closed = False
+        self._triage_classifier = None
 
         required_keys = [
             "max_workers",
@@ -81,6 +102,19 @@ class MetisEngine:
             "max_workers",
             section="MetisEngine",
         )
+        for name in ("max_active_nodes", "max_concurrent_executions"):
+            if kwargs.get(name) is None:
+                kwargs[name] = max_workers
+            _required_positive_int(kwargs, name, section="MetisEngine")
+        for name in ("review_code_include_paths", "review_code_exclude_paths"):
+            _required_string_list(kwargs.get(name, []), section=f"MetisEngine.{name}")
+        metisignore_file = kwargs.get("metisignore_file")
+        if metisignore_file is not None and not isinstance(
+            metisignore_file, (str, Path)
+        ):
+            raise ValueError(
+                "MetisEngine.metisignore_file must be a string, Path, or null"
+            )
         max_token_length = cast(int, kwargs["max_token_length"])
         llama_query_model = cast(str, kwargs["llama_query_model"])
         similarity_top_k = cast(int, kwargs["similarity_top_k"])
@@ -130,6 +164,8 @@ class MetisEngine:
             custom_prompt_text=kwargs.get("custom_prompt_text"),
             custom_guidance_precedence=custom_guidance_precedence,
             max_workers=max_workers,
+            max_active_nodes=kwargs["max_active_nodes"],
+            max_concurrent_executions=kwargs["max_concurrent_executions"],
             max_token_length=max_token_length,
             llama_query_model=llama_query_model,
             chat_model_kwargs=chat_model_kwargs,
@@ -168,24 +204,24 @@ class MetisEngine:
             ),
         )
         self._config.memory_service = None
-        codegraphs = CodeGraphService(
-            self._config,
-            self.repository,
-            discover_provider_factories(
-                {
-                    "c": CFamilyCodeGraphProvider,
-                    "cpp": CFamilyCodeGraphProvider,
-                },
-            ),
-            annotation_settings=codegraph_config,
-            semantics=CodeGraphSemanticsCatalog(
-                providers={
-                    "c": CFamilyCodeGraphSemantics(),
-                    "cpp": CFamilyCodeGraphSemantics(),
-                },
-            ),
-        )
         try:
+            codegraphs = CodeGraphService(
+                self._config,
+                self.repository,
+                discover_provider_factories(
+                    {
+                        "c": CFamilyCodeGraphProvider,
+                        "cpp": CFamilyCodeGraphProvider,
+                    },
+                ),
+                annotation_settings=codegraph_config,
+                semantics=CodeGraphSemanticsCatalog(
+                    providers={
+                        "c": CFamilyCodeGraphSemantics(),
+                        "cpp": CFamilyCodeGraphSemantics(),
+                    },
+                ),
+            )
             builtin_execution = build_builtin_execution(
                 execution_config,
                 engine_config=self._config,
@@ -197,13 +233,16 @@ class MetisEngine:
                 reachability_settings=reachability_settings,
                 review_graph_factory=self._get_review_graph,
             )
-        except Exception:
-            self.capabilities.close()
+            self.execution = builtin_execution.execution
+            self._triage_service = builtin_execution.triage_service
+            self._triage_classifier = builtin_execution.triage_classifier
+            self._config.memory_service = self.capabilities.get("memory")
+        except BaseException as exc:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                exc.add_note(f"Engine cleanup also failed: {cleanup_error}")
             raise
-        self.execution = builtin_execution.execution
-        self._triage_service = builtin_execution.triage_service
-        self._triage_classifier = builtin_execution.triage_classifier
-        self._config.memory_service = self.capabilities.get("memory")
 
     @contextlib.contextmanager
     def _execution_span(self, name: str, attributes: dict[str, object] | None = None):
@@ -409,20 +448,46 @@ class MetisEngine:
             return _execution_value(triage)
 
     def close(self):
-        self.execution.close()
-        if self._triage_classifier is not None:
-            self._triage_classifier.close()
-        self.capabilities.close()
+        execution = getattr(self, "execution", None)
+        first_error: BaseException | None = None
+        if execution is not None:
+            execution.check_can_close()
+            try:
+                execution.close()
+            except BaseException as exc:
+                first_error = exc
+        with self._close_lock:
+            resources = (
+                () if self._closed else (self._triage_classifier, self.capabilities)
+            )
+            self._closed = True
+        for resource in resources:
+            if resource is None:
+                continue
+            try:
+                resource.close()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
 
-def _execution_value(value):
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(mode="json", by_alias=True)
-    if isinstance(value, dict):
-        return {key: _execution_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_execution_value(item) for item in value]
+def _execution_value(value, *, strict: bool = True):
+    try:
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump(mode="json", by_alias=True)
+        if isinstance(value, dict):
+            return {
+                key: _execution_value(item, strict=strict)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [_execution_value(item, strict=strict) for item in value]
+    except Exception:
+        if strict:
+            raise
     return value
 
 
@@ -432,6 +497,4 @@ def _require_execution_outputs(result):
             log = logger.warning if diagnostic.severity == "warning" else logger.error
             log(diagnostic.message)
         return result.outputs
-    details = "; ".join(diagnostic.message for diagnostic in result.diagnostics)
-    message = details or result.status.value
-    raise RuntimeError(f"Execution graph failed: {message}")
+    raise ExecutionGraphError(result)

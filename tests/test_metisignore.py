@@ -3,7 +3,6 @@
 
 from pathlib import Path
 import threading
-from types import SimpleNamespace
 
 import metis.engine.capabilities.indexing as indexing_service_mod
 from metis.engine import MetisEngine
@@ -174,31 +173,10 @@ def test_index_prepare_nodes_respects_nested_metisignore_allowlist(
 
     engine = _build_engine(tmp_path, dummy_backend, dummy_llm, capability_settings)
 
-    documents = [
-        SimpleNamespace(
-            id_=str(tmp_path / "src" / "keep.py"),
-            doc_id=str(tmp_path / "src" / "keep.py"),
-        ),
-        SimpleNamespace(
-            id_=str(tmp_path / "src" / "drop.py"),
-            doc_id=str(tmp_path / "src" / "drop.py"),
-        ),
-        SimpleNamespace(
-            id_=str(tmp_path / "README.md"),
-            doc_id=str(tmp_path / "README.md"),
-        ),
-        SimpleNamespace(
-            id_=str(tmp_path / "notes.md"),
-            doc_id=str(tmp_path / "notes.md"),
-        ),
-    ]
-
-    class _DummyReader:
-        def __init__(self, **_kwargs):
-            pass
-
-        def load_data(self):
-            return list(documents)
+    for name in ("src/keep.py", "src/drop.py", "README.md", "notes.md"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("inert text\n", encoding="utf-8")
 
     captured = {}
 
@@ -209,7 +187,6 @@ def test_index_prepare_nodes_respects_nested_metisignore_allowlist(
             yield None
         return (["code-node"], ["doc-node"])
 
-    monkeypatch.setattr(indexing_service_mod, "SimpleDirectoryReader", _DummyReader)
     monkeypatch.setattr(
         indexing_service_mod, "prepare_nodes_iter", _fake_prepare_nodes_iter
     )

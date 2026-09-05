@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import Lock, RLock, local
 from typing import Any
 
 from metis.usage import UsageRuntime
@@ -22,6 +22,8 @@ class EngineConfig:
     custom_prompt_text: str | None
     custom_guidance_precedence: str
     max_workers: int
+    max_active_nodes: int
+    max_concurrent_executions: int
     max_token_length: int
     llama_query_model: str
     chat_model_kwargs: dict[str, Any]
@@ -49,6 +51,14 @@ class EngineState:
     ask_graph: Any | None = None
     retriever_code: Any | None = None
     retriever_docs: Any | None = None
-    pending_nodes: tuple[Any, Any] | None = None
-    retriever_lock: Lock = field(default_factory=Lock)
+    _index_preparation: local = field(default_factory=local, repr=False)
+    retriever_lock: RLock = field(default_factory=RLock)
     review_graph_lock: Lock = field(default_factory=Lock)
+
+    @property
+    def pending_nodes(self) -> tuple[Any, Any] | None:
+        return getattr(self._index_preparation, "nodes", None)
+
+    @pending_nodes.setter
+    def pending_nodes(self, value: tuple[Any, Any] | None) -> None:
+        self._index_preparation.nodes = value

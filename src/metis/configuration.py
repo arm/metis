@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping
+from contextlib import nullcontext
 import logging
 import os
+import sys
 from importlib.resources import as_file
 from importlib.resources import files
 from pathlib import Path
@@ -18,22 +21,215 @@ from metis.providers.registry import get_embedding_provider
 from metis.runtime_settings import ModelToolSettings
 from metis.runtime_settings import CapabilityRuntimeSettings
 from metis.runtime_settings import TriageOptions
-from metis.utils import string_list
 
 logger = logging.getLogger("metis")
 
 
+class _UniqueSafeLoader(yaml.SafeLoader):
+    def __init__(self, stream):
+        super().__init__(stream)
+        self._checked_mappings = set()
+
+    def construct_object(self, node, deep=False):
+        try:
+            return super().construct_object(node, deep=deep)
+        except (ValueError, OverflowError) as exc:
+            if not isinstance(node, yaml.ScalarNode):
+                raise
+            raise yaml.constructor.ConstructorError(
+                None, None, str(exc), node.start_mark
+            ) from exc
+
+    def flatten_mapping(self, node):
+        # Merged nodes can be flattened before construction. Validate each original
+        # mapping once, before flattening replaces its explicit keys with inherited ones.
+        if node not in self._checked_mappings:
+            self._checked_mappings.add(node)
+            keys = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:value":
+                    key_node.tag = "tag:yaml.org,2002:str"
+                key = (
+                    (key_node.tag,)
+                    if key_node.tag == "tag:yaml.org,2002:merge"
+                    else self.construct_object(key_node)
+                )
+                try:
+                    duplicate = key in keys
+                    keys.add(key)
+                except TypeError:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        "found an unhashable key",
+                        key_node.start_mark,
+                    ) from None
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+        return super().flatten_mapping(node)
+
+
 def load_yaml(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    stream = (
+        nullcontext(path)
+        if hasattr(path, "read")
+        else open(path, "r", encoding="utf-8")
+    )
+    with stream as handle:
+        loader = _UniqueSafeLoader(handle)
+        try:
+            return loader.get_single_data()
+        finally:
+            loader.dispose()
+
+
+def _deep_merge(
+    base: Mapping[str, Any],
+    overlay: Mapping[str, Any],
+    *,
+    replace_empty: bool = False,
+) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        existing = merged.get(key)
+        if (
+            isinstance(existing, Mapping)
+            and isinstance(value, Mapping)
+            and (value or not replace_empty)
+        ):
+            merged[key] = _deep_merge(existing, value, replace_empty=replace_empty)
+        else:
+            merged[key] = value
+    return merged
 
 
 def load_runtime_config(config_path=None, enable_psql=False):
-    cfg = load_metis_config(config_path)
+    cfg = _required_mapping(
+        load_metis_config(config_path),
+        section="configuration",
+        allowed={
+            "metis_engine",
+            "llm_provider",
+            "embedding_provider",
+            "query",
+            "psql_database",
+            "memory",
+            "language_plugins",
+        },
+    )
+    for name in (
+        "llm_provider",
+        "embedding_provider",
+        "query",
+        "psql_database",
+        "language_plugins",
+    ):
+        if name in cfg:
+            _required_mapping(cfg[name], section=name)
+    engine_defaults = _packaged_engine_config()
+    configured_engine = _required_mapping(
+        cfg.get("metis_engine", {}),
+        section="metis_engine",
+        allowed=engine_defaults,
+    )
+    engine_cfg = {**engine_defaults, **configured_engine}
+    # Only shared settings inherit defaults; graphs and node-owned settings replace them.
+    for name in ("model_tools", "capabilities", "threat_model"):
+        value = configured_engine.get(name)
+        if isinstance(value, dict) and value:
+            engine_cfg[name] = _deep_merge(
+                engine_defaults[name], value, replace_empty=True
+            )
+    for name in (
+        "model_tools",
+        "capabilities",
+        "execution",
+        "codegraph",
+        "reachability",
+        "threat_model",
+        "triage",
+        "hnsw_kwargs",
+    ):
+        _required_mapping(engine_cfg[name], section=f"metis_engine.{name}")
+    hnsw_kwargs = engine_cfg["hnsw_kwargs"]
+    for name in ("hnsw_m", "hnsw_ef_construction", "hnsw_ef_search"):
+        if name in hnsw_kwargs:
+            _required_positive_int(
+                hnsw_kwargs, name, section="metis_engine.hnsw_kwargs"
+            )
+    for name in ("max_token_length", "max_workers", "embed_dim", "doc_chunk_size"):
+        _required_positive_int(engine_cfg, name, section="metis_engine")
+    for name in ("max_active_nodes", "max_concurrent_executions"):
+        if engine_cfg[name] is None:
+            engine_cfg[name] = engine_cfg["max_workers"]
+        _required_positive_int(engine_cfg, name, section="metis_engine")
+    for name in ("doc_chunk_overlap", "triage_checkpoint_every", "llm_max_retries"):
+        _required_positive_int(engine_cfg, name, section="metis_engine", minimum=0)
+    if engine_cfg["doc_chunk_overlap"] >= engine_cfg["doc_chunk_size"]:
+        raise ValueError(
+            "metis_engine.doc_chunk_overlap must be less than doc_chunk_size"
+        )
+    for name in ("review_code_include_paths", "review_code_exclude_paths"):
+        _required_string_list(engine_cfg[name], section=f"metis_engine.{name}")
+    metisignore_file = engine_cfg["metisignore_file"]
+    if metisignore_file is not None and not isinstance(metisignore_file, str):
+        raise ValueError("metis_engine.metisignore_file must be a string or null")
+    query_cfg = _required_mapping(
+        cfg.get("query", {}),
+        section="query",
+        allowed={
+            "model",
+            "temperature",
+            "max_tokens",
+            "reasoning_effort",
+            "similarity_top_k",
+        },
+    )
+    temperature = query_cfg.get("temperature")
+    if temperature is not None and (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, (int, float))
+        or not 0 <= temperature <= sys.float_info.max
+    ):
+        raise ValueError("query.temperature must be a finite non-negative number")
+    if query_cfg.get("max_tokens") is not None:
+        _required_positive_int(query_cfg, "max_tokens", section="query")
+    _required_positive_int(query_cfg, "similarity_top_k", section="query", default=5)
+    db_cfg = _required_mapping(
+        cfg.get("psql_database", {}),
+        section="psql_database",
+        allowed={"provider", "credentials"},
+    )
+    if "credentials" in db_cfg:
+        _required_mapping(
+            db_cfg["credentials"],
+            section="psql_database.credentials",
+            allowed={"username", "password", "host", "port", "database_name"},
+        )
+    capability_settings = _capability_runtime_settings(engine_cfg)
+    threat_model_config = _threat_model_config(engine_cfg["threat_model"])
+    triage_options = _triage_options(engine_cfg["triage"])
+    execution_config = load_execution_config(engine_cfg["execution"])
+
+    # Engine imports this module, so resolve its schemas after module initialization.
+    from metis.engine.nodes.codegraph.annotations import CodeGraphConfiguration
+    from metis.engine.nodes.reachability.options import ReachabilityConfiguration
+
+    CodeGraphConfiguration.model_validate(engine_cfg["codegraph"])
+    ReachabilityConfiguration.model_validate(engine_cfg["reachability"])
+
+    review_checkpoints_enabled = engine_cfg.get("review_checkpoints", True)
+    if not isinstance(review_checkpoints_enabled, bool):
+        raise ValueError("metis_engine.review_checkpoints must be a boolean")
+    memory_config = _memory_config(cfg.get("memory"))
 
     runtime: dict[str, object] = {}
     if enable_psql:
-        db_cfg = cfg.get("psql_database", {})
         provider = db_cfg.get("provider", "config")
         if provider == "env":
             secrets = dict(
@@ -56,7 +252,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
             pg_db_name=secrets.get("database_name"),
         )
 
-    llm_cfg = dict(cfg.get("llm_provider") or {})
+    llm_cfg = _required_mapping(cfg.get("llm_provider", {}), section="llm_provider")
     llm_provider_name = str(llm_cfg.get("name", "")).lower()
     runtime["llm_provider_name"] = llm_provider_name
     llm_provider_cls = _get_provider_cls(
@@ -70,32 +266,20 @@ def load_runtime_config(config_path=None, enable_psql=False):
         section="llm_provider",
     )
 
-    engine_cfg = cfg.get("metis_engine", {})
-    runtime["max_token_length"] = engine_cfg.get("max_token_length", 100000)
-    runtime["max_workers"] = _required_positive_int(
-        engine_cfg,
+    for name in (
+        "max_token_length",
         "max_workers",
-        section="metis_engine",
-        default=8,
-    )
-    runtime["embed_dim"] = engine_cfg.get("embed_dim", 1536)
-    runtime["doc_chunk_size"] = engine_cfg.get("doc_chunk_size", 1024)
-    runtime["doc_chunk_overlap"] = engine_cfg.get("doc_chunk_overlap", 200)
-    runtime["triage_checkpoint_every"] = engine_cfg.get("triage_checkpoint_every", 50)
-    review_checkpoints_enabled = engine_cfg.get("review_checkpoints", True)
-    if not isinstance(review_checkpoints_enabled, bool):
-        raise ValueError("metis_engine.review_checkpoints must be a boolean")
+        "max_active_nodes",
+        "max_concurrent_executions",
+        "embed_dim",
+        "doc_chunk_size",
+        "doc_chunk_overlap",
+        "triage_checkpoint_every",
+    ):
+        runtime[name] = engine_cfg[name]
     runtime["review_checkpoints_enabled"] = review_checkpoints_enabled
-    runtime["llm_max_retries"] = int(engine_cfg.get("llm_max_retries", 5))
-    runtime["hnsw_kwargs"] = engine_cfg.get(
-        "hnsw_kwargs",
-        {
-            "hnsw_m": 16,
-            "hnsw_ef_construction": 64,
-            "hnsw_ef_search": 40,
-            "hnsw_dist_method": "vector_cosine_ops",
-        },
-    )
+    runtime["llm_max_retries"] = engine_cfg["llm_max_retries"]
+    runtime["hnsw_kwargs"] = engine_cfg["hnsw_kwargs"]
     runtime["pgvector_use_halfvec"] = pgvector_use_halfvec_setting(
         engine_cfg.get("pgvector_use_halfvec", "auto"),
         runtime["embed_dim"],
@@ -107,32 +291,18 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["review_code_exclude_paths"] = engine_cfg.get(
         "review_code_exclude_paths", []
     )
-    runtime["capability_settings"] = _capability_runtime_settings(engine_cfg)
-    memory_cfg = cfg.get("memory")
-    runtime["memory"] = _memory_config(memory_cfg)
-    runtime["threat_model_config"] = _threat_model_config(
-        engine_cfg.get("threat_model")
-    )
-    runtime["triage_options"] = _triage_options(engine_cfg.get("triage"))
-    runtime["execution_config"] = load_execution_config(engine_cfg.get("execution"))
-    codegraph_cfg = engine_cfg.get("codegraph") or {}
-    if not isinstance(codegraph_cfg, dict):
-        raise ValueError("metis_engine.codegraph must be a mapping")
-    runtime["codegraph_config"] = dict(codegraph_cfg)
-    reachability_cfg = engine_cfg.get("reachability") or {}
-    if not isinstance(reachability_cfg, dict):
-        raise ValueError("metis_engine.reachability must be a mapping")
-    runtime["reachability_config"] = dict(reachability_cfg)
-    language_plugins = cfg.get("language_plugins")
-    if language_plugins is None:
-        language_plugins = {}
-    if not isinstance(language_plugins, dict):
-        raise ValueError("language_plugins must be a mapping")
+    runtime["capability_settings"] = capability_settings
+    runtime["memory"] = memory_config
+    runtime["threat_model_config"] = threat_model_config
+    runtime["triage_options"] = triage_options
+    runtime["execution_config"] = execution_config
+    runtime["codegraph_config"] = dict(engine_cfg["codegraph"])
+    runtime["reachability_config"] = dict(engine_cfg["reachability"])
+    language_plugins = cfg.get("language_plugins", {})
     plugin_config = load_plugin_config()
     if language_plugins:
         plugin_config["language_plugins"] = dict(language_plugins)
     runtime["plugin_config"] = plugin_config
-    query_cfg = cfg.get("query", {})
     llama_query_model = query_cfg.get("model") or llm_provider_config.get("model", "")
     llama_query_model = str(llama_query_model or "")
     runtime["model"] = llm_provider_config.get("model", "")
@@ -156,7 +326,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["llm_provider"] = llm_provider_config
 
     runtime["embedding_provider_raw_config"] = (
-        dict(cfg.get("embedding_provider") or {}) or None
+        dict(cfg.get("embedding_provider", {})) or None
     )
 
     return runtime
@@ -190,17 +360,10 @@ def _get_provider_cls(provider_name: str, section: str) -> type:
             return get_chat_provider(provider_name)
         return get_embedding_provider(provider_name)
     except ValueError as exc:
+        surface = "chat" if section == "llm_provider" else "embedding"
+        if str(exc) != f"Unsupported {surface} provider: {provider_name}":
+            raise
         raise ValueError(f"Unsupported {section} provider: {provider_name}") from exc
-
-
-def _positive_int(value: object, *, fallback: int) -> int:
-    try:
-        parsed = int(cast(Any, value))
-    except (TypeError, ValueError):
-        return fallback
-    if parsed <= 0:
-        return fallback
-    return parsed
 
 
 def _required_positive_int(
@@ -209,23 +372,44 @@ def _required_positive_int(
     *,
     section: str,
     default: int | None = None,
+    minimum: int = 1,
 ) -> int:
     value = values.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{section}.{key} must be a positive integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        requirement = "positive" if minimum else "non-negative"
+        raise ValueError(f"{section}.{key} must be a {requirement} integer")
     return value
 
 
-def _required_mapping(value: object, *, section: str) -> dict[str, Any]:
+def _required_string_list(value: object, *, section: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{section} must be a list of strings")
+    return value
+
+
+def _required_mapping(
+    value: object,
+    *,
+    section: str,
+    allowed: Mapping | set[str] | None = None,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{section} must be a mapping")
+    if allowed is not None:
+        unknown = value.keys() - allowed
+        if unknown:
+            raise ValueError(
+                f"Unknown {section} settings: {', '.join(sorted(map(str, unknown)))}"
+            )
     return value
 
 
 def _triage_options(value: object) -> TriageOptions:
     if value is None:
         return TriageOptions()
-    configured = _required_mapping(value, section="metis_engine.triage")
+    configured = _required_mapping(
+        value, section="metis_engine.triage", allowed={"include_triaged"}
+    )
     include_triaged = configured.get("include_triaged", False)
     if not isinstance(include_triaged, bool):
         raise ValueError("metis_engine.triage.include_triaged must be a boolean")
@@ -242,6 +426,11 @@ def _capability_runtime_settings(
         model.update(
             _required_mapping(configured_model, section="metis_engine.model_tools")
         )
+    _required_mapping(
+        model,
+        section="metis_engine.model_tools",
+        allowed={"max_rounds", "max_contract_chars"},
+    )
     capabilities = _load_engine_mapping("capabilities", engine.get("capabilities"))
     configurations: dict[str, dict[str, Any]] = {}
     for name, value in capabilities.items():
@@ -295,17 +484,32 @@ def _memory_config(raw_config: object) -> dict[str, object]:
 
 
 def _threat_model_config(value: object) -> dict[str, object]:
-    config = value if isinstance(value, dict) else {}
-    history = config.get("history")
-    if not isinstance(history, dict):
-        history = {}
+    config = _required_mapping(
+        value,
+        section="metis_engine.threat_model",
+        allowed={"source_patterns", "history"},
+    )
+    patterns = _required_string_list(
+        config.get("source_patterns", []),
+        section="metis_engine.threat_model.source_patterns",
+    )
+    history = _required_mapping(
+        config.get("history", {}),
+        section="metis_engine.threat_model.history",
+        allowed={"enabled", "max_commits"},
+    )
+    enabled = history.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("metis_engine.threat_model.history.enabled must be a boolean")
     return {
-        "source_patterns": string_list(config.get("source_patterns")),
+        "source_patterns": list(patterns),
         "history": {
-            "enabled": history.get("enabled") is True,
-            "max_commits": _positive_int(
-                history.get("max_commits"),
-                fallback=500,
+            "enabled": enabled,
+            "max_commits": _required_positive_int(
+                history,
+                "max_commits",
+                section="metis_engine.threat_model.history",
+                default=500,
             ),
         },
     }
@@ -320,10 +524,13 @@ def _load_engine_mapping(name: str, value: object) -> dict[str, Any]:
         raise ValueError(f"metis_engine.{name} must be a mapping")
     if isinstance(value, dict):
         return dict(value)
+    return dict(_packaged_engine_config()[name])
+
+
+def _packaged_engine_config() -> dict[str, Any]:
     resource = files("metis") / "metis.yaml"
     with as_file(resource) as real_path:
-        packaged = load_yaml(real_path)
-    return dict(packaged["metis_engine"][name])
+        return {"triage": {}, **load_yaml(real_path)["metis_engine"]}
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):

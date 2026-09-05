@@ -16,7 +16,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from metis.engine.source import SourceMap
-from metis.utils import resolve_path_within_root
+from metis.utils import resolve_path_within_root, source_lines
 
 _PYTHON_REGEX_REWRITES = (
     ("[[:space:]]", r"\s"),
@@ -111,7 +111,7 @@ class NavigationCapability:
                 text = file_path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            for lineno, line in enumerate(text.splitlines(), start=1):
+            for lineno, line in enumerate(source_lines(text), start=1):
                 if regex.search(line):
                     lines.append(f"{rel}:{lineno}:{line}")
                     if sum(len(x) + 1 for x in lines) >= self.max_chars:
@@ -161,7 +161,7 @@ class NavigationCapability:
         target = self._resolve_path(path)
         if not target.is_file():
             raise FileNotFoundError(str(target))
-        lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = source_lines(target.read_text(encoding="utf-8", errors="ignore"))
         start_idx = max(0, start_line - 1)
         end_idx = min(len(lines), end_line)
         body = "\n".join(lines[start_idx:end_idx])

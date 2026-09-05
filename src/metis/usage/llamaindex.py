@@ -14,7 +14,7 @@ from metis.utils import count_tokens
 def _as_int(value: Any) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return parsed if parsed > 0 else 0
 

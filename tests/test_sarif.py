@@ -348,3 +348,18 @@ def test_generate_sarif_ignores_malformed_optional_anchor(anchor):
         "snippet": {"text": "first line\nsecond line"},
     }
     assert "anchor" not in entry["properties"]
+
+
+def test_generated_reports_own_nested_rule_metadata(monkeypatch):
+    from copy import deepcopy
+    from metis.sarif import writer
+
+    original = deepcopy(writer.RULES)
+    monkeypatch.setattr(writer, "RULES", deepcopy(original))
+    first = generate_sarif({"reviews": []})
+    first["runs"][0]["tool"]["driver"]["rules"][0]["defaultConfiguration"]["level"] = (
+        "local-only"
+    )
+    second = generate_sarif({"reviews": []})
+    assert writer.RULES == original
+    assert second["runs"][0]["tool"]["driver"]["rules"] == original

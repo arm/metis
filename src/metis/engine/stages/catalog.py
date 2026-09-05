@@ -26,6 +26,7 @@ class StageCatalog:
             if entry_points is None
             else entry_points
         )
+        self._registrations: dict[str, StageRegistration] = {}
         self._entry_points: dict[str, list[metadata.EntryPoint]] = {}
         for entry_point in discovered:
             if entry_point.name.isidentifier():
@@ -38,6 +39,8 @@ class StageCatalog:
             )
 
     def resolve(self, name: str) -> StageRegistration:
+        if name in self._registrations:
+            return self._registrations[name]
         candidates = self._entry_points.get(name, [])
         if name in self._builtin_names:
             raise ValueError(f"Execution stage {name!r} is built in")
@@ -66,5 +69,6 @@ class StageCatalog:
                 f"Execution stage entry point {name!r} returned registration "
                 f"{registration.name!r}"
             )
+        self._registrations[name] = registration
         self._entry_points.pop(name, None)
         return registration

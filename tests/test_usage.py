@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import threading
 from unittest.mock import Mock
 
 import pytest
@@ -285,3 +287,116 @@ def test_embedding_event_cleans_pending_model_when_usage_is_skipped(scoped, payl
 
     assert handler._embedding_models == {}
     assert collector.snapshot()["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("callback", ["langchain", "llamaindex"])
+@pytest.mark.parametrize(
+    "field", ["prompt_tokens", "completion_tokens", "total_tokens"]
+)
+@pytest.mark.parametrize("value", [float("inf"), float("-inf")])
+def test_usage_callbacks_ignore_nonfinite_counts(tmp_path, callback, field, value):
+    runtime = UsageRuntime(tmp_path)
+    counts = {field: value}
+    with runtime.command("inert"):
+        if callback == "langchain":
+            runtime.langchain_handler.on_llm_end(
+                SimpleNamespace(llm_output={"token_usage": counts}, generations=[])
+            )
+        else:
+            runtime.llamaindex_callback_manager.on_event_end(
+                CBEventType.LLM,
+                {EventPayload.RESPONSE: SimpleNamespace(additional_kwargs=counts)},
+            )
+    assert runtime.snapshot_total()["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("access", ["finalize", "completed", "persisted"])
+def test_usage_command_returns_do_not_mutate_persisted_records(tmp_path, access):
+    runtime = UsageRuntime(tmp_path)
+    with runtime.command("inert") as command:
+        runtime.collector.record(
+            scope_id=command.scope_id,
+            operation="inert",
+            model="inert",
+            input_tokens=1,
+            output_tokens=2,
+        )
+    finalized = runtime.finalize_command(command)
+    returned = {
+        "finalize": finalized,
+        "completed": runtime.completed_commands()[0],
+        "persisted": runtime.build_persisted_payload()["commands"][0],
+    }[access]
+    returned["summary"]["total_tokens"] = 999
+    returned["cumulative"]["by_model"]["inert"]["input_tokens"] = 999
+
+    output_path = runtime.save_run_summary(str(tmp_path / "usage.json"))
+    payload = json.loads(Path(output_path).read_text(encoding="utf-8"))
+    assert payload["commands"][0]["summary"]["total_tokens"] == 3
+    assert (
+        payload["commands"][0]["cumulative"]["by_model"]["inert"]["input_tokens"] == 1
+    )
+    assert payload["totals"]["total_tokens"] == 3
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens"), [(-5, 10), (10, -5), (-5, -5)]
+)
+def test_usage_total_uses_clamped_token_counts(input_tokens, output_tokens):
+    collector = UsageCollector()
+    collector.record(
+        scope_id="scope",
+        operation="inert",
+        model="inert",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+    total = collector.snapshot()
+    assert total["input_tokens"] == max(0, input_tokens)
+    assert total["output_tokens"] == max(0, output_tokens)
+    assert total["total_tokens"] == total["input_tokens"] + total["output_tokens"]
+    assert collector.snapshot_scope("scope") == total
+
+
+def test_concurrent_usage_export_cannot_include_commands_newer_than_totals(
+    tmp_path, monkeypatch
+):
+    runtime = UsageRuntime(tmp_path)
+    original_snapshot = runtime.snapshot_total
+    snapshot_taken = threading.Event()
+    command_done = threading.Event()
+    exporting_thread = threading.get_ident()
+
+    def paused_snapshot():
+        result = original_snapshot()
+        if threading.get_ident() == exporting_thread:
+            snapshot_taken.set()
+            assert command_done.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(runtime, "snapshot_total", paused_snapshot)
+
+    def complete_command():
+        assert snapshot_taken.wait(timeout=5)
+        with runtime.command("inert") as command:
+            runtime.collector.record(
+                scope_id=command.scope_id,
+                operation="inert",
+                model="inert",
+                input_tokens=1,
+                output_tokens=2,
+            )
+        runtime.finalize_command(command)
+        command_done.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(complete_command)
+        output_path = runtime.save_run_summary(str(tmp_path / "usage.json"))
+        future.result(timeout=5)
+
+    payload = json.loads(Path(output_path).read_text(encoding="utf-8"))
+    command_tokens = sum(
+        item["summary"]["total_tokens"] for item in payload["commands"]
+    )
+    assert payload["totals"]["total_tokens"] >= command_tokens
+    assert runtime.completed_commands()[0]["summary"]["total_tokens"] == 3

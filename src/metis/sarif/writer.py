@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from uuid import uuid4
+from copy import deepcopy
 
 from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.version import __version__ as TOOL_VERSION
@@ -99,7 +100,7 @@ def generate_sarif(
                         "version": TOOL_VERSION,
                         "fullName": f"{tool_name} v{TOOL_VERSION}",
                         "informationUri": "https://github.com/arm/metis",
-                        "rules": RULES,
+                        "rules": deepcopy(RULES),
                     }
                 },
                 "automationDetails": {"id": automation_id},

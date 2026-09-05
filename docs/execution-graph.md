@@ -113,7 +113,10 @@ Capability runtime settings live under `metis_engine.capabilities`. A node's
 capability.
 
 Unregistered stages, nodes, unknown inputs, formats, and configuration fields
-are rejected when the YAML is loaded.
+are rejected when the YAML is loaded. Duplicate explicit YAML keys and malformed
+core settings are errors; omissions inherit the packaged defaults. YAML merge
+keys may be overridden explicitly. YAML scalar rules are unchanged: quote names
+such as `on`, `off`, `yes`, and `no` when they are identifiers.
 
 ## Stage contracts
 
@@ -234,6 +237,16 @@ bindings resolve singular ambiguities and may select or order collection
 sources. Same-named stage inputs, such as the Review request, retain precedence.
 Cross-stage values remain explicit under the stage's `inputs` mapping.
 
+Fan-in is declared with a homogeneous `tuple[T, ...]` port, including an
+`Annotated` or nullable wrapper. Fixed-length and unparameterized tuples are
+single payloads. Values are validated strictly against the declared annotation;
+nullable ports do not enable coercion. Omitted nullable inputs become `None` for
+both inferred bindings and explicit `$inputs` references. Unsupported annotations
+are rejected during compilation. A registration may name inputs in
+`required_when_bound` when a selected producer must succeed even though an
+unbound input accepts `None`; this requirement follows the port rather than a
+built-in node name.
+
 An explicit source written as `node_name` selects that node's only output. Use
 `node_name.output_name` when the producer has multiple outputs. Cross-stage
 bindings use `stage_name.output_name`. In a stage's `inputs` mapping,
@@ -259,7 +272,10 @@ result:
   filename: results/review
 ```
 
-This writes `results/review.sarif` and `results/review.json`.
+This writes `results/review.sarif` and `results/review.json`. A stage may configure
+one filename, on the node that publishes its `filename` output. An external
+replacement can use its own name and an explicit binding such as
+`outputs: {filename: private_result.filename}`.
 
 Any explicit `--output-file` path makes the CLI authoritative for that run.
 The `.sarif`, `.html`, `.csv`, or `.json` extension selects its format. Each
@@ -270,9 +286,13 @@ the later Triage result; Review uses a timestamped `graph_review` path to keep
 the files distinct. A result node's YAML `filename` is used only when the CLI
 does not supply an output path. When neither CLI nor YAML supplies a filename,
 a graph run writes
-`results/graph_review_<timestamp>.<format>` and
-`results/graph_triage_<timestamp>.<format>` for the formats requested by each
-stage. Supported formats are SARIF, JSON, HTML, and CSV.
+`results/graph_review_<timestamp>_<unique-id>.<format>` and
+`results/graph_triage_<timestamp>_<unique-id>.<format>` for the formats requested by each
+stage. Supported formats are SARIF, JSON, HTML, and CSV. Conflicting effective
+YAML destinations are rejected before writing, including case and Unicode aliases on
+filesystems that equate those names. JSON, SARIF, HTML, and CSV replace
+the destination atomically after a complete write, preserving the prior file if
+rendering or writing fails.
 
 ### Review checkpoints and resume
 
@@ -297,6 +317,16 @@ packet responses; deterministic anchoring, admission, authority filtering, and
 finding preparation always run again. Failures are not cached. Each successful
 work item is atomically upserted by key. `finding_dedup` writes the normal final
 output without replacing producer files.
+
+Checkpoint storage is best effort. Unreadable or incompatible databases are
+preserved and treated as a cache miss; failed writes are logged. Metis does not
+remove or rebuild them automatically, because another process may have repaired
+the file after the failure was observed. Malformed individual records are skipped
+without hiding other valid records.
+
+Short lowercase ASCII producer identifiers retain readable filenames. Other
+identifiers use an exact-name digest so case, Unicode normalization and long
+names cannot mix producer state. Ambiguous older filenames are not resumed.
 
 Disable review checkpoint reads and writes globally in the selected YAML:
 
@@ -369,9 +399,20 @@ corresponding stage contract directly:
 | `review_code`, `review_dir`, `review_file`, `review_patch` | `review` |
 | `triage` | `triage` |
 
-Direct commands do not rewrite YAML topology. The graph stops after a failed
-stage. An inconclusive review may publish valid partial findings and SARIF so
-triage can continue.
+Direct commands use the selected stage's transitive prerequisites in the same
+topological order as full graph execution; unrelated stages are skipped. Explicit
+inputs supplied to direct triage satisfy its data bindings, while declared control
+dependencies still run. Resolved contracts and topology are owned by the engine;
+mutating the caller's configuration after construction does not change execution.
+
+The graph stops after a failed stage, retaining validated outputs from completed
+nodes and stages. Public execution raises `metis.engine.ExecutionGraphError`, a
+`RuntimeError` whose `result` contains those outputs and structured diagnostics.
+Values that cannot be serialized to JSON remain native values in that error
+result, so serialization cannot hide the original execution failure.
+An inconclusive review may publish valid partial findings and SARIF so triage can
+continue. The CLI records the inconclusive status and prints a warning, retaining
+its existing zero exit code; an execution error exits nonzero.
 
 ## Built-in implementation layout
 
@@ -519,17 +560,22 @@ verify = "external_metis_stages.verify:registration"
 ```
 
 ```python
-from metis.execution_nodes import ReviewRun
+from metis.execution_nodes import ReviewResult
 from metis.execution_stages import StageContract, StageRegistration
 
 registration = StageRegistration(
     name="verify",
     contract=StageContract(
-        inputs={"review": ReviewRun},
+        inputs={"review": ReviewResult},
         required_outputs={"verdict": str},
     ),
 )
 ```
+
+Bind this stage's `review` input to `review.findings` to consume the default
+Review stage's published findings. `ReviewRun` is the internal node-to-node
+collection contract; `FinalReviewRun` and `JsonPromptRequest` are also available
+from `metis.execution_nodes` for separately distributed handlers.
 
 Put Metis compatibility bounds in `project.dependencies`. `tool.uv.sources`
 only selects the local editable source during development.
@@ -706,25 +752,101 @@ callbacks. Dependency-ready nodes run concurrently. For example,
 `threat_model` and `codegraph` run together in Initialize. After its barrier,
 `simple_llm_review` and `reachability` may run together over the initialized
 graph.
-`max_concurrency` limits that node's active jobs; omitted values use the global
-`metis_engine.max_workers` limit. All nodes on one engine share that job pool,
-so their combined active jobs never exceed the global limit and newly active
-nodes receive the next available workers before a busier node is replenished.
-Running calls are not preempted. Interrupting a stage cancels queued jobs and
-signals active nodes through `runtime.is_cancelled`; built-in long-running nodes
-check that signal through their progress callbacks. Provider calls already in
-flight still run until their configured timeout. Node-coordinator threads are
-separate from this job budget. A node submits bounded work through
-`invocation.context.jobs.run(...)`; it does not construct its own executor. A node
-accesses only the names in `invocation.context.capabilities`. A node declares
+
+The engine has three independent concurrency limits:
+
+| Setting under `metis_engine` | Scope | Default |
+| --- | --- | --- |
+| `max_workers` | Active jobs across all nodes and graph executions on one engine | `5` |
+| `max_active_nodes` | Active node handlers across all stages and graph executions on one engine | Inherits `max_workers` |
+| `max_concurrent_executions` | Admitted graph executions, including direct stage entry points | Inherits `max_workers` |
+
+All limits accept positive integers; `null` for either new setting means inherit
+`max_workers`. For example:
+
+```yaml
+metis_engine:
+  max_workers: 8
+  max_active_nodes: 3
+  max_concurrent_executions: 2
+```
+
+This engine admits two executions, runs at most three node handlers, and runs at
+most eight jobs. Further execution callers wait for admission without creating
+another pool. They wake with a closed-service error if the engine closes while
+waiting. A handler, job or callback must not synchronously execute another graph
+on the same engine: reentry is rejected before waiting, even when capacity is
+available. An unrelated engine has its own limits.
+
+The node pool and job pool are separate and owned by the execution service.
+This allows a node to wait for its jobs even with a single worker in either pool.
+Caller threads, provider background threads and direct capability calls are not
+counted as job workers. These settings are not a provider-wide request limit:
+a direct prompt call occupies its node handler, while a call inside `jobs.run`
+occupies a job worker. Nodes use `invocation.context.jobs.run(...)` instead of
+creating executors or leaving background work after returning.
+
+`max_concurrency` limits a node's active jobs; omitted values use
+`metis_engine.max_workers`. Concurrent submissions through the same node handle
+share its limit. All nodes share the engine's job pool; newly active job runs
+receive available workers before busier runs are replenished. A pool job must
+not synchronously submit another run to the same scheduler; this raises
+`RuntimeError`. Slow completion callbacks retain backpressure for their own job
+run without blocking other eligible runs. Node submission and graph admission
+do not promise FIFO ordering.
+
+Cancellation is cooperative. Each execution owns a root signal, and the runtime
+creates child scopes for its stages and nodes. A child inherits cancellation from
+its ancestors; cancelling it never sets an ancestor or sibling signal.
+`jobs.with_cancellation(event)` binds a child handle to that Event, and `cancel()`
+sets the bound Event, cancels queued jobs and signals active jobs. Custom
+`NodeJobs` implementations must honor the same contract. `runtime.is_cancelled()`
+and the job handle observe the same child signal. Context variables carry logging
+and execution identity into workers; they do not own cancellation.
+
+Handlers check `runtime.is_cancelled()` in long loops, or use
+`context.report_progress(...)`, which checks even without a progress callback.
+Returning a successful result after cancelling the node is rejected as
+cancellation. Ordinary job failures become node errors and cancel that node's
+cooperative job peers; independent nodes may continue. `CancelledError` from a
+handler or callback aborts its stage and propagates to the caller. A stage drains
+its own active handlers before returning, including on failure, and leaves other
+executions' shared-pool work intact.
+
+Closing an engine rejects new work, wakes waiting callers, signals admitted
+executions, drains handlers and jobs, then closes capabilities. Close from an
+active handler, job or callback is rejected. Threads and in-flight I/O cannot be
+preempted: extensions must use finite network/subprocess timeouts and join any
+work they start before returning. A non-cooperative call delays shutdown until
+it returns or its timeout expires. Concurrent close callers all wait for execution
+draining. Capability cleanup runs once; a repeated close may return while that
+cleanup is running, so cleanup callbacks can reenter close. Interruptions during
+draining are re-raised after cleanup completes.
+
+A node accesses only the names in `invocation.context.capabilities`. A node declares
 `request: ReviewCommand` when it needs the review-stage request; the runner
 supplies that typed stage input without extra YAML. The context does not expose
 internal engine services or `EngineConfig`. Installed node code runs in the
 Metis process; private distribution does not imply sandboxing.
 
 The runner passes typed values between nodes using explicit bindings or the
-inferred typed contracts described above. Nodes do not receive or invoke other
-executable nodes: keeping execution in the runner preserves dependency
+inferred typed contracts described above. Each invocation receives a fresh
+configuration model validated from a private snapshot of the original node
+settings; shared port values are borrowed and should be treated as read-only
+by handlers. Copy a mutable port value before modifying it, and keep per-run
+state in the invocation rather than in a registration, global variable or shared
+capability. Capability objects are shared across node handlers, jobs and admitted
+executions. Their implementations must synchronize mutable state or confine
+non-thread-safe clients to a serialized operation. Factory/cleanup synchronization
+does not serialize capability method calls; keep locks inside the capability's
+state boundary and release them before invoking external callbacks.
+
+Progress delivery is serialized within one execution. Other callbacks (debug,
+checkpoint, resume and diagnostic), and callbacks reused across executions, may
+run concurrently. They must protect shared state. Callbacks run inline and must
+not wait on another handler or callback that needs their lock or worker capacity.
+Cancellation exceptions propagate from callbacks. Nodes do not receive or invoke
+other executable nodes: keeping execution in the runner preserves dependency
 validation, ordering, diagnostics, and replacement by another registration
 such as `reachability_v2`.
 
@@ -742,6 +864,13 @@ nodes continue. Long-running node loops should emit through
 the CLI is not rendering progress.
 
 ## CodeGraph provider contract
+
+CodeGraph references identify immutable stored revisions. Retrying an incomplete
+graph or building the same fingerprint from another service does not invalidate
+an issued reference. Fingerprint lookup prefers the latest valid complete revision
+and otherwise returns the latest valid incomplete revision. Existing v2 stores
+migrate their fingerprint constraint transactionally while preserving revisions
+and record rows. Revisions are retained without automatic pruning.
 
 Adding language support does not change the execution graph. A language
 package must:

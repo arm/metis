@@ -4,19 +4,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from concurrent.futures import CancelledError
 from concurrent.futures import FIRST_COMPLETED
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
 from dataclasses import dataclass
+from copy import deepcopy
 from dataclasses import replace
-from threading import Event
 from time import perf_counter
 from typing import Any
-from typing import get_origin
 
-from pydantic import TypeAdapter
 from pydantic import ValidationError
 
 from metis import runlog
@@ -32,6 +31,7 @@ from .contracts import NodeRegistration
 from .contracts import NodeResult
 from .contracts import StageName
 from .contracts import annotation_allows_none
+from .contracts import annotation_adapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +46,8 @@ def run_stage(
     planned: StagePlan,
     context: NodeContext,
     initial_inputs: Mapping[str, object],
+    *,
+    executor: ThreadPoolExecutor | None = None,
 ) -> StageRun:
     with runlog.span(
         "stage",
@@ -71,28 +73,25 @@ def run_stage(
         completed: set[str] = set()
         pending = {node.name for node in planned.nodes}
         stage_started = perf_counter()
-        cancellation = Event()
-        stage_jobs = context.jobs.with_cancellation(cancellation)
-        stage_context = replace(
-            context,
-            runtime=replace(
-                context.runtime,
-                jobs=stage_jobs,
-                is_cancelled=cancellation.is_set,
-            ),
-        )
+        if context.runtime.is_cancelled():
+            raise CancelledError("Execution stage was cancelled")
+        stage_context = replace(context, runtime=context.runtime._with_cancellation())
         _progress(
             stage_context,
             {"event": "execution_stage_start", "stage": stage_name},
         )
-        worker_count = min(context.runtime.max_workers, len(planned.nodes))
-        executor = ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="metis-node",
-        )
+        owns_executor = executor is None
+        if executor is None:
+            executor = ThreadPoolExecutor(
+                max_workers=min(context.runtime.max_workers, len(planned.nodes)),
+                thread_name_prefix="metis-node",
+            )
         running: dict[Future[NodeResult], _PlannedNode] = {}
+        failure: BaseException | None = None
         try:
             while pending or running:
+                if stage_context.runtime.is_cancelled():
+                    raise CancelledError("Execution stage was cancelled")
                 for node in planned.nodes:
                     if node.name not in pending or not node.dependencies <= completed:
                         continue
@@ -120,6 +119,7 @@ def run_stage(
                 finished, _unfinished = wait(
                     tuple(running),
                     return_when=FIRST_COMPLETED,
+                    timeout=0.1,
                 )
                 for future in finished:
                     node = running.pop(future)
@@ -135,14 +135,32 @@ def run_stage(
                         and status is ExecutionStatus.OK
                     ):
                         status = ExecutionStatus.INCONCLUSIVE
-        except BaseException:
-            cancellation.set()
-            stage_jobs.cancel()
-            for future in running:
-                future.cancel()
-            raise
+            if stage_context.runtime.is_cancelled():
+                raise CancelledError("Execution stage was cancelled")
+        except BaseException as exc:
+            failure = exc
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            while True:
+                try:
+                    if failure is not None:
+                        stage_context.jobs.cancel()
+                        for future in running:
+                            future.cancel()
+                    # Drain only this stage, for either executor ownership path.
+                    # done() includes cancelled futures removed from the work queue.
+                    for future in running:
+                        while not future.done():
+                            with suppress(BaseException):
+                                future.result()
+                    if owns_executor:
+                        executor.shutdown(wait=True, cancel_futures=True)
+                    break
+                except BaseException as exc:
+                    # Shutdown is idempotent; finish cleanup before raising the first error.
+                    if failure is None:
+                        failure = exc
+        if failure is not None:
+            raise failure
         diagnostics = [
             diagnostic
             for node in planned.nodes
@@ -152,8 +170,9 @@ def run_stage(
             tolerated_failures = {
                 source.partition(".")[0]
                 for node in planned.nodes
-                for binding in node.input_bindings.values()
+                for input_name, binding in node.input_bindings.items()
                 if isinstance(binding, tuple)
+                and input_name not in node.registration.required_when_bound
                 for source in binding
                 if not source.startswith("$inputs.")
             }
@@ -187,10 +206,14 @@ def run_stage(
                 "duration_seconds": perf_counter() - stage_started,
             },
         )
+        if stage_context.runtime.is_cancelled():
+            raise CancelledError("Execution stage was cancelled")
         stage_span.end(
             status=status.value,
             attributes={"outputs": stage_outputs, "diagnostics": diagnostics},
         )
+        if stage_context.runtime.is_cancelled():
+            raise CancelledError("Execution stage was cancelled")
         return StageRun(status, stage_outputs, tuple(diagnostics))
 
 
@@ -248,7 +271,9 @@ def _run_node(
                 callbacks=(
                     replace(
                         context.callbacks,
-                        progress=lambda event: progress({**event, "node": node.name}),
+                        progress=lambda event: progress(
+                            {**event, "stage": stage_name, "node": node.name}
+                        ),
                     )
                     if progress is not None
                     else context.callbacks
@@ -263,17 +288,36 @@ def _run_node(
                         else context.runtime.token_counter
                     ),
                     jobs=context.jobs.limit(max_concurrency),
-                ),
+                )._with_cancellation(),
             )
             result = node.registration.execute(
                 NodeInvocation(
-                    configuration=node.configuration,
+                    configuration=node.registration.configuration.model_validate(
+                        deepcopy(dict(node.configuration_values))
+                    ),
                     inputs=inputs,
                     context=node_context,
                     formats=node.definition.formats,
                     filename=node.definition.filename,
                 )
             )
+            if not isinstance(result, NodeResult):
+                raise TypeError("handler must return a NodeResult")
+            if not isinstance(result.status, ExecutionStatus):
+                raise TypeError("NodeResult status must be an ExecutionStatus")
+            if not isinstance(result.outputs, Mapping):
+                raise TypeError("NodeResult outputs must be a mapping")
+            if not isinstance(result.diagnostics, tuple) or not all(
+                isinstance(diagnostic, ExecutionDiagnostic)
+                and isinstance(diagnostic.code, str)
+                and isinstance(diagnostic.message, str)
+                and isinstance(diagnostic.severity, str)
+                and diagnostic.severity in ("warning", "error")
+                for diagnostic in result.diagnostics
+            ):
+                raise TypeError(
+                    "NodeResult diagnostics must be ExecutionDiagnostic values"
+                )
             diagnostics = result.diagnostics
             node_status = result.status
             if node_status is not ExecutionStatus.ERROR:
@@ -281,6 +325,10 @@ def _run_node(
                     node.registration,
                     result.outputs,
                 )
+                if node_context.runtime.is_cancelled():
+                    raise CancelledError("Execution node was cancelled")
+        except CancelledError:
+            raise
         except Exception as exc:
             node_error = exc
             node_status = ExecutionStatus.ERROR
@@ -304,15 +352,26 @@ def _run_node(
         if context.callbacks.diagnostic is not None:
             for diagnostic in diagnostics:
                 context.callbacks.diagnostic(diagnostic)
+        # Job failures also signal their scope; preserve those as node errors.
+        if (
+            node_status is not ExecutionStatus.ERROR
+            and node_context.runtime.is_cancelled()
+        ):
+            raise CancelledError("Execution node was cancelled")
         node_span.end(
             status=node_status.value,
             attributes={
                 "inputs": inputs,
-                "outputs": result.outputs if result is not None else {},
+                "outputs": node_outputs,
                 "diagnostics": diagnostics,
             },
             exc=node_error,
         )
+        if (
+            node_status is not ExecutionStatus.ERROR
+            and node_context.runtime.is_cancelled()
+        ):
+            raise CancelledError("Execution node was cancelled")
         return NodeResult(node_outputs, node_status, diagnostics)
 
 
@@ -367,7 +426,7 @@ def _resolve_inputs(
                 if item.startswith("$inputs.") or _source_is_available(item, outputs)
             )
         elif source.startswith("$inputs."):
-            value = initial_inputs[source.removeprefix("$inputs.")]
+            value = initial_inputs.get(source.removeprefix("$inputs."))
         elif not _source_is_available(source, outputs) and annotation_allows_none(
             annotation
         ):
@@ -375,7 +434,7 @@ def _resolve_inputs(
         else:
             value = _resolve_source(source, outputs, initial_inputs)
         if (
-            get_origin(annotation) is tuple
+            isinstance(source, tuple)
             and not value
             and not annotation_allows_none(annotation)
         ):
@@ -404,15 +463,7 @@ def _validate_outputs(
 
 
 def _validate_value(annotation: Any, value: object) -> object:
-    if annotation is Any:
-        return value
-    if get_origin(annotation) is None and isinstance(annotation, type):
-        if not isinstance(value, annotation):
-            raise ValueError(
-                f"expected {annotation.__name__}, got {type(value).__name__}"
-            )
-        return value
-    return TypeAdapter(annotation).validate_python(value)
+    return annotation_adapter(annotation).validate_python(value, strict=True)
 
 
 def _resolve_source(
@@ -421,7 +472,7 @@ def _resolve_source(
     initial_inputs: Mapping[str, object],
 ) -> object:
     if source.startswith("$inputs."):
-        return initial_inputs[source.removeprefix("$inputs.")]
+        return initial_inputs.get(source.removeprefix("$inputs."))
     producer_name, separator, output_name = source.partition(".")
     producer_outputs = outputs[producer_name]
     if not separator:

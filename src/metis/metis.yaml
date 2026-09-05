@@ -1,10 +1,24 @@
 metis_engine:
   max_token_length: 250000
   max_workers: 5
+  # Null inherits max_workers. Both limits apply across one engine.
+  max_active_nodes: null
+  max_concurrent_executions: null
   triage_checkpoint_every: 50
   review_checkpoints: true
   llm_max_retries: 5
   embed_dim: 3072
+  doc_chunk_size: 1024
+  doc_chunk_overlap: 200
+  pgvector_use_halfvec: auto
+  hnsw_kwargs:
+    hnsw_m: 16
+    hnsw_ef_construction: 64
+    hnsw_ef_search: 40
+    hnsw_dist_method: vector_cosine_ops
+  metisignore_file: null
+  review_code_include_paths: []
+  review_code_exclude_paths: []
   model_tools:
     max_rounds: 6
     max_contract_chars: 6000

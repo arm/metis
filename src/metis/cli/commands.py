@@ -27,6 +27,7 @@ from .utils import (
     pretty_print_reviews,
     save_output,
     print_console,
+    print_execution_diagnostic,
     output_format,
     output_files_for_formats,
 )
@@ -145,12 +146,16 @@ def _run_review_command(engine, mode, target, args, spinner_text):
         if triage is not None:
             sarif_output = triage["sarif"]
             formats = tuple(dict.fromkeys((*formats, *triage["formats"])))
-    generated_output = bool(getattr(args, "_metis_generated_output", False))
+    generated_output = (
+        bool(getattr(args, "_metis_generated_output", False)) or not args.output_file
+    )
     if not generated_output:
         explicit_formats = tuple(output_format(path) for path in args.output_file or ())
         formats = tuple(dict.fromkeys((*formats, *explicit_formats)))
     args.output_file = output_files_for_formats(
-        args.output_file,
+        [outputs["filename"]]
+        if generated_output and outputs.get("filename") is not None
+        else args.output_file,
         formats,
         command=f"review_{mode}",
         generated_output=generated_output,
@@ -164,7 +169,7 @@ def _run_review_command(engine, mode, target, args, spinner_text):
 
 def _execute_review(engine, mode, target, args, spinner_text):
     callbacks = {
-        "diagnostic_callback": lambda diagnostic: _print_review_diagnostic(
+        "diagnostic_callback": lambda diagnostic: print_execution_diagnostic(
             diagnostic,
             args.quiet,
         )
@@ -199,14 +204,6 @@ def _execute_review(engine, mode, target, args, spinner_text):
             )
         finally:
             reporter.finish()
-
-
-def _print_review_diagnostic(diagnostic, quiet):
-    color = "yellow" if diagnostic.severity == "warning" else "red"
-    print_console(
-        f"[{color}]{escape(diagnostic.message)}[/{color}]",
-        quiet,
-    )
 
 
 def _triage_review_output(engine, sarif_payload, codegraph, args):
@@ -348,10 +345,10 @@ def run_triage(engine, findings_path, args, runtime: CommandRuntime):
         spinner_text="Triaging SARIF findings...",
     )
     output_files = output_files_for_formats(
-        args.output_file or [findings_path],
+        args.output_file or [triage.get("filename") or findings_path],
         tuple(triage["formats"]),
         command="triage",
-        generated_output=args.output_file is None,
+        generated_output=not args.output_file,
     )
     save_output(
         output_files,
@@ -391,10 +388,10 @@ def _run_json_triage(engine, json_path, args, runtime: CommandRuntime):
     )
 
     output_files = output_files_for_formats(
-        args.output_file or [json_path],
+        args.output_file or [triage.get("filename") or json_path],
         tuple(triage["formats"]),
         command="triage",
-        generated_output=args.output_file is None,
+        generated_output=not args.output_file,
     )
     save_output(
         output_files,

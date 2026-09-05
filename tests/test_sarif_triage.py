@@ -325,3 +325,28 @@ def test_triage_request_propagates_metis_source_hints(engine, monkeypatch):
     assert captured["is_metis"] is True
     assert captured["source_tool"] == "Metis"
     assert "reasoning: Dangerous flow" in str(captured["explanation"])
+
+
+def test_annotation_projection_ignores_malformed_result_collections():
+    from metis.sarif.triage import apply_triage_annotations
+
+    report = {"reviews": []}
+    for results in (None, 1, True, "text", {}):
+        assert (
+            apply_triage_annotations(report, {"runs": [{"results": results}]}) is report
+        )
+
+
+def test_negative_annotation_indices_cannot_modify_neighbors():
+    from metis.sarif.triage import apply_triage_result
+
+    payload = {"runs": [{"results": [{}]}]}
+    for run_index, result_index in ((-1, 0), (-2, 0), (0, -1), (0, -2)):
+        assert not apply_triage_result(
+            payload,
+            run_index=run_index,
+            result_index=result_index,
+            status="inconclusive",
+            reason="local check",
+        )
+    assert payload == {"runs": [{"results": [{}]}]}

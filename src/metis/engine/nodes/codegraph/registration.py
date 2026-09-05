@@ -43,4 +43,5 @@ registration = NodeRegistration(
     inputs={"profiled_source": ProfiledSourceReference | None},
     outputs={"codegraph": CodeGraphReference},
     execute=execute,
+    required_when_bound=frozenset({"profiled_source"}),
 )

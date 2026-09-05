@@ -68,7 +68,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SOURCE_PLACEHOLDER = "[[METIS_FRONTIER_SOURCE]]"
-_PROMPTS = get_engine_prompts("reachability_incremental_review")
+_PROMPTS = get_engine_prompts(
+    "reachability_incremental_review",
+    required=("discovery_graph_guidance", "omission_convention"),
+)
 
 
 class _NecessaryConditionModel(BaseModel):

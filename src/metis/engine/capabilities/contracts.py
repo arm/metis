@@ -33,6 +33,12 @@ CapabilityCloser = Callable[[object], None]
 
 @dataclass(frozen=True, slots=True)
 class CapabilityRegistration:
+    """An engine-shared resource whose methods must support concurrent callers.
+
+    Construction/cleanup are synchronized; operations own their synchronization.
+    Engine-owned work drains before close. Direct callers own their lifetime.
+    """
+
     manifest: CapabilityManifest
     configuration: type[BaseModel]
     factory: CapabilityFactory

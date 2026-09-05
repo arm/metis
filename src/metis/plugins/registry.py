@@ -8,13 +8,14 @@ import importlib
 import inspect
 import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from importlib import metadata
 from importlib.resources import files
 from threading import RLock
 from typing import Any
 
-import yaml
+from metis.configuration import _deep_merge
+from metis.configuration import load_yaml
 
 
 logger = logging.getLogger("metis")
@@ -24,7 +25,13 @@ _LANGUAGE_PLUGIN_ENTRY_POINT_GROUP = "metis.language_plugins"
 
 
 def _as_tuple(values: Iterable[Any] | None) -> tuple[str, ...]:
-    return tuple(str(value).lower() for value in (values or ()) if str(value).strip())
+    if values is None:
+        return ()
+    if not isinstance(values, (list, tuple)) or any(
+        not isinstance(value, str) for value in values
+    ):
+        raise ValueError("Language plugin manifest lists must contain strings")
+    return tuple(value.strip().lower() for value in values if value.strip())
 
 
 def _normalise_resource(resource: str | None) -> str | None:
@@ -34,7 +41,7 @@ def _normalise_resource(resource: str | None) -> str | None:
 
 
 def _load_yaml_mapping(handle: Any, *, resource: str) -> dict[str, Any]:
-    loaded = yaml.safe_load(handle) or {}
+    loaded = load_yaml(handle)
     if not isinstance(loaded, dict):
         raise ValueError(f"Plugin resource {resource!r} must contain a YAML mapping")
     return loaded
@@ -48,17 +55,6 @@ def _load_yaml_resource(resource: str) -> dict[str, Any]:
         target = files(_PLUGIN_PACKAGE).joinpath(resource)
     with target.open("r", encoding="utf-8") as handle:
         return _load_yaml_mapping(handle, resource=resource)
-
-
-def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overlay.items():
-        existing = merged.get(key)
-        if isinstance(existing, Mapping) and isinstance(value, Mapping):
-            merged[key] = _deep_merge(existing, value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _matches_suffix_pattern(name: str, pattern: str) -> bool:
@@ -84,7 +80,21 @@ class LanguagePluginManifest:
     priority: int = 0
 
     def __post_init__(self) -> None:
-        name = str(self.name or "").strip().lower()
+        for key in ("name", "implementation", "config_resource"):
+            if not isinstance(getattr(self, key), str):
+                raise ValueError(f"Language plugin manifest {key} must be a string")
+        if self.prompt_profile is not None and not isinstance(self.prompt_profile, str):
+            raise ValueError("Language plugin manifest prompt_profile must be a string")
+        if isinstance(self.priority, bool) or not isinstance(self.priority, int):
+            raise ValueError("Language plugin manifest priority must be an integer")
+        if not isinstance(self.capabilities, Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, (Mapping, bool))
+            for key, value in self.capabilities.items()
+        ):
+            raise ValueError(
+                "Language plugin manifest capabilities must map names to booleans or mappings"
+            )
+        name = self.name.strip().lower()
         if not name:
             raise ValueError("Language plugin manifest name is required")
         object.__setattr__(self, "name", name)
@@ -107,8 +117,8 @@ class LanguagePluginManifest:
             self,
             "capabilities",
             {
-                str(key): dict(value) if isinstance(value, Mapping) else bool(value)
-                for key, value in dict(self.capabilities or {}).items()
+                key: dict(value) if isinstance(value, Mapping) else value
+                for key, value in self.capabilities.items()
             },
         )
         self.codegraph_registration_name()
@@ -126,19 +136,14 @@ class LanguagePluginManifest:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "LanguagePluginManifest":
-        return cls(
-            name=str(data.get("name") or ""),
-            implementation=str(data.get("implementation") or ""),
-            extensions=tuple(data.get("extensions") or ()),
-            source_extensions=tuple(data.get("source_extensions") or ()),
-            header_extensions=tuple(data.get("header_extensions") or ()),
-            filename_patterns=tuple(data.get("filename_patterns") or ()),
-            aliases=tuple(data.get("aliases") or ()),
-            capabilities=dict(data.get("capabilities") or {}),
-            config_resource=str(data.get("config_resource") or ""),
-            prompt_profile=data.get("prompt_profile"),
-            priority=int(data.get("priority") or 0),
-        )
+        if not isinstance(data, Mapping):
+            raise ValueError("Language plugin manifest must be a mapping")
+        unknown = data.keys() - {item.name for item in fields(cls)}
+        if unknown:
+            raise ValueError(
+                f"Unknown language plugin manifest settings: {', '.join(sorted(map(str, unknown)))}"
+            )
+        return cls(**{"name": "", **data})
 
     def with_overrides(self, data: Mapping[str, Any]) -> "LanguagePluginManifest":
         merged = {
@@ -155,7 +160,6 @@ class LanguagePluginManifest:
             "priority": self.priority,
         }
         merged.update(data)
-        merged["name"] = str(merged.get("name") or self.name)
         return LanguagePluginManifest.from_mapping(merged)
 
     def codegraph_registration_name(self) -> str | None:
@@ -184,7 +188,10 @@ class LanguagePluginHandle:
         self._lock = RLock()
 
     def _load_profile(self, profile_name: str) -> dict[str, Any]:
-        return _load_yaml_resource(f"profiles/{profile_name}.yaml")
+        resource = (
+            profile_name if ":" in profile_name else f"profiles/{profile_name}.yaml"
+        )
+        return _load_yaml_resource(resource)
 
     def _load_language_config(self) -> dict[str, Any]:
         loaded = _load_yaml_resource(self.manifest.config_resource)
@@ -193,6 +200,12 @@ class LanguagePluginHandle:
         ).strip()
         if profile_name:
             loaded = _deep_merge(self._load_profile(profile_name), loaded)
+        for section in ("splitting", "prompts"):
+            if section in loaded and not isinstance(loaded[section], Mapping):
+                raise ValueError(
+                    f"Language plugin {self.manifest.name!r} resource "
+                    f"{self.manifest.config_resource!r}: {section} must be a mapping"
+                )
         loaded["supported_extensions"] = [
             *self.manifest.extensions,
             *self.manifest.filename_patterns,
@@ -254,10 +267,18 @@ class LanguagePluginHandle:
         return self._plugin
 
 
-class _LazyPluginSections(dict):
+class _LazyPluginSections(Mapping):
     def __init__(self, handle: LanguagePluginHandle):
-        super().__init__()
         self._handle = handle
+
+    def __iter__(self):
+        yield self._handle.manifest.name
+
+    def __len__(self):
+        return 1
+
+    def copy(self):
+        return dict(self)
 
     def get(self, key, default=None):
         if str(key or "").lower() == self._handle.manifest.name:
@@ -291,6 +312,8 @@ class LanguagePluginRegistry:
                 if isinstance(item, LanguagePluginManifest)
                 else LanguagePluginManifest.from_mapping(item)
             )
+            if manifest.name in self._handles:
+                raise ValueError(f"Duplicate language plugin name {manifest.name!r}")
             self._handles[manifest.name] = LanguagePluginHandle(
                 manifest,
                 plugin_config=self._plugin_config,
@@ -326,10 +349,12 @@ class LanguagePluginRegistry:
         handle = self._handles.get(key)
         if handle is not None:
             return handle
-        for candidate in self._handles.values():
-            if key in candidate.manifest.aliases:
-                return candidate
-        return None
+        manifest = _select_manifest(
+            candidate.manifest
+            for candidate in self._handles.values()
+            if key in candidate.manifest.aliases
+        )
+        return self._handles[manifest.name] if manifest is not None else None
 
     def _manifests(self) -> list[LanguagePluginManifest]:
         return [handle.manifest for handle in self._handles.values()]
@@ -506,11 +531,23 @@ def _apply_manifest_overrides(
 ) -> list[LanguagePluginManifest]:
     overrides = plugin_config.get("language_plugins", {})
     if not isinstance(overrides, Mapping):
-        return manifests
+        raise ValueError("language_plugins must be a mapping")
 
-    overrides_by_name = {
-        str(name or "").lower(): override for name, override in overrides.items()
-    }
+    overrides_by_name = {}
+    for name, override in overrides.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("language_plugins keys must be non-empty names")
+        if not isinstance(override, Mapping):
+            raise ValueError(f"language_plugins.{name} must be a mapping")
+        key = name.strip().lower()
+        if "name" in override and (
+            not isinstance(override["name"], str)
+            or override["name"].strip().lower() != key
+        ):
+            raise ValueError(f"language_plugins.{name}.name must match {key!r}")
+        if key in overrides_by_name:
+            raise ValueError(f"Duplicate language plugin override {key!r}")
+        overrides_by_name[key] = override
     existing_names = {manifest.name for manifest in manifests}
     resolved = []
     for manifest in manifests:
@@ -523,10 +560,7 @@ def _apply_manifest_overrides(
     for name, override in overrides_by_name.items():
         if name in existing_names:
             continue
-        if not isinstance(override, Mapping):
-            continue
         data = dict(override)
         data.setdefault("name", name)
-        if data.get("implementation"):
-            resolved.append(LanguagePluginManifest.from_mapping(data))
+        resolved.append(LanguagePluginManifest.from_mapping(data))
     return resolved

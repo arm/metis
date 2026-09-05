@@ -92,3 +92,52 @@ def test_registry_loads_nested_entry_point_with_extras(monkeypatch):
         },
     )
     assert get_chat_provider("example") is ChatProvider
+
+
+@pytest.mark.parametrize("get_provider", [get_chat_provider, get_embedding_provider])
+def test_registry_failed_lookups_do_not_retain_callers(get_provider):
+    import gc
+    import weakref
+    from importlib.metadata import EntryPoint, EntryPoints
+
+    from metis.providers import registry
+
+    class Payload:
+        pass
+
+    def failed_lookup():
+        payload = Payload()
+        try:
+            get_provider("broken")
+        except ValueError as exc:
+            assert "must be named" in str(exc)
+        else:
+            pytest.fail("Malformed provider registration was accepted")
+        return weakref.ref(payload)
+
+    with (
+        patch.multiple(
+            registry,
+            _CHAT_PROVIDERS={},
+            _EMBEDDING_PROVIDERS={},
+            _PROVIDER_LOADERS={},
+            _PROVIDER_LOADER_ERRORS={},
+            _PROVIDER_LOADERS_DISCOVERED=False,
+        ),
+        patch.object(
+            registry.metadata,
+            "entry_points",
+            return_value=EntryPoints(
+                [
+                    EntryPoint(
+                        name="broken.invalid",
+                        value="inert:Unused",
+                        group="metis.providers",
+                    )
+                ]
+            ),
+        ),
+    ):
+        references = [failed_lookup() for _ in range(3)]
+        gc.collect()
+        assert all(reference() is None for reference in references)

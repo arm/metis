@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import closing
 import os
 import sqlite3
+from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from threading import Condition
 from threading import Event
+from threading import Thread
 from types import SimpleNamespace
 
 import pytest
@@ -28,6 +31,7 @@ from metis.engine.codegraph import Tag
 from metis.engine.codegraph import ValueAssignment
 from metis.engine.nodes.codegraph import CodeGraphSemanticsCatalog
 from metis.engine.nodes.codegraph import CodeGraphService
+from metis.engine.nodes.codegraph.progress import CODEGRAPH_PROGRESS
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
 
 
@@ -173,7 +177,12 @@ def test_materialize_persists_and_reuses_codegraph(tmp_path):
     assert (tmp_path / ".metis" / "codegraph.sqlite3").is_file()
     assert service.load(second).get_node("new") is None
     assert service.load(second).nodes["module.py::entry"].parameter_count == 2
-    with sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3") as connection:
+    with (
+        closing(
+            sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3")
+        ) as connection,
+        connection,
+    ):
         metadata_columns = {
             row[1]
             for row in connection.execute("PRAGMA table_info(canonical_codegraph)")
@@ -354,7 +363,12 @@ def test_load_rejects_incomplete_stored_codegraph(tmp_path):
         {"python": lambda _context: _provider(graph)},
     )
     reference = service.materialize()
-    with sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3") as connection:
+    with (
+        closing(
+            sqlite3.connect(tmp_path / ".metis" / "codegraph.sqlite3")
+        ) as connection,
+        connection,
+    ):
         connection.execute(
             "DELETE FROM codegraph_records WHERE kind = 'node' AND identity = ?",
             ("module.py::entry",),
@@ -372,7 +386,7 @@ def test_load_rejects_incomplete_stored_codegraph(tmp_path):
 def test_materialize_replaces_main_branch_store_schema(tmp_path):
     store_path = tmp_path / ".metis" / "codegraph.sqlite3"
     store_path.parent.mkdir()
-    with sqlite3.connect(store_path) as connection:
+    with closing(sqlite3.connect(store_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE canonical_codegraph (
@@ -394,7 +408,7 @@ def test_materialize_replaces_main_branch_store_schema(tmp_path):
     )
 
     loaded = service.load(service.materialize())
-    with sqlite3.connect(store_path) as connection:
+    with closing(sqlite3.connect(store_path)) as connection, connection:
         columns = {
             row[1]
             for row in connection.execute("PRAGMA table_info(canonical_codegraph)")
@@ -431,7 +445,7 @@ def test_failed_persistence_keeps_previous_graph(tmp_path):
     )
     first = service.materialize()
     store_path = tmp_path / ".metis" / "codegraph.sqlite3"
-    with sqlite3.connect(store_path) as connection:
+    with closing(sqlite3.connect(store_path)) as connection, connection:
         connection.execute(
             """
             CREATE TRIGGER reject_blocked_node
@@ -447,7 +461,7 @@ def test_failed_persistence_keeps_previous_graph(tmp_path):
     with pytest.raises(RuntimeError, match="Unable to persist CodeGraph store"):
         service.materialize()
 
-    with sqlite3.connect(store_path) as connection:
+    with closing(sqlite3.connect(store_path)) as connection, connection:
         stored_names = tuple(
             row[0]
             for row in connection.execute(
@@ -513,6 +527,62 @@ def test_materialize_reports_incomplete_provider_coverage(tmp_path):
     assert "invalid file coverage" in reference.diagnostics[0].message
 
 
+@pytest.mark.parametrize("phase", ["initialize", "build", "progress"])
+def test_provider_cancellation_propagates_and_materialization_can_retry(
+    tmp_path, phase
+):
+    interruption = CancelledError("inert provider cancellation")
+    interrupted = False
+
+    def interrupt(at):
+        nonlocal interrupted
+        if phase == at and not interrupted:
+            interrupted = True
+            raise interruption
+
+    def build_graph(*, files, progress_callback, **_kwargs):
+        interrupt("build")
+        progress_callback({"event": CODEGRAPH_PROGRESS, "completed": 1})
+        return CodeGraphResult(CodeGraph(), files)
+
+    def factory(_context):
+        interrupt("initialize")
+        return SimpleNamespace(build_graph=build_graph)
+
+    def progress(event):
+        if event["event"] == CODEGRAPH_PROGRESS:
+            interrupt("progress")
+
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(("module.py",), lambda _path: "python"),
+        {"python": factory},
+    )
+    with pytest.raises(CancelledError) as caught:
+        service.materialize(progress_callback=progress)
+    assert caught.value is interruption
+    assert not service._materialize_active
+    assert service._last_materialization is None
+
+    references, errors = [], []
+
+    def retry():
+        try:
+            references.append(service.materialize(progress_callback=progress))
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=retry, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert errors == []
+    assert len(references) == 1
+    assert not references[0].failed_files
+    assert service.load(references[0]).node_count() == 0
+    assert service.materialize() == references[0]
+
+
 def test_concurrent_materialize_serializes_canonical_builds(tmp_path):
     builds = []
 
@@ -549,7 +619,7 @@ def test_concurrent_materialize_shares_an_incomplete_attempt(tmp_path):
     def build_graph(**_kwargs):
         builds.append("build")
         build_started.set()
-        release_build.wait()
+        assert release_build.wait(5)
         return CodeGraphResult(CodeGraph(), ())
 
     service = CodeGraphService(
@@ -560,12 +630,14 @@ def test_concurrent_materialize_shares_an_incomplete_attempt(tmp_path):
     service._materialize_condition = TrackingCondition()
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(service.materialize)
-        build_started.wait()
-        second = executor.submit(service.materialize)
-        caller_waiting.wait()
-        release_build.set()
-        first_reference = first.result()
-        second_reference = second.result()
+        try:
+            assert build_started.wait(5)
+            second = executor.submit(service.materialize)
+            assert caller_waiting.wait(5)
+        finally:
+            release_build.set()
+        first_reference = first.result(timeout=5)
+        second_reference = second.result(timeout=5)
 
     assert first_reference == second_reference
     assert first_reference.failed_files == ("module.py",)
@@ -763,3 +835,36 @@ def test_semantics_tags_are_applied_and_persisted(tmp_path):
     }
     assert node.has_tag("trust.domain")
     assert not node.has_tag("risk.owner")
+
+
+@pytest.mark.parametrize("field", ["call_sites", "references", "global_references"])
+def test_invalid_relationship_metadata_isolates_provider_failure(tmp_path, field):
+    graph = CodeGraph()
+    node = FunctionNode("bad::node", "bad.txt", "node", 1)
+    graph.add_node(node)
+    if field == "global_references":
+        construct = GlobalConstruct("bad::global", "bad.txt", "global", 2)
+        construct.references = [{}]
+        graph.add_global(construct)
+    else:
+        setattr(node, field, [{}])
+    good = CodeGraph()
+    good.add_node(FunctionNode("good::node", "good.txt", "node", 1))
+    service = CodeGraphService(
+        SimpleNamespace(codebase_path=str(tmp_path)),
+        _repository(
+            ("bad.txt", "good.txt"),
+            lambda path: "a_bad" if path == "bad.txt" else "z_good",
+        ),
+        {
+            "a_bad": lambda context: _provider(graph),
+            "z_good": lambda context: _provider(good),
+        },
+    )
+    result = service._build(
+        ("bad.txt", "good.txt"), progress_callback=None, diagnostic_callback=None
+    )
+    assert result.failed_files == ("bad.txt",)
+    assert result.processed_files == ("good.txt",)
+    assert set(result.graph.nodes) == {"good::node"}
+    assert len(result.diagnostics) == 1

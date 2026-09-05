@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import closing
 import json
+from hashlib import sha256
+import logging
 from pathlib import Path
 import sqlite3
 
@@ -14,10 +16,19 @@ from metis.version import __version__ as METIS_VERSION
 
 
 def _checkpoint_path(checkpoint_base: Path, producer: str) -> Path:
+    if (
+        not producer.isascii()
+        or not producer.isidentifier()
+        or producer != producer.lower()
+        or len(producer) > 128
+    ):
+        # @ cannot occur in a producer identifier, so encoded and legacy names
+        # cannot alias even on case-insensitive or Unicode-normalizing volumes.
+        producer = "@" + sha256(producer.encode("utf-8")).hexdigest()
     return checkpoint_base.with_name(f"{checkpoint_base.name}.{producer}.sqlite3")
 
 
-def _ensure_checkpoint_schema(connection: sqlite3.Connection) -> None:
+def _ensure_checkpoint_schema(connection: sqlite3.Connection) -> bool:
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS review_checkpoint_records (
@@ -28,6 +39,10 @@ def _ensure_checkpoint_schema(connection: sqlite3.Connection) -> None:
         ) WITHOUT ROWID
         """
     )
+    return any(
+        row[1] == "producer"
+        for row in connection.execute("PRAGMA table_info(review_checkpoint_records)")
+    )
 
 
 def _connect_checkpoint(path: Path) -> sqlite3.Connection:
@@ -36,95 +51,77 @@ def _connect_checkpoint(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(path)
 
 
-def _discard_checkpoint(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return
-
-
-def _sqlite_records(path: Path) -> dict[str, dict[str, object]] | None:
+def _sqlite_records(
+    path: Path, *, producer: str | None = None
+) -> dict[str, dict[str, object]] | None:
     if not path.exists():
         return None
     records: dict[str, dict[str, object]] = {}
     try:
         with closing(_connect_checkpoint(path)) as connection:
-            _ensure_checkpoint_schema(connection)
-            rows = connection.execute(
-                """
+            legacy = _ensure_checkpoint_schema(connection)
+            query = """
                 SELECT record_key, payload
                 FROM review_checkpoint_records
                 WHERE metis_version = ?
-                """,
-                (METIS_VERSION,),
-            )
+            """
+            parameters: tuple[str, ...] = (METIS_VERSION,)
+            if legacy and producer is not None:
+                query += " AND producer = ?"
+                parameters += (producer,)
+            rows = connection.execute(query, parameters)
             for key, payload in rows:
                 try:
                     record = json.loads(payload)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, RecursionError):
                     continue
                 if not isinstance(record, dict):
                     continue
                 records[str(key)] = record
-    except (OSError, sqlite3.Error) as exc:
-        if _should_discard_on(exc):
-            _discard_checkpoint(path)
+    except (OSError, sqlite3.Error):
         return None
     return records or None
 
 
-def _write_sqlite_record_once(path: Path, record: ReviewCheckpointRecord) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(
-        record.record,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    with closing(_connect_checkpoint(path)) as connection:
-        path.chmod(0o600)
-        connection.execute("PRAGMA busy_timeout = 5000")
-        _ensure_checkpoint_schema(connection)
-        connection.execute(
-            """
-            INSERT INTO review_checkpoint_records (
-                metis_version, record_key, payload
-            ) VALUES (?, ?, ?)
-            ON CONFLICT (metis_version, record_key)
-            DO UPDATE SET payload = excluded.payload
-            """,
-            (record.metis_version, record.key, payload),
-        )
-        connection.commit()
-
-
-_TRANSIENT_SQLITE_CODES = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
-
-
-def _should_discard_on(exc: BaseException) -> bool:
-    if not isinstance(exc, sqlite3.Error):
-        return False
-    code = getattr(exc, "sqlite_errorcode", None)
-    if code in _TRANSIENT_SQLITE_CODES:
-        return False
-    if code is None:
-        message = str(exc).lower()
-        if "locked" in message or "busy" in message:
-            return False
-    return True
-
-
 def _write_sqlite_record(path: Path, record: ReviewCheckpointRecord) -> None:
     try:
-        _write_sqlite_record_once(path, record)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            record.record,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        with closing(_connect_checkpoint(path)) as connection:
+            path.chmod(0o600)
+            connection.execute("PRAGMA busy_timeout = 5000")
+            if _ensure_checkpoint_schema(connection):
+                connection.execute(
+                    """
+                    INSERT INTO review_checkpoint_records (
+                        producer, metis_version, record_key, payload
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (producer, metis_version, record_key)
+                    DO UPDATE SET payload = excluded.payload
+                    """,
+                    (record.producer, record.metis_version, record.key, payload),
+                )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO review_checkpoint_records (
+                        metis_version, record_key, payload
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT (metis_version, record_key)
+                    DO UPDATE SET payload = excluded.payload
+                    """,
+                    (record.metis_version, record.key, payload),
+                )
+            connection.commit()
     except (OSError, sqlite3.Error) as exc:
-        if _should_discard_on(exc):
-            _discard_checkpoint(path)
-        try:
-            _write_sqlite_record_once(path, record)
-        except (OSError, sqlite3.Error) as retry_exc:
-            if _should_discard_on(retry_exc):
-                _discard_checkpoint(path)
+        logging.getLogger("metis").error(
+            "Unable to save review checkpoint %s: %s", path, exc
+        )
 
 
 def review_checkpoint_callbacks(
@@ -139,7 +136,9 @@ def review_checkpoint_callbacks(
     )
 
     def resume(producer: str) -> Mapping[str, Mapping[str, object]] | None:
-        return _sqlite_records(_checkpoint_path(checkpoint_base, producer))
+        return _sqlite_records(
+            _checkpoint_path(checkpoint_base, producer), producer=producer
+        )
 
     def checkpoint(
         payload: dict[str, object],

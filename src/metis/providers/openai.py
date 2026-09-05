@@ -6,10 +6,6 @@ from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 
 class OpenAIProvider(OpenAICompatibleChatProvider):
     CONFIG_SPEC = ProviderConfigSpec(

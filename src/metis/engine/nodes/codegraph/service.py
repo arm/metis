@@ -11,6 +11,7 @@ import threading
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -32,6 +33,7 @@ from .progress import CODEGRAPH_START
 from .provider import normalize_provider_name
 from .semantics import CodeGraphSemanticsCatalog
 from .store import SQLiteCodeGraphStore
+from .store import _DIAGNOSTIC
 
 if TYPE_CHECKING:
     from metis.engine.repository import EngineRepository
@@ -91,16 +93,15 @@ class CodeGraphService:
                     _replay_diagnostics(completed, diagnostic_callback)
                     return completed
             self._materialize_active = True
+        completed = None
         try:
             completed = self._materialize(
                 progress_callback=progress_callback,
                 diagnostic_callback=diagnostic_callback,
             )
-        except Exception:
-            self._finish_materialization(None)
-            raise
-        self._finish_materialization(completed)
-        return completed
+            return completed
+        finally:
+            self._finish_materialization(completed)
 
     def _finish_materialization(
         self,
@@ -422,6 +423,8 @@ class CodeGraphService:
                 raise ValueError(f"Unknown CodeGraph provider: {key!r}") from exc
             try:
                 provider = factory(self._provider_context)
+            except CancelledError:
+                raise
             except Exception as exc:
                 raise RuntimeError(
                     f"CodeGraph provider {key!r} failed to initialize: {exc}"
@@ -450,6 +453,8 @@ class CodeGraphService:
                 files=requested_files,
                 progress_callback=progress_callback,
             )
+        except CancelledError:
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"CodeGraph provider {provider_name!r} failed: {exc}"
@@ -466,14 +471,20 @@ class CodeGraphService:
             raise RuntimeError(
                 f"CodeGraph provider {provider_name!r} returned an invalid result"
             )
-        if any(
-            not isinstance(diagnostic, CodeGraphDiagnostic)
-            or diagnostic.severity not in {"warning", "error"}
-            for diagnostic in result.diagnostics
-        ):
-            raise RuntimeError(
-                f"CodeGraph provider {provider_name!r} returned an invalid diagnostic"
-            )
+        for diagnostic in result.diagnostics:
+            if not isinstance(diagnostic, CodeGraphDiagnostic):
+                raise RuntimeError(
+                    f"CodeGraph provider {provider_name!r} returned an invalid diagnostic"
+                )
+            try:
+                # Existing dataclass instances skip field checks; validate the stored shape.
+                _DIAGNOSTIC.validate_json(
+                    _DIAGNOSTIC.dump_json(diagnostic, warnings="error"), strict=True
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"CodeGraph provider {provider_name!r} returned an invalid diagnostic: {exc}"
+                ) from exc
         errors = [
             diagnostic
             for diagnostic in result.diagnostics

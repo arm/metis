@@ -1,2 +1,1 @@
-include src/metis/plugins/plugins.yaml
 include src/metis/metis.yaml

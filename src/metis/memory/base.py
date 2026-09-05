@@ -17,6 +17,21 @@ Namespace = tuple[str, ...]
 JsonValue = dict[str, Any]
 
 
+def _validate_namespace(namespace: Namespace, *, allow_empty: bool = False) -> None:
+    if not isinstance(namespace, tuple):
+        raise ValueError("Memory namespace must be a tuple of string labels")
+    if not namespace and not allow_empty:
+        raise ValueError("Memory namespace cannot be empty")
+    if any(
+        not isinstance(label, str) or not label or "." in label for label in namespace
+    ):
+        raise ValueError(
+            "Memory namespace labels must be non-empty strings without periods"
+        )
+    if namespace and namespace[0] == "langgraph":
+        raise ValueError('Memory namespace root cannot be "langgraph"')
+
+
 class StoreLike(Protocol):
     def batch(self, ops: Iterable[Op]) -> list[Result]: ...
 

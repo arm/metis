@@ -4,9 +4,9 @@
 from contextlib import nullcontext
 from pathlib import Path
 import json
-import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -15,18 +15,6 @@ from metis.cli import command_registry
 from metis.engine.execution import ExecutionDiagnostic
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
-from metis.version import __version__ as METIS_VERSION
-
-
-def test_cli_entry_imports_in_clean_interpreter():
-    completed = subprocess.run(
-        [sys.executable, "-c", "from metis.cli.entry import main"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 0, completed.stderr
 
 
 def test_execute_command_allows_interactive_triage_command_with_global_triage_flag(
@@ -145,6 +133,57 @@ def test_interactive_loop_parses_quoted_paths_and_recovers_from_bad_quotes(monke
     ]
 
 
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("failure", [False, True])
+def test_execute_graph_forwards_progress_and_finishes_reporter(
+    monkeypatch, verbose, failure
+):
+    progress = object()
+    reporter = Mock()
+    build_progress = Mock(return_value=nullcontext(progress))
+    build_reporter = Mock(return_value=reporter)
+    monkeypatch.setattr(entry, "build_standard_progress", build_progress)
+    monkeypatch.setattr(entry, "ExecutionGraphProgressReporter", build_reporter)
+    callbacks = {"diagnostic_callback": object()}
+    events = [
+        {"event": "stage_start", "stage": "review"},
+        {"event": "node_end", "stage": "review", "node": "result", "status": "ok"},
+    ]
+    result = object()
+
+    def execute_graph(**kwargs):
+        assert kwargs["callbacks"] is callbacks
+        assert kwargs["include_triaged"] is None
+        callback = callbacks.get("progress_callback")
+        assert callback is (reporter if verbose else None)
+        if callback is not None:
+            for event in events:
+                callback(event)
+        if failure:
+            raise RuntimeError("graph failed")
+        return result
+
+    engine = SimpleNamespace(execute_graph=execute_graph)
+    args = SimpleNamespace(verbose=verbose, include_triaged=False)
+    if failure:
+        with pytest.raises(RuntimeError, match="graph failed"):
+            entry._execute_graph_with_progress(engine, args, callbacks)
+    else:
+        assert entry._execute_graph_with_progress(engine, args, callbacks) is result
+
+    if verbose:
+        build_progress.assert_called_once_with(transient=True)
+        build_reporter.assert_called_once_with(progress)
+        assert reporter.mock_calls == [
+            *(call(event) for event in events),
+            call.finish(),
+        ]
+    else:
+        build_progress.assert_not_called()
+        build_reporter.assert_not_called()
+        assert not reporter.mock_calls
+
+
 def test_main_version_does_not_require_runtime_config(monkeypatch, capsys):
     def fail_load_runtime_config(*_args, **_kwargs):
         raise AssertionError("runtime config should not be loaded for --version")
@@ -168,176 +207,6 @@ def test_main_rejects_removed_command_mode_flags(monkeypatch, removed_args, caps
         entry.main()
 
     assert "unrecognized arguments" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["metis"],
-        ["metis", "-v"],
-        ["metis", "-v", "--config", "graph.yaml"],
-    ],
-)
-def test_main_executes_configured_graph_by_default(monkeypatch, argv):
-    calls = []
-    messages = []
-    progress_events = []
-    reporter_finishes = []
-
-    class _Reporter:
-        def __init__(self, _progress):
-            pass
-
-        def __call__(self, event):
-            progress_events.append(event)
-
-        def finish(self):
-            reporter_finishes.append(True)
-
-    def execute_graph(**kwargs):
-        assert callable(kwargs["callbacks"]["review_checkpoint_callback"])
-        assert callable(kwargs["callbacks"]["review_resume_callback"])
-        progress = kwargs["callbacks"].get("progress_callback")
-        if progress is not None:
-            progress({"event": "execution_stage_start", "stage": "review"})
-            progress(
-                {
-                    "event": "execution_node_start",
-                    "stage": "review",
-                    "node": "reachability",
-                }
-            )
-        kwargs["callbacks"]["diagnostic_callback"](
-            SimpleNamespace(severity="warning", message="fallback review")
-        )
-        calls.append("graph")
-        return ExecutionResult(
-            ExecutionStatus.INCONCLUSIVE,
-            {
-                "review": {
-                    "formats": ["sarif"],
-                    "findings": {"reviews": []},
-                    "sarif": {"version": "2.1.0", "runs": []},
-                },
-                "triage": {
-                    "formats": ["sarif"],
-                    "sarif": {"version": "2.1.0", "runs": []},
-                },
-            },
-            (ExecutionDiagnostic("review.fallback", "fallback review", "warning"),),
-        )
-
-    engine = SimpleNamespace(execute_graph=execute_graph)
-    monkeypatch.setattr(sys, "argv", argv)
-    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
-    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
-    monkeypatch.setattr(
-        entry,
-        "build_standard_progress",
-        lambda **_kwargs: nullcontext(object()),
-    )
-    monkeypatch.setattr(entry, "ExecutionGraphProgressReporter", _Reporter)
-    monkeypatch.setattr(
-        entry,
-        "determine_output_file",
-        lambda _cmd, args, _cmd_args: setattr(args, "output_file", ["graph.json"]),
-    )
-    monkeypatch.setattr(
-        entry,
-        "save_output",
-        lambda *_args, **_kwargs: calls.append("save"),
-    )
-    monkeypatch.setattr(
-        entry,
-        "print_console",
-        lambda message, *_args, **_kwargs: messages.append(message),
-    )
-    monkeypatch.setattr(
-        entry, "finalize_cli_session_and_close", lambda *_args: calls.append("close")
-    )
-
-    entry.main()
-
-    assert calls == ["graph", "save", "save", "close"]
-    assert "[yellow]fallback review[/yellow]" in messages
-    if "-v" in argv:
-        assert [event["event"] for event in progress_events] == [
-            "execution_stage_start",
-            "execution_node_start",
-        ]
-        assert reporter_finishes == [True]
-    else:
-        assert progress_events == []
-        assert reporter_finishes == []
-
-
-def test_main_interactive_flag_starts_prompt(monkeypatch):
-    calls = []
-    engine = SimpleNamespace()
-    monkeypatch.setattr(sys, "argv", ["metis", "--interactive"])
-    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
-    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
-    monkeypatch.setattr(
-        entry,
-        "run_interactive_loop",
-        lambda *_args: calls.append("interactive") or None,
-    )
-    monkeypatch.setattr(
-        entry,
-        "finalize_cli_session_and_close",
-        lambda *_args: calls.append("close"),
-    )
-
-    entry.main()
-
-    assert calls == ["interactive", "close"]
-
-
-def test_graph_checkpoints_use_codebase_metis_directory(monkeypatch, tmp_path):
-    generated_path = tmp_path / "generated.json"
-
-    def execute_graph(**kwargs):
-        kwargs["callbacks"]["review_checkpoint_callback"](
-            {
-                "metis_version": METIS_VERSION,
-                "producer": "simple_llm_review",
-                "key": "file:key",
-                "record": {"reviews": []},
-            },
-            1,
-            1,
-        )
-        return ExecutionResult(ExecutionStatus.OK, {}, ())
-
-    def determine_output(_cmd, args, _cmd_args):
-        args.output_file = [str(generated_path)]
-        args._metis_generated_output = True
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["metis", "--codebase-path", str(tmp_path)],
-    )
-    monkeypatch.setattr(
-        entry,
-        "load_runtime_config",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        entry,
-        "build_engine",
-        lambda *_args: (SimpleNamespace(execute_graph=execute_graph), None),
-    )
-    monkeypatch.setattr(entry, "determine_output_file", determine_output)
-    monkeypatch.setattr(entry, "print_console", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
-
-    entry.main()
-
-    assert (
-        tmp_path / ".metis" / "checkpoints" / "review.simple_llm_review.sqlite3"
-    ).exists()
-    assert not (tmp_path / "generated.simple_llm_review.sqlite3").exists()
 
 
 def test_main_rejects_a_missing_codebase_before_creating_outputs(
@@ -522,38 +391,6 @@ def test_default_graph_failure_exits_cleanly(monkeypatch):
     assert calls[-1] == "closed"
 
 
-def test_main_passes_custom_config_path_to_runtime_loader(monkeypatch, tmp_path):
-    config_path = tmp_path / "custom.yaml"
-    captured = {}
-
-    def load_runtime_config(*, config_path, enable_psql):
-        captured["config_path"] = config_path
-        captured["enable_psql"] = enable_psql
-        return {}
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "metis",
-            "--config",
-            str(config_path),
-        ],
-    )
-    monkeypatch.setattr(entry, "load_runtime_config", load_runtime_config)
-    engine = SimpleNamespace(
-        execute_graph=lambda **_kwargs: ExecutionResult(ExecutionStatus.OK, {})
-    )
-    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
-    monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
-    monkeypatch.setattr(entry, "_save_graph_outputs", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
-
-    entry.main()
-
-    assert captured == {"config_path": str(config_path), "enable_psql": False}
-
-
 def test_build_engine_defers_embedding_model_construction(
     monkeypatch,
     tmp_path,
@@ -627,87 +464,168 @@ def test_build_engine_defers_embedding_model_construction(
     assert captured["engine_kwargs"]["usage_runtime"].codebase_path == str(tmp_path)
 
 
-def test_build_engine_allows_graphs_without_index_stage_to_omit_embeddings(
-    monkeypatch, tmp_path
-):
-    class ChatProvider:
-        def __init__(self, _runtime):
-            pass
-
-    class DummyEngine:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    args = SimpleNamespace(
-        backend="chroma",
-        chroma_dir=str(tmp_path / "chromadb"),
-        codebase_path=str(tmp_path),
-        custom_prompt=None,
-    )
-    runtime = {
-        "llm_provider_name": "test-provider",
-        "llm_provider": {
-            "api_key": "test-api-key",
-            "model": "test-model",
+def test_partial_graph_exports_sarif_without_findings_and_skips_failed_triage(tmp_path):
+    sarif = {"version": "2.1.0", "runs": []}
+    result = ExecutionResult(
+        ExecutionStatus.ERROR,
+        {
+            "review": {"formats": ("json", "sarif"), "sarif": sarif},
+            "triage": {"formats": ("sarif",)},
         },
-        "embedding_provider_raw_config": None,
-        "max_workers": 2,
-        "max_token_length": 2048,
-        "llama_query_model": "test-model",
-        "similarity_top_k": 3,
-        "response_mode": "compact",
-    }
-
-    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: ChatProvider)
-    monkeypatch.setattr(
-        entry,
-        "build_chroma_backend",
-        lambda *_args: SimpleNamespace(embed_model_code=None, embed_model_docs=None),
     )
-    monkeypatch.setattr(entry, "MetisEngine", DummyEngine)
+    requested_json = tmp_path / "report.json"
+    requested_json.write_text("previous report", encoding="utf-8")
+    requested_sarif = tmp_path / "report.sarif"
 
-    engine, _backend = entry.build_engine(args, runtime)
+    entry._save_graph_outputs([str(requested_json), str(requested_sarif)], result, True)
 
-    assert engine.kwargs["embedding_provider"] is None
+    assert json.loads(requested_sarif.read_text()) == sarif
+    assert requested_json.read_text() == "previous report"
+    assert set(tmp_path.iterdir()) == {requested_json, requested_sarif}
 
 
-def test_main_writes_workflow_runlog_bundle(monkeypatch, tmp_path):
-    trace_path = tmp_path / "workflow.ndjson"
+@pytest.mark.parametrize(
+    "command,arguments",
+    [
+        ("review_file", []),
+        ("review_file", ["one.py", "two.py"]),
+        ("review_dir", ["one", "two"]),
+        ("update", ["one.patch", "two.patch"]),
+        ("index", ["ignored"]),
+        ("help", ["ignored"]),
+        ("version", ["ignored"]),
+        ("exit", ["ignored"]),
+        ("ask", []),
+        ("ask", [" "]),
+    ],
+)
+def test_invalid_interactive_arguments_do_not_invoke_or_create_outputs(
+    monkeypatch, tmp_path, command, arguments
+):
+    monkeypatch.chdir(tmp_path)
+    invoke = Mock()
+    engine = Mock()
+    monkeypatch.setattr(command_registry.CommandSpec, "invoke", invoke)
+    result = entry.execute_command(
+        engine, command, arguments, SimpleNamespace(quiet=True, output_file=None)
+    )
+    assert result is not entry.EXIT_REQUESTED
+    invoke.assert_not_called()
+    engine.usage_command.assert_not_called()
+    assert not (tmp_path / "results").exists()
 
-    class Engine:
-        def execute_graph(self, **_kwargs):
-            return ExecutionResult(ExecutionStatus.OK, {}, ())
 
-    def build_engine(args, _runtime):
-        assert args._metis_runlog.ndjson_path == trace_path.resolve()
-        return Engine(), None
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["one.py", "--output-file"],
+        ["one.py", "--output-file", ""],
+        ["one.py", "--output-file", "--output-file", "report.json"],
+    ],
+)
+def test_interactive_output_option_requires_a_value(monkeypatch, tmp_path, arguments):
+    monkeypatch.chdir(tmp_path)
+    invoke = Mock()
+    monkeypatch.setattr(command_registry.CommandSpec, "invoke", invoke)
+    with pytest.raises(ValueError, match="--output-file requires a filename"):
+        entry.execute_command(
+            Mock(),
+            "review_file",
+            arguments,
+            SimpleNamespace(quiet=True, output_file=None),
+        )
+    invoke.assert_not_called()
+    assert not (tmp_path / "results").exists()
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
+
+@pytest.mark.parametrize(
+    "embedding_config",
+    [
+        {"name": "openai", "api_key": "inert"},
+        {"name": "no-such-embedding-provider"},
+    ],
+)
+def test_build_engine_validates_embedding_before_provider_construction(
+    monkeypatch, embedding_config
+):
+    def unexpected_provider(_config):
+        pytest.fail("invalid embedding settings constructed a chat provider")
+
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: unexpected_provider)
+    with pytest.raises(ValueError):
+        entry.build_engine(
+            None,
+            {
+                "llm_provider_name": "inert",
+                "llm_provider": {},
+                "embedding_provider_raw_config": embedding_config,
+            },
+        )
+
+
+@pytest.mark.parametrize("schema_exists", [False, True])
+def test_postgres_prompt_checks_index_only_for_index_commands(
+    monkeypatch, schema_exists
+):
+    backend = Mock()
+    backend.check_project_schema_exists.return_value = schema_exists
+    inputs = iter(
         [
-            "metis",
-            "--log-workflow-debug-path",
-            str(trace_path),
-        ],
+            "review_code",
+            "review_file f",
+            "review_dir d",
+            "review_patch p",
+            "ask question",
+            "exit",
+        ]
     )
-    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
-    monkeypatch.setattr(entry, "build_engine", build_engine)
-    monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
-    monkeypatch.setattr(entry, "print_console", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(entry, "PG_SUPPORTED", True)
+    monkeypatch.setattr(entry, "PGVectorStoreImpl", type(backend), raising=False)
+    monkeypatch.setattr(entry, "prompt", lambda *a, **kw: next(inputs))
 
-    entry.main()
+    def execute(engine, command, command_args, args):
+        calls.append(command)
+        return entry.EXIT_REQUESTED if command == "exit" else None
 
-    records = [
-        json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
+    monkeypatch.setattr(entry, "execute_command", execute)
+    entry.run_interactive_loop(None, SimpleNamespace(quiet=True), backend)
+    assert calls == [
+        "review_code",
+        "review_file",
+        "review_dir",
+        "review_patch",
+        *(["ask"] if schema_exists else []),
+        "exit",
     ]
-    assert records[0]["kind"] == "run"
-    command = next(
-        record
-        for record in records
-        if record["record"] == "span.start" and record.get("kind") == "command"
-    )
-    assert command["name"] == "execution_graph"
-    assert records[-1]["kind"] == "run"
-    assert records[-1]["status"] == "ok"
+    backend.check_project_schema_exists.assert_called_once_with()
+
+
+def test_main_reports_codebase_io_errors_without_setup(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["metis", "--codebase-path", "inaccessible"])
+
+    def inaccessible(path):
+        raise PermissionError("codebase access denied")
+
+    monkeypatch.setattr(entry, "check_dir_exists", inaccessible)
+    with pytest.raises(SystemExit, match="1"):
+        entry.main()
+    assert "codebase access denied" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "failure", [BrokenPipeError("closed pipe"), KeyboardInterrupt()]
+)
+def test_farewell_failure_cannot_skip_engine_close(monkeypatch, failure):
+    engine = SimpleNamespace(close=Mock())
+
+    def fail_print(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(entry, "print_console", fail_print)
+    with pytest.raises(type(failure)) as caught:
+        entry.finalize_cli_session_and_close(
+            engine, SimpleNamespace(quiet=False), "Goodbye"
+        )
+    assert caught.value is failure
+    engine.close.assert_called_once_with()

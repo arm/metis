@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 
 def _as_tuple(values: Iterable[Any] | None) -> tuple[str, ...]:
-    return tuple(
-        str(value).strip().lower() for value in values or () if str(value).strip()
-    )
+    if values is None:
+        return ()
+    if not isinstance(values, (list, tuple)) or any(
+        not isinstance(value, str) for value in values
+    ):
+        raise ValueError("Capability operation surfaces must be a list of strings")
+    return tuple(value.strip().lower() for value in values if value.strip())
 
 
 def _as_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -33,7 +37,17 @@ class CapabilityOperationManifest:
     status: str = "active"
 
     def __post_init__(self) -> None:
-        capability_id = str(self.id or "").strip().lower()
+        for key in ("id", "name", "description", "status"):
+            if not isinstance(getattr(self, key), str):
+                raise ValueError(f"Capability operation {key} must be a string")
+        if self.operation is not None and not isinstance(self.operation, str):
+            raise ValueError("Capability operation operation must be a string")
+        object.__setattr__(
+            self,
+            "input_schema",
+            _as_mapping(self.input_schema, field_name="input_schema"),
+        )
+        capability_id = self.id.strip()
         name = str(self.name or "").strip()
         if not capability_id:
             raise ValueError("Capability operation id is required")
@@ -48,17 +62,13 @@ class CapabilityOperationManifest:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "CapabilityOperationManifest":
-        return cls(
-            id=str(data.get("id") or ""),
-            name=str(data.get("name") or ""),
-            description=str(data.get("description") or ""),
-            surfaces=tuple(data.get("surfaces") or ()),
-            operation=data.get("operation"),
-            input_schema=_as_mapping(
-                data.get("input_schema"), field_name="input_schema"
-            ),
-            status=str(data.get("status") or "active"),
-        )
+        data = _as_mapping(data, field_name="manifest")
+        unknown = data.keys() - {item.name for item in fields(cls)}
+        if unknown:
+            raise ValueError(
+                f"Unknown capability operation settings: {', '.join(sorted(map(str, unknown)))}"
+            )
+        return cls(**{"id": "", "name": "", **data})
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +79,22 @@ class CapabilityManifest:
     operations: tuple[CapabilityOperationManifest, ...] = ()
 
     def __post_init__(self) -> None:
-        name = str(self.name or "").strip().lower()
+        if not isinstance(self.name, str) or not isinstance(self.status, str):
+            raise ValueError("Capability manifest name and status must be strings")
+        if not isinstance(self.contracts, Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in self.contracts.items()
+        ):
+            raise ValueError("Capability manifest contracts must map names to strings")
+        if not isinstance(self.operations, (list, tuple)) or any(
+            not isinstance(operation, CapabilityOperationManifest)
+            for operation in self.operations
+        ):
+            raise ValueError(
+                "Capability manifest operations must be operation manifests"
+            )
+        object.__setattr__(self, "operations", tuple(self.operations))
+        name = self.name.strip()
         if not name:
             raise ValueError("Capability manifest name is required")
         object.__setattr__(self, "name", name)
@@ -86,13 +111,23 @@ class CapabilityManifest:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "CapabilityManifest":
-        operations = tuple(
-            CapabilityOperationManifest.from_mapping(item)
-            for item in data.get("operations") or ()
-        )
+        if not isinstance(data, Mapping):
+            raise ValueError("Capability manifest must be a mapping")
+        unknown = data.keys() - {item.name for item in fields(cls)}
+        if unknown:
+            raise ValueError(
+                f"Unknown capability manifest settings: {', '.join(sorted(map(str, unknown)))}"
+            )
+        operations = data.get("operations", ())
+        if not isinstance(operations, (list, tuple)):
+            raise ValueError("Capability manifest operations must be a list")
         return cls(
-            name=str(data.get("name") or ""),
-            status=str(data.get("status") or "active"),
-            contracts=dict(data.get("contracts") or {}),
-            operations=operations,
+            **{
+                "name": "",
+                **data,
+                "operations": tuple(
+                    CapabilityOperationManifest.from_mapping(item)
+                    for item in operations
+                ),
+            }
         )

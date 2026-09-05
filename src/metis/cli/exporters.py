@@ -8,11 +8,14 @@ import html
 import json
 import re
 from collections import Counter
+from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Tuple
 
+from metis.json_io import atomic_text_writer
 from metis.json_io import write_json_atomic
+from metis.sarif.triage import extract_findings
 from metis.sarif.writer import generate_sarif
 
 
@@ -22,9 +25,10 @@ def export_html(
     """Render the HTML report template with the provided data."""
     issues = _flatten_issues(report_data)
     document = _build_html_document(issues, output_path.name, template, metis_version)
-    html_path = output_path.with_suffix(".html")
+    html_path = output_path
     html_path.parent.mkdir(parents=True, exist_ok=True)
-    html_path.write_text(document, encoding="utf-8")
+    with atomic_text_writer(html_path) as handle:
+        handle.write(document)
     return html_path
 
 
@@ -44,7 +48,7 @@ def export_csv(report_data, output_path: Path) -> Path:
     """Write flattened issues to a CSV file."""
     issues = _flatten_issues(report_data)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+    with atomic_text_writer(output_path, newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
             [
@@ -77,7 +81,7 @@ def export_csv(report_data, output_path: Path) -> Path:
 def _build_html_document(
     issues: Iterable[dict], source_name: str, template: str, metis_version: str
 ) -> str:
-    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     display_name = Path(source_name).stem if source_name else source_name
     title = f"Metis Security Report - {display_name}"
 
@@ -151,11 +155,14 @@ def _build_html_document(
         "folderStats": folder_stats_serialized,
     }
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-    return (
-        template.replace("__TITLE__", html.escape(title))
-        .replace("__GENERATED_AT__", html.escape(generated_at))
-        .replace("__DATA_JSON__", data_json)
-        .replace("__METIS_VERSION__", html.escape(metis_version))
+    substitutions = {
+        "__TITLE__": html.escape(title),
+        "__GENERATED_AT__": html.escape(generated_at),
+        "__DATA_JSON__": data_json,
+        "__METIS_VERSION__": html.escape(metis_version),
+    }
+    return re.sub(
+        "|".join(substitutions), lambda match: substitutions[match[0]], template
     )
 
 
@@ -165,6 +172,25 @@ def _flatten_issues(report_data) -> list[dict]:
         return issues
 
     reviews = report_data.get("reviews", [])
+    if "reviews" not in report_data:
+        for finding in extract_findings(report_data, include_triaged=True):
+            result = report_data["runs"][finding.run_index]["results"][
+                finding.result_index
+            ]
+            properties = result.get("properties")
+            reviews.append(
+                {
+                    "file": finding.file_path,
+                    "reviews": [
+                        {
+                            **(properties if isinstance(properties, dict) else {}),
+                            "issue": finding.message,
+                            "line_number": finding.line,
+                            "code_snippet": finding.snippet,
+                        }
+                    ],
+                }
+            )
     for file_entry in reviews:
         file_name = file_entry.get("file") or file_entry.get("file_path") or "Unknown"
         try:
@@ -178,6 +204,8 @@ def _flatten_issues(report_data) -> list[dict]:
                 severity = severity.strip() or "Unknown"
             else:
                 severity = str(severity)
+            if severity.lower() in {"critical", "high", "medium", "low", "unknown"}:
+                severity = severity.capitalize()
 
             cwe = issue.get("cwe") or "CWE-Unknown"
             if isinstance(cwe, (list, tuple)):

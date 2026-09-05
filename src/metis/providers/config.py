@@ -103,12 +103,12 @@ def _resolve_api_key(
         env_var = provider_config.get(config_env_key)
         if isinstance(env_var, str) and env_var.strip():
             value = os.environ.get(env_var)
-            if value:
+            if value and value.strip():
                 return value
 
     for env_var in sources.env_vars:
         value = os.environ.get(env_var)
-        if value:
+        if value and value.strip():
             return value
 
     if not sources.required or _optional_condition_matches(

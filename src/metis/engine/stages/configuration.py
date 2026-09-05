@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import RootModel
+from pydantic import PrivateAttr
 from pydantic import model_validator
 
 from metis.engine.codegraph import CodeGraphReference
@@ -133,6 +134,10 @@ class ExecutionInputs(BaseModel):
 
 
 class ExecutionConfiguration(BaseModel):
+    _resolved_contracts: dict[StageName, _ResolvedStageContract] | None = PrivateAttr(
+        default=None
+    )
+
     inputs: ExecutionInputs = Field(default_factory=ExecutionInputs)
     stages: ExecutionStages
     node_configuration: dict[str, dict[str, dict[str, Any]]] = Field(
@@ -188,25 +193,6 @@ class ExecutionConfiguration(BaseModel):
                     f"Execution stage {name!r} depends on unavailable stages: "
                     f"{unavailable}"
                 )
-        initialize = self.stages.initialize
-        if (
-            initialize is not None
-            and "compilation_profile" in initialize.nodes
-            and "codegraph" in initialize.nodes
-            and "compilation_profile" not in initialize.nodes["codegraph"].depends_on
-        ):
-            raise ValueError("Initialize codegraph must depend on compilation_profile")
-        review = self.stages.review
-        if review is not None and "reachability" in review.nodes:
-            source = review.inputs.get("codegraph", "")
-            source_stage, separator, _output = source.partition(".")
-            if not separator or source_stage != "initialize":
-                raise ValueError("Reachability requires a CodeGraph from Initialize")
-            binding = review.nodes["reachability"].inputs.get("codegraph")
-            if binding not in (None, "$inputs.codegraph"):
-                raise ValueError(
-                    "Reachability must consume the Review stage CodeGraph input"
-                )
         for name, stage in configured_stages:
             configured_filenames = [
                 node_name
@@ -218,10 +204,17 @@ class ExecutionConfiguration(BaseModel):
                     f"Execution stage {name!r} configures multiple filenames"
                 )
             if configured_filenames:
-                if configured_filenames[0] != "result":
+                if isinstance(stage.outputs, dict):
+                    filename_source = stage.outputs.get("filename", "")
+                else:
+                    filename_source = "filename" if "filename" in stage.outputs else ""
+                if not stage.outputs:
+                    filename_source = "result.filename"
+                if configured_filenames[0] != filename_source.partition(".")[0]:
                     raise ValueError(
                         f"Execution stage {name!r} filename must be "
-                        "configured on its result node"
+                        "configured on its result node "
+                        "(the producer of its filename output)"
                     )
             for stage_input_name, source in stage.inputs.items():
                 if source.startswith("$inputs."):
@@ -278,9 +271,9 @@ class ExecutionConfiguration(BaseModel):
         )
 
     def stage_contracts(self) -> Mapping[StageName, _ResolvedStageContract]:
-        catalog = StageCatalog(BUILTIN_STAGE_CONTRACTS)
-        return MappingProxyType(
-            {
+        if self._resolved_contracts is None:
+            catalog = StageCatalog(BUILTIN_STAGE_CONTRACTS)
+            self._resolved_contracts = {
                 name: (
                     BUILTIN_STAGE_CONTRACTS[name]
                     if name in BUILTIN_STAGE_CONTRACTS
@@ -288,7 +281,7 @@ class ExecutionConfiguration(BaseModel):
                 )
                 for name, _stage in self.stages.configured()
             }
-        )
+        return MappingProxyType(self._resolved_contracts)
 
     def selected_nodes(self) -> set[tuple[StageName, str]]:
         return {

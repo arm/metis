@@ -50,29 +50,34 @@ class SQLiteCodeGraphStore:
         with self._lock:
             try:
                 with closing(_connect(self.location)) as connection:
-                    row = connection.execute(
+                    latest = None
+                    for row in connection.execute(
                         """
                         SELECT revision
                         FROM canonical_codegraph
                         WHERE fingerprint = ?
+                        ORDER BY revision DESC
                         """,
                         (fingerprint,),
-                    ).fetchone()
-                    if row is None:
-                        return None
-                    try:
-                        stored = _read_stored_graph(
-                            connection,
-                            codebase_path=codebase_path,
-                            revision=int(row[0]),
-                        )
-                    except RuntimeError:
-                        return None
+                    ):
+                        try:
+                            stored = _read_stored_graph(
+                                connection,
+                                codebase_path=codebase_path,
+                                revision=int(row[0]),
+                            )
+                        except RuntimeError:
+                            continue
+                        if stored is not None:
+                            if not stored.reference.failed_files:
+                                return stored.reference
+                            if latest is None:
+                                latest = stored.reference
             except sqlite3.Error as exc:
                 raise RuntimeError(
                     f"Unable to read CodeGraph store {self.location!r}: {exc}"
                 ) from exc
-        return None if stored is None else stored.reference
+        return latest
 
     def save(
         self,
@@ -95,18 +100,6 @@ class SQLiteCodeGraphStore:
             try:
                 with closing(_connect(self.location)) as connection:
                     connection.execute("BEGIN IMMEDIATE")
-                    current = connection.execute(
-                        """
-                        SELECT revision FROM canonical_codegraph
-                        WHERE fingerprint = ?
-                        """,
-                        (fingerprint,),
-                    ).fetchone()
-                    if current is not None:
-                        connection.execute(
-                            "DELETE FROM canonical_codegraph WHERE revision = ?",
-                            (int(current[0]),),
-                        )
                     cursor = connection.execute(
                         """
                         INSERT INTO canonical_codegraph (
@@ -134,18 +127,19 @@ class SQLiteCodeGraphStore:
                             )
                         ),
                     )
+                    reference = CodeGraphReference(
+                        revision=revision,
+                        fingerprint=fingerprint,
+                        producer_version=producer_version,
+                        failed_files=failed_files,
+                        diagnostics=diagnostics,
+                    )
                     connection.commit()
             except sqlite3.Error as exc:
                 raise RuntimeError(
                     f"Unable to persist CodeGraph store {self.location!r}: {exc}"
                 ) from exc
-        return CodeGraphReference(
-            revision=revision,
-            fingerprint=fingerprint,
-            producer_version=producer_version,
-            failed_files=failed_files,
-            diagnostics=diagnostics,
-        )
+        return reference
 
     def load(
         self,
@@ -174,14 +168,27 @@ class SQLiteCodeGraphStore:
         try:
             os.makedirs(directory, exist_ok=True)
             with closing(_connect(self.location)) as connection:
-                current_version = int(
-                    connection.execute("PRAGMA user_version").fetchone()[0]
-                )
-                if current_version != _STORE_SCHEMA_VERSION:
-                    _drop_store_tables(connection)
-                _create_store_tables(connection)
-                connection.execute(f"PRAGMA user_version = {_STORE_SCHEMA_VERSION}")
-                connection.commit()
+                connection.execute("PRAGMA foreign_keys = OFF")
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    current_version = int(
+                        connection.execute("PRAGMA user_version").fetchone()[0]
+                    )
+                    if current_version > _STORE_SCHEMA_VERSION:
+                        raise RuntimeError(
+                            f"CodeGraph store {self.location!r} uses a newer schema "
+                            f"({current_version}); this version supports {_STORE_SCHEMA_VERSION}"
+                        )
+                    if current_version != _STORE_SCHEMA_VERSION:
+                        _drop_store_tables(connection)
+                    _create_store_tables(connection)
+                    _retain_graph_revisions(connection)
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS codegraph_by_fingerprint "
+                        "ON canonical_codegraph(fingerprint, revision)"
+                    )
+                    connection.execute(f"PRAGMA user_version = {_STORE_SCHEMA_VERSION}")
+                connection.execute("PRAGMA foreign_keys = ON")
         except (OSError, sqlite3.Error) as exc:
             raise RuntimeError(
                 f"Unable to initialize CodeGraph store {self.location!r}: {exc}"
@@ -194,6 +201,8 @@ def _read_stored_graph(
     codebase_path: str,
     revision: int,
 ) -> StoredCodeGraph | None:
+    if revision > 2**63 - 1:
+        return None
     metadata = connection.execute(
         """
         SELECT revision, fingerprint, producer_version, content_hash
@@ -298,7 +307,7 @@ def _graph_records(
     for unique_name, construct in graph.globals.items():
         yield "global", unique_name, _GLOBAL_CONSTRUCT.dump_json(construct)
     for name, locations in graph.public_declarations.items():
-        for location in locations:
+        for location in locations or ("",):
             yield "declaration", name, location.encode("utf-8")
     for path in processed_files:
         yield "processed", path, b""
@@ -348,29 +357,32 @@ def _update_hash(
 
 
 def _drop_store_tables(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        DROP TABLE IF EXISTS codegraph_records;
-        DROP TABLE IF EXISTS codegraph_diagnostics;
-        DROP TABLE IF EXISTS codegraph_failed_files;
-        DROP TABLE IF EXISTS codegraph_processed_files;
-        DROP TABLE IF EXISTS codegraph_public_declarations;
-        DROP TABLE IF EXISTS codegraph_globals;
-        DROP TABLE IF EXISTS codegraph_nodes;
-        DROP TABLE IF EXISTS canonical_codegraph;
-        """
-    )
+    for table in (
+        "codegraph_records",
+        "codegraph_diagnostics",
+        "codegraph_failed_files",
+        "codegraph_processed_files",
+        "codegraph_public_declarations",
+        "codegraph_globals",
+        "codegraph_nodes",
+        "canonical_codegraph",
+    ):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
 
 
 def _create_store_tables(connection: sqlite3.Connection) -> None:
-    connection.executescript(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS canonical_codegraph (
             revision INTEGER PRIMARY KEY AUTOINCREMENT,
-            fingerprint TEXT NOT NULL UNIQUE,
+            fingerprint TEXT NOT NULL,
             producer_version TEXT NOT NULL,
             content_hash TEXT NOT NULL
-        );
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS codegraph_records (
             graph_revision INTEGER NOT NULL REFERENCES canonical_codegraph(revision)
                 ON DELETE CASCADE,
@@ -384,10 +396,43 @@ def _create_store_tables(connection: sqlite3.Connection) -> None:
             identity TEXT NOT NULL,
             payload BLOB NOT NULL,
             PRIMARY KEY (graph_revision, position)
-        );
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE INDEX IF NOT EXISTS codegraph_records_by_kind
         ON codegraph_records(graph_revision, kind, position);
         """
+    )
+
+
+def _retain_graph_revisions(connection: sqlite3.Connection) -> None:
+    # The v2 record format is unchanged; remove its old one-revision constraint.
+    if not any(
+        row[2] for row in connection.execute("PRAGMA index_list(canonical_codegraph)")
+    ):
+        return
+    connection.execute(
+        """
+        CREATE TABLE canonical_codegraph_revisions (
+            revision INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL,
+            producer_version TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO canonical_codegraph_revisions
+        SELECT revision, fingerprint, producer_version, content_hash
+        FROM canonical_codegraph
+        """
+    )
+    connection.execute("DROP TABLE canonical_codegraph")
+    connection.execute(
+        "ALTER TABLE canonical_codegraph_revisions RENAME TO canonical_codegraph"
     )
 
 

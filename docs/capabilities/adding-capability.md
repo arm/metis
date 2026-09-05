@@ -89,6 +89,28 @@ private_analysis = "external_metis_capabilities.analysis:registration"
 The entry-point name must match the registration and manifest name. A package
 may contain both external nodes and external capabilities.
 
+## Thread safety and lifetime
+
+One engine shares a constructed capability across its nodes and job workers,
+including concurrent graph executions. Factory construction is synchronized;
+method calls are not. Make operations safe for concurrent use: protect mutable
+state with an instance lock, use a thread-safe client, or serialize access to a
+client that requires it. Read-only data may be shared. Keep invocation-specific
+state in the caller and never mutate borrowed node inputs.
+
+Do not hold a state lock while invoking caller callbacks or waiting for engine
+work that may need the same lock. Use finite I/O and subprocess timeouts, and
+cooperate with the calling node's cancellation signal. Background work must be
+joined before the operation returns; a returned operation must not keep using a
+capability that the engine can then close.
+
+Engine shutdown drains its active nodes and jobs before invoking capability
+closers, once, in reverse construction order. External callers using a capability
+directly must coordinate their own lifetime with shutdown. Closing the owner or
+starting a nested graph from its active node, job or callback is rejected.
+See the [execution concurrency contract](../execution-graph.md) for the three
+engine limits and callback guarantees.
+
 ## 3. Describe Operations When Needed
 
 The minimal manifest needs only the stable name. When a node exposes capability
