@@ -3,14 +3,17 @@
 
 from importlib.resources import as_file
 from importlib.resources import files
+from copy import deepcopy
 
 import pytest
 import yaml
 
+import metis.configuration as configuration
 from metis.configuration import build_embedding_provider_config
 from metis.configuration import load_execution_config
 from metis.configuration import load_metis_config
 from metis.configuration import load_runtime_config
+from metis.configuration import normalize_engine_config
 from metis.configuration import pgvector_use_halfvec_setting
 from metis.runtime_settings import CapabilityRuntimeSettings
 from metis.runtime_settings import ModelToolSettings
@@ -68,6 +71,89 @@ def test_packaged_execution_graph_omits_index_initialization():
     assert triage["nodes"]["result"]["formats"] == ["sarif"]
     assert "triage" not in packaged["metis_engine"]
     assert packaged["metis_engine"]["review_checkpoints"] is True
+
+
+def test_engine_normalization_uses_supplied_defaults_and_detaches_settings(monkeypatch):
+    defaults = configuration.load_yaml(files("metis") / "metis.yaml")["metis_engine"]
+    raw = {
+        "llm_provider": {"name": "azure_openai", "chat_deployment_model": "model"},
+        "metis_engine": {
+            "model_tools": {},
+            "capabilities": {"custom": {"token": "inert"}},
+        },
+    }
+    original = deepcopy((raw, defaults))
+
+    def unexpected_lookup(*_args, **_kwargs):
+        pytest.fail("engine normalization performed an external lookup")
+
+    monkeypatch.setattr(configuration, "files", unexpected_lookup)
+    monkeypatch.setattr(configuration, "_get_provider_cls", unexpected_lookup)
+    monkeypatch.setattr(configuration, "load_plugin_config", unexpected_lookup)
+    normalized = normalize_engine_config(raw, engine_defaults=defaults)
+
+    assert (raw, defaults) == original
+    assert normalized["triage_options"] == TriageOptions()
+    settings = normalized["capability_settings"]
+    assert settings.model_tools == ModelToolSettings(**defaults["model_tools"])
+    assert settings.configurations["custom"]["token"] == "inert"  # Not a redactor.
+    assert (
+        not {
+            "llm_provider",
+            "llm_provider_name",
+            "model",
+            "llama_query_model",
+            "plugin_config",
+        }
+        & normalized.keys()
+    )
+    normalized["hnsw_kwargs"]["hnsw_m"] = 99
+    normalized["execution_config"]["stages"].clear()
+    normalized["review_code_include_paths"].append("changed/")
+    settings.configurations["custom"]["token"] = "changed"
+    assert (raw, defaults) == original
+
+
+@pytest.mark.parametrize("provider", ["config", "env"])
+def test_runtime_loads_database_credentials(tmp_path, monkeypatch, provider):
+    credentials = {
+        "username": "user",
+        "password": "inert",
+        "host": "db.test",
+        "port": 5433,
+        "database_name": "metis",
+    }
+    for key, value in zip(
+        ("PGUSER", "PGPASSWORD", "PGHOST", "PGPORT", "PGDATABASE"), credentials.values()
+    ):
+        monkeypatch.setenv(key, str(value))
+    config = {
+        "llm_provider": {"name": "ollama", "model": "test-model"},
+        "psql_database": {
+            "provider": provider,
+            "credentials": credentials if provider == "config" else {},
+        },
+    }
+    runtime = load_runtime_config(
+        _write_config(tmp_path, yaml.safe_dump(config)), enable_psql=True
+    )
+    assert [
+        runtime[key]
+        for key in ("pg_username", "pg_password", "pg_host", "pg_port", "pg_db_name")
+    ] == list(credentials.values())
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [[], {"metis_engine": {"max_workers": 0}}, {"llm_provider": {"name": "ollama"}}],
+)
+def test_runtime_validates_before_loading_plugins(tmp_path, monkeypatch, raw):
+    def unexpected_plugins():
+        pytest.fail("invalid configuration loaded plugin defaults")
+
+    monkeypatch.setattr(configuration, "load_plugin_config", unexpected_plugins)
+    with pytest.raises(ValueError):
+        load_runtime_config(_write_config(tmp_path, yaml.safe_dump(raw)))
 
 
 def test_runtime_loads_codegraph_and_reachability_tuning_outside_execution(
@@ -537,6 +623,7 @@ llm_provider:
   azure_api_version: "2024-02-01"
   engine: chat-deployment
   chat_deployment_model: gpt-4o-mini
+  model: ignored-model-alias
   use_responses_api: true
 embedding_provider:
   name: azure_openai
@@ -555,6 +642,7 @@ embedding_provider:
     assert runtime["llm_provider_name"] == "azure_openai"
     assert runtime["llm_provider"]["engine"] == "chat-deployment"
     assert runtime["llm_provider"]["chat_deployment_model"] == "gpt-4o-mini"
+    assert runtime["model"] == runtime["llama_query_model"] == "gpt-4o-mini"
     assert runtime["llm_provider"]["use_responses_api"] is True
     assert "embedding_provider" not in runtime
 

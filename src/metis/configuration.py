@@ -3,6 +3,7 @@
 
 from collections.abc import Mapping
 from contextlib import nullcontext
+from copy import deepcopy
 import logging
 import os
 import sys
@@ -109,8 +110,73 @@ def _deep_merge(
 
 
 def load_runtime_config(config_path=None, enable_psql=False):
+    cfg = _required_mapping(load_metis_config(config_path), section="configuration")
+    runtime = normalize_engine_config(
+        cfg,
+        engine_defaults=_packaged_engine_config(),
+    )
+    if enable_psql:
+        db_cfg = cfg.get("psql_database", {})
+        provider = db_cfg.get("provider", "config")
+        if provider == "env":
+            secrets = dict(
+                username=os.environ["PGUSER"],
+                password=os.environ["PGPASSWORD"],
+                host=os.environ.get("PGHOST", "localhost"),
+                port=int(os.environ.get("PGPORT", 5432)),
+                database_name=os.environ.get("PGDATABASE", "metis_db"),
+            )
+        elif provider == "config":
+            secrets = db_cfg.get("credentials", {})
+        else:
+            raise ValueError(f"Unknown database config provider: {provider}")
+
+        runtime.update(
+            pg_username=secrets.get("username"),
+            pg_password=secrets.get("password"),
+            pg_host=secrets.get("host"),
+            pg_port=secrets.get("port"),
+            pg_db_name=secrets.get("database_name"),
+        )
+
+    llm_cfg = cfg.get("llm_provider", {})
+    llm_provider_name = str(llm_cfg.get("name", "")).lower()
+    llm_provider_config = build_provider_config(
+        provider_name=llm_provider_name,
+        provider_cls=_get_provider_cls(llm_provider_name, "llm_provider"),
+        raw_config=llm_cfg,
+        section="llm_provider",
+    )
+    runtime["llm_provider_name"] = llm_provider_name
+    model = llm_provider_config.get("model", "")
+    runtime["model"] = model
+    runtime["llama_query_model"] = str(cfg.get("query", {}).get("model") or model or "")
+    llm_provider_config["max_retries"] = runtime["llm_max_retries"]
+    runtime["llm_provider"] = llm_provider_config
+    runtime["embedding_provider_raw_config"] = (
+        dict(cfg.get("embedding_provider", {})) or None
+    )
+    plugin_config = load_plugin_config()
+    if cfg.get("language_plugins"):
+        plugin_config["language_plugins"] = deepcopy(cfg["language_plugins"])
+    runtime["plugin_config"] = plugin_config
+    return runtime
+
+
+def normalize_engine_config(
+    raw_config: object,
+    *,
+    engine_defaults: Mapping[str, Any],
+) -> dict[str, object]:
+    """Normalize engine/query settings using only supplied configuration data.
+
+    Returns detached settings, not a ready-to-run runtime: provider models,
+    credentials, and plugin configuration are resolved by the caller. Explicit
+    extension settings are preserved and may contain secrets; this is not a
+    redactor or a complete provider validator.
+    """
     cfg = _required_mapping(
-        load_metis_config(config_path),
+        raw_config,
         section="configuration",
         allowed={
             "metis_engine",
@@ -131,7 +197,7 @@ def load_runtime_config(config_path=None, enable_psql=False):
     ):
         if name in cfg:
             _required_mapping(cfg[name], section=name)
-    engine_defaults = _packaged_engine_config()
+    engine_defaults = {"triage": {}, **engine_defaults}
     configured_engine = _required_mapping(
         cfg.get("metis_engine", {}),
         section="metis_engine",
@@ -211,6 +277,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
             section="psql_database.credentials",
             allowed={"username", "password", "host", "port", "database_name"},
         )
+    # Model-tool settings retain their required defaults even for an empty mapping.
+    engine_cfg["model_tools"] = (
+        engine_cfg["model_tools"] or engine_defaults["model_tools"]
+    )
     capability_settings = _capability_runtime_settings(engine_cfg)
     threat_model_config = _threat_model_config(engine_cfg["threat_model"])
     triage_options = _triage_options(engine_cfg["triage"])
@@ -229,42 +299,6 @@ def load_runtime_config(config_path=None, enable_psql=False):
     memory_config = _memory_config(cfg.get("memory"))
 
     runtime: dict[str, object] = {}
-    if enable_psql:
-        provider = db_cfg.get("provider", "config")
-        if provider == "env":
-            secrets = dict(
-                username=os.environ["PGUSER"],
-                password=os.environ["PGPASSWORD"],
-                host=os.environ.get("PGHOST", "localhost"),
-                port=int(os.environ.get("PGPORT", 5432)),
-                database_name=os.environ.get("PGDATABASE", "metis_db"),
-            )
-        elif provider == "config":
-            secrets = db_cfg.get("credentials", {})
-        else:
-            raise ValueError(f"Unknown database config provider: {provider}")
-
-        runtime.update(
-            pg_username=secrets.get("username"),
-            pg_password=secrets.get("password"),
-            pg_host=secrets.get("host"),
-            pg_port=secrets.get("port"),
-            pg_db_name=secrets.get("database_name"),
-        )
-
-    llm_cfg = _required_mapping(cfg.get("llm_provider", {}), section="llm_provider")
-    llm_provider_name = str(llm_cfg.get("name", "")).lower()
-    runtime["llm_provider_name"] = llm_provider_name
-    llm_provider_cls = _get_provider_cls(
-        provider_name=llm_provider_name,
-        section="llm_provider",
-    )
-    llm_provider_config = build_provider_config(
-        provider_name=llm_provider_name,
-        provider_cls=llm_provider_cls,
-        raw_config=llm_cfg,
-        section="llm_provider",
-    )
 
     for name in (
         "max_token_length",
@@ -298,21 +332,12 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["execution_config"] = execution_config
     runtime["codegraph_config"] = dict(engine_cfg["codegraph"])
     runtime["reachability_config"] = dict(engine_cfg["reachability"])
-    language_plugins = cfg.get("language_plugins", {})
-    plugin_config = load_plugin_config()
-    if language_plugins:
-        plugin_config["language_plugins"] = dict(language_plugins)
-    runtime["plugin_config"] = plugin_config
-    llama_query_model = query_cfg.get("model") or llm_provider_config.get("model", "")
-    llama_query_model = str(llama_query_model or "")
-    runtime["model"] = llm_provider_config.get("model", "")
-    runtime["llama_query_model"] = llama_query_model
     if query_cfg.get("temperature") is not None:
         runtime["llama_query_temperature"] = query_cfg["temperature"]
     runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens")
     runtime["llama_query_reasoning_effort"] = query_cfg.get(
         "reasoning_effort"
-    ) or llm_cfg.get("reasoning_effort")
+    ) or cfg.get("llm_provider", {}).get("reasoning_effort")
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
     chat_model_kwargs: dict[str, object] = {}
     if runtime.get("llama_query_temperature") is not None:
@@ -322,14 +347,8 @@ def load_runtime_config(config_path=None, enable_psql=False):
     if runtime["llama_query_reasoning_effort"]:
         chat_model_kwargs["reasoning_effort"] = runtime["llama_query_reasoning_effort"]
     runtime["chat_model_kwargs"] = chat_model_kwargs
-    llm_provider_config["max_retries"] = runtime["llm_max_retries"]
-    runtime["llm_provider"] = llm_provider_config
 
-    runtime["embedding_provider_raw_config"] = (
-        dict(cfg.get("embedding_provider", {})) or None
-    )
-
-    return runtime
+    return deepcopy(runtime)
 
 
 def build_embedding_provider_config(
@@ -420,18 +439,12 @@ def _capability_runtime_settings(
     engine_config: object,
 ) -> CapabilityRuntimeSettings:
     engine = _required_mapping(engine_config, section="metis_engine")
-    model = _load_engine_mapping("model_tools", None)
-    configured_model = engine.get("model_tools")
-    if configured_model is not None:
-        model.update(
-            _required_mapping(configured_model, section="metis_engine.model_tools")
-        )
-    _required_mapping(
-        model,
+    model = _required_mapping(
+        engine["model_tools"],
         section="metis_engine.model_tools",
         allowed={"max_rounds", "max_contract_chars"},
     )
-    capabilities = _load_engine_mapping("capabilities", engine.get("capabilities"))
+    capabilities = engine["capabilities"]
     configurations: dict[str, dict[str, Any]] = {}
     for name, value in capabilities.items():
         if not isinstance(name, str) or not name.isidentifier():
@@ -530,7 +543,7 @@ def _load_engine_mapping(name: str, value: object) -> dict[str, Any]:
 def _packaged_engine_config() -> dict[str, Any]:
     resource = files("metis") / "metis.yaml"
     with as_file(resource) as real_path:
-        return {"triage": {}, **load_yaml(real_path)["metis_engine"]}
+        return load_yaml(real_path)["metis_engine"]
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):
