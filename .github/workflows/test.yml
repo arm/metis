@@ -32,9 +32,9 @@ jobs:
         run: uv venv --python ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: uv pip install '.[test,qdrant]'
+        run: uv pip install -e '.[test,qdrant]'
 
       - name: Run pre-commit checks
         run: |
           uv pip install pre-commit
-          uv run pre-commit run --all-files --show-diff-on-failure
+          uv run --no-sync pre-commit run --all-files --show-diff-on-failure

@@ -8,7 +8,9 @@ executes; an omitted node is not part of that graph.
 
 Read [Terminology](#terminology), [Default graph](#default-graph), and
 [Stage contracts](#stage-contracts) to configure a run. Contributors adding a
-separately distributed node can start at
+built-in component should use
+[Adding built-in execution nodes and stages](contributing/adding-execution-component.md);
+separately distributed components start at
 [Adding external nodes and stages](#adding-external-nodes-and-stages).
 
 ## Terminology
@@ -112,11 +114,13 @@ Capability runtime settings live under `metis_engine.capabilities`. A node's
 `capabilities` list is only an access grant; it does not configure the
 capability.
 
-Unregistered stages, nodes, unknown inputs, formats, and configuration fields
-are rejected when the YAML is loaded. Duplicate explicit YAML keys and malformed
-core settings are errors; omissions inherit the packaged defaults. YAML merge
-keys may be overridden explicitly. YAML scalar rules are unchanged: quote names
-such as `on`, `off`, `yes`, and `no` when they are identifiers.
+Duplicate explicit YAML keys and malformed core settings fail during loading.
+Stage/node registrations, ports, formats, and execution fields are validated
+during engine construction and graph compilation. Shared `metis_engine` settings
+outside `execution` may inherit packaged defaults; an explicit `execution`
+mapping replaces the complete graph. See
+[README Configuration](../README.md#configuration). YAML merge keys may be
+overridden explicitly. Quote YAML names such as `on`, `off`, `yes`, and `no`.
 
 ## Stage contracts
 
@@ -405,14 +409,19 @@ inputs supplied to direct triage satisfy its data bindings, while declared contr
 dependencies still run. Resolved contracts and topology are owned by the engine;
 mutating the caller's configuration after construction does not change execution.
 
-The graph stops after a failed stage, retaining validated outputs from completed
-nodes and stages. Public execution raises `metis.engine.ExecutionGraphError`, a
-`RuntimeError` whose `result` contains those outputs and structured diagnostics.
-Values that cannot be serialized to JSON remain native values in that error
-result, so serialization cannot hide the original execution failure.
-An inconclusive review may publish valid partial findings and SARIF so triage can
-continue. The CLI records the inconclusive status and prints a warning, retaining
-its existing zero exit code; an execution error exits nonzero.
+An `ERROR` stage stops later stages. Its result retains outputs from earlier
+completed stages and non-error same-stage nodes when exposed by configured stage
+bindings or the implicit terminal `result` convention; error-result and unbound
+internal outputs are discarded. Public execution raises
+`metis.engine.ExecutionGraphError`, whose `result` contains those outputs and
+structured diagnostics. Values that cannot be serialized to JSON remain native
+values in that result.
+
+`concurrent.futures.CancelledError` propagates directly after active stage work
+drains and does not expose a partial `ExecutionResult`. An inconclusive stage
+retains valid outputs and later stages continue. The non-interactive graph CLI
+keeps its zero exit code for inconclusive execution and exits nonzero for an
+execution error.
 
 ## Built-in implementation layout
 
@@ -421,25 +430,14 @@ directory containing their registration, contracts, configuration, and
 implementation:
 
 ```text
-engine/stages/
-  initialize/
-  review/
-    models.py
-    scope.py
-  triage/
-    models.py
+src/metis/engine/
+  stages/
+    <stage>/
+    configuration.py
     service.py
-  configuration.py
-  service.py
-engine/nodes/
-  codegraph/
-  finding_dedup/
-  reachability/
-  simple_llm_review/
-  triage/
-  threat_model/
-  index/
-  result/
+  nodes/
+    <node>/
+    builtins.py
 ```
 
 Stages own workflow contracts and orchestration. Nodes own executable behavior
@@ -454,6 +452,9 @@ Node therefore changes its Node package, the built-in composition module, and
 YAML topology; it does not change Stage execution code. Separately distributed
 public or private Nodes and Stages require no Metis change and register through
 the entry points described below.
+
+Use [Adding built-in execution nodes and stages](contributing/adding-execution-component.md)
+for the internal registration, composition, lifecycle-ownership, and test steps.
 
 ## Adding external nodes and stages
 
@@ -516,6 +517,8 @@ metis/
   external_modules/
     custom_flow/
       pyproject.toml
+      examples/
+        metis.yaml
       src/
         external_metis_nodes/
         external_metis_stages/
@@ -536,8 +539,10 @@ The external package owns dependencies, entry points, environment, and
 lockfile. The open-source checkout does not change when another package
 is added:
 
+Set `EXTERNAL_REPO` to the repository URL or local path, then run:
+
 ```bash
-git submodule add <external-repo> external_modules/custom_flow
+git submodule add "$EXTERNAL_REPO" external_modules/custom_flow
 uv sync --project external_modules/custom_flow
 uv run --project external_modules/custom_flow metis \
   --config external_modules/custom_flow/examples/metis.yaml \
@@ -561,7 +566,8 @@ verify = "external_metis_stages.verify:registration"
 
 ```python
 from metis.execution_nodes import ReviewResult
-from metis.execution_stages import StageContract, StageRegistration
+from metis.execution_stages import StageContract
+from metis.execution_stages import StageRegistration
 
 registration = StageRegistration(
     name="verify",
@@ -572,10 +578,22 @@ registration = StageRegistration(
 )
 ```
 
+The entry point may expose the registration or a zero-argument callable that
+returns it. Its name must match `registration.name`; duplicate registrations and
+collisions with `initialize`, `review`, or `triage` fail. Only configured
+external stages are loaded, except built-in-name collisions are rejected during
+catalog construction.
+
 Bind this stage's `review` input to `review.findings` to consume the default
 Review stage's published findings. `ReviewRun` is the internal node-to-node
 collection contract; `FinalReviewRun` and `JsonPromptRequest` are also available
 from `metis.execution_nodes` for separately distributed handlers.
+External stages may bind the existing `review_request`, `sarif`, and `codegraph`
+graph inputs or another stage's outputs. Adding another `$inputs` field requires
+a core `ExecutionInputs` change. External stages execute through
+`execute_graph()` or as transitive prerequisites of a built-in direct target;
+their custom outputs are programmatic/run-log values unless the integration or
+Metis CLI adds explicit export routing.
 
 Put Metis compatibility bounds in `project.dependencies`. `tool.uv.sources`
 only selects the local editable source during development.
@@ -662,15 +680,18 @@ a model.
 
 The entry-point name is always `<stage>.<node>`. Its target returns the
 registration used by the bare node name in YAML. In this example,
-`external_metis_nodes/policy.py` contains:
+`src/external_metis_nodes/policy.py` contains:
 
 ```python
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+from pydantic import ConfigDict
 
 from metis.execution_nodes import CapabilityRequirement
-from metis.execution_nodes import NodeInvocation, NodeRegistration, NodeResult
+from metis.execution_nodes import NodeInvocation
+from metis.execution_nodes import NodeRegistration
+from metis.execution_nodes import NodeResult
 from metis.execution_nodes import ReviewRun
 
 
@@ -808,10 +829,11 @@ Handlers check `runtime.is_cancelled()` in long loops, or use
 `context.report_progress(...)`, which checks even without a progress callback.
 Returning a successful result after cancelling the node is rejected as
 cancellation. Ordinary job failures become node errors and cancel that node's
-cooperative job peers; independent nodes may continue. `CancelledError` from a
-handler or callback aborts its stage and propagates to the caller. A stage drains
-its own active handlers before returning, including on failure, and leaves other
-executions' shared-pool work intact.
+cooperative job peers; independent nodes may continue.
+`concurrent.futures.CancelledError` from a handler aborts its stage and
+propagates to the caller. A stage drains its own active handlers before
+returning, including on failure, and leaves other executions' shared-pool work
+intact.
 
 Closing an engine rejects new work, wakes waiting callers, signals admitted
 executions, drains handlers and jobs, then closes capabilities. Close from an
@@ -822,6 +844,8 @@ it returns or its timeout expires. Concurrent close callers all wait for executi
 draining. Capability cleanup runs once; a repeated close may return while that
 cleanup is running, so cleanup callbacks can reenter close. Interruptions during
 draining are re-raised after cleanup completes.
+Direct capability callers are outside graph tracking and must coordinate their
+own lifetime with shutdown.
 
 A node accesses only the names in `invocation.context.capabilities`. A node declares
 `request: ReviewCommand` when it needs the review-stage request; the runner
@@ -834,21 +858,24 @@ inferred typed contracts described above. Each invocation receives a fresh
 configuration model validated from a private snapshot of the original node
 settings; shared port values are borrowed and should be treated as read-only
 by handlers. Copy a mutable port value before modifying it, and keep per-run
-state in the invocation rather than in a registration, global variable or shared
-capability. Capability objects are shared across node handlers, jobs and admitted
-executions. Their implementations must synchronize mutable state or confine
-non-thread-safe clients to a serialized operation. Factory/cleanup synchronization
-does not serialize capability method calls; keep locks inside the capability's
-state boundary and release them before invoking external callbacks.
+state local to the handler or in objects created for that invocation rather than
+in a registration, global variable or shared capability. Capability objects are
+shared across node handlers, jobs and admitted executions. Their implementations
+must synchronize mutable state or confine non-thread-safe clients to a serialized
+operation. Factory/cleanup synchronization does not serialize capability method
+calls; keep locks inside the capability's state boundary and release them before
+invoking external callbacks.
 
 Progress delivery is serialized within one execution. Other callbacks (debug,
 checkpoint, resume and diagnostic), and callbacks reused across executions, may
 run concurrently. They must protect shared state. Callbacks run inline and must
 not wait on another handler or callback that needs their lock or worker capacity.
-Cancellation exceptions propagate from callbacks. Nodes do not receive or invoke
-other executable nodes: keeping execution in the runner preserves dependency
-validation, ordering, diagnostics, and replacement by another registration
-such as `reachability_v2`.
+Execution callbacks should propagate deliberate
+`concurrent.futures.CancelledError`; ordinary callback failure behavior belongs
+to each call site. Nodes do not receive or invoke other executable nodes:
+keeping execution in the runner preserves dependency validation, ordering,
+diagnostics, and replacement by another registration such as
+`reachability_v2`.
 
 Registrations are scoped by stage, so Review and Triage may both define a
 `result` node. Built-in names cannot be silently replaced. A private
@@ -856,12 +883,14 @@ replacement uses its own name and the selected YAML routes the terminal value
 to it. A node that is omitted from YAML is neither loaded nor executed.
 
 Progress callbacks receive lifecycle events for stage and node starts
-and ends, dependency-skipped nodes, final status, and elapsed duration. Node
-exceptions and invalid outputs produce an `execution.node_failed` diagnostic;
-dependants with required inputs are reported as skipped while independent
-nodes continue. Long-running node loops should emit through
-`invocation.context.report_progress(...)` so cancellation is checked even when
-the CLI is not rendering progress.
+and ends, dependency-skipped nodes, final status, and elapsed duration.
+Non-cancellation node exceptions and invalid results or outputs become `ERROR`
+with an `execution.node_failed` diagnostic. An explicit `ERROR` result retains
+only its handler diagnostics. Nodes with failed required data or control
+dependencies are reported as skipped while independent nodes continue;
+`concurrent.futures.CancelledError` propagates as described above. Long-running
+node loops emit through `invocation.context.report_progress(...)` so cancellation
+is checked even when the CLI is not rendering progress.
 
 ## CodeGraph provider contract
 
@@ -872,8 +901,8 @@ and otherwise returns the latest valid incomplete revision. Existing v2 stores
 migrate their fingerprint constraint transactionally while preserving revisions
 and record rows. Revisions are retained without automatic pruning.
 
-Adding language support does not change the execution graph. A language
-package must:
+Adding language support does not change the execution graph. An external
+language package that declares `codegraph: true` must:
 
 1. Implement `CodeGraphProvider.build_graph()`.
 2. Return `CodeGraphResult` whose disjoint `processed_files` and `failed_files`
@@ -883,14 +912,27 @@ package must:
    group.
 4. Name the entry point after the language manifest.
 5. Declare `codegraph: true` in the language manifest.
-6. Register a same-named CodeGraph-semantics implementation when the language
+6. Register a same-named CodeGraph semantics implementation when the language
    supports advanced review.
 
-Providers receive only the repository root, their exact files, a progress
-callback, and `CodeGraphProviderContext` language/file-role lookup functions.
+Built-in CodeGraph languages instead compose their provider in `MetisEngine`
+under the manifest's language name. Add same-named deterministic semantics only
+for Reachability support; see
+[Language plugins](language-plugins.md#add-a-built-in-language).
+
+Providers receive the repository root, their exact files, a progress callback,
+and `CodeGraphProviderContext` language/file-role lookups plus optional
+`source_for_path(path)`. When that callback returns bytes, including `b""`, parse
+those profiled bytes; read the filesystem only when it is absent or returns
+`None`.
 They must use globally unique symbol IDs, resolve their internal calls, and
 return nodes only for requested files. Metis validates each provider result and
 the composed graph.
+
+The stable `metis.execution_nodes` facade does not yet export every CodeGraph
+record model needed to construct a populated graph. External implementations
+that import those models from `metis.engine.codegraph` are version-coupled and
+must pin and test their supported Metis range.
 
 C and C++ are internally routed through one shared build so calls across the
 language boundary can be resolved. Their built-in implementation uses
@@ -899,9 +941,10 @@ requirement of reachability or `CodeGraph`. A Python provider may use Python
 ASTs, a type checker, or another implementation as long as it returns the same
 contract.
 
-Provider construction is lazy. Provider failures are isolated at the provider
-boundary. For files without a configured provider, Reachability reports the
-missing support and uses the simple LLM review fallback.
+Provider construction is lazy and failures are isolated at that boundary.
+Unsupported files receive generic review from an explicitly selected
+`simple_llm_review` node, or from Reachability's internal fallback when it is the
+only review producer; missing support itself is only debug-logged.
 
 ## CodeGraph semantics contract
 
@@ -913,8 +956,8 @@ capabilities:
   codegraph: true
 ```
 
-The package registers semantics independently of its CodeGraph builder. The
-entry-point name must match the language manifest name:
+An external package registers semantics independently of its CodeGraph builder.
+The entry-point name must match the language manifest name:
 
 ```toml
 [project.entry-points."metis.codegraph_semantics"]
@@ -948,7 +991,8 @@ namespaced keys. Tags are persisted with the canonical CodeGraph and passed
 through unchanged to consuming nodes:
 
 ```python
-from metis.codegraph_semantics import CodeGraphAnnotations, Tag
+from metis.codegraph_semantics import CodeGraphAnnotations
+from metis.codegraph_semantics import Tag
 
 
 class PythonSemantics:
@@ -962,6 +1006,6 @@ class PythonSemantics:
 
 Metis resolves semantics providers lazily and serializes calls to each provider
 instance; implementations do not need to be thread-safe. Their deterministic
-annotations are persisted in the canonical CodeGraph. For a language without
-configured semantics, Reachability reports the missing support and uses the
-simple LLM review fallback.
+annotations are persisted in the canonical CodeGraph. A language without
+configured semantics does not use Reachability; generic-review ownership follows
+the fallback rule above.

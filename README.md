@@ -1,7 +1,7 @@
 # Metis: AI-Powered Security Code Review
 
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
-[![Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Ruff](https://img.shields.io/badge/lint%20%26%20format-Ruff-D7FF64.svg)](https://docs.astral.sh/ruff/)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/arm/metis/badge)](https://securityscorecards.dev/viewer/?uri=github.com/arm/metis)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10876/badge)](https://www.bestpractices.dev/projects/10876)
@@ -30,9 +30,6 @@ Metis is an open-source, agentic AI security framework for deep security code re
 
 - **Provider Flexibility**
   Support for major LLM services and local models (OpenAI, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Bedrock Mantle, vLLM, Ollama, llama.cpp, LiteLLM etc.). See [Set up LLM Provider](#2-set-up-llm-provider).
-
-![Demo](.github/demo.gif)
-
 
 ### Supported Languages
 
@@ -130,7 +127,8 @@ Set `llm_provider.name` in `metis.yaml` and install the matching extra:
 
 | Provider                 | `name`           | Install                              | Guide                                       |
 |--------------------------|------------------|--------------------------------------|---------------------------------------------|
-| OpenAI / Azure OpenAI    | `openai` / `azure_openai` | included                    | —                                           |
+| OpenAI                   | `openai`         | included                             | —                                           |
+| Azure OpenAI             | `azure_openai`   | included                             | [docs](docs/providers/azure_openai.md)      |
 | Anthropic                | `anthropic`      | `uv pip install '.[anthropic]'`      | [docs](docs/providers/anthropic.md)         |
 | Google Gemini / Vertex   | `gemini`         | `uv pip install '.[gemini]'`         | [docs](docs/providers/gemini.md)            |
 | AWS Bedrock              | `bedrock`        | `uv pip install '.[bedrock]'`        | [docs](docs/providers/bedrock.md)           |
@@ -141,9 +139,11 @@ Set `llm_provider.name` in `metis.yaml` and install the matching extra:
 
 Or install everything with `uv pip install '.[all-providers]'`.
 
-Embeddings are only required when using the `index` tool. To use a different
-provider for embeddings than for chat (e.g. Anthropic chat + OpenAI
-embeddings), add a separate `embedding_provider` block — see
+Index operations need a configured embedding provider only when the selected
+vector backend does not already supply both embedding models. This includes the
+`index`, `ask`, and `update` commands and a selected `initialize.index` node. To
+use a different provider for embeddings than for chat (e.g. Anthropic chat +
+OpenAI embeddings), add a separate `embedding_provider` block — see
 [docs/providers/embedding-provider.md](docs/providers/embedding-provider.md).
 
 ### 3. Run Analysis
@@ -151,13 +151,13 @@ embeddings), add a separate `embedding_provider` block — see
 Run the configured graph against a codebase:
 
 ```
-uv run metis --codebase-path <path_to_src> --verbose
+uv run metis --codebase-path "/path/to/src" --verbose
 ```
 
 Start the interactive prompt instead:
 
 ```
-uv run metis --interactive --codebase-path <path_to_src>
+uv run metis --interactive --codebase-path "/path/to/src"
 ```
 
 Then run commands such as:
@@ -171,17 +171,17 @@ review_code
 
 Go to your codebase path and run:
 ```bash
-docker run --rm -it -v `pwd`:/metis metis
+docker run --rm -it -v "$PWD:/metis" metis
 ```
 
 To pass environment variables use `-e`:
 ```bash
-docker run --rm -it -v `pwd`:/metis -e "OPENAI_API_KEY=${OPENAI_API_KEY}" metis
+docker run --rm -it -v "$PWD:/metis" -e "OPENAI_API_KEY=${OPENAI_API_KEY}" metis
 ```
 
 You can pass arguments to metis:
 ```bash
-docker run --rm -it -v `pwd`:/metis metis --codebase-path /metis --verbose --output-file /metis/results/review.json
+docker run --rm -it -v "$PWD:/metis" metis --codebase-path /metis --verbose --output-file /metis/results/review.json
 ```
 
 ## Configuration
@@ -189,20 +189,29 @@ docker run --rm -it -v `pwd`:/metis metis --codebase-path /metis --verbose --out
 **Metis Configuration (`metis.yaml`)**
 
 Metis ships with `src/metis/metis.yaml`. A project may provide `metis.yaml` in
-the working directory or select another file with `--config PATH`. Metis uses
-the selected file as its configuration source; it does not merge that document
-with the packaged YAML. When a selected file omits `metis_engine.execution`,
-Metis uses the packaged execution graph. When it defines that section, the
-section is the complete graph.
+the working directory or select another file with `--config PATH`. A selected
+document does not inherit packaged `llm_provider`, `embedding_provider`, or
+`query` sections; `llm_provider` is required and the others have runtime
+fallbacks. Shared `metis_engine` settings inherit packaged defaults when omitted.
+Non-empty `model_tools`, `capabilities`, and `threat_model` mappings merge
+recursively; lists and scalars replace. Empty mappings replace at that level,
+although downstream validation may restore semantic defaults. An empty
+`model_tools` mapping is restored to its required defaults. `execution`,
+`codegraph`, `reachability`, `triage`, and `hnsw_kwargs` each replace the whole
+packaged mapping, after which their models may apply field defaults. When
+`execution` is omitted, Metis uses the packaged graph; when present, it is the
+complete graph.
 
 Configuration covers:
 
 - **LLM provider:** chat model and provider connection settings
 - **Embedding provider:** models and connection settings used by Index
-- **Engine behavior:** max workers, max token length, similarity top-k
+- **Engine behavior:** max workers and max token length
+- **Query behavior:** model overrides, token limit, temperature, and similarity top-k
 - **Review checkpoints:** project-local resume storage, enabled by default
-- **Database connection:** In the case of PostgreSQL: host, port, credentials, and schema name
-- **Index storage:** backend-specific storage parameters for commands that still use the index.
+- **Database connection:** PostgreSQL host, port, credentials, and database name
+- **Index storage:** selected by CLI options such as `--backend`, `--chroma-dir`,
+  `--qdrant-url`, and `--project-schema`
 - **Capability settings:** index-search and navigation limits
 - **Reachability:** maximum reported path length and optional domain profiles
   and hints.
@@ -299,7 +308,7 @@ See [docs/triage-flow.md](docs/triage-flow.md) for a short overview of how triag
 #### Example 1: Chroma (default)
 
 ```bash
-metis --interactive --codebase-path <path_to_src>
+uv run metis --interactive --codebase-path "/path/to/src"
 ```
 
 #### Example 2: Postgres
@@ -317,9 +326,9 @@ This will launch a PostgreSQL instance with the pgvector extension enabled, usin
 Then, run Metis with the PostgreSQL backend:
 
 ```bash
-metis \
+uv run metis \
   --project-schema myproject_main \
-  --codebase-path <path_to_src> \
+  --codebase-path "/path/to/src" \
   --backend postgres
 ```
 
@@ -345,15 +354,15 @@ docker run -p 6333:6333 qdrant/qdrant
 Metis connects to localhost by default:
 
 ```bash
-metis --backend qdrant --project-schema myproject
+uv run metis --backend qdrant --project-schema myproject
 ```
 
 For another Qdrant Server or Qdrant Cloud endpoint, pass `--qdrant-url` or set `QDRANT_URL`. Set `QDRANT_API_KEY` when authentication is required. Metis creates `<project-schema>_code` and `<project-schema>_docs` collections.
 
 #### Example 4: Usage and output
 
-```bash
-metis --interactive --codebase-path <path_to_src>
+```console
+$ uv run metis --interactive --codebase-path "/path/to/src"
 > review_file src/memory/remap.c
 ```
 
@@ -370,7 +379,7 @@ for (uint32_t* ptr = start; ptr < end; ptr++) {
 
 Example output:
 
-```bash
+```text
 File: src/memory/remap.c
 Identified issue 1: Address Remapping Loop Does Not Update Memory
 Snippet:
@@ -393,23 +402,35 @@ Confidence: 1.0
 #### Example 5: Run the configured review and triage graph
 
 ```bash
-metis --codebase-path <path_to_src> --verbose --output-file results/full_review.json
+uv run metis --codebase-path "/path/to/src" --verbose --output-file results/full_review.json
 ```
 
 #### Example 6: Review a patch from the interactive prompt
 
-```bash
-metis --interactive --codebase-path <path_to_src> --triage
+```console
+$ uv run metis --interactive --codebase-path "/path/to/src" --triage
 > review_patch changes.diff --output-file results/review.sarif
 ```
 
 #### Example 7: Triage an existing SARIF file
 
-```bash
-metis --interactive --include-triaged
+```console
+$ uv run metis --interactive --include-triaged
 > triage results/review.sarif --output-file results/retriaged.sarif
 ```
 
+
+## Contributing
+
+See [CONTRIBUTION.md](CONTRIBUTION.md) for setup and checks. For built-in
+execution work, read
+[Adding built-in execution nodes and stages](docs/contributing/adding-execution-component.md).
+Separately distributed components use
+[Adding external nodes and stages](docs/execution-graph.md#adding-external-nodes-and-stages).
+See the contributor guides for
+[languages](docs/language-plugins.md),
+[capabilities](docs/capabilities/adding-capability.md), and
+[providers](docs/providers/adding-new-provider.md).
 
 ## License
 

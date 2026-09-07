@@ -5,15 +5,22 @@ implement `ChatProvider`; embedding providers implement `EmbeddingProvider`.
 A backend can support one or both, but each surface has its own entry point
 and configuration spec.
 
+The paths below are the current in-tree provider extension surface. Third-party
+providers importing `metis.providers.*` must pin and test a compatible Metis
+range because there is not yet a top-level stable provider facade.
+
 ## Provider Types
 
 ### OpenAI-Compatible Providers
 
-For backends exposing OpenAI-compatible endpoints, reuse the shared base
-classes in `src/metis/providers/openai_compatible.py`:
+For backends exposing the compatible Responses API, reuse the shared base
+classes in `src/metis/providers/openai_compatible.py`. A backend that supports
+only Chat Completions needs its own chat implementation because the shared base
+forces `use_responses_api=True`:
 
 ```python
-from metis.providers.config import ApiKeySources, ProviderConfigSpec
+from metis.providers.config import ApiKeySources
+from metis.providers.config import ProviderConfigSpec
 from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
 
@@ -78,6 +85,15 @@ Use `ProviderConfigSpec` for:
 Do not add provider-specific branches to `configuration.py` unless the config
 shape cannot be expressed with `ProviderConfigSpec`.
 
+`ProviderConfigSpec` is a required-key, credential, and copy/filter contract; it
+does not generally type-check copied values or reject unknown provider keys.
+Validate provider-specific types and relationships in the provider constructor
+before creating an SDK client. Optional-auth OpenAI-compatible backends must
+also set a provider-safe, non-secret `DEFAULT_API_KEY` for chat and embeddings
+to prevent accidental fallback to `OPENAI_API_KEY`; test with that environment
+variable set. Providers whose models are not tiktoken-compatible may need their
+own `count_tokens()`.
+
 ## Discovery
 
 Providers are discovered from the `metis.providers` entry point group. Built-in
@@ -88,8 +104,9 @@ Entry point names use `<provider>.<surface>`, where `<surface>` is `chat` or
 `embedding`:
 
 ```toml
-entry-points."metis.providers"."my_provider.chat" = "my_package.providers:MyProvider"
-entry-points."metis.providers"."my_provider.embedding" = "my_package.providers:MyEmbeddingProvider"
+[project.entry-points."metis.providers"]
+"my_provider.chat" = "my_package.providers:MyProvider"
+"my_provider.embedding" = "my_package.providers:MyEmbeddingProvider"
 ```
 
 Only register the surfaces the backend actually supports. Chat-only providers
@@ -97,6 +114,11 @@ must not declare an embedding entry point. Provider modules should not register
 themselves at import time; the registry discovers entry point values without
 importing provider modules and caches the class when the provider is first
 requested.
+
+Keep optional SDK imports inside the method that constructs the selected client,
+or guard them so loading the selected provider class produces an actionable
+missing-extra error. Verify that base-package configuration and unrelated
+providers still load without the optional dependency.
 
 ## User Configuration
 
@@ -118,26 +140,46 @@ embedding_provider:
   api_key_env: "MY_PROVIDER_API_KEY"
 ```
 
-Embedding config is only required when the `index` tool is enabled.
+Index operations require `embedding_provider` only when the vector backend does
+not already supply both embedding models. This includes the `index`, `ask`, and
+`update` commands and an explicitly selected `initialize.index` node.
 
 ## Dependencies
 
-If the provider needs packages outside the base install, add an
-`optional-dependencies.<provider>` extra in `pyproject.toml` and include it in
-`optional-dependencies.all-providers`. Guard provider tests with
-`pytest.importorskip("<package>")` when a base-only CI run should skip them.
+For a built-in provider, add any non-base SDK to an optional extra in
+`pyproject.toml` and include that extra in `optional-dependencies.all-providers`.
+The extra's package-facing name need not equal the provider id. An external
+provider instead owns its dependencies and extras; it does not edit Metis
+metadata or documentation.
+
+Guard SDK-backed tests with `pytest.importorskip("<package>")`, but retain a
+base-only subprocess check that explicitly resolves the provider without its
+SDK, then verifies client construction gives the actionable install-extra error.
 
 ## Testing
 
-Cover these in `tests/test_<provider>.py`:
+Cover the supported surfaces only:
 
-- Valid config builds the expected LangChain/LlamaIndex objects.
-- Missing required chat keys fail through config validation.
-- Missing required embedding keys fail when `build_embedding_provider_config()`
-  is called.
-- API key precedence works for explicit `api_key`, `api_key_env`, and provider
-  default env vars.
-- Entry point discovery resolves the provider class.
+- `tests/test_<provider>.py`: client construction, argument forwarding, and
+  provider-specific validation.
+- `tests/test_configuration.py`: required keys, copied values, and API-key
+  precedence.
+- `tests/test_provider_registry.py`: entry-point discovery and rejection of an
+  unsupported chat or embedding surface.
+- `tests/test_provider_token_count.py` when token counting differs.
+- A base-only subprocess: resolving the provider does not import the optional
+  SDK before client construction.
+
+When a selected node uses model tools, verify the returned chat model's
+`bind_tools` and structured-output behavior.
+
+Every new provider changes entry-point metadata. Build its distribution and
+exercise discovery/resource loading from the built artifact.
+
+For a built-in provider, add a guide covering installation, supported surfaces,
+exact YAML keys, credentials, and limitations; link it from the README matrix.
+Dual-surface built-ins also belong in `docs/providers/embedding-provider.md`.
+External providers own equivalent documentation in their package.
 
 Keep private live-provider smoke tests local under ignored paths such as
 `local-tests/`. Store credentials in ignored `.env` files or environment
