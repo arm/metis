@@ -605,6 +605,40 @@ Nodes in that stage still use the normal stage-qualified node entry point:
 "verify.private_verifier" = "external_metis_nodes.verify:registration"
 ```
 
+### Command-backed analysis and validation
+
+The separate `ExternalStageService` API runs command-backed analysis and
+validation. Analysis commands produce SARIF. Validation commands consume SARIF
+and produce `metis.external.validation-result/v1` decision JSON; Metis applies
+those decisions and writes `validated.sarif`.
+
+SARIF and decision files must contain one UTF-8 JSON object without a BOM,
+duplicate keys, or non-finite numbers. Reads are capped at 25 MiB before parsing;
+parsed documents are then checked against these default limits:
+
+| Limit | Default |
+| --- | ---: |
+| Nesting depth | 32 |
+| JSON nodes, including mapping keys | 200,000 |
+| Mapping keys | 100,000 |
+| Bytes per string | 64 KiB |
+| Items per array | 10,000 |
+| Findings or validation decisions | 10,000 |
+
+The API accepts a `sarif_limits=SarifLimits(...)` argument to configure these
+bounds. They apply to analysis reports, validation input, decision JSON, and
+the final annotated report. The final report is checked before publication and
+written atomically as compact UTF-8 JSON, within the same file-size limit.
+
+Metis requires each finding's primary location to provide a physical file URI
+and an integer `startLine` from 1 through 2,147,483,647. Supplementary locations
+may instead use logical locations, artifact references, or address/offset
+information; context regions may use character or byte offsets. Absolute file
+URIs remain supported. Compared with the earlier command API, numeric strings
+and booleans for line numbers, malformed known fields, and oversized reports
+are now rejected. These checks do not constitute full SARIF schema validation
+and do not replace the typed contracts for installed execution-graph stages.
+
 ### External analysis with a bundled implementation
 
 A Review node may package a deterministic analyzer, library, or executable in

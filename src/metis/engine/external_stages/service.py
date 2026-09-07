@@ -12,9 +12,12 @@ from typing import Any
 from uuid import uuid4
 
 from metis.sarif.triage import apply_triage_result
-from metis.sarif.triage import load_sarif_file
-from metis.sarif.triage import save_sarif_file
-from metis.sarif.writer import SARIF_VERSION
+from metis.sarif.validation import DEFAULT_SARIF_LIMITS
+from metis.sarif.validation import SarifLimits
+from metis.sarif.validation import load_json_object_file
+from metis.sarif.validation import load_metis_sarif_file
+from metis.sarif.validation import save_metis_sarif_file
+from metis.sarif.validation import validate_metis_sarif as validate_metis_sarif
 
 from .runner import ExternalStageProcessResult
 from .runner import ExternalStageExecutionError
@@ -65,10 +68,12 @@ class ExternalStageService:
         codebase_path: str,
         config: dict[str, Any] | None,
         runner: ExternalStageRunner | None = None,
+        sarif_limits: SarifLimits = DEFAULT_SARIF_LIMITS,
     ):
         self.codebase_path = codebase_path
         self.config = ExternalStagesConfigModel.model_validate(config or {})
         self.runner = runner or ExternalStageRunner()
+        self.sarif_limits = sarif_limits
 
     def run_pipeline(
         self,
@@ -145,7 +150,7 @@ class ExternalStageService:
             log_path=resolved_run_dir / "analysis-process.json",
         )
         _require_file(output_sarif, "analysis SARIF")
-        validate_metis_sarif(load_sarif_file(output_sarif))
+        load_metis_sarif_file(output_sarif, limits=self.sarif_limits)
         return ExternalAnalysisResult(
             run_dir=resolved_run_dir,
             request_path=request_path,
@@ -167,7 +172,7 @@ class ExternalStageService:
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
         codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
         input_sarif_path = Path(input_sarif).resolve()
-        validate_metis_sarif(load_sarif_file(input_sarif_path))
+        load_metis_sarif_file(input_sarif_path, limits=self.sarif_limits)
         output_decision = resolved_run_dir / "validation-decision.json"
         validated_sarif = resolved_run_dir / "validated.sarif"
         for output in (output_decision, validated_sarif):
@@ -196,9 +201,8 @@ class ExternalStageService:
             log_path=resolved_run_dir / "validation-process.json",
         )
         _require_file(output_decision, "validation decision")
-        decisions = _load_validation_result(output_decision)
-        payload = load_sarif_file(input_sarif_path)
-        validate_metis_sarif(payload)
+        decisions = _load_validation_result(output_decision, self.sarif_limits)
+        payload = load_metis_sarif_file(input_sarif_path, limits=self.sarif_limits)
         for decision in decisions.decisions:
             applied = apply_triage_result(
                 payload,
@@ -213,7 +217,7 @@ class ExternalStageService:
                     "Validation decision references missing SARIF result: "
                     f"run={decision.run_index} result={decision.result_index}"
                 )
-        save_sarif_file(validated_sarif, payload)
+        save_metis_sarif_file(validated_sarif, payload, limits=self.sarif_limits)
         return ExternalValidationResult(
             run_dir=resolved_run_dir,
             request_path=request_path,
@@ -240,64 +244,6 @@ class ExternalStageService:
             raise ValueError(
                 f"Unknown external validation stage {name!r}; available: {available}"
             ) from exc
-
-
-def validate_metis_sarif(payload: dict[str, Any]) -> None:
-    if payload.get("version") != SARIF_VERSION:
-        raise ValueError(f"Metis SARIF must use version {SARIF_VERSION}")
-    runs = payload.get("runs")
-    if not isinstance(runs, list):
-        raise ValueError("Metis SARIF must contain a runs array")
-    for run_index, run in enumerate(runs):
-        if not isinstance(run, dict):
-            raise ValueError(f"Metis SARIF run {run_index} must be an object")
-        _validate_run(run, run_index)
-
-
-def _validate_run(run: dict[str, Any], run_index: int) -> None:
-    tool = run.get("tool")
-    if not isinstance(tool, dict):
-        raise ValueError(f"Metis SARIF run {run_index} missing tool object")
-    driver = tool.get("driver")
-    if not isinstance(driver, dict) or not str(driver.get("name") or "").strip():
-        raise ValueError(f"Metis SARIF run {run_index} missing tool.driver.name")
-    results = run.get("results")
-    if not isinstance(results, list):
-        raise ValueError(f"Metis SARIF run {run_index} missing results array")
-    for result_index, result in enumerate(results):
-        _validate_result(result, run_index, result_index)
-
-
-def _validate_result(result: Any, run_index: int, result_index: int) -> None:
-    prefix = f"Metis SARIF result {run_index}:{result_index}"
-    if not isinstance(result, dict):
-        raise ValueError(f"{prefix} must be an object")
-    if not str(result.get("ruleId") or "").strip():
-        raise ValueError(f"{prefix} missing ruleId")
-    message = result.get("message")
-    if not isinstance(message, dict) or not str(message.get("text") or "").strip():
-        raise ValueError(f"{prefix} missing message.text")
-    locations = result.get("locations")
-    if not isinstance(locations, list) or not locations:
-        raise ValueError(f"{prefix} missing locations")
-    first = locations[0]
-    if not isinstance(first, dict):
-        raise ValueError(f"{prefix} first location must be an object")
-    physical = first.get("physicalLocation")
-    if not isinstance(physical, dict):
-        raise ValueError(f"{prefix} missing physicalLocation")
-    artifact = physical.get("artifactLocation")
-    if not isinstance(artifact, dict) or not str(artifact.get("uri") or "").strip():
-        raise ValueError(f"{prefix} missing artifactLocation.uri")
-    region = physical.get("region")
-    if not isinstance(region, dict):
-        raise ValueError(f"{prefix} missing region")
-    try:
-        line = int(region.get("startLine"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{prefix} missing numeric region.startLine") from exc
-    if line < 1:
-        raise ValueError(f"{prefix} region.startLine must be positive")
 
 
 def _validate_analysis_bindings(name: str, stage: ExternalStageCommandModel) -> None:
@@ -330,10 +276,12 @@ def _validate_validation_bindings(name: str, stage: ExternalStageCommandModel) -
         )
 
 
-def _load_validation_result(path: Path) -> ValidationResultModel:
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    return ValidationResultModel.model_validate(payload)
+def _load_validation_result(path: Path, limits: SarifLimits) -> ValidationResultModel:
+    payload = load_json_object_file(path, limits=limits)
+    result = ValidationResultModel.model_validate(payload)
+    if len(result.decisions) > limits.max_findings:
+        raise ValueError("External validation exceeds the decision limit")
+    return result
 
 
 def _run_stage_and_log(
