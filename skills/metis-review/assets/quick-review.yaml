@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+metis_engine:
+  max_workers: 5
+  max_active_nodes: null
+  max_concurrent_executions: 1
+  llm_max_retries: 0
+  review_checkpoints: false
+  review_code_include_paths: []
+  review_code_exclude_paths: []
+  execution:
+    inputs:
+      review_request:
+        mode: code
+    stages:
+      review:
+        nodes:
+          simple_llm_review:
+            capabilities: []
+          finding_dedup: {}
+          result:
+            formats: [sarif]
+
+# Example only: resolve the user's provider/endpoint/model before execution.
+# For a proxy, set base_url and api_key_env using its supported API/auth contract.
+# Credentials belong in the provider's environment/auth mechanism, not this file.
+llm_provider:
+  name: openai
+  model: gpt-5.5
+query:
+  max_tokens: 5000

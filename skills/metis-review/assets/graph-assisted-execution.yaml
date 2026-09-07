@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Replace metis_engine.execution with this mapping; preserve the resolved request.
+# Keep provider/model, workers and scope filters in the full base configuration.
+inputs:
+  review_request:
+    mode: code
+stages:
+  initialize:
+    outputs:
+      codegraph: codegraph.codegraph
+    nodes:
+      codegraph: {}
+  review:
+    inputs:
+      codegraph: initialize.codegraph
+    nodes:
+      simple_llm_review:
+        capabilities: []
+      reachability:
+        capabilities: []
+      finding_dedup: {}
+      result:
+        formats: [sarif]
