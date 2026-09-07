@@ -14,8 +14,12 @@ from pydantic import ValidationError
 
 from metis.engine.external_stages.schemas import ExternalValidationDecisionModel
 from metis.engine.external_stages.schemas import ExternalStageCommandModel
+from metis.engine.external_stages.runner import ExternalStageProcessResult
 from metis.engine.external_stages.runner import ExternalStageRunner
 from metis.engine.external_stages.service import ExternalStageService
+from metis.sarif.validation import SarifLimits
+from metis.sarif.validation import load_metis_sarif_file
+from metis.sarif.writer import generate_sarif
 
 
 @pytest.mark.parametrize(
@@ -102,7 +106,7 @@ def test_external_stage_pipeline_invokes_black_boxes_and_applies_decisions(tmp_p
     assert result.analysis.output_sarif.is_file()
     assert result.validation is not None
     assert result.validation.validated_sarif.is_file()
-    payload = json.loads(result.validation.validated_sarif.read_text(encoding="utf-8"))
+    payload = load_metis_sarif_file(result.validation.validated_sarif)
     props = payload["runs"][0]["results"][0]["properties"]
     assert props["metisTriaged"] is True
     assert props["metisTriageStatus"] == "valid"
@@ -249,7 +253,6 @@ def test_external_stage_rejects_previous_artifacts_before_launch(
 def test_concurrent_external_requests_cannot_share_artifacts(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-    from metis.engine.external_stages.runner import ExternalStageProcessResult
 
     started, release = Event(), Event()
     runner = Mock()
@@ -285,3 +288,92 @@ def test_concurrent_external_requests_cannot_share_artifacts(tmp_path):
             release.set()
         assert first.result(timeout=5).output_sarif.is_file()
     runner.run_sync.assert_called_once()
+
+
+def _decision_service(tmp_path, data, limits):
+    runner = Mock()
+
+    def run(stage, *, bindings):
+        bindings["output_decision"].write_bytes(data)
+        return ExternalStageProcessResult(("inert",), 0, "", "")
+
+    runner.run_sync.side_effect = run
+    return ExternalStageService(
+        codebase_path=str(tmp_path),
+        config={"validation": {"inert": {"command": ["local-test", "{request_path}"]}}},
+        runner=runner,
+        sarif_limits=limits,
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "limits", "message"),
+    [
+        (b'{"decisions":[]}' + b" " * 100, {"max_bytes": 64}, "byte limit"),
+        (
+            json.dumps({"decisions": [{"reason": "x" * 65}]}).encode(),
+            {"max_string_bytes": 64},
+            "string limit",
+        ),
+        (
+            json.dumps(
+                {
+                    "decisions": [
+                        {
+                            "run_index": 0,
+                            "result_index": 0,
+                            "status": "invalid",
+                            "reason": "Checked",
+                        }
+                    ]
+                    * 2
+                }
+            ).encode(),
+            {"max_findings": 1},
+            "decision limit",
+        ),
+        (b'{"decisions":[{},{}]}', {"max_array_items": 1}, "array-item"),
+        (b'{"decisions":[{"reason":[[[[]]]]}]}', {"max_depth": 4}, "nesting"),
+        (b'{"decisions":[],"decisions":[]}', {}, "duplicate"),
+    ],
+)
+def test_external_decision_ingestion_is_bounded_before_publication(
+    tmp_path, data, limits, message
+):
+    input_path = tmp_path / "input.sarif"
+    input_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
+    service = _decision_service(tmp_path, data, SarifLimits(**limits))
+    with pytest.raises(ValueError, match=message):
+        service.run_validation(
+            "inert", input_sarif=input_path, run_dir=tmp_path / "run"
+        )
+    assert not (tmp_path / "run" / "validated.sarif").exists()
+
+
+def test_external_annotations_cannot_publish_report_exceeding_byte_limit(tmp_path):
+    payload = generate_sarif(
+        {"reviews": [{"file": "a.py", "reviews": [{"issue": "problem"}]}]}
+    )
+    input_data = json.dumps(payload, separators=(",", ":")).encode()
+    input_path = tmp_path / "input.sarif"
+    input_path.write_bytes(input_data)
+    decisions = json.dumps(
+        {
+            "decisions": [
+                {
+                    "run_index": 0,
+                    "result_index": 0,
+                    "status": "invalid",
+                    "reason": "Caf\u00e9 checked",
+                }
+            ]
+        }
+    ).encode()
+    limits = SarifLimits(max_bytes=len(input_data))
+    service = _decision_service(tmp_path, decisions, limits)
+    with pytest.raises(ValueError, match="byte limit"):
+        service.run_validation(
+            "inert", input_sarif=input_path, run_dir=tmp_path / "run"
+        )
+    assert not (tmp_path / "run" / "validated.sarif").exists()
+    assert input_path.read_bytes() == input_data
