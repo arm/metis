@@ -263,6 +263,29 @@ def test_main_passes_custom_config_path_to_runtime_loader(monkeypatch, tmp_path)
     assert captured == {"config_path": str(config_path), "enable_psql": False}
 
 
+def test_main_exits_nonzero_and_closes_engine_when_command_fails(monkeypatch, tmp_path):
+    def fail_command(*_args):
+        raise RuntimeError("review failed")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["metis", "--non-interactive", "--command", "review_patch change.patch"],
+    )
+    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
+    monkeypatch.setattr(entry, "execute_command", fail_command)
+
+    with (tmp_path / "engine-resource").open("w") as resource:
+        engine = SimpleNamespace(close=resource.close)
+        monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+
+        with pytest.raises(SystemExit) as exc_info:
+            entry.main()
+
+        assert exc_info.value.code == 1
+        assert resource.closed
+
+
 def test_build_engine_defers_embedding_model_construction(monkeypatch, tmp_path):
     class ChatProvider:
         def __init__(self, _runtime):

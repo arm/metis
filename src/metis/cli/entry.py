@@ -446,9 +446,8 @@ def main():
     try:
         if args.non_interactive:
             exit_code, farewell = run_non_interactive(engine, args)
-            return
-
-        farewell = run_interactive_loop(engine, args, vector_backend)
+        else:
+            farewell = run_interactive_loop(engine, args, vector_backend)
     finally:
         finalize_cli_session_and_close(engine, args, farewell)
     if exit_code:

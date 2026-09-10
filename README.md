@@ -260,6 +260,8 @@ To use Metis in non-interactive mode, use the --non-interactive flag along with 
 metis --non-interactive --command "<command> [args...]" [--output-file <file.json>]
 ```
 
+When command execution raises an exception, Metis exits with status `1`. Use `--verbose` to display error details in non-interactive mode.
+
 ## Examples
 
 #### Example 1: Chroma (default)
