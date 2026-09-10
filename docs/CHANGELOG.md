@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## [1.5.3](https://github.com/arm/metis/compare/metis-v1.5.2...metis-v1.5.3) (2026-09-10)
 
 
 ### Bug Fixes
 
-* **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
-* **cli:** Preserve non-zero exit status for non-interactive command exceptions after session cleanup.
+* **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting. ([ee3f427](https://github.com/arm/metis/commit/ee3f4277551d8220f165fe5863670f6fbbad05f7))
+* **cli:** Preserve non-zero exit status for non-interactive command exceptions after session cleanup. ([ee3f427](https://github.com/arm/metis/commit/ee3f4277551d8220f165fe5863670f6fbbad05f7))
 
 
 ## [1.5.2](https://github.com/arm/metis/compare/metis-v1.5.1...metis-v1.5.2) (2026-09-04)
