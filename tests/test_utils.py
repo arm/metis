@@ -115,6 +115,11 @@ def test_tiktoken_token_count_unknown_model_falls_back_to_cl100k():
     )
 
 
+@pytest.mark.parametrize("model", ["gpt-4o", "unknown-model"])
+def test_tiktoken_token_count_treats_special_tokens_as_literal_text(model: str) -> None:
+    assert tiktoken_token_count("<|endoftext|>", model) == 7
+
+
 def test_tiktoken_token_count_falls_back_when_registry_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

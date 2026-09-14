@@ -154,6 +154,9 @@ Run the configured graph against a codebase:
 uv run metis --codebase-path "/path/to/src" --verbose
 ```
 
+Literal tokenizer markers such as `<|endoftext|>` in reviewed source are counted
+as ordinary text.
+
 Start the interactive prompt instead:
 
 ```
