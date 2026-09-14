@@ -67,6 +67,12 @@ match the LlamaIndex `BaseEmbedding` API used by the vector store.
 
 Examples: `azure_openai.py`, `bedrock.py`, `gemini.py`, `bedrock_mantle.py`.
 
+## Token Counting
+
+`OpenAICompatibleChatProvider` and `AzureOpenAIProvider` use the shared tiktoken
+counter. Literal tokenizer markers in source text, such as `<|endoftext|>`, are
+counted as ordinary text rather than special tokens.
+
 ## Configuration Specs
 
 Each provider class owns its config contract through `CONFIG_SPEC`.
