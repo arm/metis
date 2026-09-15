@@ -146,10 +146,17 @@ class TreeSitterReachabilityService:
         files=None,
     ):
         options = self._review_options(options)
-        graph, paths = self._graphs.get_codebase_graph_and_paths(
-            files=files,
-            options=options,
-        )
+        if options.confirm_paths:
+            graph, paths = self._graphs.get_codebase_graph_and_paths(
+                files=files,
+                options=options,
+            )
+        else:
+            graph = self._graphs.ensure_graph(
+                files=files,
+                options=options,
+            )
+            paths = []
         if graph.node_count() == 0:
             return []
         selected_paths = []

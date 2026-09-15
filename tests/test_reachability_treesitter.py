@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -15,10 +17,18 @@ from metis.engine.reachability import (
 from metis.engine.reachability.c_family_ast import CFamilyAstMixin
 from metis.engine.reachability.c_family import CFamilyTreeSitterExtractor
 from metis.engine.reachability.file_focus import FileFocusBuilder
+from metis.engine.reachability.finding_finalizer import FindingFinalizer
 from metis.engine.reachability.finding_identity import _canonical_fields
 from metis.engine.reachability.finding_paths import FindingPathAnnotator
 from metis.engine.reachability.graph_cache import ReachabilityGraphCache
-from metis.engine.reachability.graph_utils import select_confirmation_paths
+from metis.engine.reachability.graph_utils import (
+    _build_reverse_edges,
+    _node_sort_key,
+    select_confirmation_paths,
+)
+from metis.engine.reachability.options import ReachabilityReviewOptions
+from metis.engine.reachability.service import TreeSitterReachabilityService
+from metis.engine.llm_runner import JsonPromptRunner
 from metis.plugins.c_plugin import CPlugin
 
 
@@ -171,6 +181,24 @@ def _graph(*nodes):
         graph.add_node(node)
     graph.resolve_all_calls()
     return graph
+
+
+class _BoundedGraphNodes(dict):
+    def __init__(self, nodes, *, visits, lookups):
+        super().__init__(nodes)
+        self._visits = visits
+        self._lookups = lookups
+
+    def values(self):
+        for node in super().values():
+            self._visits -= 1
+            assert self._visits >= 0, "annotation repeatedly traverses the whole graph"
+            yield node
+
+    def get(self, name, default=None):
+        self._lookups -= 1
+        assert self._lookups >= 0, "annotation explores routes instead of unique nodes"
+        return super().get(name, default)
 
 
 def _finding(vtype, function, line, description, root_cause, **kwargs):
@@ -472,7 +500,11 @@ def test_finding_path_annotator(external):
         "finding",
     )
 
-    [annotated] = FindingPathAnnotator(graph, "src/review.c").annotate([finding])
+    [annotated] = FindingPathAnnotator(
+        graph,
+        "src/review.c",
+        reverse_edges=_build_reverse_edges(graph, partial(_node_sort_key, graph)),
+    ).annotate([finding])
 
     if external:
         assert annotated is finding
@@ -486,6 +518,340 @@ def test_finding_path_annotator(external):
         assert annotated.source_function == "src/main.c::main"
         assert annotated.sink_function == "src/review.c::helper"
         assert finding.path == ["src/review.c::helper"]
+
+
+def test_finding_path_annotator_respects_empty_reverse_index():
+    graph = _graph(
+        _fn("source.c::entry", 1, source=True, calls=["target"]),
+        _fn("review.c::target", 1),
+    )
+    graph.nodes = _BoundedGraphNodes(graph.nodes, visits=0, lookups=1)
+    annotator = FindingPathAnnotator(graph, "review.c", reverse_edges={})
+
+    assert annotator._best_source_path_to("review.c::target") == []
+
+
+def test_finding_finalizer_bounds_index_work_across_files():
+    targets = [_fn(f"src/file_{i}.c::target_{i}", i + 2) for i in range(24)]
+    source = _fn("src/main.c::entry", 1, source=True, calls=[n.name for n in targets])
+    graph = _graph(source, *targets)
+    findings = [
+        _finding(
+            "integer_overflow", node.unique_name, node.line_number, "issue", "cause"
+        )
+        for node in targets
+    ]
+    graph.nodes = _BoundedGraphNodes(
+        graph.nodes,
+        visits=graph.node_count(),
+        lookups=graph.edge_count() + 4 * len(findings),
+    )
+
+    annotated = FindingFinalizer(".").annotate_findings_with_source_paths(
+        findings, graph
+    )
+
+    assert annotated == [
+        replace(
+            finding,
+            source_function=source.unique_name,
+            source_file=source.file_path,
+            source_line=source.line_number,
+            path=[source.unique_name, finding.sink_function],
+        )
+        for finding in findings
+    ]
+    assert [finding.path for finding in findings] == [
+        [node.unique_name] for node in targets
+    ]
+
+
+def test_finding_finalizer_bounds_unreachable_cyclic_search():
+    layers = [[f"node_{depth}_{branch}" for branch in range(3)] for depth in range(8)]
+    graph = _graph(
+        _fn("cycle.c::left", 1, calls=["right", *layers[0]]),
+        _fn("cycle.c::right", 2, calls=["left", *layers[0]]),
+        *[
+            _fn(
+                f"layer_{depth}.c::{name}",
+                branch + 1,
+                calls=layers[depth + 1] if depth + 1 < len(layers) else ["target"],
+            )
+            for depth, names in enumerate(layers)
+            for branch, name in enumerate(names)
+        ],
+        _fn("review.c::target", 1),
+    )
+    finding = _finding("other", "review.c::target", 1, "unreachable issue", "cause")
+    graph.nodes = _BoundedGraphNodes(
+        graph.nodes,
+        visits=graph.node_count(),
+        lookups=graph.edge_count() + graph.node_count() + 2,
+    )
+
+    [annotated] = FindingFinalizer(".").annotate_findings_with_source_paths(
+        [finding], graph
+    )
+
+    assert annotated is finding
+    assert annotated.path == ["review.c::target"]
+
+
+@pytest.mark.parametrize("target_file", ["", "review.c"])
+def test_finding_finalizer_skips_graph_work_without_findings(target_file):
+    graph = _graph(_fn("review.c::entry", 1, source=True))
+    graph.nodes = _BoundedGraphNodes(graph.nodes, visits=0, lookups=0)
+    finalizer = FindingFinalizer(".")
+
+    assert finalizer.annotate_findings_with_source_paths([], graph) == []
+    assert finalizer.finalize(
+        [], graph, options=ReachabilityReviewOptions(), target_file=target_file
+    ) == ([], 0, 0)
+
+
+def test_finding_finalizer_skips_graph_work_without_target_file():
+    graph = _graph(_fn("review.c::entry", 1, source=True))
+    graph.nodes = _BoundedGraphNodes(graph.nodes, visits=0, lookups=0)
+    finding = _finding("other", "missing", 1, "issue", "cause")
+    finding.primary_file = finding.sink_file = finding.source_file = ""
+
+    [annotated] = FindingFinalizer(".").annotate_findings_with_source_paths(
+        [finding], graph
+    )
+
+    assert annotated is finding
+    assert annotated.path == ["missing"]
+
+
+@pytest.mark.parametrize(
+    ("target", "limit", "expected"),
+    [
+        ("missing", 3, []),
+        ("z_source.c::source_z", 1, ["z_source.c::source_z"]),
+        ("review.c::target", 1, []),
+        ("review.c::target", 2, []),
+        (
+            "review.c::target",
+            3,
+            ["z_source.c::source_z", "a.c::first", "review.c::target"],
+        ),
+    ],
+)
+def test_finding_path_search_preserves_sorted_bfs_and_node_depth(
+    target, limit, expected
+):
+    graph = _graph(
+        _fn("a_source.c::source_a", 1, source=True, calls=["last"]),
+        _fn("z_source.c::source_z", 1, source=True, calls=["first"]),
+        _fn("z.c::last", 1, calls=["target"]),
+        _fn("a.c::first", 1, calls=["target"]),
+        _fn("review.c::target", 1),
+    )
+    reverse_edges = _build_reverse_edges(graph, partial(_node_sort_key, graph))
+    reverse_edges["review.c::target"].insert(0, "missing.c::caller")
+    annotator = FindingPathAnnotator(
+        graph, "review.c", reverse_edges=reverse_edges, max_path_length=limit
+    )
+
+    assert annotator._best_source_path_to(target) == expected
+
+
+@pytest.mark.parametrize(
+    "existing_path", [["target"], ["original", "longer", "target"]]
+)
+def test_finding_finalizer_preserves_lookup_and_metadata(existing_path):
+    graph = _graph(
+        _fn("src/a.c::target", 1, source=True),
+        _fn("src/source.c::entry", 2, source=True, calls=["target"]),
+        _fn("src/review.c::target", 3),
+    )
+    graph.get_node("src/source.c::entry").resolved_calls = ["src/review.c::target"]
+    finding = _finding(
+        "integer_overflow",
+        "src/review.c::target",
+        9,
+        "issue",
+        "cause",
+        path=existing_path,
+    )
+    finding.primary_file = "src\\review.c"
+    finding.primary_function = finding.sink_function = finding.source_function = (
+        "target"
+    )
+    finding.primary_anchor = {"start_line": 8, "end_line": 9, "symbol": "target"}
+    finding.mitigation = "check the arithmetic"
+    finding.cwe = "CWE-190"
+
+    [annotated], total, removed = FindingFinalizer(".").finalize(
+        [finding],
+        graph,
+        options=ReachabilityReviewOptions(),
+        target_file="src/review.c",
+    )
+
+    assert (total, removed) == (1, 0)
+    if len(existing_path) > 2:
+        assert annotated is finding
+    else:
+        assert annotated == replace(
+            finding,
+            source_function="src/source.c::entry",
+            source_file="src/source.c",
+            source_line=2,
+            sink_function="src/review.c::target",
+            sink_file="src/review.c",
+            sink_line=3,
+            path=["src/source.c::entry", "src/review.c::target"],
+        )
+
+
+@pytest.fixture
+def offline_reachability_service(tmp_path, monkeypatch):
+    (tmp_path / "main.c").write_text(
+        "void first(void) { root(); custom_copy(); }\n"
+        "void second(void) {}\n"
+        "void root(void) { first(); second(); }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "excluded.c").write_text("void excluded(void) {}\n", encoding="utf-8")
+    (tmp_path / "notes.py").write_text("def unrelated(): pass\n", encoding="utf-8")
+    plugin = CPlugin(plugin_config={"plugins": {}})
+    repository = SimpleNamespace(
+        get_code_files=lambda: ["main.c", "excluded.c", "notes.py"],
+        get_plugin_for_path=lambda _path: plugin,
+        supports_reachability_file=lambda path: path.endswith(".c"),
+    )
+
+    def model_response(_runner, request):
+        if "candidate_findings" in request.variables:
+            return {"groups": []}
+        if "paths_section" in request.variables:
+            return {
+                "findings": [
+                    {
+                        "path_index": 0,
+                        "is_vulnerable": True,
+                        "vulnerability_type": "integer_overflow",
+                        "description": "confirmed path issue",
+                        "root_cause": "unchecked path arithmetic",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        if "allowed_analysis_types" in request.variables:
+            return {
+                "findings": [
+                    {
+                        "analysis_type": "semantic",
+                        "function_name": "first",
+                        "vulnerability_type": "buffer_overflow",
+                        "description": "graph lens issue",
+                        "root_cause": "unchecked custom copy",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        return {"findings": []}
+
+    monkeypatch.setattr(JsonPromptRunner, "invoke", model_response)
+    return TreeSitterReachabilityService(
+        SimpleNamespace(codebase_path=str(tmp_path), llama_query_model="offline"),
+        repository,
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("confirm_paths", "max_paths", "confirmed_targets"),
+    [
+        (False, 0, []),
+        (False, 1, []),
+        (True, 0, ["main.c::first", "main.c::second"]),
+        (True, 1, ["main.c::first"]),
+    ],
+)
+def test_review_codebase_confirmation_policy_preserves_lens_findings(
+    offline_reachability_service,
+    monkeypatch,
+    confirm_paths,
+    max_paths,
+    confirmed_targets,
+):
+    if not confirm_paths:
+
+        def unexpected_forward_paths(_tracer):
+            pytest.fail("disabled confirmation must not enumerate forward paths")
+
+        monkeypatch.setattr(
+            SourceRootedPathTracer, "find_all_paths", unexpected_forward_paths
+        )
+    events = []
+    options = ReachabilityReviewOptions(
+        confirm_paths=confirm_paths,
+        max_paths=max_paths,
+        max_workers=1,
+        lens_profile="review",
+        source_functions=[{"name": "root", "reason": "configured entrypoint"}],
+        security_functions=[{"name": "custom_copy", "sink_type": "buffer_overflow"}],
+        progress_callback=events.append,
+    )
+
+    [review] = offline_reachability_service.review_codebase(
+        options=options, files=["main.c", "notes.py"]
+    )
+
+    assert review["file"] == "main.c"
+    [lens] = [item for item in review["reviews"] if item["analysis_type"] == "semantic"]
+    assert lens["issue"] == "graph lens issue"
+    assert lens["primary_function"] == "main.c::first"
+    assert lens["line_number"] == 1
+    assert lens["path"] == ["main.c::root", "main.c::first"]
+    confirmed = [
+        item for item in review["reviews"] if item["analysis_type"] == "reachability"
+    ]
+    assert [item["path"] for item in confirmed] == [
+        ["main.c::root", target] for target in confirmed_targets
+    ]
+    assert len(review["reviews"]) == 1 + len(confirmed_targets)
+    paths_done = [
+        event for event in events if event["event"] == "treesitter_paths_done"
+    ]
+    assert paths_done == [
+        {
+            "event": "treesitter_paths_done",
+            "paths": 2 if confirm_paths else 0,
+            "selected": len(confirmed_targets),
+            "confirmation_enabled": confirm_paths,
+        }
+    ]
+    [done] = [
+        event for event in events if event["event"] == "treesitter_code_review_done"
+    ]
+    assert done["supplementary_findings"] == 1
+    assert done["path_findings"] == len(confirmed_targets)
+    assert done["deduped_findings"] == 1 + len(confirmed_targets)
+    graph = offline_reachability_service._graphs.ensure_graph(options=options)
+    assert set(graph.nodes) == {"main.c::root", "main.c::first", "main.c::second"}
+    assert [node.unique_name for node in graph.get_sources()] == ["main.c::root"]
+    assert [(node.unique_name, node.sink_type) for node in graph.get_sinks()] == [
+        ("main.c::first", "buffer_overflow")
+    ]
+
+
+@pytest.mark.parametrize("confirm_paths", [False, True])
+def test_review_codebase_preserves_empty_graph_result(
+    offline_reachability_service, confirm_paths
+):
+    assert (
+        offline_reachability_service.review_codebase(
+            options=ReachabilityReviewOptions(
+                confirm_paths=confirm_paths, max_workers=1
+            ),
+            files=["notes.py"],
+        )
+        == []
+    )
 
 
 def test_deduplicator_keeps_same_canonical_key_without_llm_grouping():

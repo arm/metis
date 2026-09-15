@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+
+### Bug Fixes
+
+* **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
+* **reachability:** Skip source-rooted path enumeration when codebase path confirmation is disabled.
+
+
 ## [1.5.3](https://github.com/arm/metis/compare/metis-v1.5.2...metis-v1.5.3) (2026-09-10)
 
 

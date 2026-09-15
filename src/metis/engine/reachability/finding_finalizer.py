@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from functools import partial
+
 from metis.reachability_settings import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .dedup import FindingConsolidator
 from .finding_paths import FindingPathAnnotator
 from .finding_values import _normalise_vuln_type
-from .graph_utils import _same_file
+from .graph_utils import _build_reverse_edges, _node_sort_key, _same_file
 
 
 def participates_in_file(finding, target_file, graph):
@@ -58,11 +60,15 @@ class FindingFinalizer:
         max_paths_per_sink = options.max_paths_per_sink
         max_path_length = options.max_path_length
         if target_file:
-            findings = FindingPathAnnotator(
-                graph,
-                target_file,
-                max_path_length=max_path_length,
-            ).annotate(findings)
+            if findings:
+                findings = FindingPathAnnotator(
+                    graph,
+                    target_file,
+                    reverse_edges=_build_reverse_edges(
+                        graph, partial(_node_sort_key, graph)
+                    ),
+                    max_path_length=max_path_length,
+                ).annotate(findings)
         else:
             findings = self.annotate_findings_with_source_paths(
                 findings,
@@ -90,6 +96,7 @@ class FindingFinalizer:
     ):
         annotated = []
         annotators = {}
+        reverse_edges = None
         for finding in findings:
             target_file = (
                 finding.primary_file or finding.sink_file or finding.source_file
@@ -99,9 +106,14 @@ class FindingFinalizer:
                 continue
             annotator = annotators.get(target_file)
             if annotator is None:
+                if reverse_edges is None:
+                    reverse_edges = _build_reverse_edges(
+                        graph, partial(_node_sort_key, graph)
+                    )
                 annotator = FindingPathAnnotator(
                     graph,
                     target_file,
+                    reverse_edges=reverse_edges,
                     max_path_length=max_path_length,
                 )
                 annotators[target_file] = annotator
