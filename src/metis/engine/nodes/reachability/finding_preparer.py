@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from functools import partial
+
 from metis.engine.nodes.codegraph.annotations import normalize_sink_type
 from metis.engine.nodes.reachability.options import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .finding_paths import FindingPathAnnotator
+from .graph_utils import _build_reverse_edges
+from .graph_utils import _node_sort_key
 from .graph_utils import _same_file
 
 
@@ -39,10 +43,11 @@ def prepare_findings(
     max_path_length=DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
     target_file="",
 ):
-    if target_file:
+    if target_file and findings:
         findings = FindingPathAnnotator(
             graph,
             target_file,
+            reverse_edges=_build_reverse_edges(graph, partial(_node_sort_key, graph)),
             max_path_length=max_path_length,
         ).annotate(findings)
     else:
@@ -66,6 +71,7 @@ def annotate_findings_with_source_paths(
 ):
     annotated = []
     annotators = {}
+    reverse_edges = None
     for finding in findings:
         target_file = finding.primary_file or finding.sink_file or finding.source_file
         if not target_file:
@@ -73,9 +79,14 @@ def annotate_findings_with_source_paths(
             continue
         annotator = annotators.get(target_file)
         if annotator is None:
+            if reverse_edges is None:
+                reverse_edges = _build_reverse_edges(
+                    graph, partial(_node_sort_key, graph)
+                )
             annotator = FindingPathAnnotator(
                 graph,
                 target_file,
+                reverse_edges=reverse_edges,
                 max_path_length=max_path_length,
             )
             annotators[target_file] = annotator
