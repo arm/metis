@@ -6,6 +6,7 @@
 ### Bug Fixes
 
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
+* **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 
 
 ## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)

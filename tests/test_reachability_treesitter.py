@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -24,7 +26,13 @@ from metis.engine.nodes.codegraph import CodeGraphSemanticsCatalog
 from metis.engine.nodes.codegraph import CodeGraphService
 from metis.engine.nodes.reachability import VulnerabilityFinding
 from metis.engine.nodes.reachability.finding_paths import FindingPathAnnotator
+from metis.engine.nodes.reachability.finding_preparer import (
+    annotate_findings_with_source_paths,
+)
+from metis.engine.nodes.reachability.finding_preparer import prepare_findings
+from metis.engine.nodes.reachability.graph_utils import _build_reverse_edges
 from metis.engine.nodes.reachability.graph_utils import _copy_graph_nodes
+from metis.engine.nodes.reachability.graph_utils import _node_sort_key
 from metis.engine.nodes.reachability.graph_utils import graph_fingerprint
 from metis.engine.nodes.reachability.options import ReachabilityReviewOptions
 from metis.engine.nodes.reachability.service import ReachabilityService
@@ -225,6 +233,22 @@ def _finding(vtype, function, line, description, root_cause, **kwargs):
         primary_line=line,
         canonical_key=kwargs.get("canonical_key", ""),
     )
+
+
+class _CountingGraphNodes(dict):
+    def __init__(self, nodes):
+        super().__init__(nodes)
+        self.node_visits = 0
+        self.node_lookups = 0
+
+    def values(self):
+        for node in super().values():
+            self.node_visits += 1
+            yield node
+
+    def get(self, name, default=None):
+        self.node_lookups += 1
+        return super().get(name, default)
 
 
 def test_codegraph_service_uses_installed_parser_runtime(tmp_path):
@@ -1467,7 +1491,11 @@ def test_finding_path_annotator(external):
         "finding",
     )
 
-    [annotated] = FindingPathAnnotator(graph, "src/review.c").annotate([finding])
+    [annotated] = FindingPathAnnotator(
+        graph,
+        "src/review.c",
+        reverse_edges=_build_reverse_edges(graph, partial(_node_sort_key, graph)),
+    ).annotate([finding])
 
     if external:
         assert annotated is finding
@@ -1481,3 +1509,195 @@ def test_finding_path_annotator(external):
         assert annotated.source_function == "src/main.c::main"
         assert annotated.sink_function == "src/review.c::helper"
         assert finding.path == ["src/review.c::helper"]
+
+
+@pytest.mark.parametrize("connected", [False, True])
+def test_finding_annotation_bounds_many_file_graph_work_and_refreshes(connected):
+    targets = [
+        _fn(f"src/file_{index}.c::target_{index}", 10, source=not connected)
+        for index in range(64)
+    ]
+    root = _fn("src/root.c::root", 1, source=True, calls=["dispatch"])
+    dispatch = _fn("src/dispatch.c::dispatch", 2, calls=[node.name for node in targets])
+    graph = _graph(*targets, *([root, dispatch] if connected else []))
+    edge_count = sum(len(node.resolved_calls) for node in graph.nodes.values())
+    graph.nodes = nodes = _CountingGraphNodes(graph.nodes)
+    findings = [
+        _finding("integer_overflow", node.unique_name, 10, "overflow", "unchecked size")
+        for node in targets
+    ]
+
+    annotated = annotate_findings_with_source_paths(findings, graph)
+
+    expected = [
+        replace(
+            finding,
+            source_function=root.unique_name,
+            source_file=root.file_path,
+            source_line=root.line_number,
+            path=[root.unique_name, dispatch.unique_name, finding.sink_function],
+        )
+        if connected
+        else finding
+        for finding in findings
+    ]
+    assert annotated == expected
+    # Index traversal and sorting stay graph-sized, not multiplied by target files.
+    assert nodes.node_visits <= len(nodes)
+    assert nodes.node_lookups <= edge_count + 6 * len(findings)
+
+    if connected:
+        root.resolved_calls.clear()
+        refreshed = annotate_findings_with_source_paths(findings, graph)
+        assert refreshed == findings
+        assert all(actual is original for actual, original in zip(refreshed, findings))
+        assert nodes.node_visits <= 2 * len(nodes)
+
+
+def test_prepare_findings_bounds_source_unreachable_cyclic_search():
+    layers = [[f"layer_{depth}_{branch}" for branch in range(3)] for depth in range(6)]
+    graph = _graph(
+        _fn("src/branch.c::cycle_a", 1, calls=["cycle_b", *layers[0]]),
+        _fn("src/branch.c::cycle_b", 2, calls=["cycle_a", *layers[0]]),
+        *[
+            _fn(
+                f"src/branch.c::{name}",
+                10 + depth,
+                calls=layers[depth + 1] if depth + 1 < len(layers) else ["target"],
+            )
+            for depth, layer in enumerate(layers)
+            for name in layer
+        ],
+        _fn("src/target.c::target", 30),
+    )
+    edge_count = sum(len(node.resolved_calls) for node in graph.nodes.values())
+    graph.nodes = nodes = _CountingGraphNodes(graph.nodes)
+    finding = _finding(
+        "integer_overflow", "src/target.c::target", 30, "overflow", "size"
+    )
+
+    [annotated] = prepare_findings(
+        [finding], graph, target_file="src/target.c", max_path_length=25
+    )
+
+    assert annotated is finding
+    assert annotated.path == ["src/target.c::target"]
+    assert nodes.node_visits <= len(nodes)
+    # Includes reverse-index sorting and finding lookup, not just the BFS itself.
+    assert nodes.node_lookups <= len(nodes) + edge_count + 3
+
+
+def test_prepare_findings_skips_graph_work_without_usable_candidates():
+    graph = _graph(
+        _fn("src/source.c::source", 1, source=True, calls=["target"]),
+        _fn("src/target.c::target", 2),
+    )
+    graph.nodes = nodes = _CountingGraphNodes(graph.nodes)
+    unlocated = _finding(
+        "integer_overflow", "src/target.c::target", 2, "overflow", "size"
+    )
+    unlocated.primary_file = unlocated.source_file = unlocated.sink_file = ""
+
+    assert prepare_findings([], graph) == []
+    assert prepare_findings([], graph, target_file="src/target.c") == []
+    [unchanged] = annotate_findings_with_source_paths([unlocated], graph)
+
+    assert unchanged is unlocated
+    assert nodes.node_visits == 0
+    assert nodes.node_lookups == 0
+
+
+@pytest.mark.parametrize("max_path_length", [2, 3])
+def test_prepare_findings_preserves_sorted_bfs_depth_and_metadata(max_path_length):
+    graph = _graph(
+        _fn("src/a_source.c::alpha", 1, source=True, calls=["late"]),
+        _fn("src/z_branch.c::late", 2, calls=["target"]),
+        _fn("src/z_source.c::zeta", 3, source=True, calls=["early"]),
+        _fn("src/a_branch.c::early", 4, calls=["target"]),
+        _fn("src/0_other.c::target", 1, source=True),
+        _fn("src/target.c::target", 20),
+    )
+    finding = replace(
+        _finding("integer_overflow", "src/target.c::target", 24, "overflow", "size"),
+        primary_function="target",
+        primary_file=r"src\target.c",
+        primary_anchor={"start_line": 23, "end_line": 24, "symbol": "target"},
+        canonical_key="stable-finding",
+        mitigation="Check the size before addition.",
+        cwe="CWE-190",
+    )
+
+    [annotated] = prepare_findings(
+        [finding],
+        graph,
+        target_file=r"src\target.c",
+        max_path_length=max_path_length,
+    )
+
+    if max_path_length == 2:
+        assert annotated is finding
+    else:
+        # Sorted immediate callers, not the alphabetically first source, break ties.
+        assert annotated == replace(
+            finding,
+            source_function="src/z_source.c::zeta",
+            source_file="src/z_source.c",
+            source_line=3,
+            sink_line=20,
+            path=[
+                "src/z_source.c::zeta",
+                "src/a_branch.c::early",
+                "src/target.c::target",
+            ],
+        )
+        assert finding.path == ["src/target.c::target"]
+
+
+def test_finding_annotation_handles_source_and_missing_targets_at_depth_one():
+    graph = _graph(
+        _fn("src/source.c::source", 1, source=True, calls=["target"]),
+        _fn("src/target.c::target", 2),
+    )
+    findings = [
+        _finding("integer_overflow", function, 1, "overflow", "size")
+        for function in (
+            "src/source.c::source",
+            "src/target.c::target",
+            "src/missing.c::missing",
+        )
+    ]
+    for finding in findings:
+        finding.path = []
+
+    annotated = annotate_findings_with_source_paths(findings, graph, max_path_length=1)
+
+    assert annotated[0] == replace(findings[0], path=["src/source.c::source"])
+    assert annotated[1] is findings[1]
+    assert annotated[2] is findings[2]
+
+
+@pytest.mark.parametrize(
+    "existing_path",
+    [
+        ["src/alternate.c::alternate", "src/target.c::target"],
+        ["src/alternate.c::alternate", "src/mid.c::mid", "src/target.c::target"],
+    ],
+)
+def test_finding_annotation_preserves_equal_or_longer_existing_path(existing_path):
+    graph = _graph(
+        _fn("src/source.c::source", 1, source=True, calls=["target"]),
+        _fn("src/target.c::target", 2),
+    )
+    finding = _finding(
+        "integer_overflow",
+        "src/target.c::target",
+        2,
+        "overflow",
+        "size",
+        path=existing_path,
+    )
+
+    [annotated] = annotate_findings_with_source_paths([finding], graph)
+
+    assert annotated is finding
+    assert annotated.path == existing_path

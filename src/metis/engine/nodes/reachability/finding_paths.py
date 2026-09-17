@@ -3,16 +3,15 @@
 
 
 from collections import deque
+from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 
 from metis.engine.nodes.reachability.options import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
-from .graph_utils import (
-    _build_reverse_edges,
-    _node_sort_key,
-    _normalize_file_ref,
-)
+from .graph_utils import _node_sort_key
+from .graph_utils import _normalize_file_ref
 
 
 class FindingPathAnnotator:
@@ -21,13 +20,14 @@ class FindingPathAnnotator:
         graph,
         target_file: str,
         *,
+        reverse_edges: Mapping[str, Sequence[str]],
         max_path_length: int = DEFAULT_REACHABILITY_MAX_PATH_LENGTH,
     ):
         self._graph = graph
         self._target_file = _normalize_file_ref(target_file)
         self._max_path_length = max(1, int(max_path_length or 1))
         self._node_sort_key = partial(_node_sort_key, self._graph)
-        self._reverse_edges = _build_reverse_edges(self._graph, self._node_sort_key)
+        self._reverse_edges = reverse_edges
 
     def annotate(self, findings):
         return [self.annotate_one(finding) for finding in findings]
@@ -82,7 +82,7 @@ class FindingPathAnnotator:
         short_name = str(name).split("::")[-1]
         matches = [
             node
-            for unique in self._graph.name_index.get(short_name, [])
+            for unique in self._graph.name_index.get(short_name, ())
             if (node := self._graph.get_node(unique)) is not None
         ]
         if wanted_file:
@@ -102,20 +102,28 @@ class FindingPathAnnotator:
         if target.is_source:
             return [target_name]
 
-        queue = deque([[target_name]])
+        queue = deque([target_name])
+        parents: dict[str, str | None] = {target_name: None}
+        depths = {target_name: 1}
         while queue:
-            reverse_path = queue.popleft()
-            if len(reverse_path) >= self._max_path_length:
+            current_name = queue.popleft()
+            depth = depths[current_name]
+            if depth >= self._max_path_length:
                 continue
-            upstream = reverse_path[-1]
-            for caller_name in self._reverse_edges.get(upstream, []):
-                if caller_name in reverse_path:
+            for caller_name in self._reverse_edges.get(current_name, ()):
+                if caller_name in parents:
                     continue
                 caller = self._graph.get_node(caller_name)
                 if not caller:
                     continue
-                next_reverse_path = reverse_path + [caller_name]
+                parents[caller_name] = current_name
+                depths[caller_name] = depth + 1
                 if caller.is_source:
-                    return list(reversed(next_reverse_path))
-                queue.append(next_reverse_path)
+                    path = [caller_name]
+                    parent = parents[caller_name]
+                    while parent is not None:
+                        path.append(parent)
+                        parent = parents[parent]
+                    return path
+                queue.append(caller_name)
         return []
