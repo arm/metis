@@ -45,7 +45,8 @@ def test_load_metis_config_prefers_yaml_over_yml(tmp_path, monkeypatch):
     assert config == {"selected": "yaml"}
 
 
-def test_packaged_execution_graph_omits_index_initialization():
+def test_packaged_execution_graph_omits_index_initialization(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     packaged = load_metis_config()
     execution = load_execution_config()
 

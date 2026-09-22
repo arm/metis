@@ -102,8 +102,9 @@ than LangGraph's `InMemoryStore` additionally needs this operation for namespace
 replacement and reset:
 
 ```python
-def replace_records(namespace_prefix: tuple[str, ...], records: Iterable[PutOp]) -> int:
-    ...
+def replace_records(
+    namespace_prefix: tuple[str, ...], records: Iterable[PutOp]
+) -> int: ...
 ```
 
 Each `PutOp` supplies a namespace, key, and non-null record value under the given

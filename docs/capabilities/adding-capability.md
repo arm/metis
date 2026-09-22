@@ -53,8 +53,7 @@ class PrivateAnalysis:
     def lookup(self, symbol: str) -> str:
         return f"Evidence for {symbol}"
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 def create(context: CapabilityContext, raw: BaseModel) -> PrivateAnalysis:
