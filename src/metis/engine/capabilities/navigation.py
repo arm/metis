@@ -86,13 +86,18 @@ class NavigationCapability:
         for root, _, files in os.walk(base):
             root_path = Path(root)
             for name in files:
-                yield root_path / name
+                candidate = root_path / name
+                if not candidate.is_symlink() and candidate.is_file():
+                    yield candidate
 
     def grep(self, pattern: str, path: str) -> str:
         target = self._resolve_path(path)
         if self._has_grep:
+            relative_path = target.relative_to(self.codebase_path).as_posix()
+            if relative_path.startswith("-"):
+                relative_path = f"./{relative_path}"
             return self._run(
-                ["grep", "-HREn", "--", pattern, str(target)],
+                ["grep", "-HrEn", "--", pattern, relative_path],
                 ok_returncodes=(0, 1),
             )
 

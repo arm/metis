@@ -15,11 +15,11 @@ import unidiff
 from pydantic import ValidationError
 
 from metis import runlog
-from metis.engine.diff_utils import process_diff_file
 from metis.engine.execution.contracts import NodeJobs
 from metis.engine.helpers import apply_custom_guidance
 from metis.engine.helpers import summarize_changes
 from metis.engine.llm_runner import ModelProviderConfigurationError
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.reachability.progress import emit_progress
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
@@ -42,6 +42,7 @@ logger = logging.getLogger("metis")
 
 if TYPE_CHECKING:
     from metis.engine.capabilities.index import IndexCapability
+    from metis.engine.capabilities.navigation import NavigationCapability
     from metis.memory import MemoryService
 
 
@@ -63,7 +64,7 @@ class SimpleLlmReviewService:
         self,
         config: EngineConfig,
         repository: EngineRepository,
-        review_graph_factory: Callable[[IndexCapability | None, str | None], Any],
+        review_graph_factory: Callable[..., Any],
     ) -> None:
         self._config = config
         self._repository = repository
@@ -77,11 +78,13 @@ class SimpleLlmReviewService:
         model: str | None = None,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
+        navigation: NavigationCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
-            review_graph = self._review_graph_factory(index, model)
+            graph_kwargs = {"navigation": navigation} if navigation is not None else {}
+            review_graph = self._review_graph_factory(index, model, **graph_kwargs)
             result = PatchReviewResult.model_validate(
                 self.review_patch(
                     command.target,
@@ -105,6 +108,7 @@ class SimpleLlmReviewService:
             model=model,
             memory_service=memory_service,
             index=index,
+            navigation=navigation,
             progress_callback=progress_callback,
             checkpoint_session=checkpoint_session,
         )
@@ -117,15 +121,17 @@ class SimpleLlmReviewService:
         model: str | None = None,
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
+        navigation: NavigationCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
+        graph_kwargs = {"navigation": navigation} if navigation is not None else {}
         return self._run_traditional_review(
             files,
             progress_callback,
             jobs=jobs,
             memory_service=memory_service,
-            review_graph=self._review_graph_factory(index, model),
+            review_graph=self._review_graph_factory(index, model, **graph_kwargs),
             checkpoint_session=checkpoint_session,
         )
 
@@ -429,9 +435,9 @@ class SimpleLlmReviewService:
             plugin = self._repository.get_plugin_for_path(file_diff.path)
             if not plugin:
                 continue
-            snippet = process_diff_file(file_diff)
-            if not snippet:
+            if not file_diff.added and not file_diff.removed:
                 continue
+            snippet = str(file_diff)
             language_prompts = plugin.get_prompts()
             threat_model_context = get_threat_model_context(
                 memory_service,
@@ -489,7 +495,7 @@ class SimpleLlmReviewService:
                 checkpoint_group: ReviewGroup | None = None
                 try:
                     review_dict = graph.review(req)
-                except ModelProviderConfigurationError:
+                except (ModelProviderConfigurationError, ModelInputLimitError):
                     raise
                 except Exception as exc:
                     logger.error(f"Error processing review for {file_diff.path}: {exc}")

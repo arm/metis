@@ -70,9 +70,11 @@ metis_engine:
           simple_llm_review:
             capabilities:
               - memory
+              - navigation
           reachability:
             capabilities:
               - memory
+              - navigation
           finding_dedup: {}
           result:
             formats:

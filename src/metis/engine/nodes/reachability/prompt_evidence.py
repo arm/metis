@@ -724,6 +724,10 @@ def _codegraph_evidence_data(
             }
             for node_id in direct_contract_ids
             if node_id in contract_map
+            and (
+                contract_map[node_id].normal_return_transfers
+                or contract_map[node_id].normal_exit.status != "unknown"
+            )
         ],
     }
 

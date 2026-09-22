@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from metis.engine.capabilities.manifest import CapabilityManifest
+from metis.engine.capabilities.navigation import NavigationCapability
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.execution.contracts import NodeJobs
@@ -37,6 +39,8 @@ class ReachabilityService:
         repository,
         llm_provider,
         usage_runtime,
+        *,
+        navigation_manifest: CapabilityManifest | None = None,
     ):
         self._config = config
         self._frontier_reviewer = IncrementalGraphReviewer(
@@ -44,6 +48,7 @@ class ReachabilityService:
             repository,
             llm_provider,
             usage_runtime,
+            navigation_manifest=navigation_manifest,
         )
 
     def analyze_file(
@@ -55,6 +60,7 @@ class ReachabilityService:
         codegraph: CodeGraph,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
         memory_service=None,
+        navigation: NavigationCapability | None = None,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
         if codegraph.node_count() == 0:
@@ -102,6 +108,8 @@ class ReachabilityService:
             options=options,
             memory_service=memory_service,
             evidence_graph=codegraph,
+            navigation=navigation,
+            selected_node_ids=set(focus.target_nodes),
         )
         scoped_findings = self._filter_authoritative_scope(
             outcome.findings,
@@ -143,6 +151,7 @@ class ReachabilityService:
         codegraph: CodeGraph,
         files=None,
         memory_service=None,
+        navigation: NavigationCapability | None = None,
     ):
         selected_files = None
         if files is not None:
@@ -155,8 +164,10 @@ class ReachabilityService:
                 codegraph_failures=("codegraph.empty",),
             )
         analysis_graph = codegraph
+        selected_node_ids: set[str] | None = None
         missing_selected_files: list[str] = []
         if selected_files is not None:
+            selected_node_ids = set()
             focus_nodes: set[str] = set()
             focus_builder = FileFocusBuilder(
                 codegraph,
@@ -169,6 +180,7 @@ class ReachabilityService:
             for completed, selected_file in enumerate(ordered_files, start=1):
                 focus = focus_builder.build(selected_file)
                 focus_nodes.update(focus.node_names)
+                selected_node_ids.update(focus.target_nodes)
                 if not focus.target_nodes:
                     missing_selected_files.append(selected_file)
                 emit_phase_progress(
@@ -193,6 +205,8 @@ class ReachabilityService:
             options=options,
             memory_service=memory_service,
             evidence_graph=codegraph,
+            navigation=navigation,
+            selected_node_ids=selected_node_ids,
         )
         findings = self._filter_authoritative_scope(
             outcome.findings,

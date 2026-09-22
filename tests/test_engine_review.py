@@ -16,6 +16,8 @@ from metis.engine.codegraph import FunctionNode
 from metis.engine.execution.contracts import NodeCallbacks
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import ModelProviderConfigurationError
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.reachability.domain import FrontierReviewFailure
 from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
@@ -37,7 +39,7 @@ def _simple_llm_review(engine: MetisEngine) -> SimpleLlmReviewService:
     return SimpleLlmReviewService(
         engine._config,
         engine.repository,
-        lambda index, model: engine._get_review_graph(index, model),
+        engine._get_review_graph,
     )
 
 
@@ -450,6 +452,7 @@ def test_patch_review_resumes_completed_files(engine, tmp_path, monkeypatch):
 
 def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     progress_events: list[dict[str, object]] = []
+    navigation = engine.capabilities["navigation"]
     fallback = Mock(spec=SimpleLlmReviewService)
     fallback.run_files.return_value = ReviewRun(
         ReviewStatus.SUCCEEDED,
@@ -483,6 +486,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
             ReviewCommand(mode="code"),
             jobs=engine.execution._jobs,
             codegraph=_covered_graph("supported.c"),
+            navigation=navigation,
             progress_callback=progress_events.append,
         )
 
@@ -493,6 +497,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
     ] == ["reachable", "fallback"]
     assert run.diagnostics == ()
     assert service.codebase_reviews.call_args.kwargs["files"] == (c_file,)
+    assert service.codebase_reviews.call_args.kwargs["navigation"] is navigation
     assert progress_events[:3] == [
         {
             "event": "reachability_phase_progress",
@@ -519,6 +524,7 @@ def test_reachability_review_falls_back_for_unsupported_files(engine, caplog):
         model=None,
         memory_service=None,
         index=None,
+        navigation=navigation,
         progress_callback=progress_events.append,
         checkpoint_session=None,
     )
@@ -686,7 +692,7 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     )
     patch_file = tmp_path / "change.diff"
     patch_file.write_text(
-        "--- a/test.py\n+++ b/test.py\n@@ -1 +1 @@\n-print('Old')\n+print('New')\n"
+        "--- a/test.py\n+++ b/test.py\n@@ -1,1 +1,1 @@\n-print('Old')\n+print('New')\n"
     )
     review_graph = _DummyReviewGraph(
         {"file": "test.py", "reviews": [{"issue": "Issue"}]}
@@ -709,7 +715,11 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     (request,) = review_graph.requests
     assert request["mode"] == "patch"
     assert request["original_file"] == "print('Old')\n"
-    assert request["snippet"] == "-print('Old')\n+print('New')\n"
+    assert request["snippet"] == patch_file.read_text()
+
+    review_graph.review = Mock(side_effect=ModelInputLimitError("input too large"))
+    with pytest.raises(ModelInputLimitError, match="input too large"):
+        _simple_llm_review(engine).review_patch(str(patch_file))
 
 
 def test_review_patch_handles_parse_error(engine, tmp_path):
@@ -718,3 +728,59 @@ def test_review_patch_handles_parse_error(engine, tmp_path):
     result = _simple_llm_review(engine).review_patch(str(bad_patch_file))
     assert "reviews" in result
     assert result["reviews"] == []
+
+
+def test_simple_review_receives_granted_navigation(engine):
+    target = Path(engine.codebase_path) / "caller.c"
+    target.write_text(
+        "int value;\n" * 99 + "void caller(void) { guard(); }\n", encoding="utf-8"
+    )
+    helper = Path(engine.codebase_path) / "guard.c"
+    helper.write_text("void guard(void) {}\n", encoding="utf-8")
+    navigation = engine.capabilities["navigation"]
+    engine._config.llm_provider.count_tokens = lambda text, **_: (
+        len(text) + text.count("  ")
+    )
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+    prompt_sizes = []
+
+    def respond(request):
+        prompt_sizes.append(
+            rendered_prompt_token_count(
+                graph._token_counter,
+                system_prompt=request.system_prompt,
+                user_prompt=request.user_prompt,
+                variables=request.variables,
+                model_tools=request.model_tools,
+            )
+        )
+        assert prompt_sizes[-1] <= graph.max_token_length
+        tools = {tool.name: tool for tool in request.model_tools}
+        assert request.max_tool_rounds == 6
+        assert "void guard(void)" in tools["sed"].invoke(
+            {"path": "guard.c", "start_line": 1, "end_line": 1}
+        )
+        return []
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    run = _simple_llm_review(engine).run_review(
+        ReviewCommand(mode="file", target=str(target)),
+        jobs=engine.execution._jobs,
+        navigation=navigation,
+    )
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    graph._prompt_runner.invoke.assert_called_once()
+    assert run.result is not None
+    assert run.result.reviews[0].reviews == []
+
+    graph.max_token_length = prompt_sizes[0] - 1
+    graph._prompt_runner.invoke.reset_mock()
+    run = _simple_llm_review(engine).run_review(
+        ReviewCommand(mode="file", target=str(target)),
+        jobs=engine.execution._jobs,
+        navigation=navigation,
+    )
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count > 1

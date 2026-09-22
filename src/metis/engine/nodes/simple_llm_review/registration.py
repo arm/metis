@@ -20,6 +20,7 @@ NODE_NAME = "simple_llm_review"
 
 if TYPE_CHECKING:
     from metis.engine.capabilities.index import IndexCapability
+    from metis.engine.capabilities.navigation import NavigationCapability
     from metis.memory import MemoryService
 
 
@@ -44,6 +45,10 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
             model=invocation.context.runtime.model,
             memory_service=memory,
             index=index,
+            navigation=cast(
+                "NavigationCapability | None",
+                invocation.context.capabilities.get("navigation"),
+            ),
             progress_callback=invocation.context.callbacks.progress,
             checkpoint_session=checkpoint_session,
         )
@@ -59,5 +64,6 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
         capabilities={
             "index": CapabilityRequirement.OPTIONAL,
             "memory": CapabilityRequirement.OPTIONAL,
+            "navigation": CapabilityRequirement.OPTIONAL,
         },
     )

@@ -102,22 +102,24 @@ def test_grep_can_force_python_regex_even_when_shell_grep_exists(tmp_path, monke
     assert out.splitlines() == ["src/a.c:1:foo\t("]
 
 
-def test_shell_grep_forces_filename_prefix_for_single_file(tmp_path):
-    source = tmp_path / "a.c"
+@pytest.mark.parametrize(
+    ("filename", "absolute_path", "expected_path"),
+    [("a.c", False, "a.c"), ("src/a.c", True, "src/a.c"), ("-", False, "./-")],
+)
+def test_shell_grep_returns_relative_file_and_line(
+    tmp_path, absolute_path, filename, expected_path
+):
+    source = tmp_path / filename
+    source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("alpha\nbeta\n", encoding="utf-8")
 
-    runner = NavigationCapability(
-        codebase_path=str(tmp_path), timeout_seconds=8, max_chars=16000
-    )
+    runner = _build_runner(tmp_path)
     runner._has_grep = True
 
-    out = runner.grep("beta", "a.c")
+    out = runner.grep("beta", str(source) if absolute_path else filename)
 
-    assert len(out.splitlines()) == 1
-    assert (
-        out.splitlines()[0].endswith("/a.c:2:beta")
-        or out.splitlines()[0] == "a.c:2:beta"
-    )
+    assert out == f"{expected_path}:2:beta"
+    assert runner.grep("beta", ".") == f"./{filename}:2:beta"
 
 
 def test_shell_navigation_serializes_subprocesses(tmp_path, monkeypatch):
@@ -161,3 +163,24 @@ def test_navigation_uses_canonical_source_lines(tmp_path, separator):
     assert runner.cat("input.txt") == f"1: first{separator}fragment\n2: second"
     assert runner.sed("input.txt", 2, 2) == "2: second"
     assert runner.grep("second", "input.txt") == "input.txt:2:second"
+
+
+@pytest.mark.parametrize("native_grep", [False, True])
+def test_recursive_navigation_stays_inside_codebase(tmp_path, native_grep):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.c").write_text("secret\n", encoding="utf-8")
+    (repo / "safe.c").write_text("safe\n", encoding="utf-8")
+    (repo / "leaked.c").symlink_to(outside / "secret.c")
+    (repo / "linked-dir").symlink_to(outside, target_is_directory=True)
+    runner = _build_runner(repo)
+    runner._has_grep = native_grep
+
+    assert runner.grep("secret", ".") == ""
+    assert runner.find_name("secret.c") == []
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        runner.cat("leaked.c")
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        runner.grep("secret", "leaked.c")

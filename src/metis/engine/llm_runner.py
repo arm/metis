@@ -14,10 +14,13 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
 from metis.engine.model_tool_runner import invoke_model_with_tools
+from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import model_tool_system_prompt
 from metis.engine.model_tool_runner import require_max_tool_rounds
+from metis.engine.model_tool_runner import require_model_input_budget
 from metis.runlog.langchain import ensure_runlog_callback
 
 
@@ -45,6 +48,7 @@ class JsonPromptRequest:
     model_tools: tuple[Any, ...] = ()
     max_tool_rounds: int | None = None
     on_output_limit: Callable[[], None] | None = None
+    max_input_tokens: int | None = None
 
 
 def rendered_prompt_token_count(
@@ -57,14 +61,7 @@ def rendered_prompt_token_count(
 ) -> int:
     prompt = _json_chat_prompt(system_prompt, user_prompt, model_tools)
     messages = prompt.invoke(variables).to_messages()
-    return sum(
-        token_counter(
-            message.content
-            if isinstance(message.content, str)
-            else str(message.content)
-        )
-        for message in messages
-    )
+    return model_messages_token_count(messages, token_counter)
 
 
 def _json_chat_prompt(
@@ -143,6 +140,11 @@ class JsonPromptRunner:
         last_failure = "unknown failure"
         confirmed_output_limit = False
         tool_evidence: tuple[str, ...] = ()
+        token_counter = (
+            (lambda text: self._llm_provider.count_tokens(text, model=request.model))
+            if request.max_input_tokens is not None
+            else None
+        )
         max_tool_rounds = (
             require_max_tool_rounds(request.max_tool_rounds)
             if request.model_tools
@@ -196,6 +198,12 @@ class JsonPromptRunner:
                             request.model_tools,
                             tool_evidence,
                         )
+                    if request.max_input_tokens is not None:
+                        require_model_input_budget(
+                            prompt.invoke(request.variables).to_messages(),
+                            token_counter,
+                            request.max_input_tokens,
+                        )
                     used_structured_output = False
                     structured_output = getattr(chat, "with_structured_output", None)
                     if (
@@ -241,6 +249,8 @@ class JsonPromptRunner:
                                 request.variables,
                                 active_tools,
                                 max_tool_rounds=max_tool_rounds,
+                                token_counter=token_counter,
+                                max_input_tokens=request.max_input_tokens,
                             )
                             parsed = request.parse(response_text)
                             if parsed is None:
@@ -264,7 +274,9 @@ class JsonPromptRunner:
                         )
                         return parsed
                 except Exception as exc:
-                    if isinstance(exc, ModelToolConfigurationError):
+                    if isinstance(
+                        exc, (ModelToolConfigurationError, ModelInputLimitError)
+                    ):
                         raise
                     if _certificate_verification_failed(exc):
                         raise ModelProviderConfigurationError(

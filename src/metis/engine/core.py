@@ -34,6 +34,7 @@ from .capabilities.contracts import CapabilityContext
 from .capabilities.engine import build_engine_capabilities
 from .capabilities.index import IndexCapability
 from .capabilities.indexing import IndexingService
+from .capabilities.navigation import NavigationCapability
 from .codegraph import CodeGraphReference
 from .execution import ExecutionResult
 from .execution import ExecutionStatus
@@ -50,6 +51,7 @@ from .runtime import EngineState
 from .stages.configuration import ExecutionConfiguration
 from .stages.review.models import ReviewCommand
 from .tools.index import index_model_tools
+from .tools.navigation import navigation_model_tools
 
 logger = logging.getLogger("metis")
 
@@ -345,9 +347,11 @@ class MetisEngine:
         self,
         index: IndexCapability | None = None,
         model: str | None = None,
+        *,
+        navigation: NavigationCapability | None = None,
     ):
         model = model or self._config.llama_query_model
-        cache_key = (index is not None, model)
+        cache_key = (index is not None, navigation is not None, model)
         cached = self._state.review_graphs.get(cache_key)
         if cached is not None:
             return cached
@@ -366,6 +370,14 @@ class MetisEngine:
                 if index is not None
                 else ()
             )
+            if navigation is not None:
+                model_tools += navigation_model_tools(
+                    navigation,
+                    self.capabilities.manifest("navigation"),
+                    max_contract_chars=(
+                        self._config.capability_settings.model_tools.max_contract_chars
+                    ),
+                )
             self._state.review_graphs[cache_key] = ReviewGraph(
                 llm_provider=self._config.llm_provider,
                 plugin_config=self._config.plugin_config,

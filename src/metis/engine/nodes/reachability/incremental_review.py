@@ -30,6 +30,7 @@ from metis.engine.execution.contracts import NodeJobs
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.simple_llm_review.prompt import build_review_system_prompt
 from metis.engine.nodes.simple_llm_review.schema import ReviewIssueModel
 from metis.engine.nodes.simple_llm_review.schema import review_schema_prompt
@@ -38,6 +39,7 @@ from metis.engine.source import SourceMap
 from metis.engine.threat_context_retrieval import format_threat_model_context
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
+from metis.engine.tools.navigation import navigation_model_tools
 from metis.memory.fingerprints import stable_json_hash
 from metis.usage import usage_operation
 from metis.utils import parse_json_output
@@ -45,6 +47,7 @@ from metis.utils import parse_json_output
 from . import finding_admission
 from . import prompt_evidence
 from .domain import FrontierReviewFailure
+from .domain import FrontierReviewFailureKind
 from .domain import VulnerabilityFinding
 from .domain_hints import format_domain_hints_for_prompt
 from .domain_hints import normalize_domain_hints
@@ -61,6 +64,8 @@ from .state import TrackedObjectSubject
 from .state import augment_function_contracts
 
 if TYPE_CHECKING:
+    from metis.engine.capabilities.manifest import CapabilityManifest
+    from metis.engine.capabilities.navigation import NavigationCapability
     from metis.engine.repository import EngineRepository
     from metis.engine.runtime import EngineConfig
     from metis.memory import MemoryService
@@ -137,7 +142,7 @@ class _FrontierPacket:
 class _PacketResponse:
     index: int
     analysis: _PacketAnalysis | None
-    failure_kind: Literal["invalid_output", "provider_error"] | None = None
+    failure_kind: FrontierReviewFailureKind | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,11 +194,14 @@ class IncrementalGraphReviewer:
         repository: EngineRepository,
         llm_provider: Any,
         usage_runtime: Any,
+        *,
+        navigation_manifest: CapabilityManifest | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
         self._llm_provider = llm_provider
         self._runner = JsonPromptRunner(llm_provider, usage_runtime)
+        self._navigation_manifest = navigation_manifest
         self._schema_prompt = review_schema_prompt()
         self._discovery_schema_json = json.dumps(
             _DiscoveryReviewResponseModel.model_json_schema(),
@@ -209,9 +217,27 @@ class IncrementalGraphReviewer:
         options: ReachabilityReviewOptions,
         memory_service: MemoryService | None = None,
         evidence_graph: CodeGraph | None = None,
+        navigation: NavigationCapability | None = None,
+        selected_node_ids: set[str] | None = None,
     ) -> FrontierReviewOutcome:
+        model_tools: tuple[Any, ...] = ()
+        if navigation is not None:
+            model_tools = navigation_model_tools(
+                navigation,
+                cast("CapabilityManifest", self._navigation_manifest),
+                max_contract_chars=(
+                    self._config.capability_settings.model_tools.max_contract_chars
+                ),
+            )
+        if model_tools:
+            # Retrieved source has no revision identity in the packet cache key.
+            options = replace(options, checkpoint_session=None)
         discovery_graph = evidence_graph or graph
         node_ids = tuple(sorted(graph.nodes, key=partial(_node_sort_key, graph)))
+        if selected_node_ids is not None:
+            node_ids = tuple(
+                node_id for node_id in node_ids if node_id in selected_node_ids
+            )
         represented_edges = {
             (node.unique_name, callee)
             for node in graph.nodes.values()
@@ -241,6 +267,7 @@ class IncrementalGraphReviewer:
             memory_service=memory_service,
             evidence_graph=discovery_graph,
             contracts=contracts,
+            model_tools=model_tools,
         )
         responses = self._review_frontier_packets(
             graph,
@@ -251,6 +278,7 @@ class IncrementalGraphReviewer:
             memory_service=memory_service,
             evidence_graph=discovery_graph,
             contracts=contracts,
+            model_tools=model_tools,
         )
         failures = set(build_failures)
         failures.update(responses.failures)
@@ -346,6 +374,7 @@ class IncrementalGraphReviewer:
         memory_service: MemoryService | None,
         evidence_graph: CodeGraph | None = None,
         contracts: Mapping[str, FunctionContract] | None = None,
+        model_tools: tuple[Any, ...] = (),
     ) -> _FrontierResponses:
         pending = list(initial_packets)
         leaf_packets: list[_FrontierPacket] = []
@@ -378,7 +407,7 @@ class IncrementalGraphReviewer:
                         analysis = self._validated_packet_analysis(packet, cached)
                         if analysis is not None:
                             return _PacketResponse(packet.index, analysis)
-                response = self._review_packet(packet)
+                response = self._review_packet(packet, model_tools=model_tools)
                 if checkpoint_session is not None and response.analysis is not None:
                     checkpoint_session.put(
                         checkpoint_key,
@@ -402,13 +431,13 @@ class IncrementalGraphReviewer:
             child_packets: list[_FrontierPacket] = []
             for packet in pending:
                 response = responses_by_index.get(packet.index)
-                invalid_output = (
+                should_split = (
                     response is not None
                     and response.analysis is None
-                    and response.failure_kind == "invalid_output"
+                    and response.failure_kind in {"invalid_output", "context_overflow"}
                     and len(packet.nodes) > 1
                 )
-                if not invalid_output:
+                if not should_split:
                     leaf_packets.append(packet)
                     if response is not None:
                         leaf_responses[packet.index] = response
@@ -433,6 +462,7 @@ class IncrementalGraphReviewer:
                         selected_node_ids={node.unique_name for node in nodes},
                         evidence_graph=evidence_graph,
                         contracts=contracts,
+                        model_tools=model_tools,
                     )
                     failures.update(child_failures)
                     for child in children:
@@ -457,6 +487,7 @@ class IncrementalGraphReviewer:
         selected_node_ids: set[str] | None = None,
         evidence_graph: CodeGraph | None = None,
         contracts: Mapping[str, FunctionContract] | None = None,
+        model_tools: tuple[Any, ...] = (),
     ) -> tuple[list[_FrontierPacket], set[FrontierReviewFailure]]:
         discovery_graph = evidence_graph or graph
         nodes = [
@@ -509,6 +540,7 @@ class IncrementalGraphReviewer:
                         body_template,
                         response_schema_json,
                         token_counter,
+                        model_tools=model_tools,
                     )
                 except RuntimeError as exc:
                     overflow_error = exc
@@ -560,6 +592,7 @@ class IncrementalGraphReviewer:
                             body_text,
                             response_schema_json,
                             token_counter,
+                            model_tools=model_tools,
                         )
                         > self._config.max_token_length
                     ):
@@ -666,6 +699,8 @@ class IncrementalGraphReviewer:
         body_template: str,
         response_schema_json: str,
         token_counter: Callable[[str], int],
+        *,
+        model_tools: tuple[Any, ...] = (),
     ) -> int:
         prefix, marker, suffix = body_template.rpartition(_SOURCE_PLACEHOLDER)
         if not marker:
@@ -675,6 +710,7 @@ class IncrementalGraphReviewer:
             f"{prefix}{suffix}",
             response_schema_json,
             token_counter,
+            model_tools=model_tools,
         )
         available = self._config.max_token_length - fixed_tokens
         if available <= 0:
@@ -689,12 +725,15 @@ class IncrementalGraphReviewer:
         body_text: str,
         response_schema_json: str,
         token_counter: Callable[[str], int],
+        *,
+        model_tools: tuple[Any, ...] = (),
     ) -> int:
         return rendered_prompt_token_count(
             token_counter,
             system_prompt=system_prompt,
             user_prompt="{body_text}",
             variables={"body_text": body_text},
+            model_tools=model_tools,
         ) + token_counter(response_schema_json)
 
     def _render_discovery_body(
@@ -734,7 +773,12 @@ class IncrementalGraphReviewer:
             )
         )
 
-    def _review_packet(self, packet: _FrontierPacket) -> _PacketResponse:
+    def _review_packet(
+        self,
+        packet: _FrontierPacket,
+        *,
+        model_tools: tuple[Any, ...] = (),
+    ) -> _PacketResponse:
         validation_failed = False
         output_limited = False
 
@@ -749,25 +793,37 @@ class IncrementalGraphReviewer:
             nonlocal output_limited
             output_limited = True
 
-        with usage_operation("review_discovery"):
-            analysis = self._runner.invoke(
-                JsonPromptRequest(
-                    model=packet.model,
-                    system_prompt=packet.system_prompt,
-                    user_prompt="{body_text}",
-                    variables={"body_text": packet.body_text},
-                    parse=validate,
-                    logger=logger,
-                    label="Reachability security review",
-                    batch_size=len(packet.nodes),
-                    invalid_message="expected grounded review JSON",
-                    final_keep_message="leaving this review packet incomplete",
-                    response_model=_DiscoveryReviewResponseModel,
-                    reasoning_effort=packet.reasoning_effort,
-                    chat_model_kwargs=self._config.chat_model_kwargs,
-                    on_output_limit=mark_output_limit,
+        try:
+            with usage_operation("review_discovery"):
+                analysis = self._runner.invoke(
+                    JsonPromptRequest(
+                        model=packet.model,
+                        system_prompt=packet.system_prompt,
+                        user_prompt="{body_text}",
+                        variables={"body_text": packet.body_text},
+                        parse=validate,
+                        logger=logger,
+                        label="Reachability security review",
+                        batch_size=len(packet.nodes),
+                        invalid_message="expected grounded review JSON",
+                        final_keep_message="leaving this review packet incomplete",
+                        response_model=_DiscoveryReviewResponseModel,
+                        reasoning_effort=packet.reasoning_effort,
+                        chat_model_kwargs=self._config.chat_model_kwargs,
+                        on_output_limit=mark_output_limit,
+                        model_tools=model_tools,
+                        max_input_tokens=(
+                            self._config.max_token_length if model_tools else None
+                        ),
+                        max_tool_rounds=(
+                            self._config.capability_settings.model_tools.max_rounds
+                            if model_tools
+                            else None
+                        ),
+                    ),
                 )
-            )
+        except ModelInputLimitError:
+            return _PacketResponse(packet.index, None, "context_overflow")
         if isinstance(analysis, _PacketAnalysis):
             return _PacketResponse(packet.index, analysis)
         failure_kind: Literal["invalid_output", "provider_error"] = (

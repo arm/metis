@@ -62,9 +62,11 @@ metis_engine:
           simple_llm_review:
             capabilities:
               - memory
+              - navigation
           reachability:
             capabilities:
               - memory
+              - navigation
           finding_dedup: {}
           result:
             formats:
@@ -104,10 +106,10 @@ reported operation. Code rejects a finding only when deterministic evidence
 contradicts every alternative; incomplete or ambiguous evidence remains
 fail-open.
 
-A same-file review batch is split in source order when its fixed context exceeds
-the global input limit or its returned structured analysis is invalid; provider
-failures are not subdivided. Reachability findings are combined with every
-other Review-node output and deduplicated by `finding_dedup`.
+A same-file review batch is split in source order when its context, including
+navigation evidence, exceeds the global input limit or its returned structured
+analysis is invalid; provider failures are not subdivided. Reachability findings
+are combined with every other Review-node output and deduplicated by `finding_dedup`.
 `max_path_length` must be positive; it bounds reported reachability paths.
 
 Capability runtime settings live under `metis_engine.capabilities`. A node's
@@ -177,8 +179,8 @@ capability or naming one the node did not declare is a configuration error.
 | --- | --- | --- |
 | `threat_model` | `memory` | — |
 | `index` | [`index`](capabilities/index.md) | — |
-| `simple_llm_review` | — | `index`, `memory` |
-| `reachability` | — | `index`, `memory` |
+| `simple_llm_review` | — | `index`, `memory`, `navigation` |
+| `reachability` | — | `index`, `memory`, `navigation` |
 | `triage` | [`navigation`](capabilities/navigation.md) | `memory` |
 
 Nodes without a row do not declare engine capabilities.
@@ -193,6 +195,9 @@ it does not build or modify the graph.
 selected scope with the language plugin's prompts and does not require a
 CodeGraph.
 
+Both discovery nodes support [navigation](capabilities/navigation.md) when granted;
+the packaged graph enables it.
+
 `reachability` resolves the initialized CodeGraph reference and reviews selected
 function source with the normal language security-review prompt. The evidence
 includes deterministic function, call, control-flow, assignment, loop, return,
@@ -200,10 +205,21 @@ and direct-callee contract facts. The model must identify every
 necessary-condition alternative for each finding. Deterministic admission may
 reject a finding only when every alternative is contradicted by supported
 source facts; missing, ambiguous, or incomplete evidence remains fail-open.
+Direct-callee contract records with no known return or normal-exit facts are
+omitted from the prompt; absent contracts remain unknown, not evidence of safety.
 
-Same-file functions are batched in source order. Invalid or output-limited
-multi-function batches are split immediately and their children are reviewed
-in the same run. Batch results and split decisions are not persisted. Language
+For file, directory, and filtered code reviews, only functions in the selected
+files are scheduled for LLM discovery. The surrounding caller/callee graph is
+retained for contract derivation, prompt evidence, deterministic checks, and
+path annotation; navigation may still inspect supporting files. Coverage counts
+refer to the selected review functions, not every function retained as context.
+Unrestricted code review continues to schedule all selected project functions.
+
+Same-file functions are batched in source order. Multi-function batches with
+invalid or output-limited responses, or input overflow during navigation, are
+split immediately and their children are reviewed in the same run. A single
+function that still exceeds the input limit remains incomplete. Batch results
+and split decisions are not persisted. Language
 plugins supply deterministic CodeGraph semantics during initialization.
 Directory and file review derive in-memory scopes from the same persisted
 project graph; neither mode rebuilds or mutates it.
@@ -312,8 +328,11 @@ packaged `metis.yaml`:
 Every review of that codebase automatically reuses compatible records,
 independent of its output filename. A changed source, prompt, threat-model
 context, model setting, Metis version, response schema, or chunk plan produces a
-different record key and reruns that work. Simple reviews with model tools
-enabled are rerun because the index has no stable revision identity.
+different record key and reruns that work. Simple and reachability reviews with
+model tools enabled bypass answer checkpoints: retrieved repository/index
+evidence is not covered by a stable packet revision identity. The packaged graph
+enables navigation for both nodes, so its discovery calls run afresh. Removing
+the navigation grant allows tool-free checkpoint reuse.
 
 Simple review checkpoints contain validated per-file results; patch records also
 retain each completed file summary. Reachability checkpoints contain validated
@@ -588,6 +607,11 @@ Bind this stage's `review` input to `review.findings` to consume the default
 Review stage's published findings. `ReviewRun` is the internal node-to-node
 collection contract; `FinalReviewRun` and `JsonPromptRequest` are also available
 from `metis.execution_nodes` for separately distributed handlers.
+`JsonPromptRequest.max_input_tokens` optionally limits rendered model inputs,
+including tool history and retries, using the provider's token counter. It is
+separate from the output `max_tokens` limit and defaults to no additional input
+guard for existing callers. Provider-specific message/schema framing is not
+included in that estimate.
 External stages may bind the existing `review_request`, `sarif`, and `codegraph`
 graph inputs or another stage's outputs. Adding another `$inputs` field requires
 a core `ExecutionInputs` change. External stages execute through
