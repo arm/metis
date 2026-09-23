@@ -1,6 +1,8 @@
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -10,6 +12,7 @@ from pydantic import BaseModel
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 
 
 class _CountingProvider:
@@ -240,6 +243,24 @@ def test_zero_backoff_skips_sleep(monkeypatch):
     ).invoke(_request(logger))
 
     assert result is None
+
+
+def test_oversized_input_fails_without_invoking_or_retrying_model(monkeypatch):
+    provider = _CountingProvider()
+    monkeypatch.setattr(
+        provider, "count_tokens", lambda text, **_kwargs: len(text), raising=False
+    )
+    logger = Mock()
+    request = replace(_request(logger), max_input_tokens=1)
+
+    with pytest.raises(ModelInputLimitError, match="max_input_tokens=1"):
+        JsonPromptRunner(provider, max_attempts=2, retry_backoff_seconds=0).invoke(
+            request
+        )
+
+    assert provider.calls == 0
+    assert len(provider.params) == 1
+    logger.warning.assert_not_called()
 
 
 def test_tool_round_limit_retries_with_evidence_without_repeating_tools():

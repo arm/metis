@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from pytest import MonkeyPatch
+from pytest import mark
 from pytest import raises
 
 from metis import runlog
@@ -23,6 +24,7 @@ from metis.engine.codegraph import FunctionNode
 from metis.engine.codegraph import ValueAssignment
 from metis.engine.execution.contracts import NodeCallbacks
 from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.reachability import finding_admission
 from metis.engine.nodes.reachability import incremental_review
 from metis.engine.nodes.reachability.domain import VulnerabilityFinding
@@ -489,9 +491,13 @@ def test_source_chunk_runtime_error_propagates(
         )
 
 
-def test_invalid_discovery_packet_splits_and_reviews_children(
+@mark.parametrize("failure_kind", ["invalid_output", "context_overflow"])
+@mark.parametrize("children_succeed", [False, True])
+def test_failed_discovery_packet_splits_and_reviews_children(
     tmp_path: Path,
     node_jobs,
+    failure_kind: str,
+    children_succeed: bool,
 ) -> None:
     (tmp_path / "graph.c").write_text(
         "void first(void) {}\nvoid second(void) {}\n",
@@ -503,6 +509,10 @@ def test_invalid_discovery_packet_splits_and_reviews_children(
     def respond(_messages: object) -> dict[str, object | None]:
         nonlocal calls
         calls += 1
+        if children_succeed and calls > 1:
+            return {"raw": AIMessage(content=""), "parsed": {"reviews": []}}
+        if failure_kind == "context_overflow":
+            raise ModelInputLimitError("Model input exceeds the configured limit")
         return {
             "raw": AIMessage(
                 content="",
@@ -530,7 +540,13 @@ def test_invalid_discovery_packet_splits_and_reviews_children(
         )
 
     assert calls == 3
-    assert outcome.failed_node_ids == ("graph.c::first", "graph.c::second")
+    assert outcome.failed_node_ids == (
+        () if children_succeed else ("graph.c::first", "graph.c::second")
+    )
+    assert outcome.stats.reviewed_node_count == (2 if children_succeed else 0)
+    assert {failure.kind for failure in outcome.failures} == (
+        set() if children_succeed else {failure_kind}
+    )
     assert outcome.stats.packet_count == 3
     attempts = [
         json.loads(line)
@@ -538,10 +554,15 @@ def test_invalid_discovery_packet_splits_and_reviews_children(
         if '"record":"span.end"' in line and '"kind":"attempt"' in line
     ]
     assert len(attempts) == 3
-    assert {attempt["status"] for attempt in attempts} == {"inconclusive"}
-    assert {attempt["attributes"]["failure"] for attempt in attempts} == {
-        "structured validation failed: truncated structured response"
-    }
+    if failure_kind == "invalid_output":
+        assert {attempt["status"] for attempt in attempts} == (
+            {"inconclusive", "ok"} if children_succeed else {"inconclusive"}
+        )
+        assert {
+            attempt["attributes"]["failure"]
+            for attempt in attempts
+            if attempt["status"] == "inconclusive"
+        } == {"structured validation failed: truncated structured response"}
 
 
 def test_indexed_null_condition_reaches_deterministic_admission(

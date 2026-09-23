@@ -556,15 +556,23 @@ def test_review_graph_uses_usage_callbacks(monkeypatch, capability_settings):
     assert captured["max_tool_rounds"] == 6
 
 
-@pytest.mark.parametrize("index_first", (False, True))
-def test_review_graph_cache_is_scoped_to_the_index_grant(engine, index_first):
-    index = engine.capabilities["index"]
-    first = engine._get_review_graph(index if index_first else None)
-    second = engine._get_review_graph(None if index_first else index)
+@pytest.mark.parametrize("granted_first", (False, True))
+@pytest.mark.parametrize(
+    ("capability", "tool_names"),
+    [("index", {"index_search"}), ("navigation", {"grep", "find_name", "cat", "sed"})],
+)
+def test_review_graph_cache_is_scoped_to_capability_grants(
+    engine, granted_first, capability, tool_names
+):
+    grant = {capability: engine.capabilities[capability]}
+    first = engine._get_review_graph(**(grant if granted_first else {}))
+    second = engine._get_review_graph(**({} if granted_first else grant))
 
-    graphs = {index_first: first, not index_first: second}
+    graphs = {granted_first: first, not granted_first: second}
     assert graphs[False].model_tools == ()
-    assert [tool.name for tool in graphs[True].model_tools] == ["index_search"]
+    assert {tool.name for tool in graphs[True].model_tools} == tool_names
+    assert graphs[True] is engine._get_review_graph(**grant)
+    assert graphs[False] is engine._get_review_graph()
     assert first is not second
 
 

@@ -3,10 +3,13 @@
 
 import json
 import logging
+from collections.abc import Callable
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai.chat_models.base import BaseChatOpenAI
 
 from metis import runlog
 
@@ -15,6 +18,10 @@ logger = logging.getLogger("metis")
 
 class ModelToolConfigurationError(ValueError):
     """Raised when model tools are enabled without required runtime support."""
+
+
+class ModelInputLimitError(ValueError):
+    """Raised when the rendered conversation exceeds its input budget."""
 
 
 def require_max_tool_rounds(value: int | None) -> int:
@@ -85,6 +92,8 @@ def invoke_model_with_tools(
     tools: tuple[Any, ...],
     *,
     max_tool_rounds: int,
+    token_counter: Callable[[str], int] | None = None,
+    max_input_tokens: int | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     with runlog.span(
         "model_loop",
@@ -106,6 +115,7 @@ def invoke_model_with_tools(
         evidence: list[str] = []
         last_response = None
         for round_index in range(1, max_tool_rounds + 1):
+            require_model_input_budget(messages, token_counter, max_input_tokens)
             last_response = tool_chat.invoke(messages)
             tool_calls = list(getattr(last_response, "tool_calls", None) or [])
             loop_span.event(
@@ -180,7 +190,13 @@ def invoke_model_with_tools(
                         status=status,
                     )
                 )
-        last_response = chat.invoke(messages)
+        require_model_input_budget(messages, token_counter, max_input_tokens)
+        # Preserve the cached prefix without permitting another tool round.
+        last_response = (
+            tool_chat.invoke(messages, tool_choice="none")
+            if isinstance(chat, BaseChatOpenAI)
+            else chat.invoke(messages)
+        )
         content = _message_content_text(last_response)
         loop_span.event(
             "model.round",
@@ -196,8 +212,46 @@ def invoke_model_with_tools(
     raise AssertionError("model tool loop exited without a response")
 
 
+def model_messages_token_count(
+    messages: Sequence[Any], token_counter: Callable[[str], int]
+) -> int:
+    total = 0
+    for message in messages:
+        content = message.content
+        total += token_counter(content if isinstance(content, str) else str(content))
+        content_call_ids = {
+            block.get("call_id") or block.get("id")
+            for block in (content if isinstance(content, list) else ())
+            if isinstance(block, dict)
+            and block.get("type") in {"function_call", "tool_use", "tool_call"}
+        }
+        tool_calls = [
+            call
+            for call in getattr(message, "tool_calls", None) or ()
+            if not call.get("id") or call["id"] not in content_call_ids
+        ]
+        if tool_calls:
+            total += token_counter(json.dumps(tool_calls, sort_keys=True, default=str))
+    return total
+
+
+def require_model_input_budget(
+    messages: Sequence[Any],
+    token_counter: Callable[[str], int] | None,
+    max_input_tokens: int | None,
+) -> None:
+    if (
+        max_input_tokens is not None
+        and token_counter is not None
+        and model_messages_token_count(messages, token_counter) > max_input_tokens
+    ):
+        raise ModelInputLimitError(
+            f"Model input exceeds max_input_tokens={max_input_tokens}"
+        )
+
+
 def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:
-    sections = []
+    names_by_contract: dict[str, list[str]] = {}
     for tool in tools:
         metadata = getattr(tool, "metadata", None) or {}
         if not isinstance(metadata, dict):
@@ -209,8 +263,11 @@ def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:
         if not contract:
             continue
         name = getattr(tool, "name", "tool")
-        sections.append(f"[{name}]\n{contract}")
-    return sections
+        names_by_contract.setdefault(contract, []).append(name)
+    return [
+        f"[{', '.join(names)}]\n{contract}"
+        for contract, names in names_by_contract.items()
+    ]
 
 
 def _clip_tool_contract(contract: str, max_chars: Any) -> str:

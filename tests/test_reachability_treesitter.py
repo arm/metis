@@ -1294,7 +1294,16 @@ def test_codegraph_service_preserves_provider_resolution_without_cross_links(tmp
     assert progress == [(1, 2, "c_family"), (2, 2, "python")]
 
 
-def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
+@pytest.mark.parametrize(
+    "files",
+    [
+        None,
+        ["src/target.c"],
+        ["src/api.c", "src/target.c"],
+        ["src/target.c", "src/missing.c"],
+    ],
+)
+def test_scoped_review_preserves_context_but_schedules_only_selected_files(files):
     progress_events: list[dict[str, object]] = []
     graph = _graph(
         _fn("src/api.c::api", 1, source=True, calls=["target"]),
@@ -1304,46 +1313,67 @@ def test_scoped_review_limits_frontier_analysis_to_relevant_graph():
     )
     service = object.__new__(ReachabilityService)
     service._normalize_target_file = lambda file_path: (file_path, file_path)
+    selected_node_ids = (
+        None
+        if files is None
+        else {
+            node.unique_name for node in graph.nodes.values() if node.file_path in files
+        }
+    )
     frontier_reviewer = Mock()
     frontier_reviewer.review.return_value = SimpleNamespace(
         findings=(),
         failed_node_ids=(),
         failures=(),
-        stats=SimpleNamespace(planned_node_count=3, reviewed_node_count=3),
+        stats=SimpleNamespace(planned_node_count=0, reviewed_node_count=0),
     )
     service._frontier_reviewer = frontier_reviewer
 
-    service.analyze_codebase(
+    analysis = service.analyze_codebase(
         jobs=Mock(),
-        files=["src/target.c"],
+        files=files,
         codegraph=graph,
         options=ReachabilityReviewOptions(progress_callback=progress_events.append),
     )
 
     frontier_graph = frontier_reviewer.review.call_args.args[0]
     assert frontier_reviewer.review.call_args.kwargs["evidence_graph"] is graph
-    assert set(frontier_graph.nodes) == {
+    assert (
+        frontier_reviewer.review.call_args.kwargs["selected_node_ids"]
+        == selected_node_ids
+    )
+    expected_context = {
         "src/api.c::api",
         "src/target.c::target",
         "src/sink.c::sink",
     }
+    assert set(frontier_graph.nodes) == (
+        set(graph.nodes) if files is None else expected_context
+    )
+    assert analysis.codegraph_failures == (
+        ("codegraph.target_missing:src/missing.c",)
+        if files and "src/missing.c" in files
+        else ()
+    )
+    if files is None:
+        return
     assert progress_events[:2] == [
         {
             "event": "reachability_phase_progress",
             "phase": "analysis",
             "completed": 0,
-            "total": 1,
+            "total": len(files),
         },
         {
             "event": "reachability_phase_progress",
             "phase": "analysis",
             "completed": 1,
-            "total": 1,
+            "total": len(files),
         },
     ]
 
 
-def test_file_review_scans_full_focus():
+def test_file_review_preserves_full_focus_but_schedules_only_target_nodes():
     graph = _graph(
         _fn(
             "src/main.c::main",
@@ -1364,7 +1394,7 @@ def test_file_review_scans_full_focus():
         findings=(),
         failed_node_ids=(),
         failures=(),
-        stats=SimpleNamespace(planned_node_count=5, reviewed_node_count=5),
+        stats=SimpleNamespace(planned_node_count=3, reviewed_node_count=3),
     )
     service._frontier_reviewer = frontier_reviewer
 
@@ -1377,6 +1407,11 @@ def test_file_review_scans_full_focus():
 
     frontier_graph = frontier_reviewer.review.call_args.args[0]
     assert frontier_reviewer.review.call_args.kwargs["evidence_graph"] is graph
+    assert frontier_reviewer.review.call_args.kwargs["selected_node_ids"] == {
+        "src/review.c::candidate",
+        "src/review.c::extended",
+        "src/review.c::uncovered",
+    }
     assert set(frontier_graph.nodes) == {
         "src/main.c::main",
         "src/review.c::candidate",

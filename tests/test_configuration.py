@@ -60,6 +60,8 @@ def test_packaged_execution_graph_omits_index_initialization():
     assert review["inputs"]["codegraph"] == "initialize.codegraph"
     assert "codegraph" not in review["nodes"]
     assert "inputs" not in review["nodes"]["simple_llm_review"]
+    for node in ("simple_llm_review", "reachability"):
+        assert review["nodes"][node]["capabilities"] == ["memory", "navigation"]
     assert "inputs" not in review["nodes"]["finding_dedup"]
     assert "inputs" not in review["nodes"]["result"]
     assert "outputs" not in triage

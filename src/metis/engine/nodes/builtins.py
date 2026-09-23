@@ -33,7 +33,6 @@ from .triage import registration as triage_node
 from .triage.service import TriageClassifierService
 
 if TYPE_CHECKING:
-    from ..capabilities.index import IndexCapability
     from .simple_llm_review.graph import ReviewGraph
 
 
@@ -54,7 +53,7 @@ def build_builtin_execution(
     reachability_settings: dict[str, object],
     triage_options: TriageOptions,
     triage_checkpoint_every: int,
-    review_graph_factory: Callable[[IndexCapability | None, str | None], ReviewGraph],
+    review_graph_factory: Callable[..., ReviewGraph],
 ) -> BuiltinExecution:
     selected_nodes = configuration.selected_nodes()
     static_registrations = (
@@ -97,6 +96,7 @@ def build_builtin_execution(
             repository=repository,
             llm_provider=engine_config.llm_provider,
             usage_runtime=engine_config.usage_runtime,
+            navigation_manifest=capabilities.manifest("navigation"),
         )
         if reachability_selected
         else None

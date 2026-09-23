@@ -157,3 +157,40 @@ def test_simple_review_checkpoint_key_tracks_effective_input():
 
     graph.model_tools = (object(),)
     assert graph.checkpoint_key(request) is None
+
+
+def test_patch_context_can_be_omitted_without_losing_source_anchors():
+    provider = Mock()
+    provider.count_tokens.side_effect = lambda text, **_: len(text)
+    graph = ReviewGraph(
+        provider, {}, None, "", "test-model", 4000, model_tools=(object(),)
+    )
+    graph._prompt_runner.invoke = Mock(
+        return_value=[
+            {
+                "code_snippet": "int target;",
+                "start_line": 1001,
+                "end_line": 1001,
+            }
+        ]
+    )
+    diff = "--- a/target.c\n+++ b/target.c\n@@ -1001 +1001 @@\n-int target;\n+int target = 1;\n"
+
+    result = graph.review(
+        {
+            "file_path": "target.c",
+            "mode": "patch",
+            "snippet": diff,
+            "original_file": "int filler;\n" * 1000 + "int target;\n",
+            "language_prompts": {
+                "security_review_file": "Review. [[REVIEW_SCHEMA_FIELDS]]",
+                "security_review_checks": "Check.",
+            },
+        }
+    )
+
+    graph._prompt_runner.invoke.assert_called_once()
+    body = graph._prompt_runner.invoke.call_args.args[0].variables["body_text"]
+    assert "FILE: target.c" in body
+    assert diff in body and "int filler;" not in body
+    assert result["reviews"][0]["anchor"]["start_line"] == 1001

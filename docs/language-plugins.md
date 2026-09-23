@@ -96,13 +96,23 @@ Required prompt keys:
 | --- | --- |
 | `security_review_file` | Single-file review. |
 | `security_review` | Patch review. |
-| `security_review_checks` | Review rubric. |
+| `security_review_checks` | Language-specific review guidance. |
 | `validation_review` | Reserved compatibility prompt; currently not consumed at runtime. |
 | `snippet_security_summary` | Patch summary generation. |
 
 `prompts.triage_navigation` is optional and overrides the navigation-assisted
 triage prompt. A language YAML may use `inherits: <profile>`; the manifest's
 `prompt_profile` supplies the profile when the YAML does not name one.
+
+C/C++ discovery may use supplied or retrieved evidence outside the review scope;
+file findings stay in the assigned unit, and patch findings concern failures
+introduced or affected by the changes. Findings should explain the mechanism,
+preconditions and security impact, check guards and counterexamples, and state
+evidence gaps; missing context does not prove a guard is absent.
+`security_review_checks` contains C-family language/build guidance instead of a
+generic vulnerability catalogue. Other languages keep their existing guidance.
+Triage uses separate prompts. Navigation needs no CodeGraph; languages without it
+use simple review.
 
 ## Global Config
 

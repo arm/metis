@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from collections import deque
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
@@ -15,6 +16,8 @@ from langgraph.graph import StateGraph
 from metis import runlog
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.simple_llm_review.prompt import build_review_system_prompt
 from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
 from metis.engine.nodes.simple_llm_review.prompt import sanitize_review_payload
@@ -90,10 +93,13 @@ def _build_body_text(state: ReviewState) -> str:
             "",
         ]
     else:
-        original_file = state.get("original_file") or ""
+        original_file = state.get("original_file")
         sections = [
+            f"FILE: {state.get('relative_file') or state.get('file_path', '')}",
             "ORIGINAL_FILE:",
-            SourceMap.number_text(original_file, 1) if original_file else "",
+            SourceMap.number_text(original_file, 1)
+            if original_file is not None
+            else "[Full-file context omitted.]",
             "",
             *threat_sections,
             "FILE_CHANGES:",
@@ -230,25 +236,19 @@ class ReviewGraph:
                     chat_model_kwargs=self.chat_model_kwargs,
                     model_tools=self.model_tools,
                     max_tool_rounds=self.model_tool_max_rounds,
+                    max_input_tokens=(
+                        self.max_token_length if self.model_tools else None
+                    ),
                 )
             )
 
-    def _build_app(self, language_prompts, default_prompt_key):
+    def _build_app(self, language_prompts, default_prompt_key, build_prompt):
         cache_key = (id(language_prompts), default_prompt_key)
         cached = self._app_cache.get(cache_key)
         if cached is not None:
             return cached
 
         graph = StateGraph(cast(Any, ReviewState))
-        build_prompt = partial(
-            review_node_build_prompt,
-            language_prompts=language_prompts,
-            default_prompt_key=default_prompt_key,
-            report_prompt=self.report_prompt,
-            custom_prompt_text=self.custom_prompt_text,
-            custom_guidance_precedence=self.custom_guidance_precedence,
-            schema_prompt_section=self._schema_prompt_section,
-        )
         review = partial(
             review_node_llm,
             invoke_review=self._invoke_review_model,
@@ -315,6 +315,15 @@ class ReviewGraph:
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
         threat_model_context = request.get("threat_model_context", [])
+        build_prompt = partial(
+            review_node_build_prompt,
+            language_prompts=language_prompts,
+            default_prompt_key=default_prompt_key,
+            report_prompt=self.report_prompt,
+            custom_prompt_text=self.custom_prompt_text,
+            custom_guidance_precedence=self.custom_guidance_precedence,
+            schema_prompt_section=self._schema_prompt_section,
+        )
 
         rel_path = relative_file or file_path
         if mode == "file":
@@ -337,22 +346,58 @@ class ReviewGraph:
             smap = SourceMap.for_text(rel_path, original_file)
         else:
             smap = None
-        chunks = self._chunks(snippet)
+        base_state: ReviewState = {
+            "file_path": file_path,
+            "source_map": smap,
+            "relative_file": relative_file,
+            "mode": mode,
+            "original_file": original_file,
+            "threat_model_context": threat_model_context,
+        }
+        system_prompt = build_prompt(base_state)["system_prompt"]
+
+        def input_tokens(state: ReviewState) -> int:
+            return rendered_prompt_token_count(
+                self._token_counter,
+                system_prompt=system_prompt,
+                user_prompt="{body_text}",
+                variables={"body_text": _build_body_text(state)},
+                model_tools=self.model_tools,
+            )
+
+        if self.model_tools:
+            if (
+                mode == "patch"
+                and input_tokens({**base_state, "snippet": snippet})
+                > self.max_token_length
+            ):
+                base_state["original_file"] = None
+            if input_tokens(base_state) >= self.max_token_length:
+                raise ModelInputLimitError(
+                    "Review prompt context exceeds the model input limit"
+                )
+        chunks = deque(self._chunks(snippet))
         accumulated: list[dict] = []
-        app = self._build_app(language_prompts, default_prompt_key)
-        for chunk, chunk_start in chunks:
+        app = self._build_app(language_prompts, default_prompt_key, build_prompt)
+        while chunks:
+            chunk, chunk_start = chunks.popleft()
             chunk_end = chunk_start + len(source_lines(chunk)) - 1
-            state = {
-                "file_path": file_path,
+            state: ReviewState = {
+                **base_state,
                 "snippet": chunk,
                 "chunk_start": chunk_start,
                 "chunk_end": chunk_end,
-                "source_map": smap,
-                "relative_file": relative_file,
-                "mode": mode,
-                "original_file": original_file,
-                "threat_model_context": threat_model_context,
             }
+            if self.model_tools and input_tokens(state) > self.max_token_length:
+                parts = split_snippet(chunk, max(1, len(chunk) // 2), len)
+                if len(parts) == 1:
+                    raise ModelInputLimitError(
+                        "Review input cannot fit one source fragment"
+                    )
+                chunks.extendleft(
+                    (text, chunk_start + start - 1) for text, start in reversed(parts)
+                )
+                continue
             with runlog.span(
                 "workflow",
                 "simple_llm_review",

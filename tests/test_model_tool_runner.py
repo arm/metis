@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
 from metis.engine.model_tool_runner import invoke_model_with_tools
+from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import model_tool_system_prompt
 from metis.engine.model_tool_runner import require_max_tool_rounds
 
@@ -75,21 +78,32 @@ def _prompt():
 
 
 def test_model_tool_system_prompt_includes_and_clips_tool_contracts():
+    first = _FakeTool()
+    second = _FakeTool()
+    second.name = "lookup"
     long_contract_tool = _FakeTool()
+    long_contract_tool.name = "read"
     long_contract_tool.metadata = {
         "metis_contract": "0123456789abcdef",
         "metis_contract_max_chars": 6,
     }
-    prompt = model_tool_system_prompt("Return JSON.", (_FakeTool(), long_contract_tool))
+    prompt = model_tool_system_prompt(
+        "Return JSON.", (first, second, long_contract_tool)
+    )
 
     assert "AVAILABLE MODEL TOOLS" in prompt
     assert "- index_search: Search indexed context." in prompt
+    assert "- lookup: Search indexed context." in prompt
     assert "MODEL TOOL CONTRACTS" in prompt
-    assert "CONTRACT TEXT" in prompt
-    assert "012345\n[contract truncated]" in prompt
+    assert prompt.count(first.metadata["metis_contract"]) == 1
+    assert "[index_search, lookup]" in prompt
+    assert "[read]\n012345\n[contract truncated]" in prompt
 
 
-def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
+@pytest.mark.parametrize("max_tool_rounds", [1, 2])
+def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(
+    caplog, max_tool_rounds
+):
     tool = _FakeTool()
     chat = _FakeChat()
     caplog.set_level(logging.DEBUG, logger="metis")
@@ -99,7 +113,7 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
         _prompt(),
         {"body": "review this"},
         (tool,),
-        max_tool_rounds=2,
+        max_tool_rounds=max_tool_rounds,
     )
 
     assert result == '{"reviews": []}'
@@ -125,26 +139,51 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(caplog):
     )
 
 
-def test_invoke_model_with_tools_requests_final_answer_after_last_tool_round():
-    tool = _FakeTool()
-    chat = _FakeChat()
-
-    result, evidence = invoke_model_with_tools(
-        chat,
-        _prompt(),
-        {"body": "review this"},
-        (tool,),
-        max_tool_rounds=1,
-    )
-
-    assert result == '{"reviews": []}'
-    assert evidence
-    assert tool.calls == [{"query": "allocator ownership"}]
-
-
 def test_require_max_tool_rounds_rejects_missing_value():
     with pytest.raises(
         ModelToolConfigurationError,
         match="max_tool_rounds must be configured when model_tools are used",
     ):
         require_max_tool_rounds(None)
+
+
+@pytest.mark.parametrize("max_tool_rounds", [1, 2])
+def test_input_limit_stops_oversized_tool_conversation(max_tool_rounds):
+    tool = _FakeTool()
+    chat = _FakeChat()
+
+    with pytest.raises(
+        ModelInputLimitError, match="Model input exceeds max_input_tokens=64"
+    ):
+        invoke_model_with_tools(
+            chat,
+            _prompt(),
+            {"body": "review this"},
+            (tool,),
+            max_tool_rounds=max_tool_rounds,
+            token_counter=len,
+            max_input_tokens=64,
+        )
+
+    assert len(tool.calls) == 1
+    assert len(chat.bound_chat.messages) == 1
+    assert chat.messages == []
+
+
+@pytest.mark.parametrize(
+    ("block_type", "id_key"),
+    [
+        ("function_call", "call_id"),
+        ("tool_use", "id"),
+        ("tool_call", "id"),
+    ],
+)
+def test_token_count_does_not_repeat_tool_calls_in_content(block_type, id_key):
+    call = {"id": "call-1", "name": "lookup", "args": {"query": "guard"}}
+    block = {"type": block_type, id_key: call["id"]}
+    message = AIMessage(content=[block], tool_calls=[call])
+    assert model_messages_token_count([message], len) == len(str(message.content))
+    message.tool_calls.append({**message.tool_calls[0], "id": "call-2"})
+    assert model_messages_token_count([message], len) == len(
+        str(message.content)
+    ) + len(json.dumps(message.tool_calls[1:], sort_keys=True))

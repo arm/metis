@@ -5,51 +5,24 @@ splitting:
 prompts:
   security_review_file: |-
     You are a thorough security engineer specializing in C/C++.
-    Always tie your identified issues directly to the evidence in FILE.
-    Do not introduce new security conclusions that are not supported by the specific changes provided.
-    You will be given:
-    1. FILE - A source code file
-
-    Your tasks are:
-    1. Security Review Scope
-       - Review the security implications of the FILE.
-       - Only produce findings that are fully justified by FILE. If no real issues exist, return an empty reviews list.
+    Review security failures in the assigned FILE or review unit.
+    Use all supplied or retrieved evidence, including relevant code outside the assigned scope,
+    to understand the mechanism and preconditions. Keep finding locations within the assigned scope.
 
   security_review: |-
     You are a thorough security engineer specializing in C/C++.
-    Always tie your identified issues directly to the evidence in FILE_CHANGES and ORIGINAL_FILE. Do not introduce new security conclusions that are not supported
-    by the specific changes provided.
-    You will be given:
-    1. FILE_CHANGES - a set of code changes with lines marked by "+" indicating what has been added or "-" for removed.
-
-    2. ORIGINAL_FILE - The original file before being modified. Use this to understand how changes affect the code. (this may be empty).
-
-    Your tasks are:
-    1. Security Review Scope
-       - Review the security implications of the FILE_CHANGES, focusing on lines marked with "+" or "-" but take into account how they interact with the whole file.
-       - Only produce findings that are fully justified by FILE_CHANGES and ORIGINAL_FILE. If no real issues exist, return an empty reviews list.
+    Review security failures introduced or affected by FILE_CHANGES, including interactions
+    with unchanged code. ORIGINAL_FILE, when supplied, is the pre-change source.
+    Use all supplied or retrieved evidence, including relevant code outside the assigned scope,
+    to understand the mechanism and preconditions. Keep finding locations within the assigned scope.
 
   security_review_checks: |-
-    2. What to Check
-       - Look for potential security issues such as:
-         - Memory safety issues
-         - Memory aliasing issues
-         - Buffer overflows
-         - Unsafe function usage
-         - Integer overflows
-         - Integer underflows
-         - Injection vulnerabilities
-         - Concurrency issues
-           + Specifically watch for removed wait calls or altered synchronization paths
-             that may lead to race conditions or use-after-free.
-         - Use of insecure functions
-         - Null pointer dereference
-         - Use after free
-           + Pay special attention to scenarios where an object is freed or a resource is terminated
-             while a job, firmware thread, or callback is still referencing it.
-       - IMPORTANT: If the code already checks that pointers are non-null or logically ensures they cannot be null, do not raise a 'null pointer dereference' issue.
-       - Pay extra attention to variables that are externally controlled.
-       - Do not report on issues that do not affect security.
+    Establish a concrete failure mechanism, caller/input preconditions and security impact.
+    Use all supplied or retrieved evidence to account for relevant guards and counterexamples.
+    State uncertainty and missing evidence explicitly; do not invent callers, behavior or guarantees.
+    Return an empty reviews list when no supported security finding remains.
+    Interpret integer widths and signedness, pointer aliasing, object lifetimes and synchronization
+    under the evidenced C/C++ build configuration, macros and calling conventions.
   validation_review: |-
     You will be given:
     SNIPPET: The relevant C/C++ code snippet.

@@ -37,6 +37,7 @@ from .review_output import reviews_for_findings
 
 if TYPE_CHECKING:
     from metis.engine.capabilities.index import IndexCapability
+    from metis.engine.capabilities.navigation import NavigationCapability
     from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
     from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
     from metis.memory import MemoryService
@@ -70,6 +71,10 @@ def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
                 "IndexCapability | None",
                 invocation.context.capabilities.get("index"),
             ),
+            navigation=cast(
+                "NavigationCapability | None",
+                invocation.context.capabilities.get("navigation"),
+            ),
             progress_callback=invocation.context.report_progress,
             checkpoint_session=checkpoint_session,
         )
@@ -88,6 +93,7 @@ def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
         capabilities={
             "index": CapabilityRequirement.OPTIONAL,
             "memory": CapabilityRequirement.OPTIONAL,
+            "navigation": CapabilityRequirement.OPTIONAL,
         },
     )
 
@@ -121,6 +127,7 @@ class ReachabilityReviewService:
         codegraph_failed_files=(),
         memory_service: MemoryService | None = None,
         index: IndexCapability | None = None,
+        navigation: NavigationCapability | None = None,
         progress_callback=None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
@@ -206,6 +213,7 @@ class ReachabilityReviewService:
                     codegraph=codegraph,
                     jobs=jobs,
                     memory_service=memory_service,
+                    navigation=navigation,
                     progress_callback=progress_callback,
                     diagnostics=diagnostics,
                     checkpoint_session=checkpoint_session,
@@ -226,6 +234,7 @@ class ReachabilityReviewService:
                     jobs=jobs,
                     memory_service=memory_service,
                     index=index,
+                    navigation=navigation,
                     progress_callback=progress_callback,
                     checkpoint_session=checkpoint_session,
                     model=model,
@@ -247,6 +256,7 @@ class ReachabilityReviewService:
         codegraph,
         jobs: NodeJobs,
         memory_service: MemoryService | None,
+        navigation: NavigationCapability | None,
         progress_callback,
         diagnostics: list[ReviewDiagnostic],
         checkpoint_session: ReviewCheckpointSession | None,
@@ -266,6 +276,7 @@ class ReachabilityReviewService:
                     diagnostic_callback=provider_diagnostics.append,
                     codegraph=codegraph,
                     memory_service=memory_service,
+                    navigation=navigation,
                     checkpoint_session=checkpoint_session,
                 )
                 raw = {"reviews": [] if reviewed is None else [reviewed]}
@@ -277,6 +288,7 @@ class ReachabilityReviewService:
                     progress_callback=progress_callback,
                     codegraph=codegraph,
                     memory_service=memory_service,
+                    navigation=navigation,
                     checkpoint_session=checkpoint_session,
                 )
                 raw = {"reviews": codebase_groups}
@@ -345,6 +357,7 @@ class ReachabilityReviewService:
         progress_callback=None,
         codegraph: CodeGraph,
         memory_service: MemoryService | None = None,
+        navigation: NavigationCapability | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[list[dict[str, object]], ReachabilityAnalysis]:
         options = self.review_options(
@@ -358,6 +371,7 @@ class ReachabilityReviewService:
             files=files,
             codegraph=codegraph,
             memory_service=memory_service,
+            navigation=navigation,
         )
         return (
             group_findings_as_reviews(
@@ -377,6 +391,7 @@ class ReachabilityReviewService:
         diagnostic_callback=None,
         codegraph: CodeGraph,
         memory_service: MemoryService | None = None,
+        navigation: NavigationCapability | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> tuple[dict[str, object] | None, ReachabilityAnalysis | None]:
         options = self.review_options(
@@ -391,6 +406,7 @@ class ReachabilityReviewService:
             codegraph=codegraph,
             diagnostic_callback=diagnostic_callback,
             memory_service=memory_service,
+            navigation=navigation,
         )
         if analysis is None:
             return None, None
