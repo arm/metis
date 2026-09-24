@@ -72,7 +72,9 @@ class OpenAICompatibleChatProvider(ChatProvider):
             "use_responses_api": True,
         }
         temperature = kwargs.get("temperature")
-        if temperature is not None:
+        # Astra requires temperature to be omitted from the request.
+        is_astra = str(model_name).lower().startswith("gpt-6-astra")
+        if temperature is not None and not is_astra:
             params["temperature"] = float(temperature)
         max_tokens = kwargs.get("max_tokens")
         if max_tokens is not None:

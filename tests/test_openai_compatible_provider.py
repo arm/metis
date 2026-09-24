@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from langchain_core.embeddings import Embeddings
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
@@ -42,12 +43,61 @@ def _embedding_config(**overrides: object) -> OpenAICompatibleEmbeddingConfig:
 def test_chat_model_forwards_supported_runtime_options() -> None:
     provider = OpenAICompatibleChatProvider(_chat_config())
 
-    llm = provider.get_chat_model(reasoning_effort="high", max_tokens=256)
+    llm = provider.get_chat_model(
+        temperature=0.0, reasoning_effort="high", max_tokens=256
+    )
 
     assert isinstance(llm, ChatOpenAI)
     assert llm.reasoning_effort == "high"
     assert llm.max_tokens == 256
     assert llm.use_responses_api is True
+    payload = llm._get_request_payload([HumanMessage(content="Review this code.")])
+    assert payload["temperature"] == 0.0
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-astra-2026-09-03"])
+@pytest.mark.parametrize("temperature", [0.0, 0.1, 1.0])
+def test_chat_model_omits_temperature_for_astra(model: str, temperature: float) -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config(model=model))
+
+    llm = provider.get_chat_model(
+        temperature=temperature, reasoning_effort="medium", max_tokens=256
+    )
+    payload = llm._get_request_payload([HumanMessage(content="Review this code.")])
+
+    assert "temperature" not in payload
+    assert payload["model"] == model
+    assert payload["reasoning"] == {"effort": "medium"}
+    assert payload["max_output_tokens"] == 256
+
+
+@pytest.mark.parametrize(
+    ("configured_model", "requested_model", "supports_temperature"),
+    [
+        ("gpt-4.1", "gpt-6-astra", False),
+        ("gpt-6-astra", "gpt-4.1", True),
+    ],
+)
+@pytest.mark.parametrize("positional", [False, True])
+def test_chat_model_temperature_uses_resolved_model(
+    configured_model: str,
+    requested_model: str,
+    supports_temperature: bool,
+    positional: bool,
+) -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config(model=configured_model))
+
+    if positional:
+        llm = provider.get_chat_model(requested_model, temperature=0.0)
+    else:
+        llm = provider.get_chat_model(model=requested_model, temperature=0.0)
+    payload = llm._get_request_payload([HumanMessage(content="Review this code.")])
+
+    assert payload["model"] == requested_model
+    if supports_temperature:
+        assert payload["temperature"] == 0.0
+    else:
+        assert "temperature" not in payload
 
 
 def test_chat_model_applies_configured_max_retries() -> None:

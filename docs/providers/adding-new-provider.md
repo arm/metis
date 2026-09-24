@@ -48,7 +48,6 @@ class MyEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
             "docs_extra_kwargs",
         ),
     )
-
 ```
 
 Examples: `openai.py`, `ollama.py`, `vllm.py`, `llamacpp.py`.

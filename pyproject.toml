@@ -1,6 +1,6 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = [ "setuptools>=82.0.1" ]
+requires = [ "setuptools>=84.0.0" ]
 
 [project]
 name = "metis"
@@ -19,39 +19,39 @@ classifiers = [
 ]
 dependencies = [
   "chromadb>=1.5.9",
-  "langchain==1.3.9",
-  "langchain-core==1.4.6",
-  "langchain-openai==1.2.2",
-  "langgraph==1.2.4",
-  "langsmith==0.8.18",
-  "llama-index>=0.14.22",
-  "llama-index-vector-stores-chroma>=0.5.5",
+  "langchain==1.4.2",
+  "langchain-core==1.6.4",
+  "langchain-openai==1.6.3",
+  "langgraph==1.2.12",
+  "langsmith==0.14.0",
+  "llama-index>=0.14.25",
+  "llama-index-vector-stores-chroma>=0.6.0",
   "pathspec>=1.1.1",
-  "prompt-toolkit>=3.0.52",
-  "pydantic>=2.13.4",
+  "prompt-toolkit>=3.0.53",
+  "pydantic>=2.13.5",
   "pyyaml>=6.0.3",
   "rich>=15.0.0",
   "tree-sitter==0.25.2",
   "tree-sitter-language-pack==1.8.1",
-  "unidiff>=0.7.5",
+  "unidiff>=1.0.1",
 ]
 optional-dependencies.all-providers = [
   "metis[anthropic,bedrock,bedrock-mantle,gemini]",
 ]
 optional-dependencies.anthropic = [
-  "langchain-anthropic>=1.4.3",
-  "llama-index-llms-langchain>=0.8.0",
+  "langchain-anthropic>=1.7.2",
+  "llama-index-llms-langchain>=0.9.0",
 ]
 optional-dependencies.azure = []
 optional-dependencies.bedrock = [
-  "boto3>=1.34.0",
-  "langchain-aws>=1.0.0",
+  "boto3>=1.43.99",
+  "langchain-aws>=1.7.9",
 ]
 optional-dependencies.bedrock-mantle = [
-  "anthropic[aws]>=0.74.0",
-  "boto3>=1.34.0",
-  "langchain-anthropic>=1.4.3",
-  "llama-index-llms-langchain>=0.8.0",
+  "anthropic[aws]>=1.7.0",
+  "boto3>=1.43.99",
+  "langchain-anthropic>=1.7.2",
+  "llama-index-llms-langchain>=0.9.0",
 ]
 optional-dependencies.dev = [
   "metis[all-providers]",
@@ -60,23 +60,23 @@ optional-dependencies.dev = [
   "metis[test]",
 ]
 optional-dependencies.gemini = [
-  "langchain-google-genai>=4.0.0",
+  "langchain-google-genai>=4.4.0",
 ]
 optional-dependencies.lint = [
   "bandit>=1.9.4",
-  "mypy>=2.1.0",
-  "pre-commit>=4.6.0",
-  "ruff>=0.15.15",
+  "mypy>=2.3.1",
+  "pre-commit>=4.6.2",
+  "ruff>=0.16.8",
 ]
 optional-dependencies.postgres = [
-  "llama-index-vector-stores-postgres>=0.8.1",
+  "llama-index-vector-stores-postgres>=0.9.0",
 ]
 optional-dependencies.qdrant = [
-  "llama-index-vector-stores-qdrant>=0.10.2",
+  "llama-index-vector-stores-qdrant>=0.10.3",
   "qdrant-client<1.19",
 ]
 optional-dependencies.test = [
-  "pytest>=9.0.3",
+  "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
   "setuptools>=82.0.1",
 ]
@@ -116,6 +116,7 @@ package-data."metis.plugins.profiles" = [ "*.yaml" ]
 package-data.metis = [ "metis.yaml" ]
 
 [tool.ruff]
+lint.select = [ "E4", "E7", "E9", "F" ]
 lint.isort.force-single-line = true
 
 [tool.pyproject-fmt]
