@@ -104,6 +104,13 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
                 vector_store=self.vector_store_docs
             )
 
+            # LlamaIndex initializes PostgreSQL lazily and consumes HNSW setup
+            # options. Finish setup before concurrent first-use queries can
+            # race that initialization. An empty public add initializes storage
+            # without writing nodes or making embedding/model requests.
+            self.vector_store_code.add([])
+            self.vector_store_docs.add([])
+
             self._initialized = True
             logger.info("Postgres vector components initialized.")
 

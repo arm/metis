@@ -29,14 +29,40 @@ def test_pg_vectorstore_mocked_init(monkeypatch):
     )
 
     pg.init()
+    pg.init()
     assert pg.get_storage_contexts() == ("code_ctx", "docs_ctx")
     assert pg.vector_store_code is code_store
     assert pg.vector_store_docs is docs_store
     assert pg._initialized is True
     assert from_params.call_count == 2
     assert context_from_defaults.call_count == 2
+    code_store.add.assert_called_once_with([])
+    docs_store.add.assert_called_once_with([])
     assert from_params.call_args_list[0].kwargs["use_halfvec"] is False
     assert from_params.call_args_list[1].kwargs["use_halfvec"] is False
+
+
+@pytest.mark.parametrize("failed_store", [0, 1], ids=["code", "docs"])
+def test_pg_vectorstore_setup_failure_is_not_marked_initialized(
+    monkeypatch, failed_store
+):
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
+    from metis.exceptions import VectorStoreInitError
+
+    stores = [Mock(), Mock()]
+    stores[failed_store].add.side_effect = RuntimeError("database unavailable")
+    monkeypatch.setattr(
+        pgvector_store.PGVectorStore, "from_params", Mock(side_effect=stores)
+    )
+    monkeypatch.setattr(pgvector_store.StorageContext, "from_defaults", Mock())
+    backend = pgvector_store.PGVectorStoreImpl(
+        "postgresql://localhost/metis_test", "test_schema", Mock(), Mock(), 3
+    )
+
+    with pytest.raises(VectorStoreInitError):
+        backend.init()
+
+    assert backend._initialized is False
 
 
 def test_pg_vectorstore_passes_halfvec_and_rewrites_hnsw_dist_method(monkeypatch):

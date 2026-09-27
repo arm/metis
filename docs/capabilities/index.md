@@ -16,6 +16,10 @@ The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see
 [Execution graph](../execution-graph.md#initialize).
 
+The PostgreSQL backend completes table and configured HNSW index setup before
+retrievers are returned for concurrent use. This initialization writes no
+placeholder nodes and makes no embedding requests, including for an empty index.
+
 `index_search` accepts:
 
 - `query`: a short human-readable context question.
