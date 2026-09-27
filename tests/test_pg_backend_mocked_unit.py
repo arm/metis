@@ -36,6 +36,8 @@ def test_pg_vectorstore_mocked_init(monkeypatch):
     assert pg._initialized is True
     assert from_params.call_count == 2
     assert context_from_defaults.call_count == 2
+    assert code_store.initialization_fail_on_error is True
+    assert docs_store.initialization_fail_on_error is True
     code_store.add.assert_called_once_with([])
     docs_store.add.assert_called_once_with([])
     assert from_params.call_args_list[0].kwargs["use_halfvec"] is False

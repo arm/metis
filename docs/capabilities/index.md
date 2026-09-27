@@ -19,6 +19,8 @@ the `initialize` stage when a run should build or refresh it; see
 The PostgreSQL backend completes table and configured HNSW index setup before
 retrievers are returned for concurrent use. This initialization writes no
 placeholder nodes and makes no embedding requests, including for an empty index.
+Setup errors fail initialization instead of leaving a backend marked ready after
+an unsuccessful table or index creation.
 
 `index_search` accepts:
 

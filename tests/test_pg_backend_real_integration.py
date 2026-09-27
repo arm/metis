@@ -17,43 +17,62 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.schema import DropSchema
 
 
-@pytest.mark.postgres
-def test_pg_backend_real_init():
+@pytest.fixture
+def postgres_connection():
+    dsn = os.environ.get(
+        "METIS_TEST_POSTGRES_DSN",
+        "postgresql://metis_user:metis_password@localhost:5432/metis_db",
+    )
+    engine = create_engine(dsn)
     try:
-        engine = create_engine(
-            "postgresql://metis_user:metis_password@localhost:5432/metis_db"
-        )
-        engine.connect()
-    except OperationalError:
-        pytest.skip("Postgres is not available.")
+        try:
+            with engine.connect():
+                pass
+        except OperationalError:
+            pytest.skip("Postgres is not available.")
+        yield dsn, engine
+    finally:
+        engine.dispose()
 
+
+@pytest.mark.postgres
+def test_pg_backend_real_init(postgres_connection):
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
 
+    dsn, cleanup_engine = postgres_connection
+    schema = "metis_init_" + uuid4().hex
     backend = PGVectorStoreImpl(
-        connection_string="postgresql://metis_user:metis_password@localhost:5432/metis_db",
-        project_schema="test_schema",
+        connection_string=dsn,
+        project_schema=schema,
         embed_model_code=Mock(),
         embed_model_docs=Mock(),
         embed_dim=1536,
     )
 
-    backend.init()
-    ctx_code, ctx_docs = backend.get_storage_contexts()
-    assert ctx_code is not None
-    assert ctx_docs is not None
+    try:
+        backend.init()
+        ctx_code, ctx_docs = backend.get_storage_contexts()
+        assert ctx_code is not None
+        assert ctx_docs is not None
+    finally:
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(backend, attr, None)
+            if store is not None:
+                asyncio.run(store.close())
+        with cleanup_engine.begin() as connection:
+            connection.execute(DropSchema(schema, if_exists=True, cascade=True))
 
 
 @pytest.mark.postgres
-def test_pg_backend_initializes_empty_indexes_before_parallel_queries(caplog):
+def test_pg_backend_initializes_empty_indexes_before_parallel_queries(
+    caplog, postgres_connection
+):
     from llama_index.core.schema import TextNode
     from llama_index.core.vector_stores.types import VectorStoreQuery
 
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
 
-    dsn = os.environ.get(
-        "METIS_TEST_POSTGRES_DSN",
-        "postgresql://metis_user:metis_password@localhost:5432/metis_db",
-    )
+    dsn, cleanup_engine = postgres_connection
     schema = "metis_init_" + uuid4().hex
     backend = PGVectorStoreImpl(
         dsn,
@@ -63,7 +82,6 @@ def test_pg_backend_initializes_empty_indexes_before_parallel_queries(caplog):
         3,
         hnsw_kwargs={"hnsw_m": 16, "hnsw_ef_construction": 64, "hnsw_ef_search": 40},
     )
-    cleanup_engine = create_engine(dsn)
     stores = []
     try:
         backend.init()
@@ -116,4 +134,36 @@ def test_pg_backend_initializes_empty_indexes_before_parallel_queries(caplog):
             asyncio.run(store.close())
         with cleanup_engine.begin() as connection:
             connection.execute(DropSchema(schema, if_exists=True, cascade=True))
-        cleanup_engine.dispose()
+
+
+@pytest.mark.postgres
+def test_pg_backend_reports_hnsw_setup_failure(postgres_connection):
+    from metis.exceptions import VectorStoreInitError
+    from metis.vector_store.pgvector_store import PGVectorStoreImpl
+
+    dsn, cleanup_engine = postgres_connection
+    schema = "metis_init_failure_" + uuid4().hex
+    backend = PGVectorStoreImpl(
+        dsn,
+        schema,
+        Mock(),
+        Mock(),
+        3,
+        hnsw_kwargs={"hnsw_m": 0, "hnsw_ef_construction": 64},
+    )
+    try:
+        with pytest.raises(VectorStoreInitError):
+            backend.init()
+        assert backend._initialized is False
+    finally:
+        # LlamaIndex close() skips disposal after incomplete initialization.
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(backend, attr, None)
+            engine = getattr(store, "_engine", None)
+            if engine is not None:
+                engine.dispose()
+            async_engine = getattr(store, "_async_engine", None)
+            if async_engine is not None:
+                asyncio.run(async_engine.dispose())
+        with cleanup_engine.begin() as connection:
+            connection.execute(DropSchema(schema, if_exists=True, cascade=True))
