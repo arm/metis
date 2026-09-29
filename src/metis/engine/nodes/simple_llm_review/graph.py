@@ -39,32 +39,38 @@ from .schema import review_schema_prompt
 logger = logging.getLogger("metis")
 
 
-def _normalize_reviews(raw) -> list[dict]:
+def _normalize_reviews(raw) -> list[dict] | None:
     """
-    Normalize arbitrary LLM responses into review dicts, preserving partially
+    Normalize an LLM response into review dicts, preserving partially
     structured entries with empty fields when necessary.
+
+    Returns ``None`` when the response carries no usable review list, so the
+    caller retries. An explicit empty list is a valid, clean result.
     """
     if isinstance(raw, ReviewResponseModel):
         return [
             normalize_review_fields(r) for r in (raw.model_dump().get("reviews") or [])
         ]
 
-    payload = None
-    if isinstance(raw, dict):
-        payload = raw
-    elif isinstance(raw, str):
-        parsed = parse_json_output(raw)
-        if isinstance(parsed, dict):
-            payload = parsed
-        elif parsed not in ("", None):
-            logger.warning("LLM fallback returned non-JSON response: %s", parsed)
-    elif raw not in (None, ""):
-        logger.warning("Unexpected review payload type %s", type(raw).__name__)
-
-    if isinstance(payload, dict):
+    payload = raw
+    if isinstance(raw, str):
+        payload = parse_json_output(raw)
+        if not isinstance(payload, (dict, list)):
+            if payload not in ("", None):
+                logger.warning("LLM fallback returned non-JSON response: %s", payload)
+            return None
+    if isinstance(payload, list):
+        payload = {"reviews": payload}
+    if isinstance(payload, dict) and isinstance(payload.get("reviews"), list):
         return sanitize_review_payload(payload)
 
-    return []
+    if raw not in (None, ""):
+        logger.warning("Unexpected review payload type %s", type(raw).__name__)
+    return None
+
+
+class ReviewIncompleteError(RuntimeError):
+    """Raised when the model gave no usable answer for one or more chunks."""
 
 
 def _build_body_text(state: ReviewState) -> str:
@@ -138,9 +144,10 @@ def review_node_llm(
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    reviews = invoke_review(system_prompt, body_text) or []
+    reviews = invoke_review(system_prompt, body_text)
     new_state: ReviewState = state.copy()
-    new_state["parsed_reviews"] = reviews
+    new_state["parsed_reviews"] = reviews or []
+    new_state["review_incomplete"] = reviews is None
     return new_state
 
 
@@ -231,7 +238,7 @@ class ReviewGraph:
                     label="Review graph",
                     batch_size=1,
                     invalid_message="expected review JSON object",
-                    final_keep_message="returning no findings for this chunk",
+                    final_keep_message="no usable model answer for this chunk",
                     response_model=ReviewResponseModel,
                     chat_model_kwargs=self.chat_model_kwargs,
                     model_tools=self.model_tools,
@@ -378,6 +385,7 @@ class ReviewGraph:
                 )
         chunks = deque(self._chunks(snippet))
         accumulated: list[dict] = []
+        incomplete_chunks = 0
         app = self._build_app(language_prompts, default_prompt_key, build_prompt)
         while chunks:
             chunk, chunk_start = chunks.popleft()
@@ -423,6 +431,14 @@ class ReviewGraph:
             chunk_reviews = out.get("parsed_reviews", []) or []
             if chunk_reviews:
                 accumulated.extend(chunk_reviews)
+            if out.get("review_incomplete"):
+                incomplete_chunks += 1
+
+        if incomplete_chunks:
+            raise ReviewIncompleteError(
+                f"No usable model answer for {incomplete_chunks} chunk(s) "
+                f"of {relative_file or file_path}"
+            )
 
         file_display = relative_file if relative_file else file_path
         result: dict[str, Any] = {

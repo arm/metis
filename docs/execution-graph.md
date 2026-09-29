@@ -439,8 +439,10 @@ values in that result.
 `concurrent.futures.CancelledError` propagates directly after active stage work
 drains and does not expose a partial `ExecutionResult`. An inconclusive stage
 retains valid outputs and later stages continue. The non-interactive graph CLI
-keeps its zero exit code for inconclusive execution and exits nonzero for an
-execution error.
+keeps its zero exit code for inconclusive execution that reported only warning
+diagnostics. It exits nonzero for an execution error and for inconclusive
+execution that reported an error diagnostic, such as a review that received no
+usable model answer for a file.
 
 ## Built-in implementation layout
 

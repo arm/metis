@@ -4,6 +4,7 @@
 
 from importlib.metadata import version as package_version
 import json
+from typing import Any
 from pathlib import Path
 from rich.markup import escape
 
@@ -126,12 +127,14 @@ def run_review_code(engine, args, runtime: CommandRuntime):
 
 
 def _run_review_command(engine, mode, target, args, spinner_text):
+    error_diagnostics: list[Any] = []
     outputs = _execute_review(
         engine,
         mode,
         target,
         args,
         spinner_text,
+        error_diagnostics,
     )
     results = outputs["findings"]
     sarif_output = outputs["sarif"]
@@ -164,16 +167,17 @@ def _run_review_command(engine, mode, target, args, spinner_text):
         results,
         args,
         sarif_payload=sarif_output,
+        incomplete=bool(error_diagnostics),
     )
 
 
-def _execute_review(engine, mode, target, args, spinner_text):
-    callbacks = {
-        "diagnostic_callback": lambda diagnostic: print_execution_diagnostic(
-            diagnostic,
-            args.quiet,
-        )
-    }
+def _execute_review(engine, mode, target, args, spinner_text, error_diagnostics=None):
+    def report_diagnostic(diagnostic):
+        if error_diagnostics is not None and diagnostic.severity == "error":
+            error_diagnostics.append(diagnostic)
+        print_execution_diagnostic(diagnostic, args.quiet)
+
+    callbacks = {"diagnostic_callback": report_diagnostic}
     callbacks.update(
         review_checkpoint_callbacks(
             codebase_path=getattr(engine, "codebase_path", "."),
@@ -407,6 +411,15 @@ def _finalize_review_output(
     args,
     *,
     sarif_payload,
+    incomplete=False,
 ):
-    pretty_print_reviews(results, args.quiet)
+    if incomplete:
+        print_console(
+            "[bold red]Error:[/bold red] Review incomplete. Findings may be missing.",
+            args.quiet,
+        )
+        if results and results.get("reviews"):
+            pretty_print_reviews(results, args.quiet)
+    else:
+        pretty_print_reviews(results, args.quiet)
     save_output(args.output_file, results, args.quiet, sarif_payload=sarif_payload)

@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **review:** Accept a bare JSON list as the review list, including when the model answers in text instead of calling the schema tool. Treat a model answer that has no review list as unusable, retry it, and report the review as inconclusive instead of clean. A review whose model calls fail or return no usable answer now reports an error diagnostic. The graph CLI exits nonzero for it, and the interactive prompt prints an error instead of "No security issues found!".
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 
