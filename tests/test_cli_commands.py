@@ -16,6 +16,7 @@ from metis.cli.command_runtime import CommandRuntime
 from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.cli.review_progress import ExecutionGraphProgressReporter
 from metis.cli.review_progress import ReviewCodeProgressReporter
+from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.stages.review.models import ReviewCheckpointRecord
 from metis.version import __version__ as METIS_VERSION
 
@@ -758,3 +759,61 @@ def test_checkpoint_filenames_preserve_exact_producer_identity(tmp_path, produce
     paths = list((tmp_path / ".metis" / "checkpoints").glob("*.sqlite3"))
     assert len(paths) == 2
     assert len({path.name.casefold() for path in paths}) == 2
+
+
+@pytest.mark.parametrize(
+    ("severity", "expect_incomplete"), [("error", True), ("warning", False)]
+)
+def test_review_command_reports_error_diagnostics_instead_of_clean(
+    monkeypatch, severity, expect_incomplete
+):
+    printed: list[str] = []
+    pretty: list[object] = []
+
+    class _Engine:
+        def execute_review(self, mode, **kwargs):
+            kwargs["callbacks"]["diagnostic_callback"](
+                ExecutionDiagnostic("review.file_failed", "Review failed", severity)
+            )
+            return {
+                "formats": ("json",),
+                "findings": {"reviews": []},
+                "sarif": {"version": "2.1.0", "runs": []},
+            }
+
+    args = SimpleNamespace(
+        verbose=False,
+        quiet=False,
+        triage=False,
+        include_triaged=False,
+        output_file=None,
+    )
+    monkeypatch.setattr(
+        commands, "print_console", lambda message, *_a, **_k: printed.append(message)
+    )
+    monkeypatch.setattr(
+        commands,
+        "print_execution_diagnostic",
+        lambda diagnostic, _quiet: printed.append(diagnostic.message),
+    )
+    monkeypatch.setattr(
+        commands,
+        "with_spinner",
+        lambda _message, func, *a, **k: func(
+            *a, **{key: value for key, value in k.items() if key != "quiet"}
+        ),
+    )
+    monkeypatch.setattr(
+        commands, "pretty_print_reviews", lambda results, *_a: pretty.append(results)
+    )
+    monkeypatch.setattr(commands, "save_output", lambda *_a, **_k: None)
+
+    commands.run_review_code(
+        _Engine(), args, CommandRuntime(command="review_code", command_args=[])
+    )
+
+    assert "Review failed" in printed
+    assert (
+        any("Review incomplete" in message for message in printed) is expect_incomplete
+    )
+    assert bool(pretty) is not expect_incomplete

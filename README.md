@@ -157,6 +157,9 @@ uv run metis --codebase-path "/path/to/src" --verbose
 Literal tokenizer markers such as `<|endoftext|>` in reviewed source are counted
 as ordinary text.
 
+A review that gets no usable model answer for a file is reported as an error,
+not as a clean review. The command exits nonzero.
+
 Start the interactive prompt instead:
 
 ```

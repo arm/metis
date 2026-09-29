@@ -44,6 +44,7 @@ class ReviewState(TypedDict, total=False):
     debug_callback: Any
     system_prompt: str
     parsed_reviews: list[dict[str, Any]]
+    review_incomplete: bool
 
 
 class ReviewCommand(BaseModel):

@@ -236,6 +236,17 @@ class JsonPromptRunner:
                                 parsed = request.parse(structured_result.get("parsed"))
                             except Exception as exc:
                                 attempt_failure = f"structured validation failed: {exc}"
+                        if (
+                            parsed is None
+                            and isinstance(response_text, str)
+                            and response_text.strip()
+                        ):
+                            # The model answered in text instead of calling the
+                            # schema tool; give the text to the same parser.
+                            try:
+                                parsed = request.parse(response_text)
+                            except Exception as exc:
+                                attempt_failure = f"text fallback failed: {exc}"
                         if parsed is None and _response_reached_output_limit(
                             raw_response
                         ):

@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
@@ -85,6 +86,7 @@ class SimpleLlmReviewService:
         if command.mode == "patch":
             graph_kwargs = {"navigation": navigation} if navigation is not None else {}
             review_graph = self._review_graph_factory(index, model, **graph_kwargs)
+            failures: list[ReviewFileFailure] = []
             result = PatchReviewResult.model_validate(
                 self.review_patch(
                     command.target,
@@ -92,9 +94,16 @@ class SimpleLlmReviewService:
                     memory_service=memory_service,
                     review_graph=review_graph,
                     checkpoint_session=checkpoint_session,
+                    failures=failures,
                 )
             )
-            return _review_run(result)
+            return _review_run(
+                result,
+                status=(
+                    ReviewStatus.INCONCLUSIVE if failures else ReviewStatus.SUCCEEDED
+                ),
+                diagnostics=_file_failure_diagnostics(failures),
+            )
 
         files = select_review_targets(self._repository, command)
         emit_progress(
@@ -153,13 +162,7 @@ class SimpleLlmReviewService:
             review_graph=review_graph,
             checkpoint_session=checkpoint_session,
         )
-        diagnostics = tuple(
-            ReviewDiagnostic(
-                code="review.file_failed",
-                message=f"Review failed for {failure.path}: {failure.message}",
-            )
-            for failure in outcome.failures
-        )
+        diagnostics = _file_failure_diagnostics(outcome.failures)
         if outcome.failures and not outcome.completed_files:
             return ReviewRun(
                 status=ReviewStatus.FAILED,
@@ -408,6 +411,7 @@ class SimpleLlmReviewService:
         memory_service: MemoryService | None = None,
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
+        failures: list[ReviewFileFailure] | None = None,
     ):
         patch_text = read_file_content(patch_file)
         try:
@@ -499,6 +503,10 @@ class SimpleLlmReviewService:
                     raise
                 except Exception as exc:
                     logger.error(f"Error processing review for {file_diff.path}: {exc}")
+                    if failures is not None:
+                        failures.append(
+                            ReviewFileFailure(path=file_diff.path, message=str(exc))
+                        )
                     continue
                 if review_dict:
                     checkpoint_group = ReviewGroup.model_validate(review_dict)
@@ -551,6 +559,18 @@ class SimpleLlmReviewService:
                 overall_summaries.append(changes_summary)
         overall_changes = "\n\n".join(overall_summaries)
         return {"reviews": file_reviews, "overall_changes": overall_changes}
+
+
+def _file_failure_diagnostics(
+    failures: Iterable[ReviewFileFailure],
+) -> tuple[ReviewDiagnostic, ...]:
+    return tuple(
+        ReviewDiagnostic(
+            code="review.file_failed",
+            message=f"Review failed for {failure.path}: {failure.message}",
+        )
+        for failure in failures
+    )
 
 
 def _review_group_payload(

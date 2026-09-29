@@ -391,6 +391,40 @@ def test_default_graph_failure_exits_cleanly(monkeypatch):
     assert calls[-1] == "closed"
 
 
+@pytest.mark.parametrize(("severity", "exit_code"), [("error", 1), ("warning", None)])
+def test_inconclusive_graph_exits_non_zero_only_for_error_diagnostics(
+    monkeypatch, severity, exit_code
+):
+    calls = []
+
+    def execute_graph(**kwargs):
+        kwargs["callbacks"]["diagnostic_callback"](
+            ExecutionDiagnostic("review.file_failed", "Review failed", severity)
+        )
+        return ExecutionResult(ExecutionStatus.INCONCLUSIVE, {})
+
+    engine = SimpleNamespace(execute_graph=execute_graph)
+    monkeypatch.setattr(sys, "argv", ["metis"])
+    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
+    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+    monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
+    monkeypatch.setattr(entry, "_save_graph_outputs", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        entry,
+        "print_console",
+        lambda message, *_args, **_kwargs: calls.append(message),
+    )
+    monkeypatch.setattr(entry, "finalize_cli_session_and_close", lambda *_a: None)
+
+    if exit_code is None:
+        entry.main()
+    else:
+        with pytest.raises(SystemExit, match=str(exit_code)):
+            entry.main()
+
+    assert ("Results are incomplete" in " ".join(calls)) is (exit_code is not None)
+
+
 def test_build_engine_defers_embedding_model_construction(
     monkeypatch,
     tmp_path,

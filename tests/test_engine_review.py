@@ -21,6 +21,7 @@ from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.reachability.domain import FrontierReviewFailure
 from metis.engine.nodes.reachability.domain import ReachabilityAnalysis
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
+from metis.engine.nodes.simple_llm_review.graph import ReviewIncompleteError
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.engine.nodes.simple_llm_review.service import TraditionalReviewOutcome
 from metis.engine.source import ProfiledSourceArtifact
@@ -383,6 +384,7 @@ def test_patch_review_uses_simple_llm_review(engine):
         memory_service=None,
         review_graph=engine._get_review_graph(),
         checkpoint_session=None,
+        failures=[],
     )
 
 
@@ -720,6 +722,65 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     review_graph.review = Mock(side_effect=ModelInputLimitError("input too large"))
     with pytest.raises(ModelInputLimitError, match="input too large"):
         _simple_llm_review(engine).review_patch(str(patch_file))
+
+
+def _patch_command(engine, tmp_path):
+    (Path(engine.codebase_path) / "test.py").write_text(
+        "print('Old')\n", encoding="utf-8"
+    )
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_text(
+        "--- a/test.py\n+++ b/test.py\n@@ -1,1 +1,1 @@\n-print('Old')\n+print('New')\n"
+    )
+    return ReviewCommand(mode="patch", target=str(patch_file))
+
+
+def test_patch_review_with_unusable_model_answer_is_inconclusive(engine, tmp_path):
+    review_graph = Mock()
+    review_graph.review.side_effect = ReviewIncompleteError("no usable answer")
+    engine._get_review_graph = lambda _index=None, _model=None, **_kw: review_graph
+
+    run = _simple_llm_review(engine).run_review(
+        _patch_command(engine, tmp_path), jobs=engine.execution._jobs
+    )
+
+    assert run.status is ReviewStatus.INCONCLUSIVE
+    assert [(item.code, item.severity) for item in run.diagnostics] == [
+        ("review.file_failed", "error")
+    ]
+    assert "test.py" in run.diagnostics[0].message
+
+
+def test_patch_review_with_explicit_empty_answer_is_clean(engine, tmp_path):
+    review_graph = _DummyReviewGraph({"file": "test.py", "reviews": []})
+    engine._get_review_graph = lambda _index=None, _model=None, **_kw: review_graph
+
+    run = _simple_llm_review(engine).run_review(
+        _patch_command(engine, tmp_path), jobs=engine.execution._jobs
+    )
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.diagnostics == ()
+
+
+def test_file_review_with_unusable_model_answer_is_not_clean(engine):
+    target = Path(engine.codebase_path) / "test.py"
+    target.write_text("print('Old')\n", encoding="utf-8")
+    review_graph = Mock()
+    review_graph.review.side_effect = ReviewIncompleteError("no usable answer")
+
+    run = _simple_llm_review(engine)._run_traditional_review(
+        (str(target),),
+        None,
+        jobs=engine.execution._jobs,
+        memory_service=None,
+        review_graph=review_graph,
+        checkpoint_session=None,
+    )
+
+    assert run.status is ReviewStatus.FAILED
+    assert run.result is None
+    assert "no usable answer" in run.diagnostics[0].message
 
 
 def test_review_patch_handles_parse_error(engine, tmp_path):

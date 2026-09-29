@@ -563,12 +563,15 @@ def _run_cli(args):
                 ) as command_span:
                     try:
                         determine_output_file("graph", args, [])
+                        error_diagnostics: list[object] = []
+
+                        def report_diagnostic(diagnostic):
+                            if diagnostic.severity == "error":
+                                error_diagnostics.append(diagnostic)
+                            print_execution_diagnostic(diagnostic, args.quiet)
+
                         callbacks: dict[str, object] = {
-                            "diagnostic_callback": (
-                                lambda diagnostic: print_execution_diagnostic(
-                                    diagnostic, args.quiet
-                                )
-                            )
+                            "diagnostic_callback": report_diagnostic
                         }
                         callbacks.update(
                             review_checkpoint_callbacks(
@@ -624,10 +627,18 @@ def _run_cli(args):
                                 "[green]Execution graph complete.[/green]", args.quiet
                             )
                         elif result.status is ExecutionStatus.INCONCLUSIVE:
-                            print_console(
-                                "[yellow]Execution graph finished with inconclusive results.[/yellow]",
-                                args.quiet,
-                            )
+                            if error_diagnostics:
+                                print_console(
+                                    "[red]Execution graph finished with errors. "
+                                    "Results are incomplete.[/red]",
+                                    args.quiet,
+                                )
+                                exit_code = 1
+                            else:
+                                print_console(
+                                    "[yellow]Execution graph finished with inconclusive results.[/yellow]",
+                                    args.quiet,
+                                )
                         else:
                             print_console(
                                 "[red]Execution graph failed.[/red]", args.quiet
