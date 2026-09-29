@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **providers:** Omit `temperature` from OpenAI Responses requests for every `gpt-6*` model, not only `gpt-6-astra`.
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 

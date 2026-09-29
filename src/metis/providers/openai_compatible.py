@@ -36,6 +36,12 @@ class OpenAICompatibleEmbeddingConfig(TypedDict, total=False):
     docs_extra_kwargs: Mapping[str, object]
 
 
+def _rejects_temperature(model_name: object) -> bool:
+    # GPT-6 models (sol, luna, astra) reject the temperature parameter for every
+    # value, including 0, so it must be omitted from the request.
+    return str(model_name).lower().startswith("gpt-6")
+
+
 class OpenAICompatibleChatProvider(ChatProvider):
     DEFAULT_BASE_URL: str | None = None
     DEFAULT_API_KEY: str | None = None
@@ -72,9 +78,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
             "use_responses_api": True,
         }
         temperature = kwargs.get("temperature")
-        # Astra requires temperature to be omitted from the request.
-        is_astra = str(model_name).lower().startswith("gpt-6-astra")
-        if temperature is not None and not is_astra:
+        if temperature is not None and not _rejects_temperature(model_name):
             params["temperature"] = float(temperature)
         max_tokens = kwargs.get("max_tokens")
         if max_tokens is not None:

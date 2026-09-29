@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import logging
 from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
 
 from langchain_core.embeddings import Embeddings
+from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI
+
+from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import JsonPromptRunner
 
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
 from metis.providers.llamacpp import LlamaCppEmbeddingProvider
@@ -55,9 +61,18 @@ def test_chat_model_forwards_supported_runtime_options() -> None:
     assert payload["temperature"] == 0.0
 
 
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6-astra-2026-09-03"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-6-astra",
+        "gpt-6-astra-2026-09-03",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "GPT-6-Sol",
+    ],
+)
 @pytest.mark.parametrize("temperature", [0.0, 0.1, 1.0])
-def test_chat_model_omits_temperature_for_astra(model: str, temperature: float) -> None:
+def test_chat_model_omits_temperature_for_gpt6(model: str, temperature: float) -> None:
     provider = OpenAICompatibleChatProvider(_chat_config(model=model))
 
     llm = provider.get_chat_model(
@@ -71,11 +86,24 @@ def test_chat_model_omits_temperature_for_astra(model: str, temperature: float) 
     assert payload["max_output_tokens"] == 256
 
 
+@pytest.mark.parametrize("model", ["gpt-4.1", "gpt-4o-mini"])
+@pytest.mark.parametrize("temperature", [0.0, 0.1])
+def test_chat_model_sends_temperature_for_non_gpt6(
+    model: str, temperature: float
+) -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config(model=model))
+
+    llm = provider.get_chat_model(temperature=temperature)
+    payload = llm._get_request_payload([HumanMessage(content="Review this code.")])
+
+    assert payload["temperature"] == temperature
+
+
 @pytest.mark.parametrize(
     ("configured_model", "requested_model", "supports_temperature"),
     [
-        ("gpt-4.1", "gpt-6-astra", False),
-        ("gpt-6-astra", "gpt-4.1", True),
+        ("gpt-4.1", "gpt-6-sol", False),
+        ("gpt-6-luna", "gpt-4.1", True),
     ],
 )
 @pytest.mark.parametrize("positional", [False, True])
@@ -98,6 +126,51 @@ def test_chat_model_temperature_uses_resolved_model(
         assert payload["temperature"] == 0.0
     else:
         assert "temperature" not in payload
+
+
+class _PayloadRecordingProvider(OpenAICompatibleChatProvider):
+    def __init__(self, config: OpenAICompatibleChatConfig) -> None:
+        super().__init__(config)
+        self.payloads: list[dict[str, Any]] = []
+
+    def get_chat_model(self, *args: str, **kwargs: object) -> Any:
+        llm = super().get_chat_model(*args, **kwargs)
+        self.payloads.append(
+            llm._get_request_payload([HumanMessage(content="Review this code.")])
+        )
+        return RunnableLambda(lambda _messages: AIMessage(content="{}"))
+
+
+@pytest.mark.parametrize(
+    ("model", "expect_temperature"),
+    [("gpt-6-sol", False), ("gpt-6-luna", False), ("gpt-4.1", True)],
+)
+def test_prompt_runner_temperature_reaches_request_payload(
+    model: str, expect_temperature: bool
+) -> None:
+    provider = _PayloadRecordingProvider(_chat_config(model=model))
+
+    JsonPromptRunner(provider).invoke(
+        JsonPromptRequest(
+            model=model,
+            system_prompt="system",
+            user_prompt="user",
+            variables={},
+            parse=lambda _raw: None,
+            logger=logging.getLogger("metis.test.gpt6_temperature"),
+            label="Test prompt",
+            batch_size=1,
+            invalid_message="bad payload",
+            final_keep_message="giving up",
+            temperature=0.0,
+            chat_model_kwargs={"temperature": 0.1},
+        )
+    )
+
+    assert provider.payloads
+    for payload in provider.payloads:
+        assert payload["model"] == model
+        assert ("temperature" in payload) is expect_temperature
 
 
 def test_chat_model_applies_configured_max_retries() -> None:
