@@ -7,6 +7,7 @@
 
 * **index:** Record the commit that the index reflects. `index` records `--commit SHA` or `HEAD` of the git checkout after it succeeds. `update` records `--commit` when it is given, and records an unknown commit otherwise. The record lives in the backend (a table in the PostgreSQL project schema, Chroma collection metadata, or a Qdrant collection) and a backend reset removes it. The new `index_status` command shows the recorded commit.
 * **index:** Add a `sync` command. It applies `git diff --no-renames --relative` from the recorded commit to `HEAD` like `update`, and records `HEAD` when that succeeds. It stops when `HEAD` or the working tree does not match the diff, and when the recorded commit is missing or is not an ancestor of `HEAD`. `--allow-non-ancestor` applies the diff between the two trees instead.
+* **index:** Add `--deepen` to `sync`. In a shallow clone that lacks the recorded commit or the history to `HEAD`, it runs `git fetch --deepen` in growing steps and then `git fetch --unshallow`. Without the flag, `sync` runs no network command.
 
 
 ### Bug Fixes

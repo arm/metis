@@ -69,6 +69,7 @@ Options:
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --commit SHA               (Optional) Full commit id the codebase is at. index and update record it. Without it, update records an unknown commit.
     --allow-non-ancestor       (Optional) Let sync apply a recorded commit that is not an ancestor of HEAD.
+    --deepen                   (Optional) Let sync fetch more history of a shallow clone.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --qdrant-url URL           (Optional) Qdrant server URL (default: http://localhost:6333).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -315,6 +316,7 @@ def run_sync(engine, args, runtime: CommandRuntime):
         "Syncing index...",
         engine.indexing.sync_index,
         allow_non_ancestor=bool(getattr(args, "allow_non_ancestor", False)),
+        deepen=bool(getattr(args, "deepen", False)),
         quiet=args.quiet,
     )
     if result.status == "up_to_date":

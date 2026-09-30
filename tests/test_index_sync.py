@@ -149,12 +149,15 @@ def shallow_with_c2(remote, tmp_path):
 
 
 ALLOW = {"allow_non_ancestor": True}
+DEEPEN = {"deepen": True}
 RANGE_CASES = [
     pytest.param(side_branch, {}, "is not an ancestor of", id="non-ancestor"),
     pytest.param(side_branch, ALLOW, None, id="non-ancestor-allowed"),
-    pytest.param(shallow_without_c2, {}, "--unshallow", id="shallow-missing"),
+    pytest.param(shallow_without_c2, {}, "--unshallow.*--deepen", id="shallow-missing"),
     pytest.param(shallow_with_c2, {}, "does not show that", id="shallow-no-ancestry"),
     pytest.param(shallow_with_c2, ALLOW, None, id="shallow-allowed"),
+    pytest.param(shallow_without_c2, DEEPEN, None, id="deepen-fetches-commit"),
+    pytest.param(shallow_with_c2, DEEPEN, None, id="deepen-fetches-ancestry"),
 ]
 
 
@@ -172,6 +175,25 @@ def test_sync_checks_the_history_between_the_commits(
     else:
         assert sync.run(path, recorded, **flags).status == "updated"
         assert sync.recorded() == remote.commits[-1]
+
+
+@requires_git
+def test_deepen_reports_a_commit_that_the_remote_does_not_have(remote, tmp_path, sync):
+    clone = shallow_clone(remote, tmp_path)
+
+    with pytest.raises(IndexSyncError, match="not in the history of the remote"):
+        sync.run(clone, UNKNOWN_SHA, deepen=True)
+    sync.assert_nothing_changed()
+
+
+@requires_git
+def test_deepen_reports_a_fetch_failure(remote, tmp_path, sync):
+    clone = shallow_clone(remote, tmp_path)
+    git(clone, "remote", "set-url", "origin", f"file://{remote.path}-gone")
+
+    with pytest.raises(IndexSyncError, match="git fetch --deepen=50 failed"):
+        sync.run(clone, remote.commits[0], deepen=True)
+    sync.assert_nothing_changed()
 
 
 @requires_git
@@ -295,9 +317,9 @@ def test_sync_command_passes_the_flags_and_reports_the_result(monkeypatch):
     )
     sync_index = Mock(return_value=SyncResult("updated", "a" * 40, "b" * 40))
     engine = SimpleNamespace(indexing=SimpleNamespace(sync_index=sync_index))
-    args = SimpleNamespace(quiet=True, allow_non_ancestor=True)
+    args = SimpleNamespace(quiet=True, allow_non_ancestor=True, deepen=True)
 
     commands.run_sync(engine, args, CommandRuntime("sync", []))
 
-    sync_index.assert_called_once_with(allow_non_ancestor=True)
+    sync_index.assert_called_once_with(allow_non_ancestor=True, deepen=True)
     assert f"from {'a' * 40} to {'b' * 40}" in "\n".join(printed)

@@ -245,6 +245,7 @@ Metis also provides an interactive CLI with several built-in commands:
   `sync` checks that `HEAD` is this commit.
 - `--allow-non-ancestor` – let `sync` continue when the recorded commit is not an
   ancestor of `HEAD`. See `sync` below.
+- `--deepen` – let `sync` fetch more history of a shallow clone. See `sync` below.
 - `--chroma-dir` and `--qdrant-url` configure backend storage.
 - `--triage` – in the interactive prompt, triage findings after `review_code`,
   `review_dir`, `review_file`, or `review_patch` and annotate SARIF output.
@@ -334,6 +335,11 @@ each merge or pull.
   `--allow-non-ancestor` to apply the diff between the two trees.
 - In a shallow clone that does not contain the recorded commit, or does not show
   that it is an ancestor, `sync` asks you to fetch more history.
+- `--deepen` lets `sync` fetch that history itself. It runs `git fetch --deepen`
+  with 50, 500 and 5000 commits, then `git fetch --unshallow`, and stops as soon
+  as the check passes. Each fetch sets `GIT_TERMINAL_PROMPT=0` and has a 600
+  second timeout. A fetch failure stops `sync` and leaves the record unchanged.
+  Without `--deepen`, `sync` runs no network command.
 - A failed update leaves the recorded commit unchanged, so the next `sync`
   applies the same range again.
 

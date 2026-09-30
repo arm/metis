@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Callable
 
 logger = logging.getLogger("metis")
 
@@ -166,6 +167,37 @@ def diff_between(codebase_path: str, base: str, head: str) -> str:
     if result.returncode != 0:
         raise GitError(f"git diff failed: {_first_line(result.stderr)}")
     return result.stdout
+
+
+_FETCH_TIMEOUT_SECONDS = 600
+_DEEPEN_STEPS = (50, 500, 5000)
+
+
+def deepen_until(codebase_path: str, done: Callable[[], bool]) -> bool:
+    """Fetch more history of a shallow clone until ``done()`` is true.
+
+    Runs ``git fetch --deepen`` in growing steps, then ``git fetch --unshallow``.
+    Returns ``done()`` after the last fetch. Raises ``GitError`` when a fetch
+    fails, for example without network access or credentials.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    for depth in _DEEPEN_STEPS:
+        if not is_shallow(codebase_path):
+            return done()
+        _fetch(codebase_path, env, f"--deepen={depth}")
+        if done():
+            return True
+    if is_shallow(codebase_path):
+        _fetch(codebase_path, env, "--unshallow")
+    return done()
+
+
+def _fetch(codebase_path: str, env: dict[str, str], option: str) -> None:
+    result = _git(
+        codebase_path, "fetch", option, timeout=_FETCH_TIMEOUT_SECONDS, env=env
+    )
+    if result.returncode != 0:
+        raise GitError(f"git fetch {option} failed: {_first_line(result.stderr)}")
 
 
 def _first_line(text: str) -> str:

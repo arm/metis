@@ -26,7 +26,8 @@ that the caller passes, or an unknown commit when the caller passes none. A back
 The `sync` CLI command applies the git diff from the recorded commit to `HEAD`
 through `index.update` and then records `HEAD`. It requires a clean checkout at
 `HEAD`, and by default it requires the recorded commit to be an ancestor of
-`HEAD`. `--allow-non-ancestor` removes the ancestor check.
+`HEAD`. `--allow-non-ancestor` removes the ancestor check. `--deepen` lets
+`sync` fetch more history of a shallow clone.
 
 The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see

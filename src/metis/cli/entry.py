@@ -475,6 +475,14 @@ def main():
             "HEAD when the recorded commit is not an ancestor of HEAD."
         ),
     )
+    parser.add_argument(
+        "--deepen",
+        action="store_true",
+        help=(
+            "Let the sync command fetch more history of a shallow git clone when "
+            "the clone lacks the recorded commit or the history to HEAD."
+        ),
+    )
     parser.add_argument("--version", action="store_true", help="Show program version")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose output"

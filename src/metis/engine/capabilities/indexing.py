@@ -385,13 +385,17 @@ class IndexingService:
         except NotImplementedError:
             return None
 
-    def sync_index(self, *, allow_non_ancestor: bool = False) -> SyncResult:
+    def sync_index(
+        self, *, allow_non_ancestor: bool = False, deepen: bool = False
+    ) -> SyncResult:
         """Update the index from the recorded commit to the checked-out commit.
 
         The diff between the two commits is applied like ``update``, and the new
         commit is recorded when that succeeds. Changed files are read from the
         working tree, so HEAD must be the new commit and tracked files under the
-        codebase must be unchanged, before and after the update.
+        codebase must be unchanged, before and after the update. With
+        ``deepen``, a shallow clone fetches more history when it lacks the
+        recorded commit or the history between the two commits.
         """
         state = self.get_index_state()
         base = (state or {}).get("commit")
@@ -420,7 +424,9 @@ class IndexingService:
                 self._check_checkout(path, head)
             if base == head:
                 return SyncResult("up_to_date", base, head)
-            self._check_range(path, base, head, allow_non_ancestor=allow_non_ancestor)
+            self._check_range(
+                path, base, head, allow_non_ancestor=allow_non_ancestor, deepen=deepen
+            )
             patch_text = git_history.diff_between(path, base, head)
             with self._mutation():
                 self._apply_patch(patch_text)
@@ -456,27 +462,43 @@ class IndexingService:
 
     @staticmethod
     def _check_range(
-        path: str, base: str, head: str, *, allow_non_ancestor: bool
+        path: str, base: str, head: str, *, allow_non_ancestor: bool, deepen: bool
     ) -> None:
-        shallow = git_history.is_shallow(path)
-        if not git_history.has_commit(path, base):
-            if shallow:
+        def present() -> bool:
+            return git_history.has_commit(path, base)
+
+        def ancestor() -> bool:
+            return git_history.is_ancestor(path, base, head)
+
+        if not present():
+            if not git_history.is_shallow(path):
+                raise IndexSyncError(
+                    f"The recorded commit {base} is not in this repository. "
+                    "Run a full `index`."
+                )
+            if not deepen:
                 raise IndexSyncError(
                     f"The recorded commit {base} is not in this shallow clone. "
-                    "Fetch more history with `git fetch --unshallow`, or run a "
-                    "full `index`."
+                    "Fetch more history with `git fetch --unshallow`, pass "
+                    "--deepen, or run a full `index`."
                 )
-            raise IndexSyncError(
-                f"The recorded commit {base} is not in this repository. "
-                "Run a full `index`."
-            )
-        if allow_non_ancestor or git_history.is_ancestor(path, base, head):
+            logger.info("Fetching more history to find %s", base)
+            if not git_history.deepen_until(path, present):
+                raise IndexSyncError(
+                    f"The recorded commit {base} is not in the history of the "
+                    "remote. Run a full `index`."
+                )
+        if allow_non_ancestor or ancestor():
             return
-        if shallow:
+        if deepen and git_history.is_shallow(path):
+            logger.info("Fetching more history to check that %s is an ancestor", base)
+            if git_history.deepen_until(path, ancestor):
+                return
+        if git_history.is_shallow(path):
             raise IndexSyncError(
                 f"This shallow clone does not show that {base} is an ancestor of "
                 f"{head}. Fetch more history with `git fetch --unshallow`, pass "
-                "--allow-non-ancestor, or run a full `index`."
+                "--deepen or --allow-non-ancestor, or run a full `index`."
             )
         raise IndexSyncError(
             f"The recorded commit {base} is not an ancestor of {head}. History "
