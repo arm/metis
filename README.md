@@ -297,6 +297,17 @@ requests as inconclusive.
 
 ### `update <patch.diff>`
 Incrementally updates the index using a diff. Avoids full reindexing.
+A renamed file (`rename from` and `rename to` in the diff, with or without edits) is
+removed under its old path and added under its new path.
+Git C-quoted paths in the diff are decoded before `update` reads or removes files.
+`update` skips unsupported and ignored files, and removes old rows when a file
+becomes ignored.
+Added and modified files use the same node splitting and anchor metadata as `index`.
+`update` removes stale rows for empty or unsplittable files. It reports files that
+cannot be read, decoded, or split with an error after applying other files.
+`update` accepts Git diffs with default `a/` and `b/` prefixes or `--no-prefix`.
+Copies add only the target, mode-only changes leave rows alone, binary changes
+remove old rows, and gitlink changes are skipped.
 
 ### `ask <question>`
 Ask questions against the indexed codebase.

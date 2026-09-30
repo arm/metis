@@ -7,6 +7,7 @@ from contextlib import closing, nullcontext
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -570,6 +571,32 @@ def test_run_update_uses_indexing_domain_surface(monkeypatch, tmp_path):
     )
 
     assert captured == ["diff --git a/a.py b/a.py"]
+
+
+def test_run_update_applies_a_patch_with_an_invalid_utf8_byte(
+    engine, dummy_backend, tmp_path
+):
+    code_index, docs_index = Mock(), Mock()
+    dummy_backend.get_index_handles.return_value = (code_index, docs_index)
+    codebase = Path(engine._config.codebase_path)
+    (codebase / "legacy.c").write_text("int ok;\n", encoding="utf-8")
+    (codebase / "other.c").write_text("int other;\n", encoding="utf-8")
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_bytes(
+        b"--- a/legacy.c\n+++ b/legacy.c\n@@ -1 +1 @@\n-int caf\xe9;\n+int ok;\n"
+        b"--- a/other.c\n+++ b/other.c\n@@ -1 +1 @@\n-int old;\n+int other;\n"
+    )
+
+    commands.run_update(
+        engine,
+        str(patch_file),
+        SimpleNamespace(quiet=True),
+        CommandRuntime(command="update", command_args=[str(patch_file)]),
+    )
+
+    deleted = {call.args[0] for call in code_index.delete_ref_doc.call_args_list}
+    assert deleted == {f"{codebase.name}/legacy.c", f"{codebase.name}/other.c"}
+    assert code_index.insert_nodes.call_count == 2
 
 
 def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):

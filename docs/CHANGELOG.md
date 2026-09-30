@@ -5,6 +5,14 @@
 
 ### Bug Fixes
 
+* **index:** Keep the source rows of copied files while adding the target during `update`.
+* **index:** Skip mode-only and gitlink changes, and remove old rows when a file becomes binary.
+* **index:** Preserve real `a/` and `b/` directories in diffs made with `--no-prefix`.
+* **index:** Report unreadable and unsplittable files during `update`, and remove stale rows when a changed file has no content or nodes.
+* **index:** Prepare updated code nodes with the same splitting and anchors as `index`, and replace rows when an added diff is applied again.
+* **index:** Apply the file selection of `index` during `update` and remove rows for files that became ignored.
+* **index:** Decode Git C-quoted paths before `update` reads or removes files with special characters.
+* **index:** Handle a renamed file in `update` as a delete of the old path and an add of the new path. The old path no longer stays in the index.
 * **providers:** Omit `temperature` from OpenAI Responses requests for every `gpt-6*` model, not only `gpt-6-astra`.
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.

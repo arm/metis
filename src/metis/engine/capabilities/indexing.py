@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from concurrent.futures import CancelledError
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -14,14 +16,92 @@ from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
+from metis.engine.diff_utils import unquote_git_path
 from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.runtime import EngineState
+from metis.exceptions import IndexUpdateError
 from metis.exceptions import ParsingError
-from metis.utils import read_file_content
 
 logger = logging.getLogger("metis")
+
+
+def _read_source_text(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8") as source:
+        return source.read()
+
+
+def _source_path(diff_file: unidiff.PatchedFile) -> str:
+    """Return the decoded pre-change path of a patched file."""
+    return _path_from_diff(diff_file, source=True)
+
+
+def _diff_path(diff_file: unidiff.PatchedFile) -> str:
+    """Return the decoded post-change path of a patched file."""
+    return _path_from_diff(diff_file, source=diff_file.is_removed_file)
+
+
+def _patch_headers(diff_file: unidiff.PatchedFile) -> list[str]:
+    return [line.rstrip("\n") for line in diff_file.patch_info or []]
+
+
+def _header_paths(headers: list[str]) -> tuple[str, str] | None:
+    for line in headers:
+        if line.startswith("diff --git "):
+            parts = re.findall(r'"(?:\\.|[^"\\])*"|\S+', line[len("diff --git ") :])
+            if len(parts) == 2:
+                return unquote_git_path(parts[0]), unquote_git_path(parts[1])
+    return None
+
+
+def _path_from_diff(diff_file: unidiff.PatchedFile, *, source: bool) -> str:
+    headers = _patch_headers(diff_file)
+    marker = "rename from " if source else "rename to "
+    copy_marker = "copy from " if source else "copy to "
+    for line in headers:
+        if line.startswith((marker, copy_marker)):
+            return unquote_git_path(line.split(" ", 2)[2])
+    raw_path = unquote_git_path(
+        diff_file.source_file if source else diff_file.target_file
+    )
+    header_paths = _header_paths(headers)
+    if header_paths is not None:
+        left, right = header_paths
+        # Both sides of a default diff name the same path after a/ and b/.
+        prefixed = (
+            left.startswith("a/") and right.startswith("b/") and left[2:] == right[2:]
+        )
+    else:
+        old = unquote_git_path(diff_file.source_file)
+        new = unquote_git_path(diff_file.target_file)
+        # Without a git header, /dev/null marks the side that has no path.
+        prefixed = (old.startswith("a/") or old == "/dev/null") and (
+            new.startswith("b/") or new == "/dev/null"
+        )
+    if prefixed and raw_path.startswith("a/" if source else "b/"):
+        return raw_path[2:]
+    return raw_path
+
+
+def _has_header(headers: list[str], prefix: str) -> bool:
+    return any(line.startswith(prefix) for line in headers)
+
+
+def _is_gitlink(diff_file: unidiff.PatchedFile) -> bool:
+    if "160000" in (diff_file.source_mode, diff_file.target_mode):
+        return True
+    # A modified gitlink keeps its mode in the index line, so check the body.
+    # A text file that contains this phrase also has other changed lines.
+    changed = [
+        line.value
+        for hunk in diff_file
+        for line in hunk
+        if line.is_added or line.is_removed
+    ]
+    return bool(changed) and all(
+        value.startswith("Subproject commit ") for value in changed
+    )
 
 
 class IndexingService:
@@ -83,12 +163,27 @@ class IndexingService:
         if callable(close):
             close()
 
+    def _docs_extensions(self) -> list[str]:
+        return [
+            ext.lower()
+            for ext in self._config.plugin_config.get("docs", {}).get(
+                "supported_extensions", [".md"]
+            )
+        ]
+
+    def _index_kind(self, path: str, docs_supported_exts: list[str]) -> str | None:
+        if os.path.splitext(path)[1].lower() in docs_supported_exts:
+            return "docs"
+        if self._repository.get_language_name_for_path(path) is not None:
+            return "code"
+        return None
+
     def _get_supported_input_files(
         self,
         docs_supported_exts: list[str],
     ) -> list[str]:
         base_path = os.path.abspath(self._config.codebase_path)
-        docs_supported = {ext.lower() for ext in docs_supported_exts}
+        docs_supported = [ext.lower() for ext in docs_supported_exts]
         metisignore_spec = self._repository.load_metisignore()
         selected = []
 
@@ -99,12 +194,7 @@ class IndexingService:
                     continue
                 if self._repository.is_metisignored(full_path, spec=metisignore_spec):
                     continue
-                ext = os.path.splitext(file_name)[1].lower()
-                if (
-                    ext in docs_supported
-                    or self._repository.get_language_name_for_path(full_path)
-                    is not None
-                ):
+                if self._index_kind(full_path, docs_supported) is not None:
                     selected.append(full_path)
 
         return selected
@@ -133,12 +223,7 @@ class IndexingService:
                 "Finish the pending index preparation before preparing again"
             )
         self._get_embedding_models()
-        docs_supported_exts = [
-            ext.lower()
-            for ext in self._config.plugin_config.get("docs", {}).get(
-                "supported_extensions", [".md"]
-            )
-        ]
+        docs_supported_exts = self._docs_extensions()
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
         input_files = self._get_supported_input_files(docs_supported_exts)
@@ -161,15 +246,14 @@ class IndexingService:
         doc_docs = []
         for doc in documents:
             file_path = doc.metadata.get("file_path") or doc.id_
-            ext = os.path.splitext(file_path)[1].lower()
             new_id = os.path.relpath(doc.id_, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
 
-            language_name = self._repository.get_language_name_for_path(file_path)
-            if ext in docs_supported_exts:
+            kind = self._index_kind(file_path, docs_supported_exts)
+            if kind == "docs":
                 doc_docs.append(doc)
-            elif language_name is not None:
+            elif kind == "code":
                 code_docs.append(doc)
 
         nodes_code, nodes_docs = yield from prepare_nodes_iter(
@@ -212,6 +296,23 @@ class IndexingService:
                 **self._config.usage_runtime.hooks.embed_model_kwargs(),
             )
 
+    def _prepare_nodes(
+        self, code_docs: list[Document], doc_docs: list[Document]
+    ) -> tuple[list, list]:
+        preparation = prepare_nodes_iter(
+            code_docs,
+            doc_docs,
+            self._repository.get_plugin_for_path,
+            self._repository.get_splitter_cached,
+            self._repository.get_doc_splitter(),
+            raise_on_error=True,
+        )
+        try:
+            while True:
+                next(preparation)
+        except StopIteration as done:
+            return done.value
+
     def update_index(self, patch_text):
         with self._mutation():
             embed_model_code, embed_model_docs = self._get_embedding_models()
@@ -228,54 +329,95 @@ class IndexingService:
                 **self._config.usage_runtime.hooks.embed_model_kwargs(),
             )
 
-            doc_splitter = self._repository.get_doc_splitter()
-
+            codebase_name = os.path.basename(
+                os.path.abspath(self._config.codebase_path)
+            )
+            docs_supported_exts = self._docs_extensions()
+            metisignore_spec = self._repository.load_metisignore()
+            failures: list[str] = []
             for diff_file in patch_set:
-                if diff_file.is_binary_file:
+                headers = _patch_headers(diff_file)
+                if _is_gitlink(diff_file):
                     continue
-                doc_id = os.path.join(
-                    os.path.basename(os.path.abspath(self._config.codebase_path)),
-                    diff_file.path,
+                is_copy = _has_header(headers, "copy from ") and _has_header(
+                    headers, "copy to "
                 )
-                language_name = self._repository.get_language_name_for_path(doc_id)
-                target_index = index_code if language_name is not None else index_docs
+                is_rename = _has_header(headers, "rename from ") and _has_header(
+                    headers, "rename to "
+                )
+                if (
+                    not diff_file
+                    and not is_copy
+                    and not is_rename
+                    and not diff_file.is_binary_file
+                    and not diff_file.is_added_file
+                    and not diff_file.is_removed_file
+                ):
+                    continue
+                diff_path = _diff_path(diff_file)
+                doc_id = os.path.join(codebase_name, diff_path)
+                kind = self._index_kind(doc_id, docs_supported_exts)
 
-                if diff_file.is_removed_file:
+                if is_rename:
+                    # A rename is a delete of the old path plus an add of the new one.
+                    old_doc_id = os.path.join(codebase_name, _source_path(diff_file))
+                    old_kind = self._index_kind(old_doc_id, docs_supported_exts)
+                    if old_kind is not None:
+                        old_index = index_code if old_kind == "code" else index_docs
+                        old_index.delete_ref_doc(old_doc_id, delete_from_docstore=True)
+
+                if kind is None:
+                    continue
+                target_index = index_code if kind == "code" else index_docs
+                file_path = os.path.join(self._config.codebase_path, diff_path)
+
+                if diff_file.is_removed_file or diff_file.is_binary_file:
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 else:
-                    file_path = os.path.join(self._config.codebase_path, diff_file.path)
-                    file_content = read_file_content(file_path)
-                    if not file_content and diff_file.is_added_file:
+                    if self._repository.is_metisignored(
+                        os.path.abspath(file_path), spec=metisignore_spec
+                    ):
+                        # Existing rows may predate the ignore rule.
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                        continue
+                    try:
+                        file_content = _read_source_text(file_path)
+                    except FileNotFoundError:
+                        if not (diff_file.is_added_file or is_copy or is_rename):
+                            failures.append(f"{diff_path} (file not found)")
+                            continue
                         file_content = extract_content_from_diff(diff_file)
+                    except (OSError, UnicodeError) as exc:
+                        failures.append(f"{diff_path} ({exc})")
+                        continue
                     if not file_content:
-                        logger.warning("No content available for %s", diff_file.path)
+                        logger.warning("No content available for %s", diff_path)
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                         continue
                     doc = Document(
                         text=file_content,
-                        metadata={"file_name": diff_file.path},
+                        metadata={"file_name": diff_path},
                         id_=doc_id,
                     )
 
-                    if diff_file.is_added_file:
-                        if language_name is not None:
-                            plugin = self._repository.get_plugin_for_path(doc_id)
-                            if not plugin:
-                                continue
-                            splitter = self._repository.get_splitter_cached(plugin)
-                            try:
-                                nodes = splitter.get_nodes_from_documents([doc])
-                            except Exception as e:
-                                logger.warning(
-                                    "Could not parse code with language %s for file %s: %s",
-                                    plugin.get_name(),
-                                    doc.id_,
-                                    e,
-                                )
-                                continue
-                        else:
-                            nodes = doc_splitter.get_nodes_from_documents([doc])
-                        target_index.insert_nodes(nodes)
-                    else:
-                        target_index.update_ref_doc(doc)
+                    try:
+                        nodes_code, nodes_docs = self._prepare_nodes(
+                            [doc] if kind == "code" else [],
+                            [doc] if kind == "docs" else [],
+                        )
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        failures.append(f"{diff_path} (node preparation: {exc})")
+                        continue
+                    nodes = nodes_code or nodes_docs
+                    if not nodes:
+                        logger.warning("No nodes available for %s", diff_path)
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                        continue
+                    target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    target_index.insert_nodes(nodes)
                     target_index.docstore.set_document_hash(doc.id_, doc.hash)
+            if failures:
+                raise IndexUpdateError(failures)
             logger.info("Index update complete based on the provided patch diff.")

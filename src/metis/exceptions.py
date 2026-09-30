@@ -30,3 +30,12 @@ class VectorSchemaError(Exception):
 
     def __init__(self):
         super().__init__("Error checking for project schema.")
+
+
+class IndexUpdateError(Exception):
+    """Raised when one or more files could not be applied to the index."""
+
+    def __init__(self, failures: list[str]):
+        super().__init__(
+            f"Index update failed for {len(failures)} file(s):\n" + "\n".join(failures)
+        )

@@ -4,6 +4,7 @@
 from unidiff import PatchSet
 
 from metis.engine.diff_utils import extract_content_from_diff, process_diff_file
+from metis.engine.diff_utils import unquote_git_path
 
 
 def _make_patch(patch_text: str):
@@ -37,3 +38,11 @@ def test_process_diff_preserves_added_and_removed_lines_without_wrappers():
     file_diff = next(iter(ps))
 
     assert process_diff_file(file_diff) == "-orig2\n+new2\n+new3\n"
+
+
+def test_unquote_git_path_decodes_utf8_and_special_characters():
+    assert unquote_git_path('"caf\\303\\251.c"') == "café.c"
+    assert unquote_git_path('"tab\\there.c"') == "tab\there.c"
+    assert unquote_git_path('"say \\"hi\\".c"') == 'say "hi".c'
+    assert unquote_git_path('"back\\\\slash.c"') == "back\\slash.c"
+    assert unquote_git_path("plain.c") == "plain.c"
