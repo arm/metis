@@ -172,3 +172,53 @@ def test_update_decodes_git_quoted_paths(
     engine.indexing.update_index(patch_text)
 
     assert idx.code_rows() == expected
+
+
+def _modify_patch(name):
+    return f"--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n-old\n+new\n"
+
+
+@pytest.mark.parametrize("seeded", [False, True], ids=["new-file", "already-indexed"])
+def test_update_drops_a_file_the_index_rules_ignore(engine, idx, seeded):
+    if seeded:
+        idx.seed("generated/out.c")
+    idx.write(".metisignore", "generated/\n")
+    (idx.codebase / "generated").mkdir()
+    idx.write("generated/out.c")
+    idx.write("kept.c")
+
+    engine.indexing.update_index(
+        _modify_patch("generated/out.c") + _modify_patch("kept.c")
+    )
+
+    assert idx.code_rows() == {"kept.c"}
+    assert idx.docs_rows() == set()
+
+
+@pytest.mark.parametrize("name", ["data.json", "notes.yaml", "unknown.bin"])
+def test_update_skips_unsupported_files(engine, idx, name):
+    idx.write(name)
+
+    engine.indexing.update_index(_modify_patch(name))
+
+    assert idx.code_rows() == idx.docs_rows() == set()
+
+
+def test_update_keeps_documentation_in_docs_index(engine, idx):
+    idx.write("guide.md", "# Guide\n")
+
+    engine.indexing.update_index(_modify_patch("guide.md"))
+
+    assert idx.code_rows() == set()
+    assert idx.docs_rows() == {"guide.md"}
+
+
+def test_update_deletes_a_removed_selected_file(engine, idx):
+    idx.seed("gone.c")
+
+    engine.indexing.update_index(
+        "--- a/gone.c\n+++ /dev/null\n@@ -1 +0,0 @@\n-int old;\n"
+        "--- a/data.json\n+++ /dev/null\n@@ -1 +0,0 @@\n-{}\n"
+    )
+
+    assert idx.code_rows() == set()

@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **index:** Apply the file selection of `index` during `update` and remove rows for files that became ignored.
 * **index:** Decode Git C-quoted paths before `update` reads or removes files with special characters.
 * **index:** Handle a renamed file in `update` as a delete of the old path and an add of the new path. The old path no longer stays in the index.
 * **providers:** Omit `temperature` from OpenAI Responses requests for every `gpt-6*` model, not only `gpt-6-astra`.

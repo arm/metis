@@ -98,12 +98,27 @@ class IndexingService:
         if callable(close):
             close()
 
+    def _docs_extensions(self) -> list[str]:
+        return [
+            ext.lower()
+            for ext in self._config.plugin_config.get("docs", {}).get(
+                "supported_extensions", [".md"]
+            )
+        ]
+
+    def _index_kind(self, path: str, docs_supported_exts: list[str]) -> str | None:
+        if os.path.splitext(path)[1].lower() in docs_supported_exts:
+            return "docs"
+        if self._repository.get_language_name_for_path(path) is not None:
+            return "code"
+        return None
+
     def _get_supported_input_files(
         self,
         docs_supported_exts: list[str],
     ) -> list[str]:
         base_path = os.path.abspath(self._config.codebase_path)
-        docs_supported = {ext.lower() for ext in docs_supported_exts}
+        docs_supported = [ext.lower() for ext in docs_supported_exts]
         metisignore_spec = self._repository.load_metisignore()
         selected = []
 
@@ -114,12 +129,7 @@ class IndexingService:
                     continue
                 if self._repository.is_metisignored(full_path, spec=metisignore_spec):
                     continue
-                ext = os.path.splitext(file_name)[1].lower()
-                if (
-                    ext in docs_supported
-                    or self._repository.get_language_name_for_path(full_path)
-                    is not None
-                ):
+                if self._index_kind(full_path, docs_supported) is not None:
                     selected.append(full_path)
 
         return selected
@@ -148,12 +158,7 @@ class IndexingService:
                 "Finish the pending index preparation before preparing again"
             )
         self._get_embedding_models()
-        docs_supported_exts = [
-            ext.lower()
-            for ext in self._config.plugin_config.get("docs", {}).get(
-                "supported_extensions", [".md"]
-            )
-        ]
+        docs_supported_exts = self._docs_extensions()
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
         input_files = self._get_supported_input_files(docs_supported_exts)
@@ -176,15 +181,14 @@ class IndexingService:
         doc_docs = []
         for doc in documents:
             file_path = doc.metadata.get("file_path") or doc.id_
-            ext = os.path.splitext(file_path)[1].lower()
             new_id = os.path.relpath(doc.id_, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
 
-            language_name = self._repository.get_language_name_for_path(file_path)
-            if ext in docs_supported_exts:
+            kind = self._index_kind(file_path, docs_supported_exts)
+            if kind == "docs":
                 doc_docs.append(doc)
-            elif language_name is not None:
+            elif kind == "code":
                 code_docs.append(doc)
 
         nodes_code, nodes_docs = yield from prepare_nodes_iter(
@@ -248,29 +252,37 @@ class IndexingService:
             codebase_name = os.path.basename(
                 os.path.abspath(self._config.codebase_path)
             )
+            docs_supported_exts = self._docs_extensions()
+            metisignore_spec = self._repository.load_metisignore()
             for diff_file in patch_set:
                 if diff_file.is_binary_file:
                     continue
                 diff_path = _diff_path(diff_file)
                 doc_id = os.path.join(codebase_name, diff_path)
-                language_name = self._repository.get_language_name_for_path(doc_id)
-                target_index = index_code if language_name is not None else index_docs
+                kind = self._index_kind(doc_id, docs_supported_exts)
 
                 if diff_file.is_rename:
                     # A rename is a delete of the old path plus an add of the new one.
                     old_doc_id = os.path.join(codebase_name, _source_path(diff_file))
-                    old_is_code = (
-                        self._repository.get_language_name_for_path(old_doc_id)
-                        is not None
-                    )
-                    (index_code if old_is_code else index_docs).delete_ref_doc(
-                        old_doc_id, delete_from_docstore=True
-                    )
+                    old_kind = self._index_kind(old_doc_id, docs_supported_exts)
+                    if old_kind is not None:
+                        old_index = index_code if old_kind == "code" else index_docs
+                        old_index.delete_ref_doc(old_doc_id, delete_from_docstore=True)
+
+                if kind is None:
+                    continue
+                target_index = index_code if kind == "code" else index_docs
+                file_path = os.path.join(self._config.codebase_path, diff_path)
 
                 if diff_file.is_removed_file:
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 else:
-                    file_path = os.path.join(self._config.codebase_path, diff_path)
+                    if self._repository.is_metisignored(
+                        os.path.abspath(file_path), spec=metisignore_spec
+                    ):
+                        # Existing rows may predate the ignore rule.
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                        continue
                     file_content = read_file_content(file_path)
                     if not file_content and diff_file.is_added_file:
                         file_content = extract_content_from_diff(diff_file)
@@ -284,7 +296,7 @@ class IndexingService:
                     )
 
                     if diff_file.is_added_file:
-                        if language_name is not None:
+                        if kind == "code":
                             plugin = self._repository.get_plugin_for_path(doc_id)
                             if not plugin:
                                 continue
