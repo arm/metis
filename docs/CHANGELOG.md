@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **index:** Store the path relative to the codebase root as `file_name` in `index` and `update`, and give `update` rows the same metadata as `index` rows. Rebuild an existing index with `index` to update old rows.
 * **index:** Keep the source rows of copied files while adding the target during `update`.
 * **index:** Skip mode-only and gitlink changes, and remove old rows when a file becomes binary.
 * **index:** Preserve real `a/` and `b/` directories in diffs made with `--no-prefix`.

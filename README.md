@@ -309,6 +309,11 @@ cannot be read, decoded, or split with an error after applying other files.
 Copies add only the target, mode-only changes leave rows alone, binary changes
 remove old rows, and gitlink changes are skipped.
 
+`index` and `update` store the same metadata for each file. `file_path` is the
+absolute path. `file_name` is the path relative to the codebase root, for example
+`src/app/index.ts`. An index built by an earlier version stores only the base
+name in `file_name`. Run `index` again to rebuild it with relative paths.
+
 ### `ask <question>`
 Ask questions against the indexed codebase.
 

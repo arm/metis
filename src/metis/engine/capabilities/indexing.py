@@ -13,6 +13,7 @@ from typing import Any
 
 import unidiff
 from llama_index.core import SimpleDirectoryReader
+from llama_index.core.readers.file.base import default_file_metadata_func
 from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
@@ -25,6 +26,42 @@ from metis.exceptions import IndexUpdateError
 from metis.exceptions import ParsingError
 
 logger = logging.getLogger("metis")
+
+
+# SimpleDirectoryReader keeps only file_path in the embedded and LLM text of a
+# document. update must write the same metadata as index, or the rows differ.
+_READER_EXCLUDED_METADATA_KEYS = (
+    "file_name",
+    "file_type",
+    "file_size",
+    "creation_date",
+    "last_modified_date",
+    "last_accessed_date",
+)
+
+
+def _relative_path(file_path: str, codebase_path: str) -> str:
+    """Return the path of a file relative to the codebase root, with ``/`` separators."""
+    relative = os.path.relpath(
+        os.path.abspath(file_path), os.path.abspath(codebase_path)
+    )
+    return relative.replace(os.sep, "/")
+
+
+def _document_metadata(file_path: str, codebase_path: str) -> dict[str, Any]:
+    """Return the metadata that index and update write for a file.
+
+    ``file_path`` is the absolute path. ``file_name`` is the path relative to the
+    codebase root, because a base name does not identify a file when several
+    files share it.
+    """
+    file_path = os.path.abspath(file_path)
+    try:
+        metadata = default_file_metadata_func(file_path)
+    except OSError:
+        metadata = {"file_path": file_path}
+    metadata["file_name"] = _relative_path(file_path, codebase_path)
+    return metadata
 
 
 def _read_source_text(file_path: str) -> str:
@@ -246,6 +283,7 @@ class IndexingService:
         doc_docs = []
         for doc in documents:
             file_path = doc.metadata.get("file_path") or doc.id_
+            doc.metadata["file_name"] = _relative_path(file_path, base_path)
             new_id = os.path.relpath(doc.id_, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
@@ -396,8 +434,14 @@ class IndexingService:
                         continue
                     doc = Document(
                         text=file_content,
-                        metadata={"file_name": diff_path},
+                        metadata=_document_metadata(
+                            file_path, self._config.codebase_path
+                        ),
                         id_=doc_id,
+                        excluded_embed_metadata_keys=list(
+                            _READER_EXCLUDED_METADATA_KEYS
+                        ),
+                        excluded_llm_metadata_keys=list(_READER_EXCLUDED_METADATA_KEYS),
                     )
 
                     try:

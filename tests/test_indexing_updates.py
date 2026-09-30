@@ -7,6 +7,7 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
+from llama_index.core import SimpleDirectoryReader
 from llama_index.core import VectorStoreIndex
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
 from llama_index.core.schema import Document
@@ -451,3 +452,36 @@ def test_update_preserves_real_prefix_named_directory(engine, idx, directory, pr
 
     assert idx.code_rows() == {relative}
     assert len(idx.code_store.data.embedding_dict) == 1
+
+
+def test_update_writes_the_same_metadata_as_index(engine, idx):
+    idx.code_index.insert_nodes = Mock(wraps=idx.code_index.insert_nodes)
+    source = idx.codebase / "pkg" / "sub" / "meta.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("int before;\n", encoding="utf-8")
+    indexed = SimpleDirectoryReader(
+        input_files=[str(source)], filename_as_id=True
+    ).load_data()[0]
+    source.write_text("int after;\n", encoding="utf-8")
+
+    engine.indexing.update_index(_modify_patch("pkg/sub/meta.c"))
+
+    ((nodes,), _) = idx.code_index.insert_nodes.call_args
+    stored = nodes[0]
+    assert stored.metadata["file_path"] == indexed.metadata["file_path"]
+    assert stored.metadata["file_name"] == "pkg/sub/meta.c"
+    assert stored.excluded_embed_metadata_keys == indexed.excluded_embed_metadata_keys
+    assert stored.excluded_llm_metadata_keys == indexed.excluded_llm_metadata_keys
+
+
+def test_index_writes_the_relative_path_as_file_name(engine):
+    codebase = Path(engine._config.codebase_path)
+    for name in ("a/index.c", "b/index.c"):
+        (codebase / name).parent.mkdir(parents=True, exist_ok=True)
+        (codebase / name).write_text("int value;\n", encoding="utf-8")
+
+    engine.indexing.index_prepare_nodes()
+    nodes_code, _nodes_docs = engine._state.pending_nodes
+
+    names = {node.metadata["file_name"] for node in nodes_code}
+    assert {"a/index.c", "b/index.c"} <= names and "index.c" not in names
