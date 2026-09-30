@@ -24,6 +24,14 @@ from metis.utils import read_file_content
 logger = logging.getLogger("metis")
 
 
+def _source_path(diff_file: unidiff.PatchedFile) -> str:
+    """Return the pre-change path of a patched file, without the ``a/`` prefix."""
+    source = diff_file.source_file
+    if source.startswith("a/") and diff_file.target_file.startswith("b/"):
+        return source[2:]
+    return source
+
+
 class IndexingService:
     def __init__(
         self,
@@ -230,15 +238,26 @@ class IndexingService:
 
             doc_splitter = self._repository.get_doc_splitter()
 
+            codebase_name = os.path.basename(
+                os.path.abspath(self._config.codebase_path)
+            )
             for diff_file in patch_set:
                 if diff_file.is_binary_file:
                     continue
-                doc_id = os.path.join(
-                    os.path.basename(os.path.abspath(self._config.codebase_path)),
-                    diff_file.path,
-                )
+                doc_id = os.path.join(codebase_name, diff_file.path)
                 language_name = self._repository.get_language_name_for_path(doc_id)
                 target_index = index_code if language_name is not None else index_docs
+
+                if diff_file.is_rename:
+                    # A rename is a delete of the old path plus an add of the new one.
+                    old_doc_id = os.path.join(codebase_name, _source_path(diff_file))
+                    old_is_code = (
+                        self._repository.get_language_name_for_path(old_doc_id)
+                        is not None
+                    )
+                    (index_code if old_is_code else index_docs).delete_ref_doc(
+                        old_doc_id, delete_from_docstore=True
+                    )
 
                 if diff_file.is_removed_file:
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
