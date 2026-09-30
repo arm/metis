@@ -14,6 +14,7 @@ from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
+from metis.engine.diff_utils import unquote_git_path
 from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
@@ -25,11 +26,17 @@ logger = logging.getLogger("metis")
 
 
 def _source_path(diff_file: unidiff.PatchedFile) -> str:
-    """Return the pre-change path of a patched file, without the ``a/`` prefix."""
-    source = diff_file.source_file
-    if source.startswith("a/") and diff_file.target_file.startswith("b/"):
+    """Return the decoded pre-change path of a patched file."""
+    source = unquote_git_path(diff_file.source_file)
+    target = unquote_git_path(diff_file.target_file)
+    if source.startswith("a/") and target.startswith("b/"):
         return source[2:]
     return source
+
+
+def _diff_path(diff_file: unidiff.PatchedFile) -> str:
+    """Return the decoded post-change path of a patched file."""
+    return unquote_git_path(diff_file.path)
 
 
 class IndexingService:
@@ -244,7 +251,8 @@ class IndexingService:
             for diff_file in patch_set:
                 if diff_file.is_binary_file:
                     continue
-                doc_id = os.path.join(codebase_name, diff_file.path)
+                diff_path = _diff_path(diff_file)
+                doc_id = os.path.join(codebase_name, diff_path)
                 language_name = self._repository.get_language_name_for_path(doc_id)
                 target_index = index_code if language_name is not None else index_docs
 
@@ -262,16 +270,16 @@ class IndexingService:
                 if diff_file.is_removed_file:
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 else:
-                    file_path = os.path.join(self._config.codebase_path, diff_file.path)
+                    file_path = os.path.join(self._config.codebase_path, diff_path)
                     file_content = read_file_content(file_path)
                     if not file_content and diff_file.is_added_file:
                         file_content = extract_content_from_diff(diff_file)
                     if not file_content:
-                        logger.warning("No content available for %s", diff_file.path)
+                        logger.warning("No content available for %s", diff_path)
                         continue
                     doc = Document(
                         text=file_content,
-                        metadata={"file_name": diff_file.path},
+                        metadata={"file_name": diff_path},
                         id_=doc_id,
                     )
 

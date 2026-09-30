@@ -299,6 +299,7 @@ requests as inconclusive.
 Incrementally updates the index using a diff. Avoids full reindexing.
 A renamed file (`rename from` and `rename to` in the diff, with or without edits) is
 removed under its old path and added under its new path.
+Git C-quoted paths in the diff are decoded before `update` reads or removes files.
 
 ### `ask <question>`
 Ask questions against the indexed codebase.

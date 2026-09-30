@@ -127,3 +127,48 @@ def test_rename_of_a_path_that_was_never_indexed_still_adds_the_new_path(engine,
     engine.indexing.update_index(_rename_patch("gone.c", "new.c"))
 
     assert idx.code_rows() == {"new.c"}
+
+
+@pytest.mark.parametrize(
+    ("patch_text", "seeded", "written", "expected"),
+    [
+        pytest.param(
+            'diff --git "a/caf\\303\\251.c" "b/caf\\303\\251.c"\n'
+            '--- "a/caf\\303\\251.c"\n+++ "b/caf\\303\\251.c"\n'
+            "@@ -1 +1 @@\n-int before;\n+int after;\n",
+            None,
+            "café.c",
+            {"café.c"},
+            id="modify",
+        ),
+        pytest.param(
+            'diff --git "a/caf\\303\\251.c" "b/caf\\303\\251.c"\n'
+            'deleted file mode 100644\n--- "a/caf\\303\\251.c"\n+++ /dev/null\n'
+            "@@ -1 +0,0 @@\n-int before;\n",
+            "café.c",
+            None,
+            set(),
+            id="delete",
+        ),
+        pytest.param(
+            'diff --git "a/caf\\303\\251.c" "b/na\\303\\257ve.c"\n'
+            'similarity index 100%\nrename from "caf\\303\\251.c"\n'
+            'rename to "na\\303\\257ve.c"\n',
+            "café.c",
+            "naïve.c",
+            {"naïve.c"},
+            id="rename",
+        ),
+    ],
+)
+def test_update_decodes_git_quoted_paths(
+    engine, idx, patch_text, seeded, written, expected
+):
+    if seeded:
+        idx.seed(seeded)
+    if written:
+        idx.write(written)
+
+    engine.indexing.update_index(patch_text)
+
+    assert idx.code_rows() == expected
