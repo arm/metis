@@ -231,6 +231,22 @@ class IndexingService:
                 **self._config.usage_runtime.hooks.embed_model_kwargs(),
             )
 
+    def _prepare_nodes(
+        self, code_docs: list[Document], doc_docs: list[Document]
+    ) -> tuple[list, list]:
+        preparation = prepare_nodes_iter(
+            code_docs,
+            doc_docs,
+            self._repository.get_plugin_for_path,
+            self._repository.get_splitter_cached,
+            self._repository.get_doc_splitter(),
+        )
+        try:
+            while True:
+                next(preparation)
+        except StopIteration as done:
+            return done.value
+
     def update_index(self, patch_text):
         with self._mutation():
             embed_model_code, embed_model_docs = self._get_embedding_models()
@@ -246,8 +262,6 @@ class IndexingService:
                 embed_model_docs=embed_model_docs,
                 **self._config.usage_runtime.hooks.embed_model_kwargs(),
             )
-
-            doc_splitter = self._repository.get_doc_splitter()
 
             codebase_name = os.path.basename(
                 os.path.abspath(self._config.codebase_path)
@@ -295,26 +309,15 @@ class IndexingService:
                         id_=doc_id,
                     )
 
-                    if diff_file.is_added_file:
-                        if kind == "code":
-                            plugin = self._repository.get_plugin_for_path(doc_id)
-                            if not plugin:
-                                continue
-                            splitter = self._repository.get_splitter_cached(plugin)
-                            try:
-                                nodes = splitter.get_nodes_from_documents([doc])
-                            except Exception as e:
-                                logger.warning(
-                                    "Could not parse code with language %s for file %s: %s",
-                                    plugin.get_name(),
-                                    doc.id_,
-                                    e,
-                                )
-                                continue
-                        else:
-                            nodes = doc_splitter.get_nodes_from_documents([doc])
-                        target_index.insert_nodes(nodes)
-                    else:
-                        target_index.update_ref_doc(doc)
+                    nodes_code, nodes_docs = self._prepare_nodes(
+                        [doc] if kind == "code" else [],
+                        [doc] if kind == "docs" else [],
+                    )
+                    nodes = nodes_code or nodes_docs
+                    if not nodes:
+                        logger.warning("Could not prepare nodes for %s", diff_path)
+                        continue
+                    target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    target_index.insert_nodes(nodes)
                     target_index.docstore.set_document_hash(doc.id_, doc.hash)
             logger.info("Index update complete based on the provided patch diff.")

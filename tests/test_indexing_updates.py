@@ -222,3 +222,32 @@ def test_update_deletes_a_removed_selected_file(engine, idx):
     )
 
     assert idx.code_rows() == set()
+
+
+def test_update_prepares_code_nodes_with_index_anchors(engine, dummy_backend):
+    text = "int first(void) { return 1; }\n" * 40
+    codebase = Path(engine._config.codebase_path)
+    (codebase / "same.c").write_text(text, encoding="utf-8")
+    engine.indexing.index_prepare_nodes()
+    indexed, _docs = engine._state.pending_nodes
+    idx = _Indexes(engine, dummy_backend)
+    idx.code_index.insert_nodes = Mock(wraps=idx.code_index.insert_nodes)
+
+    engine.indexing.update_index(_modify_patch("same.c"))
+
+    ((updated,), _) = idx.code_index.insert_nodes.call_args
+    expected = [node for node in indexed if node.metadata["file_name"] == "same.c"]
+    assert expected
+    assert [node.text for node in updated] == [node.text for node in expected]
+    assert {"anchor_id", "start_line", "end_line"} <= set(updated[0].metadata)
+
+
+def test_update_is_idempotent_for_an_added_file(engine, idx):
+    idx.write("added.c", "int added;\n")
+    patch_text = "--- /dev/null\n+++ b/added.c\n@@ -0,0 +1 @@\n+int added;\n"
+
+    engine.indexing.update_index(patch_text)
+    engine.indexing.update_index(patch_text)
+
+    assert idx.code_rows() == {"added.c"}
+    assert len(idx.code_store.data.embedding_dict) == 1
