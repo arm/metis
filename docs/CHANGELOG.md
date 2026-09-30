@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **index:** Report unreadable and unsplittable files during `update`, and remove stale rows when a changed file has no content or nodes.
 * **index:** Prepare updated code nodes with the same splitting and anchors as `index`, and replace rows when an added diff is applied again.
 * **index:** Apply the file selection of `index` during `update` and remove rows for files that became ignored.
 * **index:** Decode Git C-quoted paths before `update` reads or removes files with special characters.

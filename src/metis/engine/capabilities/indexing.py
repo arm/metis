@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import CancelledError
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -19,10 +20,15 @@ from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.runtime import EngineState
+from metis.exceptions import IndexUpdateError
 from metis.exceptions import ParsingError
-from metis.utils import read_file_content
 
 logger = logging.getLogger("metis")
+
+
+def _read_source_text(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8") as source:
+        return source.read()
 
 
 def _source_path(diff_file: unidiff.PatchedFile) -> str:
@@ -240,6 +246,7 @@ class IndexingService:
             self._repository.get_plugin_for_path,
             self._repository.get_splitter_cached,
             self._repository.get_doc_splitter(),
+            raise_on_error=True,
         )
         try:
             while True:
@@ -268,6 +275,7 @@ class IndexingService:
             )
             docs_supported_exts = self._docs_extensions()
             metisignore_spec = self._repository.load_metisignore()
+            failures: list[str] = []
             for diff_file in patch_set:
                 if diff_file.is_binary_file:
                     continue
@@ -297,11 +305,19 @@ class IndexingService:
                         # Existing rows may predate the ignore rule.
                         target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                         continue
-                    file_content = read_file_content(file_path)
-                    if not file_content and diff_file.is_added_file:
+                    try:
+                        file_content = _read_source_text(file_path)
+                    except FileNotFoundError:
+                        if not diff_file.is_added_file:
+                            failures.append(f"{diff_path} (file not found)")
+                            continue
                         file_content = extract_content_from_diff(diff_file)
+                    except (OSError, UnicodeError) as exc:
+                        failures.append(f"{diff_path} ({exc})")
+                        continue
                     if not file_content:
                         logger.warning("No content available for %s", diff_path)
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                         continue
                     doc = Document(
                         text=file_content,
@@ -309,15 +325,24 @@ class IndexingService:
                         id_=doc_id,
                     )
 
-                    nodes_code, nodes_docs = self._prepare_nodes(
-                        [doc] if kind == "code" else [],
-                        [doc] if kind == "docs" else [],
-                    )
+                    try:
+                        nodes_code, nodes_docs = self._prepare_nodes(
+                            [doc] if kind == "code" else [],
+                            [doc] if kind == "docs" else [],
+                        )
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        failures.append(f"{diff_path} (node preparation: {exc})")
+                        continue
                     nodes = nodes_code or nodes_docs
                     if not nodes:
-                        logger.warning("Could not prepare nodes for %s", diff_path)
+                        logger.warning("No nodes available for %s", diff_path)
+                        target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                         continue
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                     target_index.insert_nodes(nodes)
                     target_index.docstore.set_document_hash(doc.id_, doc.hash)
+            if failures:
+                raise IndexUpdateError(failures)
             logger.info("Index update complete based on the provided patch diff.")

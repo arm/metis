@@ -11,7 +11,7 @@ from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
 from .review_checkpoints import review_checkpoint_callbacks
 from .review_progress import ReviewCodeProgressReporter
-from metis.utils import read_file_content, safe_decode_unicode
+from metis.utils import safe_decode_unicode
 from metis.sarif.writer import generate_sarif
 from metis.sarif.triage import load_sarif_file
 from metis.usage import usage_operation
@@ -278,7 +278,9 @@ def run_index(engine, verbose=False, quiet=False):
 def run_update(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
-    file_diff = read_file_content(patch_file)
+    # A diff of a legacy-encoded file carries bytes that are not UTF-8. Update
+    # reads file content from the working tree, so only the paths must parse.
+    file_diff = Path(patch_file).read_bytes().decode("utf-8", errors="replace")
     with_spinner(
         "Updating index...",
         engine.indexing.update_index,

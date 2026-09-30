@@ -1,14 +1,19 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 from llama_index.core import VectorStoreIndex
 from llama_index.core.embeddings.mock_embed_model import MockEmbedding
 from llama_index.core.schema import Document
 from llama_index.core.vector_stores.simple import SimpleVectorStore
+
+from metis.engine.capabilities import indexing
+from metis.exceptions import IndexUpdateError
 
 
 def test_modified_patch_replaces_vectors_with_fresh_index_handles(
@@ -251,3 +256,89 @@ def test_update_is_idempotent_for_an_added_file(engine, idx):
 
     assert idx.code_rows() == {"added.c"}
     assert len(idx.code_store.data.embedding_dict) == 1
+
+
+def _no_injected_failure(engine):
+    return nullcontext()
+
+
+def _unreadable_source(engine):
+    return patch.object(
+        indexing, "_read_source_text", side_effect=PermissionError("denied")
+    )
+
+
+def _prepare_nodes_raises(engine):
+    return patch.object(
+        engine.indexing, "_prepare_nodes", side_effect=RuntimeError("split failed")
+    )
+
+
+def test_update_reports_missing_modified_file_and_applies_other_files(engine, idx):
+    idx.seed("missing.c")
+    idx.write("fine.c", "int fine;\n")
+
+    with pytest.raises(IndexUpdateError, match="missing.c"):
+        engine.indexing.update_index(
+            _modify_patch("missing.c") + _modify_patch("fine.c")
+        )
+
+    assert idx.code_rows() == {"missing.c", "fine.c"}
+
+
+@pytest.mark.parametrize(
+    ("content", "inject", "match"),
+    [
+        pytest.param(b"\xff\xfe", _no_injected_failure, r"broken\.c", id="undecodable"),
+        pytest.param(
+            b"int new;\n", _unreadable_source, r"broken\.c \(denied\)", id="unreadable"
+        ),
+        pytest.param(
+            b"int new;\n",
+            _prepare_nodes_raises,
+            r"broken\.c \(node preparation",
+            id="node-preparation-raises",
+        ),
+    ],
+)
+def test_update_reports_a_file_it_cannot_index_and_keeps_its_rows(
+    engine, idx, content, inject, match
+):
+    idx.seed("broken.c")
+    (idx.codebase / "broken.c").write_bytes(content)
+
+    with inject(engine), pytest.raises(IndexUpdateError, match=match):
+        engine.indexing.update_index(_modify_patch("broken.c"))
+
+    assert idx.code_rows() == {"broken.c"}
+
+
+def test_update_removes_rows_when_a_file_becomes_empty(engine, idx):
+    idx.seed("empty.c")
+    idx.write("empty.c", "")
+
+    engine.indexing.update_index(_modify_patch("empty.c"))
+
+    assert idx.code_rows() == set()
+
+
+def test_update_removes_rows_when_a_file_yields_no_nodes(engine, idx):
+    idx.seed("blank.c")
+    idx.write("blank.c", " \n")
+
+    with (
+        patch.object(engine.indexing, "_prepare_nodes", return_value=([], [])),
+        patch.object(indexing.logger, "warning") as warning,
+    ):
+        engine.indexing.update_index(_modify_patch("blank.c"))
+
+    assert idx.code_rows() == set()
+    warning.assert_called_once_with("No nodes available for %s", "blank.c")
+
+
+def test_update_adds_missing_file_from_diff_content(engine, idx):
+    engine.indexing.update_index(
+        "--- /dev/null\n+++ b/from_diff.c\n@@ -0,0 +1 @@\n+int value;\n"
+    )
+
+    assert idx.code_rows() == {"from_diff.c"}

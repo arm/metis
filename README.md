@@ -303,6 +303,8 @@ Git C-quoted paths in the diff are decoded before `update` reads or removes file
 `update` skips unsupported and ignored files, and removes old rows when a file
 becomes ignored.
 Added and modified files use the same node splitting and anchor metadata as `index`.
+`update` removes stale rows for empty or unsplittable files. It reports files that
+cannot be read, decoded, or split with an error after applying other files.
 
 ### `ask <question>`
 Ask questions against the indexed codebase.
