@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 
 from llama_index.core import StorageContext
@@ -9,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
+from metis.exceptions import IndexStateError
 from metis.exceptions import VectorSchemaError
 from metis.exceptions import VectorStoreInitError
 from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
@@ -16,6 +18,7 @@ from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
 logger = logging.getLogger(__name__)
 
 
+INDEX_STATE_TABLE = "index_state"
 HALFVEC_HNSW_DIST_METHODS = {
     "vector_l2_ops": "halfvec_l2_ops",
     "vector_ip_ops": "halfvec_ip_ops",
@@ -143,6 +146,75 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
         except Exception:
             logger.error(f"Error checking for project schema '{self.project_schema}'")
             raise VectorSchemaError()
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+    def _state_schema(self):
+        """Return the schema that holds the vector tables.
+
+        PGVectorStore lowercases the schema name before it creates the schema,
+        so the state table must use the same name as the vector tables.
+        """
+        store = getattr(self, "vector_store_code", None)
+        schema = getattr(store, "schema_name", None)
+        return schema or (self.project_schema or "public").lower()
+
+    def _state_table(self, engine):
+        preparer = engine.dialect.identifier_preparer
+        return f"{preparer.quote_schema(self._state_schema())}.{preparer.quote(INDEX_STATE_TABLE)}"
+
+    def get_index_state(self):
+        engine = None
+        try:
+            engine = create_engine(self.connection_string)
+            table = self._state_table(engine)
+            with engine.connect() as conn:
+                if (
+                    conn.execute(
+                        text("SELECT to_regclass(:name)"), {"name": table}
+                    ).scalar()
+                    is None
+                ):
+                    return None
+                value = conn.execute(
+                    text(f"SELECT value FROM {table} WHERE key = 'index'")
+                ).scalar()
+            return json.loads(value) if isinstance(value, str) else value
+        except Exception as exc:
+            raise IndexStateError(
+                f"cannot read the state of '{self.project_schema}'"
+            ) from exc
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+    def set_index_state(self, state):
+        engine = None
+        try:
+            engine = create_engine(self.connection_string)
+            table = self._state_table(engine)
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        f"CREATE TABLE IF NOT EXISTS {table} ("
+                        "key text PRIMARY KEY, value jsonb NOT NULL, "
+                        "updated_at timestamptz NOT NULL DEFAULT now())"
+                    )
+                )
+                conn.execute(
+                    text(
+                        f"INSERT INTO {table} (key, value) "
+                        "VALUES ('index', CAST(:value AS jsonb)) "
+                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
+                        "updated_at = now()"
+                    ),
+                    {"value": json.dumps(state)},
+                )
+        except Exception as exc:
+            raise IndexStateError(
+                f"cannot write the state of '{self.project_schema}'"
+            ) from exc
         finally:
             if engine is not None:
                 engine.dispose()

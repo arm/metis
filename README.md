@@ -240,6 +240,8 @@ Metis also provides an interactive CLI with several built-in commands:
   root when that file exists.
 - `--backend chroma|postgres|qdrant` – choose a vector-store backend (default `chroma`).
 - `--project-schema` namespaces PostgreSQL schemas and Qdrant collections.
+- `--commit SHA` – full 40 or 64 character id of the commit the codebase is at.
+  `index` records it instead of `HEAD`. `update` records it, or "unknown" without it.
 - `--chroma-dir` and `--qdrant-url` configure backend storage.
 - `--triage` – in the interactive prompt, triage findings after `review_code`,
   `review_dir`, `review_file`, or `review_patch` and annotate SARIF output.
@@ -294,6 +296,21 @@ Runs the configured Review stage and limits findings to the selected file.
 Runs the configured Review stage for a diff. Patch analysis requires a graph
 that selects `simple_llm_review`; the packaged Reachability node reports patch
 requests as inconclusive.
+
+### `index_status`
+Shows the commit that the index reflects, the operation that recorded it, and
+the time. The record lives in the selected backend: a table in the PostgreSQL
+project schema, the metadata of the Chroma code collection, or a
+`<prefix>_state` collection in Qdrant. A reset of the backend removes it.
+
+- `index` records `--commit`, or `HEAD` of the git checkout that contains the
+  codebase. It records "unknown" when neither is available, so an old commit is
+  never kept for a rebuilt index.
+- `update <patch.diff>` records `--commit` when you pass it. A plain `update`
+  records "unknown". A patch is not always the diff from the recorded commit, so
+  after a plain `update` neither the old commit nor `HEAD` describes the index.
+  A plain `update` that fails partway also records "unknown". Run `index` before
+  the next `sync`.
 
 ### `update <patch.diff>`
 Incrementally updates the index using a diff. Avoids full reindexing.

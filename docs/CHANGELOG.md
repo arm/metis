@@ -3,6 +3,11 @@
 ## Unreleased
 
 
+### Features
+
+* **index:** Record the commit that the index reflects. `index` records `--commit SHA` or `HEAD` of the git checkout after it succeeds. `update` records `--commit` when it is given, and records an unknown commit otherwise. The record lives in the backend (a table in the PostgreSQL project schema, Chroma collection metadata, or a Qdrant collection) and a backend reset removes it. The new `index_status` command shows the recorded commit.
+
+
 ### Bug Fixes
 
 * **index:** Store the path relative to the codebase root as `file_name` in `index` and `update`, and give `update` rows the same metadata as `index` rows. Rebuild an existing index with `index` to update old rows.

@@ -7,6 +7,8 @@ import logging
 import os
 import re
 from concurrent.futures import CancelledError
+from datetime import UTC
+from datetime import datetime
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -18,6 +20,7 @@ from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
 from metis.engine.diff_utils import unquote_git_path
+from metis.engine.git_history import head_commit
 from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
@@ -333,6 +336,44 @@ class IndexingService:
                 embed_model_docs=embed_model_docs,
                 **self._config.usage_runtime.hooks.embed_model_kwargs(),
             )
+            self._record_index_state("index", self._resolve_commit())
+
+    def _resolve_commit(self) -> str | None:
+        """Return the commit the codebase is at: the explicit one, else git HEAD."""
+        return self._config.index_commit or head_commit(self._config.codebase_path)
+
+    def _record_index_state(self, operation: str, commit: str | None) -> None:
+        """Record the commit that the index reflects after a successful change.
+
+        A commit that is not known is recorded as ``None``, so a commit recorded
+        by an earlier run is never left in place for an index that has changed.
+        """
+        state = {
+            "commit": commit,
+            "operation": operation,
+            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        set_state = getattr(self._config.vector_backend, "set_index_state", None)
+        try:
+            if set_state is None:
+                raise NotImplementedError
+            set_state(state)
+        except NotImplementedError:
+            logger.warning("This vector backend does not record the index state.")
+            return
+        if commit is None:
+            logger.warning(
+                "The recorded index commit is now unknown. Pass --commit, or run "
+                "index in a git checkout."
+            )
+
+    def get_index_state(self) -> dict | None:
+        """Return the recorded index state, or ``None`` when nothing is recorded."""
+        get_state = getattr(self._config.vector_backend, "get_index_state", None)
+        try:
+            return get_state() if get_state is not None else None
+        except NotImplementedError:
+            return None
 
     def _prepare_nodes(
         self, code_docs: list[Document], doc_docs: list[Document]
@@ -351,7 +392,39 @@ class IndexingService:
         except StopIteration as done:
             return done.value
 
-    def update_index(self, patch_text):
+    def update_index(self, patch_text, commit=None):
+        """Apply a patch to the index and record the commit it reaches.
+
+        The commit is the one given here or with ``--commit``. Without one, the
+        recorded commit becomes unknown. A patch is not always the diff from the
+        recorded commit, so after a plain update neither the old commit nor HEAD
+        describes the index, and ``sync`` must not start from the old commit.
+
+        A plain update that fails after the patch parses also records an
+        unknown commit, because it may have written rows. An update with a
+        commit that fails keeps the old record, so ``sync`` applies the range
+        again.
+        """
+        commit = commit or self._config.index_commit
+        with self._mutation():
+            try:
+                self._apply_patch(patch_text)
+            except ParsingError:
+                raise
+            except BaseException:
+                if commit is None:
+                    self._clear_commit_after_failed_update()
+                raise
+            self._record_index_state("update", commit)
+
+    def _clear_commit_after_failed_update(self) -> None:
+        try:
+            self._record_index_state("update", None)
+        except Exception:
+            # The update error matters more. Report this one and keep going.
+            logger.exception("Could not clear the recorded commit after update.")
+
+    def _apply_patch(self, patch_text):
         with self._mutation():
             embed_model_code, embed_model_docs = self._get_embedding_models()
             try:

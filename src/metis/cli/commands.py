@@ -54,6 +54,7 @@ Type one of the following commands (with arguments):
 - [cyan]review_code[/cyan]
 - [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
 - [cyan]update patch.diff[/cyan]
+- [cyan]index_status[/cyan]   (show the commit the index reflects)
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
 - [magenta]help[/magenta]   (show this message)
@@ -65,6 +66,7 @@ Options:
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
+    --commit SHA               (Optional) Full commit id the codebase is at. index and update record it. Without it, update records an unknown commit.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --qdrant-url URL           (Optional) Qdrant server URL (default: http://localhost:6333).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -288,6 +290,22 @@ def run_update(engine, patch_file, args, runtime: CommandRuntime):
         quiet=args.quiet,
     )
     print_console("[green]Index update completed.[/green]", args.quiet)
+
+
+def run_index_status(engine, args, runtime: CommandRuntime):
+    state = engine.indexing.get_index_state()
+    if state is None:
+        print_console(
+            "[yellow]No index state is recorded. Run index first.[/yellow]",
+            args.quiet,
+        )
+        return
+    print_console(
+        f"Recorded commit: {escape(str(state.get('commit') or 'unknown'))}\n"
+        f"Last operation: {escape(str(state.get('operation') or 'unknown'))}\n"
+        f"Updated at: {escape(str(state.get('updated_at') or 'unknown'))}",
+        args.quiet,
+    )
 
 
 def run_ask(engine, question, args, runtime: CommandRuntime):

@@ -15,6 +15,7 @@ from .commands import (
     run_file_review,
     run_init,
     run_index,
+    run_index_status,
     run_review,
     run_review_code,
     run_triage,
@@ -128,6 +129,7 @@ COMMANDS = {
         invocation_mode="path",
         prepares_output_file=True,
     ),
+    "index_status": CommandSpec(run_index_status, invocation_mode="args"),
     "review_file": CommandSpec(
         run_file_review,
         tracked=True,

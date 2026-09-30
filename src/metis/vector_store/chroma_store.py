@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 from contextlib import suppress
 from threading import RLock
@@ -11,6 +12,7 @@ from chromadb.errors import NotFoundError
 from llama_index.core import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
+from metis.exceptions import IndexStateError
 from metis.exceptions import RetrieverInitError
 from metis.exceptions import VectorStoreInitError
 from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
@@ -19,6 +21,9 @@ from metis.vector_store.retrievers import QueryAnswerRetriever
 from metis.vector_store.retrievers import query_chat_model_kwargs
 
 logger = logging.getLogger(__name__)
+
+
+INDEX_STATE_KEY = "metis_index_state"
 
 
 class ChromaStore(LlamaIndexVectorBackend):
@@ -105,6 +110,27 @@ class ChromaStore(LlamaIndexVectorBackend):
         self.storage_context_docs = StorageContext.from_defaults(
             vector_store=self.vector_store_docs
         )
+
+    def get_index_state(self):
+        self.init()
+        assert self._client is not None
+        try:
+            # A collection object caches its metadata. Fetch the collection
+            # again, so a write by another store instance is visible here.
+            collection = self._client.get_collection("code")
+            raw = (collection.metadata or {}).get(INDEX_STATE_KEY)
+            return json.loads(raw) if raw else None
+        except NotFoundError:
+            return None
+        except Exception as e:
+            raise IndexStateError("cannot read the state of the Chroma index") from e
+
+    def set_index_state(self, state):
+        self.init()
+        try:
+            self.collection_code.modify(metadata={INDEX_STATE_KEY: json.dumps(state)})
+        except Exception as e:
+            raise IndexStateError("cannot write the state of the Chroma index") from e
 
     def reset_index(self):
         if not self._initialized:

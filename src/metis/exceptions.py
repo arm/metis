@@ -39,3 +39,10 @@ class IndexUpdateError(Exception):
         super().__init__(
             f"Index update failed for {len(failures)} file(s):\n" + "\n".join(failures)
         )
+
+
+class IndexStateError(Exception):
+    """Exception raised when the recorded index state cannot be read or written."""
+
+    def __init__(self, message: str):
+        super().__init__(f"Index state error: {message}")

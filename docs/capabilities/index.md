@@ -18,6 +18,11 @@ sources, skips mode-only and gitlink changes, and removes rows for binary files.
 `index.build` and `index.update` store `file_path` as the absolute path and
 `file_name` as the path relative to the codebase root.
 
+The backend records the commit that the index reflects. `index.build` records
+`--commit` or `HEAD` of the git checkout. `index.update` records the commit
+that the caller passes, or an unknown commit when the caller passes none. A backend reset removes the record, and
+`index_status` shows it.
+
 The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see
 [Execution graph](../execution-graph.md#initialize).

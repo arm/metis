@@ -167,3 +167,29 @@ def test_pg_backend_reports_hnsw_setup_failure(postgres_connection):
                 asyncio.run(async_engine.dispose())
         with cleanup_engine.begin() as connection:
             connection.execute(DropSchema(schema, if_exists=True, cascade=True))
+
+
+@pytest.mark.postgres
+def test_pg_backend_index_state_round_trip_with_a_mixed_case_schema(
+    postgres_connection,
+):
+    from metis.vector_store.pgvector_store import PGVectorStoreImpl
+
+    dsn, cleanup_engine = postgres_connection
+    schema = "Metis_State_" + uuid4().hex
+    backend = PGVectorStoreImpl(dsn, schema, Mock(), Mock(), 3)
+    state = {"commit": "0" * 40, "operation": "index", "updated_at": "now"}
+    try:
+        backend.init()
+        backend.set_index_state(state)
+
+        assert backend.get_index_state() == state
+        reader = PGVectorStoreImpl(dsn, schema, Mock(), Mock(), 3)
+        assert reader.get_index_state() == state
+    finally:
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(backend, attr, None)
+            if store is not None:
+                asyncio.run(store.close())
+        with cleanup_engine.begin() as connection:
+            connection.execute(DropSchema(schema.lower(), if_exists=True, cascade=True))

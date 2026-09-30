@@ -4,6 +4,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
+from unittest.mock import call
 from unittest.mock import patch
 
 import pytest
@@ -350,7 +351,8 @@ def test_update_removes_rows_when_a_file_yields_no_nodes(engine, idx):
         engine.indexing.update_index(_modify_patch("blank.c"))
 
     assert idx.code_rows() == set()
-    warning.assert_called_once_with("No nodes available for %s", "blank.c")
+    node_warnings = [c for c in warning.call_args_list if "No nodes" in c.args[0]]
+    assert node_warnings == [call("No nodes available for %s", "blank.c")]
 
 
 def test_update_adds_missing_file_from_diff_content(engine, idx):
