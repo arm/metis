@@ -305,6 +305,9 @@ becomes ignored.
 Added and modified files use the same node splitting and anchor metadata as `index`.
 `update` removes stale rows for empty or unsplittable files. It reports files that
 cannot be read, decoded, or split with an error after applying other files.
+`update` accepts Git diffs with default `a/` and `b/` prefixes or `--no-prefix`.
+Copies add only the target, mode-only changes leave rows alone, binary changes
+remove old rows, and gitlink changes are skipped.
 
 ### `ask <question>`
 Ask questions against the indexed codebase.

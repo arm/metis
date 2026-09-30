@@ -12,6 +12,9 @@ Current operations:
 - `index.search`: expose bounded retrieval as the model-callable
   `index_search` tool.
 
+`index.update` accepts default Git prefixes and `--no-prefix`. It preserves copy
+sources, skips mode-only and gitlink changes, and removes rows for binary files.
+
 The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see
 [Execution graph](../execution-graph.md#initialize).

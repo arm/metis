@@ -204,8 +204,10 @@ def test_update_drops_a_file_the_index_rules_ignore(engine, idx, seeded):
 def test_update_skips_unsupported_files(engine, idx, name):
     idx.write(name)
 
-    engine.indexing.update_index(_modify_patch(name))
+    with patch.object(engine.indexing, "_prepare_nodes") as prepare:
+        engine.indexing.update_index(_modify_patch(name))
 
+    prepare.assert_not_called()
     assert idx.code_rows() == idx.docs_rows() == set()
 
 
@@ -286,6 +288,14 @@ def test_update_reports_missing_modified_file_and_applies_other_files(engine, id
     assert idx.code_rows() == {"missing.c", "fine.c"}
 
 
+def _code_splitter_raises(engine):
+    splitter = Mock()
+    splitter.get_nodes_from_documents.side_effect = RuntimeError("split failed")
+    return patch.object(
+        engine.indexing._repository, "get_splitter_cached", return_value=splitter
+    )
+
+
 @pytest.mark.parametrize(
     ("content", "inject", "match"),
     [
@@ -298,6 +308,12 @@ def test_update_reports_missing_modified_file_and_applies_other_files(engine, id
             _prepare_nodes_raises,
             r"broken\.c \(node preparation",
             id="node-preparation-raises",
+        ),
+        pytest.param(
+            b"int new;\n",
+            _code_splitter_raises,
+            r"broken\.c \(node preparation",
+            id="code-splitter-raises",
         ),
     ],
 )
@@ -342,3 +358,96 @@ def test_update_adds_missing_file_from_diff_content(engine, idx):
     )
 
     assert idx.code_rows() == {"from_diff.c"}
+
+
+@pytest.mark.parametrize("edited", [False, True], ids=["identical", "edited"])
+def test_copy_adds_target_without_deleting_source(engine, idx, edited):
+    idx.seed("source.c", "int first;")
+    idx.write("target.c", "int first;\nint second;\n" if edited else "int first;\n")
+    patch_text = (
+        "diff --git a/source.c b/target.c\n"
+        f"similarity index {90 if edited else 100}%\n"
+        "copy from source.c\ncopy to target.c\n"
+    )
+    if edited:
+        patch_text += (
+            "--- a/source.c\n+++ b/target.c\n@@ -1 +1,2 @@\n int first;\n+int second;\n"
+        )
+
+    engine.indexing.update_index(patch_text)
+
+    assert idx.code_rows() == {"source.c", "target.c"}
+
+
+@pytest.mark.parametrize(
+    ("patch_text", "rows_kept"),
+    [
+        pytest.param(
+            "diff --git a/file.c b/file.c\nold mode 100644\nnew mode 100755\n",
+            True,
+            id="mode-only",
+        ),
+        pytest.param(
+            "diff --git a/file.c b/file.c\nindex 111..222 100644\n"
+            "Binary files a/file.c and b/file.c differ\n",
+            False,
+            id="became-binary",
+        ),
+        pytest.param(
+            "diff --git a/file.c b/file.c\nindex 111..222 160000\n"
+            "--- a/file.c\n+++ b/file.c\n@@ -1 +1 @@\n"
+            "-Subproject commit 1111111111111111111111111111111111111111\n"
+            "+Subproject commit 2222222222222222222222222222222222222222\n",
+            True,
+            id="gitlink",
+        ),
+    ],
+)
+def test_update_handles_changes_that_need_no_file_read(
+    engine, idx, patch_text, rows_kept
+):
+    idx.seed("file.c")
+    old_nodes = set(idx.code_store.data.embedding_dict)
+
+    with patch.object(indexing, "_read_source_text", side_effect=AssertionError):
+        engine.indexing.update_index(patch_text)
+
+    assert idx.code_rows() == ({"file.c"} if rows_kept else set())
+    assert set(idx.code_store.data.embedding_dict) == (
+        old_nodes if rows_kept else set()
+    )
+
+
+def test_text_file_that_mentions_a_subproject_commit_is_indexed(engine, idx):
+    idx.write(
+        "note.md",
+        "Subproject commit 1111111111111111111111111111111111111111\n# kept\n",
+    )
+
+    engine.indexing.update_index(
+        "--- /dev/null\n+++ b/note.md\n@@ -0,0 +1,2 @@\n"
+        "+Subproject commit 1111111111111111111111111111111111111111\n"
+        "+# kept\n"
+    )
+
+    assert idx.docs_rows() == {"note.md"}
+
+
+@pytest.mark.parametrize("prefix", [True, False], ids=["prefix", "no-prefix"])
+@pytest.mark.parametrize("directory", ["a", "b"])
+def test_update_preserves_real_prefix_named_directory(engine, idx, directory, prefix):
+    relative = f"{directory}/unit.c"
+    idx.seed(relative)
+    (idx.codebase / directory).mkdir()
+    idx.write(relative)
+    old = f"a/{relative}" if prefix else relative
+    new = f"b/{relative}" if prefix else relative
+
+    engine.indexing.update_index(
+        f"diff --git {old} {new}\n"
+        f"--- {old}\n+++ {new}\n"
+        "@@ -1 +1 @@\n-int old;\n+int new;\n"
+    )
+
+    assert idx.code_rows() == {relative}
+    assert len(idx.code_store.data.embedding_dict) == 1

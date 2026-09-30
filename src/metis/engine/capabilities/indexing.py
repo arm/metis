@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from concurrent.futures import CancelledError
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -33,16 +34,74 @@ def _read_source_text(file_path: str) -> str:
 
 def _source_path(diff_file: unidiff.PatchedFile) -> str:
     """Return the decoded pre-change path of a patched file."""
-    source = unquote_git_path(diff_file.source_file)
-    target = unquote_git_path(diff_file.target_file)
-    if source.startswith("a/") and target.startswith("b/"):
-        return source[2:]
-    return source
+    return _path_from_diff(diff_file, source=True)
 
 
 def _diff_path(diff_file: unidiff.PatchedFile) -> str:
     """Return the decoded post-change path of a patched file."""
-    return unquote_git_path(diff_file.path)
+    return _path_from_diff(diff_file, source=diff_file.is_removed_file)
+
+
+def _patch_headers(diff_file: unidiff.PatchedFile) -> list[str]:
+    return [line.rstrip("\n") for line in diff_file.patch_info or []]
+
+
+def _header_paths(headers: list[str]) -> tuple[str, str] | None:
+    for line in headers:
+        if line.startswith("diff --git "):
+            parts = re.findall(r'"(?:\\.|[^"\\])*"|\S+', line[len("diff --git ") :])
+            if len(parts) == 2:
+                return unquote_git_path(parts[0]), unquote_git_path(parts[1])
+    return None
+
+
+def _path_from_diff(diff_file: unidiff.PatchedFile, *, source: bool) -> str:
+    headers = _patch_headers(diff_file)
+    marker = "rename from " if source else "rename to "
+    copy_marker = "copy from " if source else "copy to "
+    for line in headers:
+        if line.startswith((marker, copy_marker)):
+            return unquote_git_path(line.split(" ", 2)[2])
+    raw_path = unquote_git_path(
+        diff_file.source_file if source else diff_file.target_file
+    )
+    header_paths = _header_paths(headers)
+    if header_paths is not None:
+        left, right = header_paths
+        # Both sides of a default diff name the same path after a/ and b/.
+        prefixed = (
+            left.startswith("a/") and right.startswith("b/") and left[2:] == right[2:]
+        )
+    else:
+        old = unquote_git_path(diff_file.source_file)
+        new = unquote_git_path(diff_file.target_file)
+        # Without a git header, /dev/null marks the side that has no path.
+        prefixed = (old.startswith("a/") or old == "/dev/null") and (
+            new.startswith("b/") or new == "/dev/null"
+        )
+    if prefixed and raw_path.startswith("a/" if source else "b/"):
+        return raw_path[2:]
+    return raw_path
+
+
+def _has_header(headers: list[str], prefix: str) -> bool:
+    return any(line.startswith(prefix) for line in headers)
+
+
+def _is_gitlink(diff_file: unidiff.PatchedFile) -> bool:
+    if "160000" in (diff_file.source_mode, diff_file.target_mode):
+        return True
+    # A modified gitlink keeps its mode in the index line, so check the body.
+    # A text file that contains this phrase also has other changed lines.
+    changed = [
+        line.value
+        for hunk in diff_file
+        for line in hunk
+        if line.is_added or line.is_removed
+    ]
+    return bool(changed) and all(
+        value.startswith("Subproject commit ") for value in changed
+    )
 
 
 class IndexingService:
@@ -277,13 +336,29 @@ class IndexingService:
             metisignore_spec = self._repository.load_metisignore()
             failures: list[str] = []
             for diff_file in patch_set:
-                if diff_file.is_binary_file:
+                headers = _patch_headers(diff_file)
+                if _is_gitlink(diff_file):
+                    continue
+                is_copy = _has_header(headers, "copy from ") and _has_header(
+                    headers, "copy to "
+                )
+                is_rename = _has_header(headers, "rename from ") and _has_header(
+                    headers, "rename to "
+                )
+                if (
+                    not diff_file
+                    and not is_copy
+                    and not is_rename
+                    and not diff_file.is_binary_file
+                    and not diff_file.is_added_file
+                    and not diff_file.is_removed_file
+                ):
                     continue
                 diff_path = _diff_path(diff_file)
                 doc_id = os.path.join(codebase_name, diff_path)
                 kind = self._index_kind(doc_id, docs_supported_exts)
 
-                if diff_file.is_rename:
+                if is_rename:
                     # A rename is a delete of the old path plus an add of the new one.
                     old_doc_id = os.path.join(codebase_name, _source_path(diff_file))
                     old_kind = self._index_kind(old_doc_id, docs_supported_exts)
@@ -296,7 +371,7 @@ class IndexingService:
                 target_index = index_code if kind == "code" else index_docs
                 file_path = os.path.join(self._config.codebase_path, diff_path)
 
-                if diff_file.is_removed_file:
+                if diff_file.is_removed_file or diff_file.is_binary_file:
                     target_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 else:
                     if self._repository.is_metisignored(
@@ -308,7 +383,7 @@ class IndexingService:
                     try:
                         file_content = _read_source_text(file_path)
                     except FileNotFoundError:
-                        if not diff_file.is_added_file:
+                        if not (diff_file.is_added_file or is_copy or is_rename):
                             failures.append(f"{diff_path} (file not found)")
                             continue
                         file_content = extract_content_from_diff(diff_file)

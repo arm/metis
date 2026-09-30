@@ -5,6 +5,9 @@
 
 ### Bug Fixes
 
+* **index:** Keep the source rows of copied files while adding the target during `update`.
+* **index:** Skip mode-only and gitlink changes, and remove old rows when a file becomes binary.
+* **index:** Preserve real `a/` and `b/` directories in diffs made with `--no-prefix`.
 * **index:** Report unreadable and unsplittable files during `update`, and remove stale rows when a changed file has no content or nodes.
 * **index:** Prepare updated code nodes with the same splitting and anchors as `index`, and replace rows when an added diff is applied again.
 * **index:** Apply the file selection of `index` during `update` and remove rows for files that became ignored.
