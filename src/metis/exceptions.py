@@ -46,3 +46,7 @@ class IndexStateError(Exception):
 
     def __init__(self, message: str):
         super().__init__(f"Index state error: {message}")
+
+
+class IndexSyncError(Exception):
+    """Raised when the index cannot be synced to the current commit."""

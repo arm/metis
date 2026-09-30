@@ -242,6 +242,9 @@ Metis also provides an interactive CLI with several built-in commands:
 - `--project-schema` namespaces PostgreSQL schemas and Qdrant collections.
 - `--commit SHA` – full 40 or 64 character id of the commit the codebase is at.
   `index` records it instead of `HEAD`. `update` records it, or "unknown" without it.
+  `sync` checks that `HEAD` is this commit.
+- `--allow-non-ancestor` – let `sync` continue when the recorded commit is not an
+  ancestor of `HEAD`. See `sync` below.
 - `--chroma-dir` and `--qdrant-url` configure backend storage.
 - `--triage` – in the interactive prompt, triage findings after `review_code`,
   `review_dir`, `review_file`, or `review_patch` and annotate SARIF output.
@@ -311,6 +314,28 @@ project schema, the metadata of the Chroma code collection, or a
   after a plain `update` neither the old commit nor `HEAD` describes the index.
   A plain `update` that fails partway also records "unknown". Run `index` before
   the next `sync`.
+
+### `sync`
+Updates the index from the recorded commit to `HEAD` of the git checkout that
+contains the codebase, then records `HEAD`. Use it to keep an index current after
+each merge or pull.
+
+- `sync` runs `git diff --no-renames --relative <recorded> HEAD` in the codebase
+  directory and applies the diff like `update`. A renamed file becomes a delete
+  and an add. When the codebase is a subdirectory of the repository, the diff
+  covers only that directory, with paths relative to it.
+- `sync` reads changed files from the working tree. It stops when `HEAD` is not
+  the commit it diffs to, or when tracked files under the codebase have
+  uncommitted changes. It checks again after the update and does not record the
+  new commit when the checkout changed.
+- `sync` stops with an error when no commit is recorded (also after a plain
+  `update`), when the recorded commit is not in the repository, and when the recorded commit is not an ancestor of
+  `HEAD` (for example after a force push). Run `index` in these cases, or pass
+  `--allow-non-ancestor` to apply the diff between the two trees.
+- In a shallow clone that does not contain the recorded commit, or does not show
+  that it is an ancestor, `sync` asks you to fetch more history.
+- A failed update leaves the recorded commit unchanged, so the next `sync`
+  applies the same range again.
 
 ### `update <patch.diff>`
 Incrementally updates the index using a diff. Avoids full reindexing.

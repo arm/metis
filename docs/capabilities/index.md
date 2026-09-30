@@ -23,6 +23,11 @@ The backend records the commit that the index reflects. `index.build` records
 that the caller passes, or an unknown commit when the caller passes none. A backend reset removes the record, and
 `index_status` shows it.
 
+The `sync` CLI command applies the git diff from the recorded commit to `HEAD`
+through `index.update` and then records `HEAD`. It requires a clean checkout at
+`HEAD`, and by default it requires the recorded commit to be an ancestor of
+`HEAD`. `--allow-non-ancestor` removes the ancestor check.
+
 The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see
 [Execution graph](../execution-graph.md#initialize).

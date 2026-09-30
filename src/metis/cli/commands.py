@@ -55,6 +55,7 @@ Type one of the following commands (with arguments):
 - [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
 - [cyan]update patch.diff[/cyan]
 - [cyan]index_status[/cyan]   (show the commit the index reflects)
+- [cyan]sync[/cyan]   (update the index from the recorded commit to HEAD)
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
 - [magenta]help[/magenta]   (show this message)
@@ -67,6 +68,7 @@ Options:
     --include-triaged          Include findings already triaged by Metis.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
     --commit SHA               (Optional) Full commit id the codebase is at. index and update record it. Without it, update records an unknown commit.
+    --allow-non-ancestor       (Optional) Let sync apply a recorded commit that is not an ancestor of HEAD.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --qdrant-url URL           (Optional) Qdrant server URL (default: http://localhost:6333).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -304,6 +306,24 @@ def run_index_status(engine, args, runtime: CommandRuntime):
         f"Recorded commit: {escape(str(state.get('commit') or 'unknown'))}\n"
         f"Last operation: {escape(str(state.get('operation') or 'unknown'))}\n"
         f"Updated at: {escape(str(state.get('updated_at') or 'unknown'))}",
+        args.quiet,
+    )
+
+
+def run_sync(engine, args, runtime: CommandRuntime):
+    result = with_spinner(
+        "Syncing index...",
+        engine.indexing.sync_index,
+        allow_non_ancestor=bool(getattr(args, "allow_non_ancestor", False)),
+        quiet=args.quiet,
+    )
+    if result.status == "up_to_date":
+        print_console(
+            f"[green]Index is up to date at {result.head}.[/green]", args.quiet
+        )
+        return
+    print_console(
+        f"[green]Index synced from {result.base} to {result.head}.[/green]",
         args.quiet,
     )
 

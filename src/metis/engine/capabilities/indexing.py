@@ -11,6 +11,7 @@ from datetime import UTC
 from datetime import datetime
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import unidiff
@@ -20,11 +21,13 @@ from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
 from metis.engine.diff_utils import unquote_git_path
+from metis.engine import git_history
 from metis.engine.git_history import head_commit
 from metis.engine.helpers import prepare_nodes_iter
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.runtime import EngineState
+from metis.exceptions import IndexSyncError
 from metis.exceptions import IndexUpdateError
 from metis.exceptions import ParsingError
 
@@ -142,6 +145,13 @@ def _is_gitlink(diff_file: unidiff.PatchedFile) -> bool:
     return bool(changed) and all(
         value.startswith("Subproject commit ") for value in changed
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SyncResult:
+    status: str  # "up_to_date" or "updated"
+    base: str
+    head: str
 
 
 class IndexingService:
@@ -374,6 +384,106 @@ class IndexingService:
             return get_state() if get_state is not None else None
         except NotImplementedError:
             return None
+
+    def sync_index(self, *, allow_non_ancestor: bool = False) -> SyncResult:
+        """Update the index from the recorded commit to the checked-out commit.
+
+        The diff between the two commits is applied like ``update``, and the new
+        commit is recorded when that succeeds. Changed files are read from the
+        working tree, so HEAD must be the new commit and tracked files under the
+        codebase must be unchanged, before and after the update.
+        """
+        state = self.get_index_state()
+        base = (state or {}).get("commit")
+        if not base:
+            raise IndexSyncError(
+                "No commit is recorded for this index. Run `index` first."
+            )
+        try:
+            base = git_history.normalize_commit(base)
+        except ValueError as exc:
+            raise IndexSyncError(
+                "The recorded commit is not a valid commit id. Run a full `index`."
+            ) from exc
+        path = self._config.codebase_path
+        explicit = self._config.index_commit
+        try:
+            checkout = git_history.read_head(path)
+            if checkout is None:
+                raise IndexSyncError(
+                    "sync needs the git checkout that contains the codebase. "
+                    "Run it inside the checkout, or set GIT_DIR."
+                )
+            head = explicit or checkout
+            # An explicit commit must be checked out even when the index is at it.
+            if explicit or base != head:
+                self._check_checkout(path, head)
+            if base == head:
+                return SyncResult("up_to_date", base, head)
+            self._check_range(path, base, head, allow_non_ancestor=allow_non_ancestor)
+            patch_text = git_history.diff_between(path, base, head)
+            with self._mutation():
+                self._apply_patch(patch_text)
+                try:
+                    self._check_checkout(path, head)
+                except IndexSyncError as exc:
+                    raise IndexSyncError(
+                        f"The checkout changed while sync ran: {exc} The index was "
+                        f"updated, but the recorded commit is still {base}. "
+                        "Run sync again."
+                    ) from exc
+                self._record_index_state("sync", head)
+        except git_history.GitError as exc:
+            raise IndexSyncError(
+                f"{exc}. Run sync in a git checkout with git installed, "
+                "or run a full `index`."
+            ) from exc
+        return SyncResult("updated", base, head)
+
+    @staticmethod
+    def _check_checkout(path: str, head: str) -> None:
+        checkout = git_history.read_head(path)
+        if checkout != head:
+            raise IndexSyncError(
+                f"HEAD is {checkout or 'unknown'}, not {head}. sync reads changed "
+                f"files from the working tree, so check out {head} first."
+            )
+        if git_history.has_tracked_changes(path):
+            raise IndexSyncError(
+                "Tracked files under the codebase have uncommitted changes. "
+                "Commit or stash them first."
+            )
+
+    @staticmethod
+    def _check_range(
+        path: str, base: str, head: str, *, allow_non_ancestor: bool
+    ) -> None:
+        shallow = git_history.is_shallow(path)
+        if not git_history.has_commit(path, base):
+            if shallow:
+                raise IndexSyncError(
+                    f"The recorded commit {base} is not in this shallow clone. "
+                    "Fetch more history with `git fetch --unshallow`, or run a "
+                    "full `index`."
+                )
+            raise IndexSyncError(
+                f"The recorded commit {base} is not in this repository. "
+                "Run a full `index`."
+            )
+        if allow_non_ancestor or git_history.is_ancestor(path, base, head):
+            return
+        if shallow:
+            raise IndexSyncError(
+                f"This shallow clone does not show that {base} is an ancestor of "
+                f"{head}. Fetch more history with `git fetch --unshallow`, pass "
+                "--allow-non-ancestor, or run a full `index`."
+            )
+        raise IndexSyncError(
+            f"The recorded commit {base} is not an ancestor of {head}. History "
+            "was rewritten or the index was built from another branch. Run a "
+            "full `index`, or pass --allow-non-ancestor to apply the diff "
+            "between the two trees."
+        )
 
     def _prepare_nodes(
         self, code_docs: list[Document], doc_docs: list[Document]

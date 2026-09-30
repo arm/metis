@@ -19,6 +19,7 @@ from .commands import (
     run_review,
     run_review_code,
     run_triage,
+    run_sync,
     run_update,
     show_help,
     show_version,
@@ -130,6 +131,7 @@ COMMANDS = {
         prepares_output_file=True,
     ),
     "index_status": CommandSpec(run_index_status, invocation_mode="args"),
+    "sync": CommandSpec(run_sync, invocation_mode="args"),
     "review_file": CommandSpec(
         run_file_review,
         tracked=True,

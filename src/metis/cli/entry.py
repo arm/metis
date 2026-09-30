@@ -467,6 +467,14 @@ def main():
             "an unknown commit."
         ),
     )
+    parser.add_argument(
+        "--allow-non-ancestor",
+        action="store_true",
+        help=(
+            "Let the sync command apply the diff between the recorded commit and "
+            "HEAD when the recorded commit is not an ancestor of HEAD."
+        ),
+    )
     parser.add_argument("--version", action="store_true", help="Show program version")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose output"
