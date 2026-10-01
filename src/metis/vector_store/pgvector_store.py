@@ -6,8 +6,18 @@ import logging
 
 from llama_index.core import StorageContext
 from llama_index.vector_stores.postgres import PGVectorStore
+from sqlalchemy import Column
+from sqlalchemy import MetaData
+from sqlalchemy import Table
+from sqlalchemy import Text
 from sqlalchemy import create_engine
+from sqlalchemy import func
+from sqlalchemy import inspect
+from sqlalchemy import select
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine.url import make_url
 
 from metis.exceptions import IndexStateError
@@ -19,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 INDEX_STATE_TABLE = "index_state"
+INDEX_STATE_KEY = "index"
 HALFVEC_HNSW_DIST_METHODS = {
     "vector_l2_ops": "halfvec_l2_ops",
     "vector_ip_ops": "halfvec_ip_ops",
@@ -160,25 +171,30 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
         schema = getattr(store, "schema_name", None)
         return schema or (self.project_schema or "public").lower()
 
-    def _state_table(self, engine):
-        preparer = engine.dialect.identifier_preparer
-        return f"{preparer.quote_schema(self._state_schema())}.{preparer.quote(INDEX_STATE_TABLE)}"
+    def _state_table(self):
+        return Table(
+            INDEX_STATE_TABLE,
+            MetaData(schema=self._state_schema()),
+            Column("key", Text, primary_key=True),
+            Column("value", JSONB, nullable=False),
+            Column(
+                "updated_at",
+                TIMESTAMP(timezone=True),
+                server_default=func.now(),
+                nullable=False,
+            ),
+        )
 
     def get_index_state(self):
         engine = None
         try:
             engine = create_engine(self.connection_string)
-            table = self._state_table(engine)
+            table = self._state_table()
             with engine.connect() as conn:
-                if (
-                    conn.execute(
-                        text("SELECT to_regclass(:name)"), {"name": table}
-                    ).scalar()
-                    is None
-                ):
+                if not inspect(conn).has_table(table.name, schema=table.schema):
                     return None
                 value = conn.execute(
-                    text(f"SELECT value FROM {table} WHERE key = 'index'")
+                    select(table.c.value).where(table.c.key == INDEX_STATE_KEY)
                 ).scalar()
             return json.loads(value) if isinstance(value, str) else value
         except Exception as exc:
@@ -193,24 +209,15 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
         engine = None
         try:
             engine = create_engine(self.connection_string)
-            table = self._state_table(engine)
+            table = self._state_table()
+            upsert = insert(table).values(key=INDEX_STATE_KEY, value=state)
+            upsert = upsert.on_conflict_do_update(
+                index_elements=[table.c.key],
+                set_={"value": upsert.excluded.value, "updated_at": func.now()},
+            )
             with engine.begin() as conn:
-                conn.execute(
-                    text(
-                        f"CREATE TABLE IF NOT EXISTS {table} ("
-                        "key text PRIMARY KEY, value jsonb NOT NULL, "
-                        "updated_at timestamptz NOT NULL DEFAULT now())"
-                    )
-                )
-                conn.execute(
-                    text(
-                        f"INSERT INTO {table} (key, value) "
-                        "VALUES ('index', CAST(:value AS jsonb)) "
-                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
-                        "updated_at = now()"
-                    ),
-                    {"value": json.dumps(state)},
-                )
+                table.create(conn, checkfirst=True)
+                conn.execute(upsert)
         except Exception as exc:
             raise IndexStateError(
                 f"cannot write the state of '{self.project_schema}'"

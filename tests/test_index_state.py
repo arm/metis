@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from qdrant_client.models import Distance
-from sqlalchemy import create_engine
 
 from metis.cli import commands
 from metis.cli import entry
@@ -19,10 +17,8 @@ from metis.engine.capabilities import indexing
 from metis.exceptions import IndexStateError
 from metis.exceptions import IndexUpdateError
 from metis.exceptions import ParsingError
-from metis.vector_store import pgvector_store
 from metis.vector_store import qdrant_store
 from metis.vector_store.chroma_store import ChromaStore
-from metis.vector_store.pgvector_store import PGVectorStoreImpl
 from metis.vector_store.qdrant_store import QdrantStore
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -219,29 +215,19 @@ def test_qdrant_state_round_trip_uses_a_dot_distance_point(qdrant):
     assert deleted == {"project_code", "project_docs", "project_state"}
 
 
-class _FakePostgres:
-    def __init__(self):
-        self.executed = []
-        self.dialect = create_engine("postgresql+psycopg2://u:p@localhost/db").dialect
-        self.dispose = Mock()
-
-    @contextmanager
-    def begin(self):
-        yield SimpleNamespace(execute=lambda sql, *_a: self.executed.append(str(sql)))
-
-
 @pytest.mark.parametrize(
-    ("store_schema", "table"),
-    [(None, "mixedcase.index_state"), ("from_store", "from_store.index_state")],
+    ("store_schema", "expected"),
+    [(None, "mixedcase"), ("from_store", "from_store")],
     ids=["lowercased", "vector-store-schema"],
 )
-def test_postgres_state_uses_the_vector_schema(monkeypatch, store_schema, table):
-    fake = _FakePostgres()
-    monkeypatch.setattr(pgvector_store, "create_engine", lambda *_a, **_k: fake)
-    backend = PGVectorStoreImpl("postgresql://db", "MixedCase", None, None, 8)
+def test_postgres_state_table_uses_the_vector_schema(store_schema, expected):
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
+    backend = pgvector_store.PGVectorStoreImpl(
+        "postgresql://db", "MixedCase", None, None, 8
+    )
     if store_schema:
         backend.vector_store_code = SimpleNamespace(schema_name=store_schema)
 
-    backend.set_index_state({"commit": SHA})
+    table = backend._state_table()
 
-    assert f"CREATE TABLE IF NOT EXISTS {table} (" in fake.executed[0]
+    assert (table.schema, table.name) == (expected, "index_state")
