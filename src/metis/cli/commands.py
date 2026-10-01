@@ -11,7 +11,7 @@ from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
 from .review_checkpoints import review_checkpoint_callbacks
 from .review_progress import ReviewCodeProgressReporter
-from metis.utils import read_file_content, safe_decode_unicode
+from metis.utils import safe_decode_unicode
 from metis.sarif.writer import generate_sarif
 from metis.sarif.triage import load_sarif_file
 from metis.usage import usage_operation
@@ -54,6 +54,8 @@ Type one of the following commands (with arguments):
 - [cyan]review_code[/cyan]
 - [cyan]triage findings.sarif[/cyan] or [cyan]triage results.json[/cyan]
 - [cyan]update patch.diff[/cyan]
+- [cyan]index_status[/cyan]   (show the commit the index reflects)
+- [cyan]sync[/cyan]   (update the index from the recorded commit to HEAD)
 - [cyan]ask "Give me an overview of the code"[/cyan]
 - [magenta]exit[/magenta]   (quit the tool)
 - [magenta]help[/magenta]   (show this message)
@@ -65,6 +67,9 @@ Options:
     --triage                   Triage findings and annotate SARIF output for review commands.
     --include-triaged          Include findings already triaged by Metis.
     --project-schema SCHEMA    (Optional) Project identifier if postgresql is used.
+    --commit SHA               (Optional) Full commit id the codebase is at. index and update record it. Without it, update records an unknown commit.
+    --allow-non-ancestor       (Optional) Let sync apply a recorded commit that is not an ancestor of HEAD.
+    --deepen                   (Optional) Let sync fetch more history of a shallow clone.
     --chroma-dir DIR           (Optional) Directory to store ChromaDB data (default: ./chromadb).
     --qdrant-url URL           (Optional) Qdrant server URL (default: http://localhost:6333).
     --verbose                  (Optional) Shows detailed output in the terminal window.
@@ -278,7 +283,9 @@ def run_index(engine, verbose=False, quiet=False):
 def run_update(engine, patch_file, args, runtime: CommandRuntime):
     if not check_file_exists(patch_file):
         return
-    file_diff = read_file_content(patch_file)
+    # A diff of a legacy-encoded file carries bytes that are not UTF-8. Update
+    # reads file content from the working tree, so only the paths must parse.
+    file_diff = Path(patch_file).read_bytes().decode("utf-8", errors="replace")
     with_spinner(
         "Updating index...",
         engine.indexing.update_index,
@@ -286,6 +293,41 @@ def run_update(engine, patch_file, args, runtime: CommandRuntime):
         quiet=args.quiet,
     )
     print_console("[green]Index update completed.[/green]", args.quiet)
+
+
+def run_index_status(engine, args, runtime: CommandRuntime):
+    state = engine.indexing.get_index_state()
+    if state is None:
+        print_console(
+            "[yellow]No index state is recorded. Run index first.[/yellow]",
+            args.quiet,
+        )
+        return
+    print_console(
+        f"Recorded commit: {escape(str(state.get('commit') or 'unknown'))}\n"
+        f"Last operation: {escape(str(state.get('operation') or 'unknown'))}\n"
+        f"Updated at: {escape(str(state.get('updated_at') or 'unknown'))}",
+        args.quiet,
+    )
+
+
+def run_sync(engine, args, runtime: CommandRuntime):
+    result = with_spinner(
+        "Syncing index...",
+        engine.indexing.sync_index,
+        allow_non_ancestor=bool(getattr(args, "allow_non_ancestor", False)),
+        deepen=bool(getattr(args, "deepen", False)),
+        quiet=args.quiet,
+    )
+    if result.status == "up_to_date":
+        print_console(
+            f"[green]Index is up to date at {result.head}.[/green]", args.quiet
+        )
+        return
+    print_console(
+        f"[green]Index synced from {result.base} to {result.head}.[/green]",
+        args.quiet,
+    )
 
 
 def run_ask(engine, question, args, runtime: CommandRuntime):

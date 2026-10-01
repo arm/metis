@@ -9,9 +9,17 @@ from llama_index.core import StorageContext
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance
+from qdrant_client.models import PointStruct
 from qdrant_client.models import VectorParams
 
+from metis.exceptions import IndexStateError
 from metis.vector_store.llama_index_backend import LlamaIndexVectorBackend
+
+
+INDEX_STATE_POINT_ID = 1
+# The state point is never searched. Qdrant normalizes vectors for cosine
+# distance, so the point uses dot distance and a non-zero vector.
+INDEX_STATE_VECTOR = [1.0]
 
 
 class QdrantStore(LlamaIndexVectorBackend):
@@ -80,11 +88,55 @@ class QdrantStore(LlamaIndexVectorBackend):
         )
         return *stores, *contexts
 
+    def _state_collection(self) -> str:
+        return f"{self.collection_prefix}_state"
+
+    def get_index_state(self) -> dict | None:
+        self.init()
+        assert self._client is not None
+        name = self._state_collection()
+        try:
+            if not self._client.collection_exists(name):
+                return None
+            points = self._client.retrieve(
+                collection_name=name, ids=[INDEX_STATE_POINT_ID], with_payload=True
+            )
+        except Exception as e:
+            raise IndexStateError("cannot read the state of the Qdrant index") from e
+        return dict(points[0].payload) if points else None
+
+    def set_index_state(self, state: dict) -> None:
+        self.init()
+        assert self._client is not None
+        name = self._state_collection()
+        try:
+            if not self._client.collection_exists(name):
+                self._client.create_collection(
+                    collection_name=name,
+                    vectors_config=VectorParams(size=1, distance=Distance.DOT),
+                )
+            self._client.upsert(
+                collection_name=name,
+                points=[
+                    PointStruct(
+                        id=INDEX_STATE_POINT_ID,
+                        vector=INDEX_STATE_VECTOR,
+                        payload=state,
+                    )
+                ],
+            )
+        except Exception as e:
+            raise IndexStateError("cannot write the state of the Qdrant index") from e
+
     def reset_index(self) -> None:
         self.init()
         assert self._client is not None
-        for kind in ("code", "docs"):
-            name = f"{self.collection_prefix}_{kind}"
+        # The recorded commit describes the rows that the reset removes.
+        for name in (
+            f"{self.collection_prefix}_code",
+            f"{self.collection_prefix}_docs",
+            self._state_collection(),
+        ):
             if self._client.collection_exists(name):
                 self._client.delete_collection(name)
         (

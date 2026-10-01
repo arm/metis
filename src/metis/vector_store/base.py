@@ -42,6 +42,14 @@ class BaseVectorStore(ABC):
     ):
         """Return mutable index handles (code, docs) for patch updates."""
 
+    def get_index_state(self) -> dict | None:
+        """Return the state recorded by the last index or update, or ``None``."""
+        raise NotImplementedError("This vector backend cannot record index state.")
+
+    def set_index_state(self, state: dict) -> None:
+        """Record the state of the index after a successful index or update."""
+        raise NotImplementedError("This vector backend cannot record index state.")
+
     def close(self):
         """Best-effort resource cleanup hook for vector backends."""
         return

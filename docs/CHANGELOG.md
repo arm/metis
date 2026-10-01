@@ -3,8 +3,24 @@
 ## Unreleased
 
 
+### Features
+
+* **index:** Record the commit that the index reflects. `index` records `--commit SHA` or `HEAD` of the git checkout after it succeeds. `update` records `--commit` when it is given, and records an unknown commit otherwise. The record lives in the backend (a table in the PostgreSQL project schema, Chroma collection metadata, or a Qdrant collection) and a backend reset removes it. The new `index_status` command shows the recorded commit.
+* **index:** Add a `sync` command. It applies `git diff --no-renames --relative` from the recorded commit to `HEAD` like `update`, and records `HEAD` when that succeeds. It stops when `HEAD` or the working tree does not match the diff, and when the recorded commit is missing or is not an ancestor of `HEAD`. `--allow-non-ancestor` applies the diff between the two trees instead.
+* **index:** Add `--deepen` to `sync`. In a shallow clone that lacks the recorded commit or the history to `HEAD`, it runs `git fetch --deepen` in growing steps and then `git fetch --unshallow`. Without the flag, `sync` runs no network command.
+
+
 ### Bug Fixes
 
+* **index:** Store the path relative to the codebase root as `file_name` in `index` and `update`, and give `update` rows the same metadata as `index` rows. Rebuild an existing index with `index` to update old rows.
+* **index:** Keep the source rows of copied files while adding the target during `update`.
+* **index:** Skip mode-only and gitlink changes, and remove old rows when a file becomes binary.
+* **index:** Preserve real `a/` and `b/` directories in diffs made with `--no-prefix`.
+* **index:** Report unreadable and unsplittable files during `update`, and remove stale rows when a changed file has no content or nodes.
+* **index:** Prepare updated code nodes with the same splitting and anchors as `index`, and replace rows when an added diff is applied again.
+* **index:** Apply the file selection of `index` during `update` and remove rows for files that became ignored.
+* **index:** Decode Git C-quoted paths before `update` reads or removes files with special characters.
+* **index:** Handle a renamed file in `update` as a delete of the old path and an add of the new path. The old path no longer stays in the index.
 * **providers:** Omit `temperature` from OpenAI Responses requests for every `gpt-6*` model, not only `gpt-6-astra`.
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.

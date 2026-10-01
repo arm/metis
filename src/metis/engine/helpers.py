@@ -82,6 +82,8 @@ def prepare_nodes_iter(
     get_plugin_for_path,
     get_splitter_cached,
     doc_splitter,
+    *,
+    raise_on_error=False,
 ):
     """
     Generator that prepares nodes for code and docs
@@ -99,10 +101,14 @@ def prepare_nodes_iter(
                 annotate_chunk_anchors(d, parsed_nodes)
                 nodes_code.extend(parsed_nodes)
             except Exception as e:
+                if raise_on_error:
+                    raise
                 name = plugin.get_name() if hasattr(plugin, "get_name") else "unknown"
                 logger.warning(
                     f"Could not parse code with language {name} for file {d.id_} (ext {ext}): {e}"
                 )
+        elif raise_on_error:
+            raise ValueError(f"No language plugin for {d.id_}")
         # yield regardless of success
         yield None
 
@@ -110,6 +116,8 @@ def prepare_nodes_iter(
         try:
             nodes_docs.extend(doc_splitter.get_nodes_from_documents([d]))
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(f"Could not parse docs for file {d.id_}: {e}")
         finally:
             yield None

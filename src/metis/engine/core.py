@@ -36,6 +36,7 @@ from .capabilities.index import IndexCapability
 from .capabilities.indexing import IndexingService
 from .capabilities.navigation import NavigationCapability
 from .codegraph import CodeGraphReference
+from .git_history import normalize_commit
 from .execution import ExecutionResult
 from .execution import ExecutionStatus
 from .nodes.builtins import build_builtin_execution
@@ -156,6 +157,9 @@ class MetisEngine:
         )
         language_registry = LanguagePluginRegistry.from_config(plugin_config)
 
+        index_commit = kwargs.get("index_commit")
+        if index_commit is not None:
+            index_commit = normalize_commit(index_commit)
         self._config = EngineConfig(
             codebase_path=self.codebase_path,
             vector_backend=vector_backend,
@@ -181,6 +185,7 @@ class MetisEngine:
             memory_config=memory_config,
             threat_model_config=dict(kwargs.get("threat_model_config") or {}),
             language_registry=language_registry,
+            index_commit=index_commit,
             code_exts=set(language_registry.supported_code_extensions()),
         )
         self._state = EngineState()

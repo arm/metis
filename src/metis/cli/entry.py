@@ -20,6 +20,7 @@ from metis.configuration import build_embedding_provider_config, load_runtime_co
 from metis.engine import MetisEngine
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
+from metis.engine.git_history import normalize_commit
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_chat_provider
@@ -279,6 +280,8 @@ def build_engine(args, runtime):
     else:
         vector_backend = build_chroma_backend(args, runtime, None, None)
 
+    if getattr(args, "commit", None):
+        engine_runtime["index_commit"] = args.commit
     engine = MetisEngine(
         codebase_path=args.codebase_path,
         llm_provider=llm_provider,
@@ -455,6 +458,31 @@ def main():
         type=str,
         help="Path to a custom prompt file (.md or .txt) used to guide analysis",
     )
+    parser.add_argument(
+        "--commit",
+        type=str,
+        help=(
+            "Full id of the commit the codebase is at. index and update record it. "
+            "Without it, index records HEAD of the git checkout and update records "
+            "an unknown commit."
+        ),
+    )
+    parser.add_argument(
+        "--allow-non-ancestor",
+        action="store_true",
+        help=(
+            "Let the sync command apply the diff between the recorded commit and "
+            "HEAD when the recorded commit is not an ancestor of HEAD."
+        ),
+    )
+    parser.add_argument(
+        "--deepen",
+        action="store_true",
+        help=(
+            "Let the sync command fetch more history of a shallow git clone when "
+            "the clone lacks the recorded commit or the history to HEAD."
+        ),
+    )
     parser.add_argument("--version", action="store_true", help="Show program version")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose output"
@@ -496,6 +524,11 @@ def main():
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    if args.commit:
+        try:
+            args.commit = normalize_commit(args.commit)
+        except ValueError as exc:
+            parser.error(f"--commit: {exc}")
     if args.tools is not None:
         parser.error(
             "--tools has been removed; configure execution nodes and capability grants in YAML"

@@ -12,6 +12,23 @@ Current operations:
 - `index.search`: expose bounded retrieval as the model-callable
   `index_search` tool.
 
+`index.update` accepts default Git prefixes and `--no-prefix`. It preserves copy
+sources, skips mode-only and gitlink changes, and removes rows for binary files.
+
+`index.build` and `index.update` store `file_path` as the absolute path and
+`file_name` as the path relative to the codebase root.
+
+The backend records the commit that the index reflects. `index.build` records
+`--commit` or `HEAD` of the git checkout. `index.update` records the commit
+that the caller passes, or an unknown commit when the caller passes none. A backend reset removes the record, and
+`index_status` shows it.
+
+The `sync` CLI command applies the git diff from the recorded commit to `HEAD`
+through `index.update` and then records `HEAD`. It requires a clean checkout at
+`HEAD`, and by default it requires the recorded commit to be an ancestor of
+`HEAD`. `--allow-non-ancestor` removes the ancestor check. `--deepen` lets
+`sync` fetch more history of a shallow clone.
+
 The packaged execution graph does not build an index. Add the `index` node to
 the `initialize` stage when a run should build or refresh it; see
 [Execution graph](../execution-graph.md#initialize).

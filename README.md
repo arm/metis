@@ -240,6 +240,12 @@ Metis also provides an interactive CLI with several built-in commands:
   root when that file exists.
 - `--backend chroma|postgres|qdrant` – choose a vector-store backend (default `chroma`).
 - `--project-schema` namespaces PostgreSQL schemas and Qdrant collections.
+- `--commit SHA` – full 40 or 64 character id of the commit the codebase is at.
+  `index` records it instead of `HEAD`. `update` records it, or "unknown" without it.
+  `sync` checks that `HEAD` is this commit.
+- `--allow-non-ancestor` – let `sync` continue when the recorded commit is not an
+  ancestor of `HEAD`. See `sync` below.
+- `--deepen` – let `sync` fetch more history of a shallow clone. See `sync` below.
 - `--chroma-dir` and `--qdrant-url` configure backend storage.
 - `--triage` – in the interactive prompt, triage findings after `review_code`,
   `review_dir`, `review_file`, or `review_patch` and annotate SARIF output.
@@ -295,8 +301,66 @@ Runs the configured Review stage for a diff. Patch analysis requires a graph
 that selects `simple_llm_review`; the packaged Reachability node reports patch
 requests as inconclusive.
 
+### `index_status`
+Shows the commit that the index reflects, the operation that recorded it, and
+the time. The record lives in the selected backend: a table in the PostgreSQL
+project schema, the metadata of the Chroma code collection, or a
+`<prefix>_state` collection in Qdrant. A reset of the backend removes it.
+
+- `index` records `--commit`, or `HEAD` of the git checkout that contains the
+  codebase. It records "unknown" when neither is available, so an old commit is
+  never kept for a rebuilt index.
+- `update <patch.diff>` records `--commit` when you pass it. A plain `update`
+  records "unknown". A patch is not always the diff from the recorded commit, so
+  after a plain `update` neither the old commit nor `HEAD` describes the index.
+  A plain `update` that fails partway also records "unknown". Run `index` before
+  the next `sync`.
+
+### `sync`
+Updates the index from the recorded commit to `HEAD` of the git checkout that
+contains the codebase, then records `HEAD`. Use it to keep an index current after
+each merge or pull.
+
+- `sync` runs `git diff --no-renames --relative <recorded> HEAD` in the codebase
+  directory and applies the diff like `update`. A renamed file becomes a delete
+  and an add. When the codebase is a subdirectory of the repository, the diff
+  covers only that directory, with paths relative to it.
+- `sync` reads changed files from the working tree. It stops when `HEAD` is not
+  the commit it diffs to, or when tracked files under the codebase have
+  uncommitted changes. It checks again after the update and does not record the
+  new commit when the checkout changed.
+- `sync` stops with an error when no commit is recorded (also after a plain
+  `update`), when the recorded commit is not in the repository, and when the recorded commit is not an ancestor of
+  `HEAD` (for example after a force push). Run `index` in these cases, or pass
+  `--allow-non-ancestor` to apply the diff between the two trees.
+- In a shallow clone that does not contain the recorded commit, or does not show
+  that it is an ancestor, `sync` asks you to fetch more history.
+- `--deepen` lets `sync` fetch that history itself. It runs `git fetch --deepen`
+  with 50, 500 and 5000 commits, then `git fetch --unshallow`, and stops as soon
+  as the check passes. Each fetch sets `GIT_TERMINAL_PROMPT=0` and has a 600
+  second timeout. A fetch failure stops `sync` and leaves the record unchanged.
+  Without `--deepen`, `sync` runs no network command.
+- A failed update leaves the recorded commit unchanged, so the next `sync`
+  applies the same range again.
+
 ### `update <patch.diff>`
 Incrementally updates the index using a diff. Avoids full reindexing.
+A renamed file (`rename from` and `rename to` in the diff, with or without edits) is
+removed under its old path and added under its new path.
+Git C-quoted paths in the diff are decoded before `update` reads or removes files.
+`update` skips unsupported and ignored files, and removes old rows when a file
+becomes ignored.
+Added and modified files use the same node splitting and anchor metadata as `index`.
+`update` removes stale rows for empty or unsplittable files. It reports files that
+cannot be read, decoded, or split with an error after applying other files.
+`update` accepts Git diffs with default `a/` and `b/` prefixes or `--no-prefix`.
+Copies add only the target, mode-only changes leave rows alone, binary changes
+remove old rows, and gitlink changes are skipped.
+
+`index` and `update` store the same metadata for each file. `file_path` is the
+absolute path. `file_name` is the path relative to the codebase root, for example
+`src/app/index.ts`. An index built by an earlier version stores only the base
+name in `file_name`. Run `index` again to rebuild it with relative paths.
 
 ### `ask <question>`
 Ask questions against the indexed codebase.
