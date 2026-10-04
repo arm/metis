@@ -8,6 +8,7 @@ import os
 import re
 import threading
 from collections import OrderedDict, defaultdict
+from functools import cached_property
 from typing import Any
 
 from metis.utils import source_lines
@@ -95,6 +96,8 @@ class SourceMap:
         self.line_offsets: list[int] = self._compute_line_offsets(self._source)
         # (start_line, end_line, name) for each top-level function
         self._functions: list[tuple[int, int, str]] | None = None
+        self._anchor_hashes: OrderedDict[tuple[int, int], str] = OrderedDict()
+        self._anchor_hash_lock = threading.Lock()
 
     @classmethod
     def for_file(cls, codebase_path: str, rel_path: str) -> "SourceMap | None":
@@ -231,6 +234,21 @@ class SourceMap:
             f"{start_line + i:>{width}}: {ln}" for i, ln in enumerate(lines)
         )
 
+    def _anchor_content_hash(self, start_byte: int, end_byte: int) -> str:
+        # Many minified chunks share a source line. Hash its original bytes once,
+        # with bounded per-source retention rather than a process-global cache.
+        with self._anchor_hash_lock:
+            key = (start_byte, end_byte)
+            digest = self._anchor_hashes.get(key)
+            if digest is not None:
+                self._anchor_hashes.move_to_end(key)
+                return digest
+            digest = content_hash(self._anchor_slice(start_byte, end_byte))
+            if len(self._anchor_hashes) >= 256:
+                self._anchor_hashes.popitem(last=False)
+            self._anchor_hashes[key] = digest
+            return digest
+
     def anchor_for_lines(
         self,
         start_line: int,
@@ -256,7 +274,7 @@ class SourceMap:
             end_byte=eb,
             symbol=symbol,
             kind=kind,
-            content_hash=content_hash(self._anchor_slice(sb, eb)),
+            content_hash=self._anchor_content_hash(sb, eb),
             confidence=confidence,
         )
 
@@ -380,32 +398,40 @@ class SourceMap:
             return anchor
         return self._resolve_fuzzy(snippet_lines, hint)
 
+    @cached_property
+    def _verbatim_source(self) -> tuple[str, list[int]]:
+        # Snippet matching uses rstripped characters, not the raw UTF-8 offsets.
+        text = "\n".join(ln.rstrip() for ln in self.lines)
+        return text, [0, *(match.end() for match in re.finditer("\n", text))]
+
     def _resolve_verbatim(
         self, snippet_lines: list[str], hint: range | None, context_text: str
     ) -> CodeAnchor | None:
         needle = "\n".join(snippet_lines)
-        haystack = "\n".join(ln.rstrip() for ln in self.lines)
-
-        starts: list[int] = []
-        pos = haystack.find(needle)
-        while pos != -1:
-            starts.append(pos)
-            pos = haystack.find(needle, pos + 1)
-        if not starts:
+        haystack, line_starts = self._verbatim_source
+        first = haystack.find(needle)
+        if first == -1:
             return None
-
-        spans = [
-            (
-                haystack.count("\n", 0, s) + 1,
-                haystack.count("\n", 0, s) + len(snippet_lines),
+        second = haystack.find(needle, first + 1)
+        start_line = bisect.bisect_right(line_starts, first)
+        end_line = start_line + len(snippet_lines) - 1
+        if second == -1:
+            return self.anchor_for_lines(
+                start_line, end_line, confidence=CONFIDENCE_EXACT
             )
-            for s in starts
-        ]
+        # Without hints, disambiguation always chooses the first occurrence.
+        # Minified chunks can match tens of thousands of times on one line.
+        if hint is None and not context_text:
+            return self.anchor_for_lines(
+                start_line, end_line, confidence=CONFIDENCE_DISAMBIGUATED
+            )
 
-        if len(spans) == 1:
-            sl, el = spans[0]
-            return self.anchor_for_lines(sl, el, confidence=CONFIDENCE_EXACT)
-
+        spans = [(start_line, end_line)]
+        pos = second
+        while pos != -1:
+            start_line = bisect.bisect_right(line_starts, pos)
+            spans.append((start_line, start_line + len(snippet_lines) - 1))
+            pos = haystack.find(needle, pos + 1)
         chosen = self._disambiguate(spans, hint, context_text)
         return self.anchor_for_lines(
             chosen[0], chosen[1], confidence=CONFIDENCE_DISAMBIGUATED
