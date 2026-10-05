@@ -20,6 +20,8 @@ from metis.engine.runtime import EngineConfig
 from metis.engine.runtime import EngineState
 from metis.exceptions import ParsingError
 from metis.utils import read_file_content
+from metis.vector_store.node_projection import project_index_node
+from metis.vector_store.node_projection import project_index_nodes
 
 logger = logging.getLogger("metis")
 
@@ -192,8 +194,9 @@ class IndexingService:
             raise RuntimeError("No pending index preparation for this thread")
         self._state.pending_nodes = None
         with self._mutation():
+            # Input errors must preserve the existing readable index.
+            nodes_code, nodes_docs = (project_index_nodes(nodes) for nodes in pending)
             embed_model_code, embed_model_docs = self._get_embedding_models()
-            nodes_code, nodes_docs = pending
             self._config.vector_backend.init()
             reset_index = getattr(self._config.vector_backend, "reset_index", None)
             if callable(reset_index):
@@ -274,8 +277,9 @@ class IndexingService:
                                 continue
                         else:
                             nodes = doc_splitter.get_nodes_from_documents([doc])
-                        target_index.insert_nodes(nodes)
+                        target_index.insert_nodes(project_index_nodes(nodes))
                     else:
-                        target_index.update_ref_doc(doc)
+                        # LlamaIndex deletes the old document before inserting it.
+                        target_index.update_ref_doc(project_index_node(doc))
                     target_index.docstore.set_document_hash(doc.id_, doc.hash)
             logger.info("Index update complete based on the provided patch diff.")

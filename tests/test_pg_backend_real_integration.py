@@ -4,16 +4,20 @@
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import column
 from sqlalchemy import create_engine
 from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import table
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.schema import DropSchema
 
 
@@ -165,5 +169,144 @@ def test_pg_backend_reports_hnsw_setup_failure(postgres_connection):
             async_engine = getattr(store, "_async_engine", None)
             if async_engine is not None:
                 asyncio.run(async_engine.dispose())
+        with cleanup_engine.begin() as connection:
+            connection.execute(DropSchema(schema, if_exists=True, cascade=True))
+
+
+@pytest.mark.postgres
+def test_pg_backend_normalizes_nul_text_and_nested_metadata(postgres_connection):
+    from llama_index.core.embeddings import MockEmbedding
+    from llama_index.core.schema import TextNode
+
+    from metis.vector_store.pgvector_store import PGVectorStoreImpl
+
+    dsn, cleanup_engine = postgres_connection
+    schema = "metis_nul_" + uuid4().hex
+    embed = MockEmbedding(embed_dim=3)
+    backend = PGVectorStoreImpl(dsn, schema, embed, embed, 3)
+    nodes = [
+        TextNode(
+            id_="code-stable",
+            text="before\x00after",
+            metadata={"nested": {"key\x00": ["value\x00"]}},
+        ),
+        TextNode(id_="docs-stable", text="documentation\x00"),
+    ]
+    originals = [node.model_dump() for node in nodes]
+    try:
+        backend.init()
+        # Establish the underlying PostgreSQL failure without provider calls.
+        with pytest.raises((ValueError, DBAPIError), match="NUL|0x00|0000"):
+            backend.vector_store_code.add(
+                [TextNode(text="raw\x00", embedding=[0.1, 0.2, 0.3])]
+            )
+        backend.index_nodes(
+            [nodes[0]], [nodes[1]], embed_model_code=embed, embed_model_docs=embed
+        )
+        with cleanup_engine.connect() as connection:
+            for name, original in zip(("code", "docs"), nodes, strict=True):
+                rows = table(
+                    f"data_{name}",
+                    column("node_id"),
+                    column("text"),
+                    column("metadata_"),
+                    schema=schema,
+                )
+                row = connection.execute(select(rows)).mappings().one()
+                assert row["node_id"] == original.node_id
+                assert row["text"] == original.text.replace("\x00", "\\u0000")
+                if name == "code":
+                    assert row["metadata_"]["nested"] == {
+                        r"key\u0000": [r"value\u0000"]
+                    }
+        assert [node.model_dump() for node in nodes] == originals
+    finally:
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(backend, attr, None)
+            if store is not None:
+                asyncio.run(store.close())
+        with cleanup_engine.begin() as connection:
+            connection.execute(DropSchema(schema, if_exists=True, cascade=True))
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("added", [False, True])
+@pytest.mark.parametrize("kind,extension", [("code", "c"), ("docs", "md")])
+def test_pg_incremental_index_normalizes_nul_before_persistence(
+    postgres_connection, engine, added, kind, extension
+):
+    from llama_index.core.embeddings import MockEmbedding
+    from llama_index.core.schema import NodeRelationship
+    from llama_index.core.schema import RelatedNodeInfo
+    from llama_index.core.schema import TextNode
+
+    from metis.engine.capabilities.indexing import IndexingService
+    from metis.engine.runtime import EngineState
+    from metis.vector_store.pgvector_store import PGVectorStoreImpl
+
+    dsn, cleanup_engine = postgres_connection
+    schema = "metis_nul_update_" + uuid4().hex
+    embed = MockEmbedding(embed_dim=3)
+    backend = PGVectorStoreImpl(dsn, schema, embed, embed, 3)
+    indexing = IndexingService(
+        replace(engine._config, vector_backend=backend),
+        EngineState(),
+        engine.repository,
+        get_embedding_models=lambda: (embed, embed),
+    )
+    path = Path(engine._config.codebase_path) / f"nul.{extension}"
+    source = (
+        "// before\x00after\nint value;\n" if kind == "code" else "before\x00after\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    doc_id = f"{path.parent.name}/{path.name}"
+    patch = (
+        f"--- /dev/null\n+++ b/{path.name}\n@@ -0,0 +1 @@\n+new\n"
+        if added
+        else f"--- a/{path.name}\n+++ b/{path.name}\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+    try:
+        backend.init()
+        store = getattr(backend, f"vector_store_{kind}")
+        if not added:
+            store.add(
+                [
+                    TextNode(
+                        id_="old-node",
+                        text="old",
+                        embedding=[0.1, 0.2, 0.3],
+                        relationships={
+                            NodeRelationship.SOURCE: RelatedNodeInfo(node_id=doc_id)
+                        },
+                    )
+                ]
+            )
+        store.add(
+            [TextNode(id_="untouched", text="untouched", embedding=[0.1, 0.2, 0.3])]
+        )
+
+        indexing.update_index(patch)
+
+        with cleanup_engine.connect() as connection:
+            data = table(
+                f"data_{kind}",
+                column("node_id"),
+                column("text"),
+                column("metadata_"),
+                schema=schema,
+            )
+            rows = connection.execute(select(data)).mappings().all()
+        assert any(row["node_id"] == "untouched" for row in rows)
+        changed = [row for row in rows if row["node_id"] != "untouched"]
+        assert changed
+        assert all(row["node_id"] != "old-node" for row in changed)
+        assert all(row["metadata_"]["ref_doc_id"] == doc_id for row in changed)
+        assert any(r"before\u0000after" in row["text"] for row in changed)
+        assert path.read_text(encoding="utf-8") == source
+    finally:
+        for attr in ("vector_store_code", "vector_store_docs"):
+            store = getattr(backend, attr, None)
+            if store is not None:
+                asyncio.run(store.close())
         with cleanup_engine.begin() as connection:
             connection.execute(DropSchema(schema, if_exists=True, cascade=True))
