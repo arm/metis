@@ -1132,6 +1132,39 @@ def test_codegraph_service_preserves_typed_diagnostics_when_cached(tmp_path):
     assert second == [warning]
 
 
+@pytest.mark.parametrize("error_count", [0, 1, 10])
+def test_codegraph_progress_summarizes_errors_without_losing_diagnostics(
+    tmp_path, error_count
+):
+    files = ("one.c", "failed.c") if error_count else ("one.c",)
+    service = _codegraph_service(str(tmp_path), files=files)
+    warning = CodeGraphDiagnostic("one.c", "partial parse", severity="warning")
+    errors = tuple(
+        CodeGraphDiagnostic("failed.c", f"error {index}")
+        for index in range(error_count)
+    )
+    diagnostics = (warning, warning, *errors, *errors)
+    service._providers["c_family"].build_graph = lambda **_kwargs: CodeGraphResult(
+        CodeGraph(),
+        processed_files=("one.c",),
+        failed_files=("failed.c",) if error_count else (),
+        diagnostics=diagnostics,
+    )
+    progress = []
+    observed = []
+
+    reference = service.materialize(
+        progress_callback=progress.append, diagnostic_callback=observed.append
+    )
+
+    done = next(event for event in progress if event["event"] == "codegraph_done")
+    assert done["errors"] == [f"error {index}" for index in range(min(error_count, 8))]
+    assert done["error_count"] == 2 * error_count
+    assert done["warning_count"] == 2
+    assert observed == list(diagnostics)
+    assert reference.diagnostics == diagnostics
+
+
 def test_structured_relationships_affect_cache_keys_and_scoped_copies():
     target = _fn("src/target.c::target", 2)
     caller = _fn("src/caller.c::caller", 1, calls=["target"])

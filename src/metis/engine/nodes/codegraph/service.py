@@ -296,7 +296,19 @@ class CodeGraphService:
                     "nodes": graph.node_count(),
                     "edges": graph.edge_count(),
                     "globals": len(graph.get_globals()),
-                    "errors": [diagnostic.message for diagnostic in diagnostics],
+                    "errors": list(
+                        dict.fromkeys(
+                            diagnostic.message
+                            for diagnostic in diagnostics
+                            if diagnostic.severity == "error"
+                        )
+                    )[:8],
+                    "error_count": sum(
+                        diagnostic.severity == "error" for diagnostic in diagnostics
+                    ),
+                    "warning_count": sum(
+                        diagnostic.severity == "warning" for diagnostic in diagnostics
+                    ),
                 }
             )
         return CodeGraphResult(
