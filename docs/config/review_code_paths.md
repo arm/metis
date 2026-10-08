@@ -11,6 +11,11 @@ These settings allow you to filter files **specifically for the review process**
 
 The **`review_code_include_paths`** and **`review_code_exclude_paths`** configurations utilize standard **gitignore-style** pattern matching.
 
+Compiled review patterns are reused across file selection and rebuilt when the
+ordered pattern lists change. Review patterns and `.metisignore` use pathspec's
+Python backend for consistent filename matching during concurrent discovery,
+including when optional native matching backends are installed.
+
 ---
 
 ## Why use this instead of `.metisignore`?

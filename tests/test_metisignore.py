@@ -1,8 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import errno
+import os
 import threading
+
+import pathspec
+import pytest
 
 import metis.engine.capabilities.indexing as indexing_service_mod
 from metis.engine import MetisEngine
@@ -64,6 +70,120 @@ def test_direct_code_file_selection_respects_metisignore(
 
     assert engine.repository.is_code_file_selected("keep.py") is True
     assert engine.repository.is_code_file_selected("drop.py") is False
+
+
+def test_concurrent_review_selection_reuses_compiled_scopes(
+    tmp_path, dummy_backend, dummy_llm, capability_settings, monkeypatch
+):
+    names = [f"selected-{index}.py" for index in range(16)]
+    for name in [*names, "omitted.py"]:
+        (tmp_path / name).touch()
+    (tmp_path / ".metisignore").write_text("/omitted.py\n", encoding="utf-8")
+    includes = [f"/selected-{index}.py" for index in range(1024)]
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_include_paths=includes,
+        review_code_exclude_paths=["/never.py"],
+    )
+    compiled = []
+    from_lines = pathspec.GitIgnoreSpec.from_lines
+
+    def compile_spec(lines, **kwargs):
+        patterns = tuple(lines)
+        compiled.append(patterns)
+        assert kwargs == {"backend": "simple"}
+        return from_lines(patterns, **kwargs)
+
+    monkeypatch.setattr(pathspec.GitIgnoreSpec, "from_lines", compile_spec)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        inventories = list(
+            pool.map(lambda _: engine.repository.get_code_files(), range(8))
+        )
+
+    expected = sorted(str(tmp_path / name) for name in names)
+    assert all(sorted(files) == expected for files in inventories)
+    assert compiled == [("/omitted.py\n",), tuple(includes), ("/never.py",)]
+    assert engine.repository.is_code_file_selected(names[0])
+    assert len(compiled) == 3
+
+
+def test_review_scope_cache_observes_ordered_pattern_changes(
+    tmp_path, dummy_backend, dummy_llm, capability_settings
+):
+    names = {"first.py", "second.py", "third.py"}
+    for name in names:
+        (tmp_path / name).touch()
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_include_paths=["*.py", "!second.py"],
+        review_code_exclude_paths=["third.py"],
+    )
+
+    def selected():
+        return {Path(path).name for path in engine.repository.get_code_files()}
+
+    assert selected() == {"first.py"}
+    engine._config.review_code_include_paths.append("second.py")
+    assert selected() == {"first.py", "second.py"}
+    engine._config.review_code_exclude_paths[:] = ["*.py", "!second.py"]
+    assert selected() == {"second.py"}
+    engine._config.review_code_include_paths = ["first.py"]
+    assert selected() == set()
+    engine._config.review_code_exclude_paths = []
+    assert selected() == {"first.py"}
+    engine._config.review_code_include_paths = []
+    assert selected() == names
+    engine._config.review_code_include_paths = ["# comment"]
+    assert selected() == set()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "unicode-文.py",
+        pytest.param(
+            "undecodable-\udcff.py",
+            marks=pytest.mark.skipif(os.name == "nt", reason="POSIX byte filename"),
+        ),
+    ],
+)
+def test_review_scope_preserves_unicode_and_literal_matching(
+    tmp_path, dummy_backend, dummy_llm, capability_settings, name
+):
+    try:
+        (tmp_path / name).touch()
+    except OSError as exc:
+        if exc.errno == errno.EILSEQ and "\udcff" in name:
+            pytest.skip("Filesystem does not support undecodable byte filenames")
+        raise
+    for filename in ("bracket[one].py", "bracketo.py", "ignored.py"):
+        (tmp_path / filename).touch()
+    (tmp_path / ".metisignore").write_text("/ignored.py\n", encoding="utf-8")
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_include_paths=["*.py"],
+        review_code_exclude_paths=[
+            "*.py",
+            "!unicode-*.py",
+            "!undecodable-*.py",
+            r"!bracket\[one\].py",
+            "!ignored.py",
+        ],
+    )
+
+    assert {Path(path).name for path in engine.repository.get_code_files()} == {
+        name,
+        "bracket[one].py",
+    }
 
 
 def test_perl_files_follow_repository_review_selection_rules(

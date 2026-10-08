@@ -35,6 +35,10 @@ class EngineRepository:
         self._metisignore_loaded = False
         self._metisignore_spec: pathspec.GitIgnoreSpec | None = None
         self._metisignore_lock = Lock()
+        self._review_path_specs: dict[
+            str, tuple[tuple[str, ...], pathspec.GitIgnoreSpec]
+        ] = {}
+        self._review_path_lock = Lock()
         self._profiled_source: ProfiledSourceArtifact | None = None
 
     def install_profiled_source(self, artifact: ProfiledSourceArtifact) -> None:
@@ -198,7 +202,7 @@ class EngineRepository:
                 else:
                     with open(metisignore_path, "r") as metisignore_file:
                         self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(
-                            metisignore_file
+                            metisignore_file, backend="simple"
                         )
                     logger.info(f"MetisIgnore file loaded: {metisignore_path}")
             except FileNotFoundError:
@@ -260,12 +264,26 @@ class EngineRepository:
         if metisignore_spec and metisignore_spec.match_file(rel_path):
             return False
         include_paths = self._config.review_code_include_paths
-        if include_paths and not pathspec.GitIgnoreSpec.from_lines(
-            include_paths
+        if include_paths and not self._review_path_spec(
+            "include", include_paths
         ).match_file(rel_path):
             return False
         exclude_paths = self._config.review_code_exclude_paths
         return not (
             exclude_paths
-            and pathspec.GitIgnoreSpec.from_lines(exclude_paths).match_file(rel_path)
+            and self._review_path_spec("exclude", exclude_paths).match_file(rel_path)
         )
+
+    def _review_path_spec(self, kind: str, paths: list[str]) -> pathspec.GitIgnoreSpec:
+        patterns = tuple(paths)
+        with self._review_path_lock:
+            cached = self._review_path_specs.get(kind)
+            if cached is None or cached[0] != patterns:
+                # Keep only the current include/exclude specs. The Python backend
+                # supports concurrent matching and undecodable filesystem names.
+                cached = (
+                    patterns,
+                    pathspec.GitIgnoreSpec.from_lines(patterns, backend="simple"),
+                )
+                self._review_path_specs[kind] = cached
+            return cached[1]
