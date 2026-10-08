@@ -3,6 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import errno
 import os
 import threading
 
@@ -155,7 +156,13 @@ def test_review_scope_cache_observes_ordered_pattern_changes(
 def test_review_scope_preserves_unicode_and_literal_matching(
     tmp_path, dummy_backend, dummy_llm, capability_settings, name
 ):
-    for filename in (name, "bracket[one].py", "bracketo.py", "ignored.py"):
+    try:
+        (tmp_path / name).touch()
+    except OSError as exc:
+        if exc.errno == errno.EILSEQ and "\udcff" in name:
+            pytest.skip("Filesystem does not support undecodable byte filenames")
+        raise
+    for filename in ("bracket[one].py", "bracketo.py", "ignored.py"):
         (tmp_path / filename).touch()
     (tmp_path / ".metisignore").write_text("/ignored.py\n", encoding="utf-8")
     engine = _build_engine(
