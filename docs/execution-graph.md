@@ -987,6 +987,11 @@ They must use globally unique symbol IDs, resolve their internal calls, and
 return nodes only for requested files. Metis validates each provider result and
 the composed graph.
 
+The `codegraph_done` progress event summarizes provider diagnostics with
+`error_count`, `warning_count`, and `errors` containing the first eight distinct
+error messages in encounter order. Counts include repeated diagnostics. Complete
+diagnostics remain available through the diagnostic callback and stored reference.
+
 The stable `metis.execution_nodes` facade does not yet export every CodeGraph
 record model needed to construct a populated graph. External implementations
 that import those models from `metis.engine.codegraph` are version-coupled and
