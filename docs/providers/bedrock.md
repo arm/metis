@@ -12,6 +12,9 @@ pip install "metis[bedrock]"
 
 ## Configure
 
+Save this configuration in a trusted file and select it with `--config PATH`;
+Metis does not automatically load repository-local configuration.
+
 ```yaml
 llm_provider:
   name: "bedrock"

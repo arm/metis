@@ -123,7 +123,8 @@ export OPENAI_API_KEY="your-key-here"
 
 **Other providers**
 
-Set `llm_provider.name` in `metis.yaml` and install the matching extra:
+Set `llm_provider.name` in a trusted configuration file, select it with
+`--config PATH`, and install the matching extra:
 
 | Provider                 | `name`           | Install                              | Guide                                       |
 |--------------------------|------------------|--------------------------------------|---------------------------------------------|
@@ -191,11 +192,23 @@ docker run --rm -it -v "$PWD:/metis" metis --codebase-path /metis --verbose --ou
 
 **Metis Configuration (`metis.yaml`)**
 
-Metis ships with `src/metis/metis.yaml`. A project may provide `metis.yaml` in
-the working directory or select another file with `--config PATH`. A selected
-document does not inherit packaged `llm_provider`, `embedding_provider`, or
-`query` sections; `llm_provider` is required and the others have runtime
-fallbacks. Shared `metis_engine` settings inherit packaged defaults when omitted.
+Without `--config`, Metis uses its packaged `src/metis/metis.yaml` defaults.
+It does not discover `metis.yaml` or `metis.yml` in the working directory or
+target repository. Select a custom configuration explicitly:
+
+```bash
+uv run metis --config /path/to/trusted/metis.yaml --codebase-path /path/to/src
+```
+
+Relative config paths resolve from the working directory. A missing or invalid
+explicit config is an error, not a request to fall back to packaged defaults.
+Only select configuration you trust: it controls provider endpoints and
+credential environment-variable selection.
+
+A selected document does not inherit packaged `llm_provider`,
+`embedding_provider`, or `query` sections; `llm_provider` is required and the
+others have runtime fallbacks. Shared `metis_engine` settings inherit packaged
+defaults when omitted.
 Non-empty `model_tools`, `capabilities`, and `threat_model` mappings merge
 recursively; lists and scalars replace. Empty mappings replace at that level,
 although downstream validation may restore semantic defaults. An empty
@@ -219,7 +232,7 @@ Configuration covers:
 - **Reachability:** maximum reported path length and optional domain profiles
   and hints.
 
-Project configuration is optional when the packaged defaults are suitable.
+An explicit configuration is optional when the packaged defaults are suitable.
 
 **Language Configuration**
 
@@ -235,6 +248,8 @@ Metis also provides an interactive CLI with several built-in commands:
 
 ### Global CLI Flags
 
+- `--config PATH` – load a trusted configuration file instead of packaged defaults.
+  Repository-local configuration files are not discovered automatically.
 - `--custom-prompt PATH` – optional `.md` or `.txt` file containing additional
   security-review guidance. If omitted, Metis uses `.metis.md` from the project
   root when that file exists.
@@ -338,7 +353,7 @@ uv run metis \
 For embedding models above pgvector's normal-vector HNSW limit, such as
 3072-dimensional embeddings, Metis automatically enables pgvector `halfvec`
 storage for the PostgreSQL backend so HNSW indexes can still be created. You
-can override this in `metis.yaml`:
+can override this in the configuration file selected with `--config PATH`:
 
 ```yaml
 metis_engine:

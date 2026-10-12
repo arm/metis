@@ -132,7 +132,7 @@ query:
 Then run Metis:
 
 ```bash
-uv run metis <options>
+uv run metis --config metis.yaml <options>
 ```
 
 ## Troubleshooting

@@ -418,7 +418,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        help="Path to a custom Metis config file.",
+        help="Path to a Metis config file (default: packaged configuration; no repository config discovery).",
     )
     parser.add_argument("--chroma-dir", type=str, default="./chromadb")
     parser.add_argument(

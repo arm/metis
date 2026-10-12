@@ -57,4 +57,4 @@ embedding_provider:
 
 ## Metis usage
 
-Once the server responds, run `uv run metis --interactive --codebase-path <path>` (or `metis --interactive` inside your virtual environment) and use the usual `index`, `review_code`, `review_dir` or `review_file` commands. Metis will route model requests through the OpenAI Responses API and embedding requests through the OpenAI-compatible embeddings API.
+Once the server responds, run `uv run metis --config metis.yaml --interactive --codebase-path <path>` (or `metis --config metis.yaml --interactive` inside your virtual environment) and use the usual `index`, `review_code`, `review_dir` or `review_file` commands. Metis will route model requests through the OpenAI Responses API and embedding requests through the OpenAI-compatible embeddings API.

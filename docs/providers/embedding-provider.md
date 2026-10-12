@@ -6,8 +6,9 @@ triage commands can run without embeddings when their selected nodes do not use
 that capability.
 
 Embeddings are configured explicitly under a top-level `embedding_provider`
-block. This keeps chat-only providers such as Anthropic, Gemini, and Bedrock
-Mantle from needing embedding credentials or embedding model settings.
+block in the trusted configuration file selected with `--config PATH`.
+This keeps chat-only providers such as Anthropic, Gemini, and Bedrock Mantle
+from needing embedding credentials or embedding model settings.
 
 ```yaml
 llm_provider:

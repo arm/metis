@@ -18,9 +18,30 @@ For more information visit https://developer.arm.com/support/arm-security-update
 
 ## Security Guidelines
 
-Metis is a CLI tool and does not operate as a networked service. However, users and contributors should still follow standard software security practices, such as:
+> [!WARNING]
+> Running Metis on untrusted repositories carries security risks.
 
-- Validating input and output when integrating Metis into larger pipelines.
-- Reviewing third-party dependencies regularly for vulnerabilities.
-- Ensuring that local environments (e.g., Python runtime, system packages) are up to date and secured.
-- Not exposing logs or intermediate results that may contain sensitive project data.
+Source code, comments, documentation, and other repository content may contain
+malicious inputs, including prompt injection intended to influence model
+responses or tool use. Metis does not guarantee protection against these
+attacks and must not be treated as a sandbox or security boundary.
+
+Users are responsible for assessing these risks and securing their execution
+environment and any surrounding automation or CI/CD pipeline. Apply controls
+appropriate to your threat model, data sensitivity, enabled features, and
+operational requirements:
+
+- Run scans in isolated, disposable environments with least-privilege
+  filesystem, process, and network access.
+- Use narrowly scoped credentials and avoid exposing production secrets,
+  unrelated sensitive data, or privileged services to scans.
+- Use trusted configuration and extensions, and restrict outbound connections
+  to approved destinations. Repository content may be sent to configured
+  model providers.
+- Validate inputs and treat model responses, findings, and generated artifacts
+  as untrusted advisory output. Review them before they trigger code changes,
+  deployments, or other privileged actions.
+- Protect logs and intermediate results that may contain sensitive project
+  data.
+- Keep the runtime, system packages, and third-party dependencies up to date,
+  and review them regularly for vulnerabilities.
