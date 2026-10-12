@@ -52,5 +52,5 @@ query:
 Run Metis normally after the service credentials are available:
 
 ```bash
-uv run metis --codebase-path <path>
+uv run metis --config metis.yaml --codebase-path <path>
 ```

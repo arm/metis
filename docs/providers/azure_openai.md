@@ -6,6 +6,9 @@ does not need to carry embedding settings.
 
 ## Configuration
 
+Save this configuration in a trusted file and select it with `--config PATH`;
+Metis does not automatically load repository-local configuration.
+
 ```yaml
 llm_provider:
   name: "azure_openai"

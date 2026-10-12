@@ -128,7 +128,8 @@ providers still load without the optional dependency.
 ## User Configuration
 
 Chat config goes under `llm_provider`; embedding config goes under the
-top-level `embedding_provider` block:
+top-level `embedding_provider` block. Save these settings in a trusted file
+and select it with `--config PATH`; repository-local files are not discovered:
 
 ```yaml
 llm_provider:

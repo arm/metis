@@ -33,7 +33,8 @@ It is important to distinguish between these configuration options and the globa
 
 ## Configuration
 
-Add these options to your `metis.yaml` file under the `metis_engine` block.
+Add these options under `metis_engine` in the configuration file selected with
+`--config PATH`. Metis does not automatically load repository-local configuration.
 
 ### Example Configuration
 

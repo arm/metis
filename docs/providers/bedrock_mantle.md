@@ -17,7 +17,8 @@ aws sso login --profile <aws-profile>
 aws sts get-caller-identity --profile <aws-profile>
 ```
 
-Then add or adjust the `llm_provider` block in your `metis.yaml`:
+Then add or adjust the `llm_provider` block in your trusted configuration file
+and select it when running Metis with `--config PATH`:
 
 ```yaml
 llm_provider:

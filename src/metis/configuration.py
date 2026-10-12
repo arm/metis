@@ -561,6 +561,7 @@ def load_plugin_config(plugins_path: str | Path | None = None):
 
 
 def load_metis_config(config_path: str | Path | None = None):
+    """Load an explicitly selected config or packaged defaults, never CWD config."""
     return config_path_fallback(
         "metis.yaml",
         "metis",
@@ -575,10 +576,7 @@ def config_path_fallback(
     config_path: str | Path | None = None,
     alt_filenames: tuple[str, ...] = (),
 ):
-    """
-    Loads the config from either a given path, the current working
-    directory or from the packaged resource directory.
-    """
+    """Load config from an explicit path or the packaged resource directory."""
     candidate_filenames = (filename, *alt_filenames)
 
     if config_path is not None:
@@ -587,12 +585,6 @@ def config_path_fallback(
             raise FileNotFoundError(f"Config not found: {config_path}")
         logger.info(f"Loading {config_path.name} from {config_path}")
         return load_yaml(config_path)
-
-    for candidate_filename in candidate_filenames:
-        cwd_path = Path.cwd() / candidate_filename
-        if cwd_path.is_file():
-            logger.info(f"Loading {candidate_filename} from {cwd_path}")
-            return load_yaml(cwd_path)
 
     for candidate_filename in candidate_filenames:
         resource = files(anchor) / candidate_filename
@@ -605,5 +597,5 @@ def config_path_fallback(
 
     supported_names = ", ".join(candidate_filenames)
     raise FileNotFoundError(
-        f"No config file ({supported_names}) found in CWD or package resources"
+        f"No config file ({supported_names}) found in package resources"
     )
