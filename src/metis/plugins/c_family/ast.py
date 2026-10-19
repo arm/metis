@@ -27,6 +27,7 @@ from metis.engine.source.tree_sitter_nodes import (
 )
 
 from .runtime import _scan_invocation
+from .runtime import _walk_nodes
 
 ANONYMOUS_NAMESPACE_SCOPE = "(anonymous namespace)"
 _UNEVALUATED_EXPRESSION_KINDS = frozenset(
@@ -68,12 +69,7 @@ class CFamilyAstMixin:
     def _iter_nodes(self, root):
         if root is None:
             return
-        stack = [root]
-        while stack:
-            node = stack.pop()
-            yield node
-            for child in reversed(_node_children(node)):
-                stack.append(child)
+        yield from _walk_nodes(root)
 
     def _has_anonymous_namespace_ancestor(self, node: Any) -> bool:
         parent = node.parent() if node is not None else None
@@ -1086,13 +1082,7 @@ def _direct_field_path(node: Any, source: bytes) -> str:
 def _walk_expression_nodes(node: Any) -> tuple[Any, ...]:
     if node is None:
         return ()
-    nodes: list[Any] = []
-    stack = [node]
-    while stack:
-        current = stack.pop()
-        nodes.append(current)
-        stack.extend(reversed(_node_children(current)))
-    return tuple(nodes)
+    return tuple(_walk_nodes(node))
 
 
 def _walk_value_expression_nodes(node: Any) -> tuple[Any, ...]:
