@@ -387,8 +387,8 @@ class CodeGraph:
         return [n for n in self.nodes.values() if n.file_path == file_path]
 
     def merge(self, other: "CodeGraph") -> None:
-        duplicate_nodes = set(self.nodes) & set(other.nodes)
-        duplicate_globals = set(self.globals) & set(other.globals)
+        duplicate_nodes = self.nodes.keys() & other.nodes.keys()
+        duplicate_globals = self.globals.keys() & other.globals.keys()
         if duplicate_nodes:
             duplicate = min(duplicate_nodes)
             raise ValueError(f"Duplicate code graph node ID: {duplicate!r}")

@@ -66,8 +66,18 @@ def _resolve_calls(
 ) -> None:
     definitions_by_name: dict[str, list[ParsedFunction]] = {}
     definitions_by_qualified_name: dict[str, list[ParsedFunction]] = {}
+    c_definitions_by_file: dict[tuple[str, str], list[ParsedFunction]] = {}
+    external_c_definitions: dict[str, list[ParsedFunction]] = {}
     for function in functions:
         definitions_by_name.setdefault(function.node.name, []).append(function)
+        if function.node.language == "c":
+            c_definitions_by_file.setdefault(
+                (function.node.file_path, function.node.name), []
+            ).append(function)
+            if not function.node.has_internal_linkage:
+                external_c_definitions.setdefault(function.node.name, []).append(
+                    function
+                )
         definitions_by_qualified_name.setdefault(
             function.syntax.qualified_name, []
         ).append(function)
@@ -119,7 +129,8 @@ def _resolve_calls(
                     else _c_call_candidates(
                         call,
                         caller,
-                        definitions_by_name,
+                        c_definitions_by_file,
+                        external_c_definitions,
                         value_declarations,
                     )
                 )
@@ -286,7 +297,8 @@ def _reference_candidates(
 def _c_call_candidates(
     call: CFamilyCallSite,
     caller: ParsedFunction,
-    definitions_by_name: dict[str, list[ParsedFunction]],
+    c_definitions_by_file: dict[tuple[str, str], list[ParsedFunction]],
+    external_c_definitions: dict[str, list[ParsedFunction]],
     value_declarations: dict[tuple[str, str], list[int]],
 ) -> list[ParsedFunction]:
     if call.kind != "direct":
@@ -298,21 +310,9 @@ def _c_call_candidates(
         at_byte=call.start_byte,
     ):
         return []
-    candidates = [
-        candidate
-        for candidate in definitions_by_name.get(call.precise_symbol, [])
-        if candidate.node.language == "c"
-        and (
-            not candidate.node.has_internal_linkage
-            or candidate.node.file_path == caller.node.file_path
-        )
-    ]
-    same_file = [
-        candidate
-        for candidate in candidates
-        if candidate.node.file_path == caller.node.file_path
-    ]
-    return same_file or candidates
+    return c_definitions_by_file.get(
+        (caller.node.file_path, call.precise_symbol)
+    ) or external_c_definitions.get(call.precise_symbol, [])
 
 
 def _has_visible_value_declaration(
