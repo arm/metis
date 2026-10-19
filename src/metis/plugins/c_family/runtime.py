@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from metis.engine.source.tree_sitter_nodes import _node_children
 from metis.utils import resolve_path_within_root
 
 _IDENTIFIER_CALL = re.compile(rb"\b[A-Za-z_][A-Za-z0-9_]*[ \t\r\n]*\(")
@@ -640,12 +641,4 @@ def _walk_nodes(root: Any):
     while stack:
         node = stack.pop()
         yield node
-        stack.extend(
-            reversed(
-                [
-                    child
-                    for index in range(node.child_count())
-                    if (child := node.child(index)) is not None
-                ]
-            )
-        )
+        stack.extend(reversed(_node_children(node)))
