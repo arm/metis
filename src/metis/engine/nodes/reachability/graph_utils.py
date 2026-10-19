@@ -2,24 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import replace
 import hashlib
-from typing import Literal
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
-from .domain import ReachabilityPath
-
-
-def _dedupe_paths(paths):
-    seen, results = set(), []
-    for p in paths:
-        key = (p.source, p.sink, tuple(p.path))
-        if key not in seen:
-            seen.add(key)
-            results.append(p)
-    return results
 
 
 def _build_reverse_edges(graph, sort_key):
@@ -253,90 +240,3 @@ def _copy_graph_nodes(graph, node_names):
                 )
             )
     return focus
-
-
-def _select_diverse_paths(
-    paths: Sequence[ReachabilityPath],
-    graph: CodeGraph,
-    *,
-    group_by: Literal["source", "sink"],
-    max_paths: int,
-    max_groups: int = 0,
-    max_per_group: int = 0,
-    max_variants_per_boundary: int = 0,
-) -> list[ReachabilityPath]:
-    unique_paths = _dedupe_paths(paths)
-    if not unique_paths:
-        return []
-    diversity_by: Literal["source", "sink"] = "source" if group_by == "sink" else "sink"
-    grouped: dict[str, list[ReachabilityPath]] = defaultdict(list)
-    for path in unique_paths:
-        grouped[getattr(path, group_by)].append(path)
-
-    def rank(path: ReachabilityPath) -> tuple:
-        return _confirmation_path_rank(path, graph)
-
-    ordered_groups: list[list[ReachabilityPath]] = []
-    for group_paths in grouped.values():
-        by_boundary: dict[str, list[ReachabilityPath]] = defaultdict(list)
-        for path in sorted(group_paths, key=rank):
-            boundary_paths = by_boundary[getattr(path, diversity_by)]
-            if (
-                max_variants_per_boundary <= 0
-                or len(boundary_paths) < max_variants_per_boundary
-            ):
-                boundary_paths.append(path)
-        boundary_groups = sorted(by_boundary.values(), key=lambda items: rank(items[0]))
-        ordered: list[ReachabilityPath] = []
-        route_index = 0
-        while boundary_groups:
-            next_boundary_groups: list[list[ReachabilityPath]] = []
-            for boundary_paths in boundary_groups:
-                if route_index < len(boundary_paths):
-                    ordered.append(boundary_paths[route_index])
-                if route_index + 1 < len(boundary_paths):
-                    next_boundary_groups.append(boundary_paths)
-            boundary_groups = next_boundary_groups
-            route_index += 1
-        if max_per_group > 0:
-            ordered = ordered[:max_per_group]
-        ordered_groups.append(ordered)
-
-    ordered_groups.sort(key=lambda items: rank(items[0]))
-    if max_groups > 0:
-        ordered_groups = ordered_groups[:max_groups]
-
-    selected: list[ReachabilityPath] = []
-    path_index = 0
-    while ordered_groups and (max_paths <= 0 or len(selected) < max_paths):
-        next_groups: list[list[ReachabilityPath]] = []
-        for group_paths in ordered_groups:
-            if path_index < len(group_paths):
-                selected.append(group_paths[path_index])
-                if max_paths > 0 and len(selected) >= max_paths:
-                    return selected
-            if path_index + 1 < len(group_paths):
-                next_groups.append(group_paths)
-        ordered_groups = next_groups
-        path_index += 1
-    return selected
-
-
-def _confirmation_path_rank(path, graph):
-    node_names = list(path.path or [])
-    nodes = [graph.get_node(name) for name in node_names]
-    nodes = [node for node in nodes if node is not None]
-    endpoint = graph.get_node(path.sink)
-    sink_count = sum(1 for node in nodes if node.is_sink)
-    source = graph.get_node(path.source)
-    return (
-        -sink_count,
-        -int(bool(endpoint and endpoint.is_sink)),
-        -int(bool(endpoint and endpoint.sink_type and endpoint.sink_type != "other")),
-        len(node_names),
-        endpoint.file_path if endpoint else "",
-        int(endpoint.line_number or 0) if endpoint else 0,
-        source.file_path if source else "",
-        int(source.line_number or 0) if source else 0,
-        tuple(node_names),
-    )
