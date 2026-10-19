@@ -15,7 +15,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import _response_reached_output_limit
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import model_tool_system_prompt
@@ -226,20 +228,26 @@ class JsonPromptRunner:
                             )
                         raw_response = structured_result.get("raw")
                         response_text = getattr(raw_response, "content", None)
-                        parsing_error = structured_result.get("parsing_error")
-                        if parsing_error is not None:
+                        if _response_reached_output_limit(raw_response):
+                            confirmed_output_limit = True
                             attempt_failure = (
-                                f"structured validation failed: {parsing_error}"
+                                "model response reached its output token limit"
                             )
                         else:
-                            try:
-                                parsed = request.parse(structured_result.get("parsed"))
-                            except Exception as exc:
-                                attempt_failure = f"structured validation failed: {exc}"
-                        if parsed is None and _response_reached_output_limit(
-                            raw_response
-                        ):
-                            confirmed_output_limit = True
+                            parsing_error = structured_result.get("parsing_error")
+                            if parsing_error is not None:
+                                attempt_failure = (
+                                    f"structured validation failed: {parsing_error}"
+                                )
+                            else:
+                                try:
+                                    parsed = request.parse(
+                                        structured_result.get("parsed")
+                                    )
+                                except Exception as exc:
+                                    attempt_failure = (
+                                        f"structured validation failed: {exc}"
+                                    )
                     if parsed is None and not used_structured_output:
                         if active_tools:
                             assert max_tool_rounds is not None
@@ -258,13 +266,13 @@ class JsonPromptRunner:
                         else:
                             response = (prompt | chat).invoke(request.variables)
                             response_text = StrOutputParser().invoke(response)
-                            try:
+                            if _response_reached_output_limit(response):
+                                confirmed_output_limit = True
+                                attempt_failure = (
+                                    "model response reached its output token limit"
+                                )
+                            else:
                                 parsed = request.parse(response_text)
-                            finally:
-                                if parsed is None and _response_reached_output_limit(
-                                    response
-                                ):
-                                    confirmed_output_limit = True
                     if parsed is not None:
                         attempt_span.end(
                             attributes={
@@ -273,6 +281,10 @@ class JsonPromptRunner:
                             }
                         )
                         return parsed
+                except ModelOutputLimitError as exc:
+                    confirmed_output_limit = True
+                    attempt_failure = str(exc)
+                    tool_evidence = exc.tool_evidence
                 except Exception as exc:
                     if isinstance(
                         exc, (ModelToolConfigurationError, ModelInputLimitError)
@@ -322,8 +334,14 @@ class JsonPromptRunner:
                 )
                 if backoff_seconds > 0:
                     time.sleep(backoff_seconds)
-        if confirmed_output_limit and request.on_output_limit is not None:
-            request.on_output_limit()
+        if confirmed_output_limit:
+            if request.on_output_limit is not None:
+                request.on_output_limit()
+            else:
+                raise ModelOutputLimitError(
+                    f"{request.label} reached the model output token limit "
+                    f"after {self._max_attempts} attempts"
+                )
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,
@@ -332,29 +350,6 @@ class JsonPromptRunner:
             last_failure,
         )
         return None
-
-
-def _response_reached_output_limit(response: object) -> bool:
-    for attribute in ("response_metadata", "additional_kwargs"):
-        metadata = getattr(response, attribute, None)
-        if not isinstance(metadata, dict):
-            continue
-        incomplete_details = metadata.get("incomplete_details")
-        if (
-            str(metadata.get("status", "")).strip().lower() == "incomplete"
-            and isinstance(incomplete_details, dict)
-            and str(incomplete_details.get("reason", "")).strip().lower()
-            == "max_output_tokens"
-        ):
-            return True
-        for key in ("finish_reason", "stop_reason", "stopReason"):
-            value = metadata.get(key)
-            if isinstance(value, str) and value.strip().lower() in {
-                "length",
-                "max_tokens",
-            }:
-                return True
-    return False
 
 
 def _certificate_verification_failed(error: BaseException) -> bool:

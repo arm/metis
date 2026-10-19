@@ -7,6 +7,7 @@ from metis.engine.nodes.simple_llm_review.prompt import (
     build_review_system_prompt,
     sanitize_review_payload,
 )
+from metis.engine.nodes.simple_llm_review.graph import _normalize_reviews
 from metis.engine.nodes.simple_llm_review.graph import review_node_llm
 
 
@@ -65,6 +66,18 @@ def test_sanitize_review_payload_fills_missing_fields():
     assert entry["cwe"] == "CWE-Unknown"
     assert entry["severity"] == ""
     assert entry["confidence"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "payload", [None, "", {"reviews": None}, {"reviews": "[]"}, {"unrelated": []}]
+)
+def test_review_normalization_rejects_missing_collection(payload):
+    assert _normalize_reviews(payload) is None
+
+
+@pytest.mark.parametrize("payload", [{"reviews": []}, '{"reviews": []}'])
+def test_review_normalization_accepts_explicit_empty_collection(payload):
+    assert _normalize_reviews(payload) == []
 
 
 def test_review_node_llm_keeps_partial_reviews():

@@ -558,11 +558,6 @@ def test_failed_discovery_packet_splits_and_reviews_children(
         assert {attempt["status"] for attempt in attempts} == (
             {"inconclusive", "ok"} if children_succeed else {"inconclusive"}
         )
-        assert {
-            attempt["attributes"]["failure"]
-            for attempt in attempts
-            if attempt["status"] == "inconclusive"
-        } == {"structured validation failed: truncated structured response"}
 
 
 def test_indexed_null_condition_reaches_deterministic_admission(

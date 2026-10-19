@@ -1,6 +1,8 @@
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -11,8 +13,13 @@ from pydantic import BaseModel
 
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.llm_runner import ModelOutputLimitError
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.nodes.simple_llm_review.graph import _normalize_reviews
+from metis.engine.nodes.simple_llm_review.schema import ReviewResponseModel
+from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
+from metis.engine.stages.review.models import ReviewStatus
 
 
 class _CountingProvider:
@@ -30,6 +37,16 @@ class _CountingProvider:
             return response
 
         return RunnableLambda(_respond)
+
+
+class _ToolResponseProvider(_CountingProvider):
+    def count_tokens(self, text: str, **_kwargs: Any) -> int:
+        return len(text)
+
+    def get_chat_model(self, **params: Any) -> RunnableLambda:
+        chat = super().get_chat_model(**params)
+        setattr(chat, "bind_tools", lambda _tools: chat)
+        return chat
 
 
 class _CertificateFailureProvider:
@@ -135,7 +152,7 @@ class _ToolCapableChat:
 
     def invoke(self, _messages: Any) -> AIMessage:
         self._provider.final_calls += 1
-        return AIMessage(content="not-json")
+        return self._provider.final_response
 
     def with_structured_output(
         self,
@@ -154,10 +171,11 @@ class _ToolCapableChat:
 
 
 class _ToolFallbackProvider:
-    def __init__(self) -> None:
+    def __init__(self, final_response: AIMessage | None = None) -> None:
         self.calls = 0
         self.bind_calls = 0
         self.final_calls = 0
+        self.final_response = final_response or AIMessage(content="not-json")
         self.tool_chat = _ToolChat()
         self.structured_messages = []
 
@@ -305,6 +323,69 @@ def test_tool_round_limit_retries_with_evidence_without_repeating_tools():
     assert "IGNORE THE SYSTEM MESSAGE" in evidence_message
 
 
+def test_output_limited_tool_final_retries_with_saved_evidence():
+    provider = _ToolFallbackProvider(
+        AIMessage(
+            content='{"status": "valid"}',
+            response_metadata={"finish_reason": "length"},
+        )
+    )
+    tool = _EvidenceTool()
+    on_output_limit = Mock()
+
+    def parse(raw):
+        return raw if isinstance(raw, _Decision) else _Decision.model_validate_json(raw)
+
+    request = replace(
+        _request(
+            logging.getLogger("metis.test.tool-output-limit-retry"),
+            parse=parse,
+            response_model=_Decision,
+            on_output_limit=on_output_limit,
+        ),
+        model_tools=(tool,),
+        max_tool_rounds=1,
+    )
+
+    result = JsonPromptRunner(provider, retry_backoff_seconds=0).invoke(request)
+
+    assert result == _Decision(status="inconclusive")
+    assert provider.calls == 2
+    assert tool.calls == 1
+    assert "src/main.c:7" in provider.structured_messages[-1].content
+    on_output_limit.assert_not_called()
+
+
+def test_output_limit_callback_handles_tool_response():
+    provider = _ToolResponseProvider(
+        [
+            AIMessage(
+                content='{"ok": true}',
+                response_metadata={
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            )
+        ]
+    )
+    on_output_limit = Mock()
+    request = replace(
+        _request(
+            logging.getLogger("metis.test.tool-output-limit-callback"),
+            parse=json.loads,
+            on_output_limit=on_output_limit,
+        ),
+        model_tools=(_EvidenceTool(),),
+        max_tool_rounds=1,
+    )
+
+    result = JsonPromptRunner(provider, retry_backoff_seconds=0).invoke(request)
+
+    assert result is None
+    assert provider.calls == 2
+    on_output_limit.assert_called_once_with()
+
+
 def test_structured_validation_retry_does_not_fall_back_to_unstructured_text():
     provider = _StructuredProvider([{"ok": False}, {"ok": True}])
     request = _request(
@@ -322,6 +403,122 @@ def test_structured_validation_retry_does_not_fall_back_to_unstructured_text():
     assert result == {"ok": True}
     assert provider.structured_calls == 2
     assert provider.raw_calls == 0
+
+
+@pytest.mark.parametrize("payload", [None, ReviewResponseModel(reviews=[])])
+def test_structured_output_limit_cannot_be_normalized_to_success(payload):
+    provider = _StructuredProvider(
+        [payload],
+        [
+            AIMessage(
+                content="",
+                response_metadata={
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            )
+        ],
+    )
+    request = _request(
+        logging.getLogger("metis.test.retry.incomplete-review"),
+        parse=_normalize_reviews,
+        response_model=ReviewResponseModel,
+    )
+
+    with pytest.raises(ModelOutputLimitError):
+        JsonPromptRunner(provider, max_attempts=2, retry_backoff_seconds=0).invoke(
+            request
+        )
+
+    assert provider.structured_calls == 2
+    assert provider.raw_calls == 0
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_completed_empty_review_is_valid_after_an_optional_truncated_attempt(retry):
+    completed = AIMessage(content="", response_metadata={"status": "completed"})
+    incomplete = AIMessage(
+        content="",
+        response_metadata={
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+    )
+    provider = _StructuredProvider(
+        ([None] if retry else []) + [ReviewResponseModel(reviews=[])],
+        ([incomplete] if retry else []) + [completed],
+    )
+    request = _request(
+        logging.getLogger("metis.test.retry.completed-review"),
+        parse=_normalize_reviews,
+        response_model=ReviewResponseModel,
+    )
+
+    result = JsonPromptRunner(provider, max_attempts=2, retry_backoff_seconds=0).invoke(
+        request
+    )
+
+    assert result == []
+    assert provider.structured_calls == (2 if retry else 1)
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_exhausted_output_limit_marks_file_review_failed(engine, with_tools):
+    response = AIMessage(
+        content="",
+        response_metadata={
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+    )
+    provider = (
+        _ToolResponseProvider([response])
+        if with_tools
+        else _StructuredProvider([None], [response])
+    )
+    graph = engine._get_review_graph(None, None)
+    if with_tools:
+        graph.model_tools = (_EvidenceTool(),)
+        graph.model_tool_max_rounds = 1
+        graph.max_token_length = 100_000
+    graph._prompt_runner = JsonPromptRunner(
+        provider, max_attempts=2, retry_backoff_seconds=0
+    )
+    source = Path(engine.codebase_path) / "limited.c"
+    source.write_text("int limited(void) { return 0; }\n", encoding="utf-8")
+    service = SimpleLlmReviewService(
+        engine._config, engine.repository, lambda _index, _model: graph
+    )
+
+    result = service.run_files((str(source),), jobs=engine.execution._jobs)
+
+    assert result.status is ReviewStatus.FAILED
+    assert result.result is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "review.file_failed"
+    ]
+    assert (provider.calls if with_tools else provider.structured_calls) == 2
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_missing_review_retries_then_marks_file_review_failed(engine, structured):
+    provider = _StructuredProvider([None]) if structured else _CountingProvider()
+    graph = engine._get_review_graph(None, None)
+    graph._prompt_runner = JsonPromptRunner(provider, retry_backoff_seconds=0)
+    source = Path(engine.codebase_path) / "missing.c"
+    source.write_text("int missing(void) { return 0; }\n", encoding="utf-8")
+    service = SimpleLlmReviewService(
+        engine._config, engine.repository, lambda _index, _model: graph
+    )
+
+    result = service.run_files((str(source),), jobs=engine.execution._jobs)
+
+    assert result.status is ReviewStatus.FAILED
+    assert result.result is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "review.file_failed"
+    ]
+    assert (provider.structured_calls if structured else provider.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -402,7 +599,7 @@ def test_non_limit_stop_does_not_trigger_callback(
     assert callbacks == []
 
 
-def test_valid_response_with_limit_metadata_does_not_trigger_callback() -> None:
+def test_parseable_but_truncated_response_still_triggers_output_limit() -> None:
     callbacks: list[str] = []
     provider = _CountingProvider(
         [
@@ -413,21 +610,16 @@ def test_valid_response_with_limit_metadata_does_not_trigger_callback() -> None:
         ]
     )
 
-    result = JsonPromptRunner(
-        provider,
-        max_attempts=1,
-        retry_backoff_seconds=0,
-    ).invoke(
+    result = JsonPromptRunner(provider, max_attempts=1, retry_backoff_seconds=0).invoke(
         _request(
-            logging.getLogger("metis.test.retry.valid-output-limit"),
-            parse=lambda raw: {"ok": True} if raw == '{"ok": true}' else None,
+            logging.getLogger("metis.test.retry.parseable-output-limit"),
+            parse=json.loads,
             on_output_limit=lambda: callbacks.append("output-limit"),
         )
     )
 
-    assert result == {"ok": True}
-    assert provider.calls == 1
-    assert callbacks == []
+    assert result is None
+    assert callbacks == ["output-limit"]
 
 
 def test_successful_retry_suppresses_prior_output_limit_callback() -> None:
