@@ -39,10 +39,11 @@ from .schema import review_schema_prompt
 logger = logging.getLogger("metis")
 
 
-def _normalize_reviews(raw) -> list[dict]:
+def _normalize_reviews(raw) -> list[dict] | None:
     """
     Normalize arbitrary LLM responses into review dicts, preserving partially
     structured entries with empty fields when necessary.
+    Return None when no review collection was provided.
     """
     if isinstance(raw, ReviewResponseModel):
         return [
@@ -61,10 +62,10 @@ def _normalize_reviews(raw) -> list[dict]:
     elif raw not in (None, ""):
         logger.warning("Unexpected review payload type %s", type(raw).__name__)
 
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and isinstance(payload.get("reviews"), list):
         return sanitize_review_payload(payload)
 
-    return []
+    return None
 
 
 def _build_body_text(state: ReviewState) -> str:
@@ -138,7 +139,9 @@ def review_node_llm(
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    reviews = invoke_review(system_prompt, body_text) or []
+    reviews = invoke_review(system_prompt, body_text)
+    if reviews is None:
+        raise RuntimeError("Model did not return a valid review after retries")
     new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
     return new_state
@@ -231,7 +234,7 @@ class ReviewGraph:
                     label="Review graph",
                     batch_size=1,
                     invalid_message="expected review JSON object",
-                    final_keep_message="returning no findings for this chunk",
+                    final_keep_message="marking this file review failed",
                     response_model=ReviewResponseModel,
                     chat_model_kwargs=self.chat_model_kwargs,
                     model_tools=self.model_tools,
@@ -282,7 +285,7 @@ class ReviewGraph:
         }
         return stable_json_hash(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "provider": self.llm_provider.cache_identity(),
                 "model": self.llama_query_model,
                 "max_token_length": self.max_token_length,

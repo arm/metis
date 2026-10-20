@@ -195,6 +195,10 @@ it does not build or modify the graph.
 selected scope with the language plugin's prompts and does not require a
 CodeGraph.
 
+`simple_llm_review` retries missing, invalid, and token-limited model responses.
+Exhausted retries fail the file review; a valid response with no findings remains
+a successful review.
+
 Both discovery nodes support [navigation](capabilities/navigation.md) when granted;
 the packaged graph enables it.
 
@@ -612,6 +616,11 @@ including tool history and retries, using the provider's token counter. It is
 separate from the output `max_tokens` limit and defaults to no additional input
 guard for existing callers. Provider-specific message/schema framing is not
 included in that estimate.
+
+Exhausted output-limit retries call `JsonPromptRequest.on_output_limit` once and
+return `None`, or raise `ModelOutputLimitError` when no callback is configured.
+Successful retries do not call the callback.
+
 External stages may bind the existing `review_request`, `sarif`, and `codegraph`
 graph inputs or another stage's outputs. Adding another `$inputs` field requires
 a core `ExecutionInputs` change. External stages execute through

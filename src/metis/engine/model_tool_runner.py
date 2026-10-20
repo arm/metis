@@ -24,6 +24,40 @@ class ModelInputLimitError(ValueError):
     """Raised when the rendered conversation exceeds its input budget."""
 
 
+class ModelOutputLimitError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        tool_evidence: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.tool_evidence = tool_evidence
+
+
+def _response_reached_output_limit(response: object) -> bool:
+    for attribute in ("response_metadata", "additional_kwargs"):
+        metadata = getattr(response, attribute, None)
+        if not isinstance(metadata, dict):
+            continue
+        incomplete_details = metadata.get("incomplete_details")
+        if (
+            str(metadata.get("status", "")).strip().lower() == "incomplete"
+            and isinstance(incomplete_details, dict)
+            and str(incomplete_details.get("reason", "")).strip().lower()
+            == "max_output_tokens"
+        ):
+            return True
+        for key in ("finish_reason", "stop_reason", "stopReason"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip().lower() in {
+                "length",
+                "max_tokens",
+            }:
+                return True
+    return False
+
+
 def require_max_tool_rounds(value: int | None) -> int:
     if value is None:
         raise ModelToolConfigurationError(
@@ -126,6 +160,11 @@ def invoke_model_with_tools(
                     "tool_calls": tool_calls,
                 },
             )
+            if _response_reached_output_limit(last_response):
+                raise ModelOutputLimitError(
+                    "model response reached its output token limit",
+                    tool_evidence=tuple(evidence),
+                )
             if not tool_calls:
                 content = _message_content_text(last_response)
                 loop_span.end(attributes={"response": content, "rounds": round_index})
@@ -197,7 +236,6 @@ def invoke_model_with_tools(
             if isinstance(chat, BaseChatOpenAI)
             else chat.invoke(messages)
         )
-        content = _message_content_text(last_response)
         loop_span.event(
             "model.round",
             {
@@ -207,6 +245,12 @@ def invoke_model_with_tools(
                 "final": True,
             },
         )
+        if _response_reached_output_limit(last_response):
+            raise ModelOutputLimitError(
+                "model response reached its output token limit",
+                tool_evidence=tuple(evidence),
+            )
+        content = _message_content_text(last_response)
         loop_span.end(attributes={"response": content, "rounds": max_tool_rounds + 1})
         return content, tuple(evidence)
     raise AssertionError("model tool loop exited without a response")

@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
@@ -137,6 +138,58 @@ def test_invoke_model_with_tools_executes_tool_calls_and_logs_debug(
         "Model tool index_search completed with 15 output chars" in message
         for message in messages
     )
+
+
+@pytest.mark.parametrize(
+    ("max_tool_rounds", "collect_evidence"),
+    [(1, False), (2, True), (1, True)],
+    ids=["truncated-tool-call", "truncated-followup", "truncated-forced-final"],
+)
+def test_output_limit_stops_tools_and_preserves_completed_evidence(
+    max_tool_rounds, collect_evidence
+):
+    tool = _FakeTool()
+    tool_request = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "call-1",
+                "name": tool.name,
+                "args": {"query": "allocator ownership"},
+            }
+        ],
+    )
+    limited_response = AIMessage(
+        content='{"reviews": []}',
+        response_metadata={"finish_reason": "length"},
+        tool_calls=[] if collect_evidence else tool_request.tool_calls,
+    )
+    responses = iter(
+        [tool_request, limited_response] if collect_evidence else [limited_response]
+    )
+
+    class Chat:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, _messages):
+            return next(responses)
+
+    with pytest.raises(ModelOutputLimitError) as raised:
+        invoke_model_with_tools(
+            Chat(),
+            _prompt(),
+            {"body": "review this"},
+            (tool,),
+            max_tool_rounds=max_tool_rounds,
+        )
+
+    if collect_evidence:
+        assert tool.calls == [{"query": "allocator ownership"}]
+        assert "indexed context" in raised.value.tool_evidence[0]
+    else:
+        assert tool.calls == []
+        assert raised.value.tool_evidence == ()
 
 
 def test_require_max_tool_rounds_rejects_missing_value():
