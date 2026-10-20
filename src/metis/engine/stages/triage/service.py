@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 import logging
 from typing import cast
 
@@ -41,6 +42,8 @@ class TriageService:
             return
         try:
             callback(*args, **kwargs)
+        except CancelledError:
+            raise
         except Exception:
             pass
 
@@ -261,6 +264,8 @@ class TriageService:
                     memory_service=memory_service,
                 )
                 outcome = idx, finding, decision, None
+            except CancelledError:
+                raise
             except Exception as exc:
                 outcome = idx, finding, None, exc
             outcomes[idx] = outcome

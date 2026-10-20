@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from concurrent.futures import CancelledError
 from typing import Any
 
 from metis.vector_store.retrievers import document_text
@@ -16,6 +17,8 @@ def retrieve_text(retriever: Any, query: str) -> str:
         return "\n\n".join(
             text for document in (docs or ()) if (text := document_text(document))
         )
+    except CancelledError:
+        raise
     except Exception as exc:
         logger.warning("Error retrieving context: %s", exc)
         return ""

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from concurrent.futures import CancelledError
 
 from llama_index.core import StorageContext
 from llama_index.vector_stores.postgres import PGVectorStore
@@ -115,6 +116,8 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
             self._initialized = True
             logger.info("Postgres vector components initialized.")
 
+        except CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
@@ -140,6 +143,8 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
                         f"Project schema '{self.project_schema}' does not exist in the database."
                     )
                 return exists
+        except CancelledError:
+            raise
         except Exception:
             logger.error(f"Error checking for project schema '{self.project_schema}'")
             raise VectorSchemaError()

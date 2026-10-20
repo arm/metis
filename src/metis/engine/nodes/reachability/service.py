@@ -177,12 +177,18 @@ class ReachabilityService:
             emit_phase_progress(
                 options.progress_callback, "analysis", 0, len(ordered_files)
             )
+            present_files: set[str] = set()
+            for node in codegraph.nodes.values():
+                if node.file_path in selected_files:
+                    selected_node_ids.add(node.unique_name)
+                    present_files.add(node.file_path)
             for completed, selected_file in enumerate(ordered_files, start=1):
-                focus = focus_builder.build(selected_file)
-                focus_nodes.update(focus.node_names)
-                selected_node_ids.update(focus.target_nodes)
-                if not focus.target_nodes:
+                if selected_file not in present_files:
                     missing_selected_files.append(selected_file)
+                if completed == len(ordered_files):
+                    focus_nodes = focus_builder.node_names_for_targets(
+                        selected_node_ids
+                    )
                 emit_phase_progress(
                     options.progress_callback,
                     "analysis",

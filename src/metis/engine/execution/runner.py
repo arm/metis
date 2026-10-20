@@ -19,6 +19,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from metis import runlog
+from metis.engine.concurrency import _bind_cancellation
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis.usage import submit_with_current_context
 
 from .compiler import StagePlan
@@ -290,17 +292,19 @@ def _run_node(
                     jobs=context.jobs.limit(max_concurrency),
                 )._with_cancellation(),
             )
-            result = node.registration.execute(
-                NodeInvocation(
-                    configuration=node.registration.configuration.model_validate(
-                        deepcopy(dict(node.configuration_values))
-                    ),
-                    inputs=inputs,
-                    context=node_context,
-                    formats=node.definition.formats,
-                    filename=node.definition.filename,
+            with _bind_cancellation(node_context.runtime.is_cancelled):
+                _cancellation_checkpoint()
+                result = node.registration.execute(
+                    NodeInvocation(
+                        configuration=node.registration.configuration.model_validate(
+                            deepcopy(dict(node.configuration_values))
+                        ),
+                        inputs=inputs,
+                        context=node_context,
+                        formats=node.definition.formats,
+                        filename=node.definition.filename,
+                    )
                 )
-            )
             if not isinstance(result, NodeResult):
                 raise TypeError("handler must return a NodeResult")
             if not isinstance(result.status, ExecutionStatus):

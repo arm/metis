@@ -8,6 +8,7 @@ import importlib
 import inspect
 import logging
 from collections.abc import Iterable, Mapping
+from concurrent.futures import CancelledError
 from dataclasses import dataclass, field, fields
 from importlib import metadata
 from importlib.resources import files
@@ -498,6 +499,8 @@ def _load_entry_point_manifests() -> list[LanguagePluginManifest]:
                 if isinstance(loaded, LanguagePluginManifest)
                 else LanguagePluginManifest.from_mapping(loaded)
             )
+        except CancelledError:
+            raise
         except Exception as exc:
             logger.warning(
                 "Failed to load language plugin manifest '%s': %s",

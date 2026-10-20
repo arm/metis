@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import Callable
 from collections.abc import Sequence
+from concurrent.futures import CancelledError
 from typing import Any
 
 from langchain_core.messages import ToolMessage
@@ -12,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai.chat_models.base import BaseChatOpenAI
 
 from metis import runlog
+from metis.engine.concurrency import _cancellation_checkpoint
 
 logger = logging.getLogger("metis")
 
@@ -129,6 +131,7 @@ def invoke_model_with_tools(
     token_counter: Callable[[str], int] | None = None,
     max_input_tokens: int | None = None,
 ) -> tuple[str, tuple[str, ...]]:
+    _cancellation_checkpoint()
     with runlog.span(
         "model_loop",
         "tool_loop",
@@ -150,7 +153,9 @@ def invoke_model_with_tools(
         last_response = None
         for round_index in range(1, max_tool_rounds + 1):
             require_model_input_budget(messages, token_counter, max_input_tokens)
+            _cancellation_checkpoint()
             last_response = tool_chat.invoke(messages)
+            _cancellation_checkpoint()
             tool_calls = list(getattr(last_response, "tool_calls", None) or [])
             loop_span.event(
                 "model.round",
@@ -168,6 +173,7 @@ def invoke_model_with_tools(
             if not tool_calls:
                 content = _message_content_text(last_response)
                 loop_span.end(attributes={"response": content, "rounds": round_index})
+                _cancellation_checkpoint()
                 return content, tuple(evidence)
             messages.append(last_response)
             for index, tool_call in enumerate(tool_calls):
@@ -192,7 +198,9 @@ def invoke_model_with_tools(
                                 name,
                                 _debug_tool_args(args),
                             )
+                        _cancellation_checkpoint()
                         content = tool.invoke(args)
+                        _cancellation_checkpoint()
                         if logger.isEnabledFor(logging.DEBUG):
                             logger.debug(
                                 "Model tool %s completed with %d output chars",
@@ -205,7 +213,10 @@ def invoke_model_with_tools(
                                 "output_bytes": len(str(content).encode("utf-8")),
                             }
                         )
+                    except CancelledError:
+                        raise
                     except Exception as exc:
+                        _cancellation_checkpoint()
                         status = "error"
                         content = f"Tool {name!r} failed: {exc}"
                         logger.debug("Model tool %s failed: %s", name, exc)
@@ -230,12 +241,14 @@ def invoke_model_with_tools(
                     )
                 )
         require_model_input_budget(messages, token_counter, max_input_tokens)
+        _cancellation_checkpoint()
         # Preserve the cached prefix without permitting another tool round.
         last_response = (
             tool_chat.invoke(messages, tool_choice="none")
             if isinstance(chat, BaseChatOpenAI)
             else chat.invoke(messages)
         )
+        _cancellation_checkpoint()
         loop_span.event(
             "model.round",
             {
@@ -252,6 +265,7 @@ def invoke_model_with_tools(
             )
         content = _message_content_text(last_response)
         loop_span.end(attributes={"response": content, "rounds": max_tool_rounds + 1})
+        _cancellation_checkpoint()
         return content, tuple(evidence)
     raise AssertionError("model tool loop exited without a response")
 

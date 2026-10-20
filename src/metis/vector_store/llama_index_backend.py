@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import CancelledError
+
 from llama_index.core import VectorStoreIndex
 
 from metis.exceptions import RetrieverInitError
@@ -37,6 +39,8 @@ class LlamaIndexVectorBackend(BaseVectorStore):
                 )
                 for index in indexes
             )
+        except CancelledError:
+            raise
         except Exception as exc:
             raise RetrieverInitError() from exc
 

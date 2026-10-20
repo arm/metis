@@ -3,11 +3,13 @@
 
 import logging
 import os
+from concurrent.futures import CancelledError
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.source import SourceMap
 from metis.engine.source.anchor import KIND_CHUNK
 
@@ -58,6 +60,7 @@ def summarize_changes(
     callbacks=None,
 ):
     try:
+        _cancellation_checkpoint()
         kwargs = merge_chat_model_kwargs(
             chat_model_kwargs,
             model=model,
@@ -68,9 +71,12 @@ def summarize_changes(
             [("system", "{system}"), ("user", "{input}")]
         )
         chain = prompt_tmpl | chat | StrOutputParser()
-        return chain.invoke(
-            {"system": summary_prompt or "", "input": issues or ""}
-        ).strip()
+        _cancellation_checkpoint()
+        result = chain.invoke({"system": summary_prompt or "", "input": issues or ""})
+        _cancellation_checkpoint()
+        return result.strip()
+    except CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Error summarizing changes for {file_path}: {e}")
         return ""
@@ -98,6 +104,8 @@ def prepare_nodes_iter(
                 parsed_nodes = splitter.get_nodes_from_documents([d])
                 annotate_chunk_anchors(d, parsed_nodes)
                 nodes_code.extend(parsed_nodes)
+            except CancelledError:
+                raise
             except Exception as e:
                 name = plugin.get_name() if hasattr(plugin, "get_name") else "unknown"
                 logger.warning(
@@ -109,10 +117,11 @@ def prepare_nodes_iter(
     for d in doc_docs:
         try:
             nodes_docs.extend(doc_splitter.get_nodes_from_documents([d]))
+        except CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"Could not parse docs for file {d.id_}: {e}")
-        finally:
-            yield None
+        yield None
 
     return nodes_code, nodes_docs
 

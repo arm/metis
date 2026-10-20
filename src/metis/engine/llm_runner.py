@@ -4,6 +4,7 @@
 import ssl
 import time
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,8 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.engine.concurrency import _cancellation_checkpoint
+from metis.engine.concurrency import _current_cancellation
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
@@ -109,6 +112,7 @@ class JsonPromptRunner:
         self._retry_backoff_seconds = float(retry_backoff_seconds)
 
     def invoke(self, request: JsonPromptRequest):
+        _cancellation_checkpoint()
         with runlog.span(
             "prompt",
             request.label,
@@ -136,6 +140,7 @@ class JsonPromptRunner:
                 status="ok" if parsed is not None else "inconclusive",
                 attributes={"parsed": parsed},
             )
+            _cancellation_checkpoint()
             return parsed
 
     def _invoke_attempts(self, request: JsonPromptRequest):
@@ -158,6 +163,7 @@ class JsonPromptRunner:
         )
         prompt.invoke(request.variables)
         for attempt in range(self._max_attempts):
+            _cancellation_checkpoint()
             response_text: Any = None
             parsed: Any = None
             attempt_error: Exception | None = None
@@ -191,7 +197,9 @@ class JsonPromptRunner:
                         params["max_tokens"] = request.max_tokens
                     if request.temperature is not None:
                         params["temperature"] = request.temperature
+                    _cancellation_checkpoint()
                     chat = self._llm_provider.get_chat_model(**params)
+                    _cancellation_checkpoint()
                     active_tools = request.model_tools if not tool_evidence else ()
                     if tool_evidence:
                         prompt = _json_chat_prompt(
@@ -214,27 +222,31 @@ class JsonPromptRunner:
                         and callable(structured_output)
                     ):
                         used_structured_output = True
-                        structured_result = (
-                            prompt
-                            | structured_output(
-                                request.response_model,
-                                method="function_calling",
-                                include_raw=True,
-                            )
-                        ).invoke(request.variables)
+                        structured_model = structured_output(
+                            request.response_model,
+                            method="function_calling",
+                            include_raw=True,
+                        )
+                        _cancellation_checkpoint()
+                        structured_result = (prompt | structured_model).invoke(
+                            request.variables
+                        )
+                        _cancellation_checkpoint()
                         if not isinstance(structured_result, dict):
                             raise TypeError(
                                 "Structured model response did not include raw output"
                             )
                         raw_response = structured_result.get("raw")
                         response_text = getattr(raw_response, "content", None)
+                        parsing_error = structured_result.get("parsing_error")
+                        if isinstance(parsing_error, CancelledError):
+                            raise parsing_error
                         if _response_reached_output_limit(raw_response):
                             confirmed_output_limit = True
                             attempt_failure = (
                                 "model response reached its output token limit"
                             )
                         else:
-                            parsing_error = structured_result.get("parsing_error")
                             if parsing_error is not None:
                                 attempt_failure = (
                                     f"structured validation failed: {parsing_error}"
@@ -244,6 +256,8 @@ class JsonPromptRunner:
                                     parsed = request.parse(
                                         structured_result.get("parsed")
                                     )
+                                except CancelledError:
+                                    raise
                                 except Exception as exc:
                                     attempt_failure = (
                                         f"structured validation failed: {exc}"
@@ -260,11 +274,14 @@ class JsonPromptRunner:
                                 token_counter=token_counter,
                                 max_input_tokens=request.max_input_tokens,
                             )
+                            _cancellation_checkpoint()
                             parsed = request.parse(response_text)
                             if parsed is None:
                                 tool_evidence = observed_evidence
                         else:
+                            _cancellation_checkpoint()
                             response = (prompt | chat).invoke(request.variables)
+                            _cancellation_checkpoint()
                             response_text = StrOutputParser().invoke(response)
                             if _response_reached_output_limit(response):
                                 confirmed_output_limit = True
@@ -274,18 +291,24 @@ class JsonPromptRunner:
                             else:
                                 parsed = request.parse(response_text)
                     if parsed is not None:
+                        _cancellation_checkpoint()
                         attempt_span.end(
                             attributes={
                                 "response_text": response_text,
                                 "parsed": parsed,
                             }
                         )
+                        _cancellation_checkpoint()
                         return parsed
+                except CancelledError:
+                    raise
                 except ModelOutputLimitError as exc:
+                    _cancellation_checkpoint()
                     confirmed_output_limit = True
                     attempt_failure = str(exc)
                     tool_evidence = exc.tool_evidence
                 except Exception as exc:
+                    _cancellation_checkpoint()
                     if isinstance(
                         exc, (ModelToolConfigurationError, ModelInputLimitError)
                     ):
@@ -298,6 +321,7 @@ class JsonPromptRunner:
                         ) from exc
                     attempt_error = exc
                     attempt_failure = str(exc)
+                _cancellation_checkpoint()
                 last_failure = attempt_failure
                 attempt_span.end(
                     status="error" if attempt_error is not None else "inconclusive",
@@ -333,7 +357,14 @@ class JsonPromptRunner:
                     last_failure,
                 )
                 if backoff_seconds > 0:
-                    time.sleep(backoff_seconds)
+                    if _current_cancellation.get() is None:
+                        time.sleep(backoff_seconds)
+                    else:
+                        deadline = time.monotonic() + backoff_seconds
+                        while (remaining := deadline - time.monotonic()) > 0:
+                            _cancellation_checkpoint()
+                            time.sleep(min(remaining, 0.1))
+        _cancellation_checkpoint()
         if confirmed_output_limit:
             if request.on_output_limit is not None:
                 request.on_output_limit()
@@ -349,6 +380,7 @@ class JsonPromptRunner:
             request.final_keep_message,
             last_failure,
         )
+        _cancellation_checkpoint()
         return None
 
 

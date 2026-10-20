@@ -22,6 +22,11 @@ placeholder nodes and makes no embedding requests, including for an empty index.
 Setup errors fail initialization instead of leaving a backend marked ready after
 an unsuccessful table or index creation.
 
+`concurrent.futures.CancelledError` from backend setup, language splitters, or
+retrieval propagates to the caller instead of becoming error evidence or a
+successful partial index build. Existing setup-failure cleanup is preserved.
+Cancellation does not roll back index writes that already completed.
+
 `index_search` accepts:
 
 - `query`: a short human-readable context question.

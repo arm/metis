@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
@@ -200,6 +201,8 @@ class SimpleLlmReviewService:
                         checkpoint_session=checkpoint_session,
                         cache_only=True,
                     )
+                except CancelledError:
+                    raise
                 except Exception:
                     review = None
                 return path, review
@@ -387,7 +390,7 @@ class SimpleLlmReviewService:
         def review(path):
             try:
                 return path, self._review_file_task(review_fn, path), None
-            except ModelProviderConfigurationError:
+            except (CancelledError, ModelProviderConfigurationError):
                 raise
             except Exception as exc:
                 return path, None, exc
@@ -495,7 +498,11 @@ class SimpleLlmReviewService:
                 checkpoint_group: ReviewGroup | None = None
                 try:
                     review_dict = graph.review(req)
-                except (ModelProviderConfigurationError, ModelInputLimitError):
+                except (
+                    CancelledError,
+                    ModelProviderConfigurationError,
+                    ModelInputLimitError,
+                ):
                     raise
                 except Exception as exc:
                     logger.error(f"Error processing review for {file_diff.path}: {exc}")

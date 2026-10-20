@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from contextvars import ContextVar
 from contextvars import Token
 from datetime import datetime
@@ -90,7 +91,7 @@ class Span:
             if not self._ended:
                 if exc is None:
                     self.end()
-                elif isinstance(exc, KeyboardInterrupt):
+                elif isinstance(exc, (KeyboardInterrupt, CancelledError)):
                     self.end(status="cancelled", exc=exc)
                 else:
                     self.end(status="error", exc=exc)
@@ -263,7 +264,9 @@ class RunLogSession:
     def __exit__(self, exc_type, exc, tb) -> bool:
         if exc is not None:
             self.set_outcome(
-                "cancelled" if isinstance(exc, KeyboardInterrupt) else "error",
+                "cancelled"
+                if isinstance(exc, (KeyboardInterrupt, CancelledError))
+                else "error",
                 exc=exc,
             )
         self.close()

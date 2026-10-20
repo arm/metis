@@ -4,6 +4,7 @@
 
 import os
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
@@ -112,6 +113,8 @@ class CFamilyCodeGraphProvider:
                         )
                     file_graph.add_public_declarations(parsed.public_declarations)
                     graph.merge(file_graph)
+            except CancelledError:
+                raise
             except Exception as exc:
                 error_messages = (f"{type(exc).__name__}: {exc}",)
 
@@ -194,6 +197,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 else None
             )
             parsed = runtime.parse_file(codebase_path, rel_path, source=source)
+        except CancelledError:
+            raise
         except Exception as exc:
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 

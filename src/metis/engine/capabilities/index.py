@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from typing import Any
 
 from pydantic import BaseModel
@@ -249,6 +250,8 @@ class IndexCapability:
 def _retrieve_index_text(retriever, query: str, *, max_chars: int) -> str:
     try:
         documents = retrieve_documents(retriever, query)
+    except CancelledError:
+        raise
     except Exception as exc:
         return f"[INDEX_RETRIEVAL_ERROR]\n{exc}"
 

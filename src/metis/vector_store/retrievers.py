@@ -11,6 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis import runlog
 
 
@@ -52,7 +53,9 @@ class QueryAnswerRetriever:
         return self.get_relevant_documents(query)
 
     def _query_text(self, query: str) -> str:
+        _cancellation_checkpoint()
         context = self._retrieve_context(query)
+        _cancellation_checkpoint()
         if not context.strip():
             return ""
         chat = self._llm_provider.get_chat_model(**self._chat_model_kwargs)
@@ -74,11 +77,12 @@ class QueryAnswerRetriever:
                 ),
             ]
         )
-        return (
-            (prompt | chat | StrOutputParser())
-            .invoke({"query": query, "context": context})
-            .strip()
+        _cancellation_checkpoint()
+        result = (prompt | chat | StrOutputParser()).invoke(
+            {"query": query, "context": context}
         )
+        _cancellation_checkpoint()
+        return result.strip()
 
     def _retrieve_context(self, query: str) -> str:
         with runlog.span(
