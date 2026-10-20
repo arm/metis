@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Iterator
+from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from typing import Any
 
@@ -267,6 +268,8 @@ class IndexingService:
                             splitter = self._repository.get_splitter_cached(plugin)
                             try:
                                 nodes = splitter.get_nodes_from_documents([doc])
+                            except CancelledError:
+                                raise
                             except Exception as e:
                                 logger.warning(
                                     "Could not parse code with language %s for file %s: %s",

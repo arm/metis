@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import CancelledError
 
 from . import constants as C
 from .debug import _emit_debug
@@ -35,6 +36,8 @@ def _safe_tool_capture(
 ) -> str | None:
     try:
         output = invoke()
+    except CancelledError:
+        raise
     except Exception as exc:
         if append_error_section and error_label:
             sections.append(f"[{error_label}]\n{exc}")
@@ -69,6 +72,8 @@ def _tool_debug_args(toolbox, tool_name: str, **tool_args) -> dict:
         return out
     try:
         details = describe(tool_name)
+    except CancelledError:
+        raise
     except Exception:
         return out
     if not isinstance(details, dict):

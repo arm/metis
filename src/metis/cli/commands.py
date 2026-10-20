@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from concurrent.futures import CancelledError
 from importlib.metadata import version as package_version
 import json
 from pathlib import Path
@@ -225,6 +226,8 @@ def _triage_review_output(engine, sarif_payload, codegraph, args):
                 action=_invoke,
                 spinner_text="Triaging findings...",
             )
+    except CancelledError:
+        raise
     except Exception as exc:
         print_console(
             f"[yellow]Triage skipped due to error: {escape(str(exc))}[/yellow]",

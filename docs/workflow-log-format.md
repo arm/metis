@@ -251,9 +251,9 @@ telemetry and emits one warning; it does not change execution results. The
 metadata file remains incomplete when possible.
 
 Span context managers record uncaught exceptions with type, message, and
-traceback. Keyboard interruption records a cancelled outcome. Caught execution
-failures are recorded from their returned status or diagnostic before the run
-closes.
+traceback. Keyboard interruption and `concurrent.futures.CancelledError` record
+a cancelled outcome. Caught execution failures are recorded from their returned
+status or diagnostic before the run closes.
 
 ## External execution nodes
 

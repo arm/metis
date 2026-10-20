@@ -50,13 +50,16 @@ class SQLiteCodeGraphStore:
         with self._lock:
             try:
                 with closing(_connect(self.location)) as connection:
-                    latest = None
                     for row in connection.execute(
                         """
                         SELECT revision
                         FROM canonical_codegraph
                         WHERE fingerprint = ?
-                        ORDER BY revision DESC
+                        ORDER BY EXISTS (
+                            SELECT 1 FROM codegraph_records
+                            WHERE graph_revision = canonical_codegraph.revision
+                                AND kind = 'failed'
+                        ), revision DESC
                         """,
                         (fingerprint,),
                     ):
@@ -69,15 +72,12 @@ class SQLiteCodeGraphStore:
                         except RuntimeError:
                             continue
                         if stored is not None:
-                            if not stored.reference.failed_files:
-                                return stored.reference
-                            if latest is None:
-                                latest = stored.reference
+                            return stored.reference
             except sqlite3.Error as exc:
                 raise RuntimeError(
                     f"Unable to read CodeGraph store {self.location!r}: {exc}"
                 ) from exc
-        return latest
+        return None
 
     def save(
         self,

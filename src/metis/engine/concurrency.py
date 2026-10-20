@@ -6,11 +6,13 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Sequence
 from concurrent.futures import CancelledError
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from contextlib import contextmanager
 from contextvars import Context
 from contextvars import ContextVar
 from contextvars import copy_context
@@ -24,6 +26,26 @@ from metis import runlog
 
 if TYPE_CHECKING:
     from metis.engine.execution.contracts import NodeJobs
+
+
+_current_cancellation: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "metis_current_cancellation", default=None
+)
+
+
+@contextmanager
+def _bind_cancellation(is_cancelled: Callable[[], bool]) -> Iterator[None]:
+    token = _current_cancellation.set(is_cancelled)
+    try:
+        yield
+    finally:
+        _current_cancellation.reset(token)
+
+
+def _cancellation_checkpoint() -> None:
+    is_cancelled = _current_cancellation.get()
+    if is_cancelled is not None and is_cancelled():
+        raise CancelledError("Execution was cancelled")
 
 
 def _validate_worker_limit(value: int, name: str) -> None:
@@ -119,20 +141,22 @@ class JobScheduler:
             active_worker.set()
             token = self._in_worker.set(active_worker)
             try:
-                if run.cancelled:
-                    raise CancelledError("Concurrent jobs were cancelled")
-                if label is None:
-                    return worker(job)
-                key = result_key(job)
-                with runlog.span(
-                    "task",
-                    label,
-                    {"kind": "concurrent_job", "key": key},
-                ) as task_span:
-                    runlog.bump("tasks")
-                    result = worker(job)
-                    task_span.end(attributes={"result": result})
-                    return result
+                with _bind_cancellation(
+                    lambda: run.cancelled or self._is_cancelled(run)
+                ):
+                    _cancellation_checkpoint()
+                    if label is None:
+                        return worker(job)
+                    key = result_key(job)
+                    with runlog.span(
+                        "task",
+                        label,
+                        {"kind": "concurrent_job", "key": key},
+                    ) as task_span:
+                        runlog.bump("tasks")
+                        result = worker(job)
+                        task_span.end(attributes={"result": result})
+                        return result
             finally:
                 active_worker.clear()
                 self._in_worker.reset(token)

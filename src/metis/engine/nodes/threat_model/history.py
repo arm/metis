@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,8 @@ def write_history_records(
         return
     try:
         lessons = _distill_history(config, commits)
+    except CancelledError:
+        raise
     except Exception as exc:
         logger.warning("Git-history distillation failed: %s", exc)
         return

@@ -3,6 +3,7 @@
 
 
 from collections import deque
+from collections.abc import Collection
 from dataclasses import dataclass
 from dataclasses import field
 from functools import partial
@@ -45,9 +46,14 @@ class FileFocusBuilder:
         if not target_nodes:
             return focus
 
+        focus.node_names = self.node_names_for_targets(focus.target_nodes)
+        return focus
+
+    def node_names_for_targets(self, target_names: Collection[str]) -> set[str]:
+        node_names: set[str] = set()
         for reverse in (True, False):
-            reached = set(focus.target_nodes)
-            queue = deque(focus.target_nodes)
+            reached = set(target_names)
+            queue = deque(target_names)
             while queue:
                 current_name = queue.popleft()
                 current = self._graph.get_node(current_name)
@@ -63,9 +69,11 @@ class FileFocusBuilder:
                         continue
                     reached.add(next_name)
                     queue.append(next_name)
-            focus.node_names.update(reached)
+            node_names.update(reached)
 
-        for node in target_nodes:
-            focus.node_names.update(node.resolved_calls or [])
-            focus.node_names.update(self._reverse_edges.get(node.unique_name, []))
-        return focus
+        for target_name in target_names:
+            node = self._graph.get_node(target_name)
+            if node is not None:
+                node_names.update(node.resolved_calls or [])
+            node_names.update(self._reverse_edges.get(target_name, []))
+        return node_names

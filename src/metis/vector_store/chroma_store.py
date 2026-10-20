@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from concurrent.futures import CancelledError
 from contextlib import suppress
 from threading import RLock
 
@@ -57,6 +58,8 @@ class ChromaStore(LlamaIndexVectorBackend):
                 if client is not None:
                     with suppress(Exception):
                         client.close()
+                if isinstance(e, CancelledError):
+                    raise
                 logger.error(f"Error initializing ChromaStore: {e}")
                 raise VectorStoreInitError() from e
 
@@ -84,6 +87,8 @@ class ChromaStore(LlamaIndexVectorBackend):
                     (self.collection_docs, self.embed_model_docs),
                 )
             )
+        except CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error creating Chroma retrievers: {e}")
             raise RetrieverInitError()

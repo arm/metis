@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from typing import Annotated
 
 from pydantic import BaseModel
@@ -177,6 +178,8 @@ def _annotate_language_semantics(
                     f"CodeGraph semantics provider {semantics_name!r} returned "
                     "invalid annotations"
                 )
+        except CancelledError:
+            raise
         except Exception as exc:
             failed_files.add(node.file_path)
             diagnostics.append(

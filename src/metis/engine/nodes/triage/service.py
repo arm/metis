@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from typing import Any
 from typing import TYPE_CHECKING
 
@@ -133,6 +134,8 @@ class TriageClassifierService:
             return ""
         try:
             prompts = plugin.get_prompts()
+        except CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Failed to load triage language guidance: %s", exc)
             return ""

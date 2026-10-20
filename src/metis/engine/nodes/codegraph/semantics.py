@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from importlib import metadata
 from threading import Lock
 from threading import RLock
@@ -65,6 +66,8 @@ class CodeGraphSemanticsCatalog:
             try:
                 loaded = candidates[0].load()
                 provider = loaded() if callable(loaded) else loaded
+            except CancelledError:
+                raise
             except Exception as exc:
                 message = f"CodeGraph semantics provider {name!r} failed to load: {exc}"
                 raise RuntimeError(message) from exc

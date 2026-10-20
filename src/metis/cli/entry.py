@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+from concurrent.futures import CancelledError
 from copy import copy
 from datetime import datetime
 import logging
@@ -405,6 +406,8 @@ def run_interactive_loop(engine, args, vector_backend):
 
         except (EOFError, KeyboardInterrupt):
             return "\n[magenta]Bye![/magenta]"
+        except CancelledError:
+            raise
         except Exception as e:
             print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
 
@@ -591,6 +594,8 @@ def _run_cli(args):
                                 getattr(args, "_metis_generated_output", False)
                             ),
                         )
+                    except CancelledError:
+                        raise
                     except Exception as exc:
                         partial = getattr(exc, "result", None)
                         if isinstance(partial, ExecutionResult) and partial.outputs:

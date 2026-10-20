@@ -889,8 +889,9 @@ its ancestors; cancelling it never sets an ancestor or sibling signal.
 `jobs.with_cancellation(event)` binds a child handle to that Event, and `cancel()`
 sets the bound Event, cancels queued jobs and signals active jobs. Custom
 `NodeJobs` implementations must honor the same contract. `runtime.is_cancelled()`
-and the job handle observe the same child signal. Context variables carry logging
-and execution identity into workers; they do not own cancellation.
+and the job handle observe the same child signal. Context variables carry logging,
+execution identity, and access to the active cancellation checker into workers;
+the node and job scopes still own cancellation.
 
 Handlers check `runtime.is_cancelled()` in long loops, or use
 `context.report_progress(...)`, which checks even without a progress callback.
@@ -898,7 +899,11 @@ Returning a successful result after cancelling the node is rejected as
 cancellation. Ordinary job failures become node errors and cancel that node's
 cooperative job peers; independent nodes may continue.
 `concurrent.futures.CancelledError` from a handler aborts its stage and
-propagates to the caller. A stage drains its own active handlers before
+propagates to the caller. Model calls, response parsers, model tools, and index
+retrieval propagate this exception without retrying or converting it into error
+text. Built-in model and tool loops check the active cancellation signal before
+new calls, after active calls return, and during retry waits. A stage drains its
+own active handlers before
 returning, including on failure, and leaves other executions' shared-pool work
 intact.
 
@@ -907,10 +912,13 @@ executions, drains handlers and jobs, then closes capabilities. Close from an
 active handler, job or callback is rejected. Threads and in-flight I/O cannot be
 preempted: extensions must use finite network/subprocess timeouts and join any
 work they start before returning. A non-cooperative call delays shutdown until
-it returns or its timeout expires. Concurrent close callers all wait for execution
+it returns or its timeout expires, including any retries inside the provider SDK.
+Concurrent close callers all wait for execution
 draining. Capability cleanup runs once; a repeated close may return while that
 cleanup is running, so cleanup callbacks can reenter close. Interruptions during
 draining are re-raised after cleanup completes.
+For the CLI, Ctrl+C cancels queued work but still waits for active calls to return
+or time out. Repeated Ctrl+C does not bypass this cleanup.
 Direct capability callers are outside graph tracking and must coordinate their
 own lifetime with shutdown.
 

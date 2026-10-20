@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from glob import has_magic
 from pathlib import Path
@@ -508,6 +509,8 @@ def _model_distilled_source_claims(
                 )
                 return []
             records.extend(batch_records)
+    except CancelledError:
+        raise
     except Exception as exc:
         logger.warning(
             "Threat-model source distillation failed for %s: %s", rel_path, exc
@@ -551,6 +554,8 @@ def _model_reduce_source_claim_group(
             temperature=0.0,
             chat_model_kwargs=config.chat_model_kwargs,
         )
+    except CancelledError:
+        raise
     except Exception as exc:
         logger.warning("Threat-model source claim deduplication failed: %s", exc)
         return claims
