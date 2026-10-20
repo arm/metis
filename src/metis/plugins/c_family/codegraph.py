@@ -973,6 +973,7 @@ def _annotate_macro_passthrough_calls(
 
     for function in functions:
         calls = list(function.calls)
+        call_indexes_by_span: dict[tuple[int, int], list[int]] | None = None
         wrapper_indexes = sorted(
             range(len(calls)),
             key=lambda index: (
@@ -1006,11 +1007,16 @@ def _annotate_macro_passthrough_calls(
             if wrapper.result is None:
                 continue
             argument_span = wrapper.lexical_argument_spans[passthrough_index]
+            if call_indexes_by_span is None:
+                call_indexes_by_span = {}
+                for index, candidate in enumerate(calls):
+                    call_indexes_by_span.setdefault(
+                        (candidate.start_byte, candidate.end_byte), []
+                    ).append(index)
             rooted_calls = [
                 index
-                for index, candidate in enumerate(calls)
+                for index in call_indexes_by_span.get(argument_span, ())
                 if index != wrapper_index
-                and (candidate.start_byte, candidate.end_byte) == argument_span
             ]
             if len(rooted_calls) != 1:
                 continue

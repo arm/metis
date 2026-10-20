@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from metis.engine.codegraph import CallKind
@@ -39,7 +40,7 @@ class ParsedFunction:
 
 
 def _visible_value_binding(
-    bindings: tuple[ValueBinding, ...],
+    bindings: Sequence[ValueBinding],
     *,
     name: str,
     at_byte: int,
@@ -97,9 +98,17 @@ def _resolve_calls(
     for caller in functions:
         resolved: list[str] = []
         call_sites: list[CallSite] = []
+        bindings_by_name: dict[str, list[ValueBinding]] = {}
+        for binding in caller.value_bindings:
+            bindings_by_name.setdefault(binding.name, []).append(binding)
+        cpp_candidates: dict[tuple[str, str, str, str, int], list[ParsedFunction]] = {}
         for call in caller.calls:
             kind: CallKind
-            pointer_targets = _pointer_targets_for_call(caller, call)
+            pointer_targets = _pointer_targets_for_call(
+                caller,
+                call,
+                value_bindings=bindings_by_name.get(call.precise_symbol, ()),
+            )
             if pointer_targets is not None:
                 candidates = [
                     candidate
@@ -112,28 +121,36 @@ def _resolve_calls(
                         file_path=caller.node.file_path,
                         language=caller.node.language,
                         lexical_scope=caller.syntax.lexical_scope,
-                        value_bindings=caller.value_bindings,
+                        value_bindings=bindings_by_name.get(reference.symbol, ()),
                     )
                 ]
                 kind = "indirect"
             else:
-                candidates = (
-                    _call_candidates(
-                        call,
-                        caller,
-                        definitions_by_name,
-                        definitions_by_qualified_name,
-                        declared_minimums,
+                if caller.node.language == "cpp":
+                    candidate_key = (
+                        call.symbol,
+                        call.qualified_name,
+                        call.generic_qualified_name,
+                        call.receiver,
+                        call.argument_count,
                     )
-                    if caller.node.language == "cpp"
-                    else _c_call_candidates(
+                    if candidate_key not in cpp_candidates:
+                        cpp_candidates[candidate_key] = _call_candidates(
+                            call,
+                            caller,
+                            definitions_by_name,
+                            definitions_by_qualified_name,
+                            declared_minimums,
+                        )
+                    candidates = cpp_candidates[candidate_key]
+                else:
+                    candidates = _c_call_candidates(
                         call,
                         caller,
                         c_definitions_by_file,
                         external_c_definitions,
                         value_declarations,
                     )
-                )
                 kind = call.kind
             target_ids = tuple(
                 dict.fromkeys(candidate.node.unique_name for candidate in candidates)
@@ -171,7 +188,7 @@ def _resolve_calls(
                             file_path=caller.node.file_path,
                             language=caller.node.language,
                             lexical_scope=caller.syntax.lexical_scope,
-                            value_bindings=caller.value_bindings,
+                            value_bindings=bindings_by_name.get(reference.symbol, ()),
                         )
                     )
                 )
@@ -213,11 +230,13 @@ def _resolve_calls(
 def _pointer_targets_for_call(
     caller: ParsedFunction,
     call: CFamilyCallSite,
+    *,
+    value_bindings: Sequence[ValueBinding] | None = None,
 ) -> tuple[SymbolReference, ...] | None:
     if call.receiver:
         return None
     binding = _visible_value_binding(
-        caller.value_bindings,
+        caller.value_bindings if value_bindings is None else value_bindings,
         name=call.precise_symbol,
         at_byte=call.start_byte,
     )
@@ -239,7 +258,7 @@ def _reference_candidates(
     file_path: str,
     language: str,
     lexical_scope: tuple[str, ...],
-    value_bindings: tuple[ValueBinding, ...],
+    value_bindings: Sequence[ValueBinding],
 ) -> list[ParsedFunction]:
     symbol = reference.symbol.removeprefix("::")
     is_qualified = reference.symbol.startswith("::") or "::" in symbol

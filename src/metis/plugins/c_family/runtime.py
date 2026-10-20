@@ -343,7 +343,7 @@ def _macro_function_definitions(
     tree: Any,
     source: bytes,
 ) -> tuple[_MacroFunctionDefinition, ...]:
-    lexical_source = _mask_c_comments_and_literals(source)
+    lexical_source = None
     definitions: list[_MacroFunctionDefinition] = []
     for node in _walk_nodes(tree.root_node()):
         if node.kind() != "preproc_function_def":
@@ -360,18 +360,19 @@ def _macro_function_definitions(
         )
         if not parameters or len(parameters) != len(set(parameters)):
             continue
+        if lexical_source is None:
+            lexical_source = _mask_c_comments_and_literals(source)
         value_span = (value_node.start_byte(), value_node.end_byte())
-        referenced_parameters = frozenset(
-            parameter_index
+        parameter_indexes = {
+            parameter.encode("ascii"): parameter_index
             for parameter_index, parameter in enumerate(parameters)
-            if any(
-                match.group() == parameter.encode("ascii")
-                for match in _IDENTIFIER.finditer(
-                    lexical_source,
-                    value_span[0],
-                    value_span[1],
-                )
+        }
+        referenced_parameters = frozenset(
+            parameter_indexes[match.group()]
+            for match in _IDENTIFIER.finditer(
+                lexical_source, value_span[0], value_span[1]
             )
+            if match.group() in parameter_indexes
         )
         definitions.append(
             _MacroFunctionDefinition(

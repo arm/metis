@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import replace
 import hashlib
 
@@ -14,8 +15,9 @@ def _build_reverse_edges(graph, sort_key):
     for node in graph.nodes.values():
         for callee in node.resolved_calls or []:
             reverse[callee].append(node.unique_name)
-    for callers in reverse.values():
-        callers.sort(key=sort_key)
+    if sort_key is not None:
+        for callers in reverse.values():
+            callers.sort(key=sort_key)
     return dict(reverse)
 
 
@@ -131,8 +133,10 @@ def function_for_location(
     line: int,
     *,
     symbol: str = "",
+    nodes: Sequence[FunctionNode] | None = None,
 ) -> FunctionNode | None:
-    nodes = graph.get_file_nodes(file_path)
+    if nodes is None:
+        nodes = graph.get_file_nodes(file_path)
     if not nodes:
         return None
     line = max(1, int(line or 1))

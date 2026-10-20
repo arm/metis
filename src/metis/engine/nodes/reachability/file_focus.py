@@ -6,13 +6,11 @@ from collections import deque
 from collections.abc import Collection
 from dataclasses import dataclass
 from dataclasses import field
-from functools import partial
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.nodes.reachability.options import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .graph_utils import _build_reverse_edges
-from .graph_utils import _node_sort_key
 
 
 @dataclass
@@ -31,8 +29,7 @@ class FileFocusBuilder:
     ):
         self._graph = graph
         self._max_path_length = max(1, int(max_path_length or 1))
-        self._node_sort_key = partial(_node_sort_key, self._graph)
-        self._reverse_edges = _build_reverse_edges(self._graph, self._node_sort_key)
+        self._reverse_edges = _build_reverse_edges(self._graph, None)
 
     def build(self, target_file: str) -> FileFocus:
         target_nodes = sorted(
