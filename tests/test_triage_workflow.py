@@ -1,22 +1,24 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import CancelledError
+from concurrent.futures import ThreadPoolExecutor
+import json
+from threading import Barrier
+from threading import Event
+from unittest.mock import Mock
+
 import pytest
 from langchain_core.messages import AIMessage
 
+from metis.engine.capabilities.navigation import NavigationCapability
+from metis.engine.concurrency import _bind_cancellation
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.triage.workflow import TriageWorkflow
 from metis.engine.nodes.triage.workflow.llm import _build_user_prompt
 from metis.engine.stages.triage.models import TriageDecisionModel
-
-
-class _App:
-    def __init__(self, payload):
-        self.payload = payload
-        self.last_input = None
-
-    def invoke(self, state):
-        self.last_input = state
-        return self.payload
+from metis.runlog import RunLogConfig
+from metis.runlog import RunLogSession
 
 
 class _FakeTool:
@@ -29,7 +31,7 @@ class _FakeTool:
 
     def invoke(self, args):
         self.calls.append(args)
-        return "a.py:10:value = request.args['x']"
+        return "10: value = request.args['x']"
 
 
 class _FakeToolChat:
@@ -81,13 +83,31 @@ class _FakeProvider:
         return self.chat
 
 
-def _build_workflow():
+@pytest.fixture
+def source_workflow(tmp_path):
+    (tmp_path / "a.c").write_text(
+        "int read(int *a, int i) {\n    return a[i];\n}\n", encoding="utf-8"
+    )
+    navigation = NavigationCapability(
+        codebase_path=str(tmp_path), timeout_seconds=8, max_chars=16000
+    )
     return TriageWorkflow(
         llm_provider=object(),
         llama_query_model="dummy",
-        toolbox=object(),
+        toolbox=navigation,
         plugin_config={},
     )
+
+
+@pytest.fixture
+def triage_request():
+    return {
+        "finding_message": "The index is not checked before access.",
+        "finding_file_path": "a.c",
+        "finding_line": 2,
+        "finding_rule_id": "R1",
+        "finding_snippet": "return a[i];",
+    }
 
 
 def test_triage_schema_allows_inconclusive_with_unresolved_hops():
@@ -101,26 +121,15 @@ def test_triage_schema_allows_inconclusive_with_unresolved_hops():
     assert decision.status == "inconclusive"
 
 
-def test_triage_workflow_invokes_navigation_model_tool_before_decision():
-    provider = _FakeProvider()
-    tool = _FakeTool()
-    workflow = TriageWorkflow(
-        llm_provider=provider,
-        llama_query_model="dummy",
-        toolbox=object(),
-        plugin_config={},
-        model_tools=(tool,),
-        model_tool_max_rounds=2,
-    )
-
-    decision = workflow._invoke_triage_model(
-        "You triage findings.",
-        "Validate this finding with navigation evidence.",
-    )
-
-    assert decision.status == "valid"
-    assert provider.chat.bound_tools == [tool]
-    assert tool.calls == [{"path": "a.py", "start_line": 8, "end_line": 12}]
+def test_triage_schema_rejects_inconclusive_without_unresolved_hops():
+    with pytest.raises(ValueError):
+        TriageDecisionModel(
+            status="inconclusive",
+            reason="uncertain",
+            evidence=[],
+            resolution_chain=["source -> sink"],
+            unresolved_hops=[],
+        )
 
 
 def test_triage_user_prompt_includes_language_navigation_guidance():
@@ -152,452 +161,264 @@ def test_triage_user_prompt_includes_language_navigation_guidance():
     assert "Callers validate input." in prompt
 
 
-def test_triage_schema_rejects_inconclusive_without_unresolved_hops():
-    with pytest.raises(ValueError):
-        TriageDecisionModel(
-            status="inconclusive",
-            reason="uncertain",
-            evidence=[],
-            resolution_chain=["x -> y"],
-            unresolved_hops=[],
+@pytest.mark.parametrize(
+    ("status", "reason", "unresolved_hops"),
+    [
+        (
+            "valid",
+            "The index is not validated before use. This is not a false positive.",
+            ["FLOW_SINK_NOT_FOUND", "MACRO_DEFINITION_UNRESOLVED:PROJECT_STACK_ALLOC"],
+        ),
+        ("invalid", "Unknown inputs are rejected by the caller.", []),
+        ("inconclusive", "I cannot determine the input contract.", ["caller missing"]),
+    ],
+)
+def test_triage_preserves_structured_verdict_regardless_of_prose(
+    source_workflow,
+    triage_request,
+    monkeypatch,
+    tmp_path,
+    status,
+    reason,
+    unresolved_hops,
+):
+    invoke = Mock(
+        return_value=TriageDecisionModel(
+            status=status,
+            reason=reason,
+            evidence=["a.c:2"],
+            resolution_chain=["input -> a.c:2"],
+            unresolved_hops=unresolved_hops,
+        )
+    )
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", invoke)
+
+    with RunLogSession(RunLogConfig(path=tmp_path / "triage.ndjson")) as session:
+        result = source_workflow.triage(triage_request)
+
+    invoke.assert_called_once()
+    assert result["status"] == status
+    assert result["reason"] == reason
+    assert result["unresolved_hops"] == unresolved_hops
+    assert result["decision_source"] == "model"
+    assert result["validation_errors"] == []
+    records = [
+        json.loads(line) for line in session.ndjson_path.read_text().splitlines()
+    ]
+    assert [
+        record["name"]
+        for record in records
+        if record["record"] == "span.start" and record["kind"] == "step"
+    ] == ["triage.collect_evidence", "triage.triage"]
+
+
+@pytest.mark.parametrize(
+    "template", ["{triage_input}", "{triage_input}\n{tool_outputs}"]
+)
+def test_custom_template_cannot_omit_evidence_used_to_validate_citations(
+    source_workflow, triage_request, monkeypatch, template
+):
+    source_workflow.triage_decision_prompt = template
+    triage_request["finding_snippet"] = "literal {tool_outputs} and {triage_input}"
+
+    def decide(_system, prompt, **_kwargs):
+        assert "literal {tool_outputs} and {triage_input}" in prompt
+        assert prompt.count("2:     return a[i];") == 1
+        return TriageDecisionModel(
+            status="valid",
+            reason="Source shows the access.",
+            evidence=["a.c:2"],
+            resolution_chain=["input -> array access"],
         )
 
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", decide)
 
-def test_triage_workflow_accepts_inconclusive(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "inconclusive",
-                "decision_reason": "chain unresolved",
-                "decision_evidence": [],
-                "decision_resolution_chain": ["finding -> wrapper"],
-                "decision_unresolved_hops": ["wrapper definition missing"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
+    assert source_workflow.triage(triage_request)["status"] == "valid"
 
 
-def test_triage_workflow_fills_unresolved_hops_for_inconclusive(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "inconclusive",
-                "decision_reason": "chain unresolved",
-                "decision_evidence": [],
-                "decision_resolution_chain": ["finding -> wrapper"],
-                "decision_unresolved_hops": ["wrapper target unresolved"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
-    assert out["unresolved_hops"] == ["wrapper target unresolved"]
-
-
-def test_triage_workflow_keeps_inconclusive_when_uncertainty_exists(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "inconclusive",
-                "decision_reason": "insufficient evidence; cannot determine.",
-                "decision_evidence": ["a.c:10"],
-                "decision_resolution_chain": ["finding -> symbol -> site"],
-                "decision_unresolved_hops": ["macro expansion unresolved"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
-
-
-def test_triage_workflow_allows_valid_with_non_critical_unresolved_hops(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": "evidence chain is present with direct citations.",
-                "decision_evidence": ["a.c:10", "a.c:30"],
-                "decision_resolution_chain": ["source -> guard -> sink"],
-                "decision_unresolved_hops": ["FLOW_SINK_CLASS_UNRESOLVED:helper_call"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
-
-
-def test_triage_workflow_keeps_inconclusive_with_critical_unresolved_hops(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": "evidence chain is present with direct citations.",
-                "decision_evidence": ["a.c:10", "a.c:30"],
-                "decision_resolution_chain": ["source -> guard -> sink"],
-                "decision_unresolved_hops": ["FLOW_SINK_NOT_FOUND"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
-
-
-def test_triage_workflow_allows_valid_when_macro_unresolved_hop_is_resolved(
-    monkeypatch,
+def test_triage_checks_configured_input_budget_before_model_invocation(
+    source_workflow, triage_request
 ):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": "evidence chain is present with direct citations.",
-                "decision_evidence": [
-                    "a.c:10",
-                    "a.c:30",
-                    "MACRO_RESOLUTION PROJECT_STACK_ALLOC -> alloca",
-                ],
-                "decision_resolution_chain": [
-                    "source -> guard -> sink",
-                    "MACRO_RESOLUTION PROJECT_STACK_ALLOC -> alloca",
-                ],
-                "decision_unresolved_hops": [
-                    "MACRO_DEFINITION_UNRESOLVED:PROJECT_STACK_ALLOC"
-                ],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 1,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
+    provider = Mock()
+    provider.count_tokens.side_effect = lambda text, **_kwargs: len(text)
+    source_workflow._prompt_runner._llm_provider = provider
+    source_workflow.max_input_tokens = 1
+
+    with pytest.raises(ModelInputLimitError):
+        source_workflow.triage(triage_request)
+
+    provider.get_chat_model.return_value.invoke.assert_not_called()
 
 
-def test_triage_workflow_does_not_force_inconclusive_for_assumption_findings(
-    monkeypatch,
+def test_triage_honors_cancellation_between_steps(
+    source_workflow, triage_request, monkeypatch
 ):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": "concrete citations and full chain show issue.",
-                "decision_evidence": ["a.c:75", "a.c:102"],
-                "decision_resolution_chain": [
-                    "reported helper -> run wrapper -> kernel call"
-                ],
-                "decision_unresolved_hops": [],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "Use of PROJECT_ASSUME instead of runtime checks allows undefined behavior",
-            "finding_file_path": "a.c",
-            "finding_line": 75,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
+    cancellation = Event()
+    invoke = Mock()
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", invoke)
+
+    def cancel_after_collection(event):
+        if event["event"] == "evidence_collection":
+            cancellation.set()
+
+    triage_request["debug_callback"] = cancel_after_collection
+    with _bind_cancellation(cancellation.is_set), pytest.raises(CancelledError):
+        source_workflow.triage(triage_request)
+
+    invoke.assert_not_called()
 
 
-def test_triage_workflow_does_not_upgrade_invalid_to_valid(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "invalid",
-                "decision_reason": "false positive due to dominating assignment",
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["source -> assignment -> sink"],
-                "decision_unresolved_hops": [],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "invalid"
-
-
-def test_triage_workflow_does_not_treat_unbounded_as_bounded_contradiction(
-    monkeypatch,
+def test_concurrent_findings_cannot_borrow_each_others_source(
+    source_workflow, triage_request, tmp_path, monkeypatch
 ):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": (
-                    "The finding is valid because an unbounded receiver_count "
-                    "is used without overflow checking."
-                ),
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["reported count -> size calculation"],
-                "decision_unresolved_hops": [],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "unchecked size calculation",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
-    assert "OVERRIDE_CONTRADICTION_SIGNAL" not in out["reason"]
+    (tmp_path / "b.c").write_text("void second(void) {}\n", encoding="utf-8")
+    barrier = Barrier(2)
+
+    def decide(_system, _prompt, **_kwargs):
+        barrier.wait(timeout=5)
+        return TriageDecisionModel(
+            status="invalid",
+            reason="The inspected operation is safe.",
+            evidence=["b.c:1"],
+            resolution_chain=["finding -> b.c:1"],
+        )
+
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", decide)
+    requests = [
+        triage_request,
+        {**triage_request, "finding_file_path": "b.c", "finding_line": 1},
+    ]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = executor.map(source_workflow.triage, requests)
+
+    assert first["status"] == "inconclusive"
+    assert first["validation_errors"] == ["UNOBSERVED_CITATION:b.c:1"]
+    assert second["status"] == "invalid"
+    assert second["validation_errors"] == []
 
 
-def test_triage_workflow_does_not_treat_bounded_table_as_contradiction(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": (
-                    "The finding is valid because the bounded table is indexed "
-                    "without a runtime validation path."
-                ),
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["reported index -> table access"],
-                "decision_unresolved_hops": [],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "unchecked table index",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
-    assert "OVERRIDE_CONTRADICTION_SIGNAL" not in out["reason"]
-
-
-def test_triage_workflow_does_not_treat_negated_contradiction_as_invalid(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": (
-                    "The finding is valid. The unresolved platform contract "
-                    "does not contradict the absence of a local bounds check."
-                ),
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["reported index -> table access"],
-                "decision_unresolved_hops": [],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "unchecked table index",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "valid"
-    assert "OVERRIDE_CONTRADICTION_SIGNAL" not in out["reason"]
-
-
-def test_triage_workflow_applies_evidence_gate_override(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "valid",
-                "decision_reason": "looks valid",
-                "decision_evidence": ["a.c:10"],
-                "decision_resolution_chain": ["source -> sink"],
-                "decision_unresolved_hops": [],
-                "evidence_gate_missing": ["FILE_CONTEXT_MISSING"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
-    assert "OVERRIDE_EVIDENCE_GATE_INCOMPLETE" in out["reason"]
-    assert out["missing_evidence"] == ["FILE_CONTEXT_MISSING"]
-
-
-def test_triage_workflow_applies_status_specific_obligation_gate(monkeypatch):
-    g = _build_workflow()
-    monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "invalid",
-                "decision_reason": "strong contradiction in observed flow",
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["source -> guard -> sink"],
-                "decision_unresolved_hops": [],
-                "evidence_obligations": [
-                    "local_context",
-                    "symbol_definition",
-                    "constraint_or_guard",
-                ],
-                "obligation_coverage": {
-                    "local_context": 1,
-                    "symbol_definition": 1,
-                    "constraint_or_guard": 0,
-                },
-                "obligation_missing": ["constraint_or_guard"],
-            }
-        ),
-    )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
-    )
-    assert out["status"] == "inconclusive"
-    assert "OVERRIDE_OBLIGATION_COVERAGE" in out["reason"]
-    assert out["missing_evidence"] == []
-
-
-def test_triage_workflow_relaxes_invalid_constraint_gate_when_core_evidence_present(
-    monkeypatch,
+@pytest.mark.parametrize("status", ["valid", "invalid"])
+def test_triage_retains_findings_when_citations_are_unusable(
+    source_workflow, triage_request, monkeypatch, status
 ):
-    g = _build_workflow()
     monkeypatch.setattr(
-        g,
-        "_get_app",
-        lambda: _App(
-            {
-                "decision_status": "invalid",
-                "decision_reason": "concrete local contradiction in observed flow",
-                "decision_evidence": ["a.c:10", "a.c:20"],
-                "decision_resolution_chain": ["source -> check -> sink"],
-                "decision_unresolved_hops": [],
-                "evidence_obligations": [
-                    "local_context",
-                    "symbol_definition",
-                    "use_site",
-                    "constraint_or_guard",
-                ],
-                "obligation_coverage": {
-                    "local_context": 1,
-                    "symbol_definition": 2,
-                    "use_site": 1,
-                    "constraint_or_guard": 0,
-                },
-                "obligation_missing": ["constraint_or_guard"],
-            }
+        source_workflow,
+        "_invoke_triage_model",
+        Mock(
+            return_value=TriageDecisionModel(
+                status=status,
+                reason="The source proves the verdict.",
+                evidence=["unseen.c:1"],
+                resolution_chain=["input -> access"],
+            )
         ),
     )
-    out = g.triage(
-        {
-            "finding_message": "msg",
-            "finding_file_path": "a.c",
-            "finding_line": 10,
-            "finding_rule_id": "R1",
-            "finding_snippet": "",
-        }
+
+    result = source_workflow.triage(triage_request)
+
+    assert result["status"] == "inconclusive"
+    assert result["decision_source"] == "validation_failure"
+    assert result["validation_errors"] == ["UNOBSERVED_CITATION:unseen.c:1"]
+    assert result["unresolved_hops"]
+
+
+def test_triage_requires_citations_for_builtin_invalid_decisions(
+    source_workflow, triage_request, monkeypatch
+):
+    monkeypatch.setattr(
+        source_workflow,
+        "_invoke_triage_model",
+        Mock(return_value=TriageDecisionModel(status="invalid", reason="Looks safe.")),
     )
-    assert out["status"] == "invalid"
-    assert "OVERRIDE_OBLIGATION_COVERAGE" not in out["reason"]
+
+    result = source_workflow.triage(triage_request)
+
+    assert result["status"] == "inconclusive"
+    assert result["decision_source"] == "validation_failure"
+    assert "MISSING_EVIDENCE" in result["validation_errors"]
+    assert "MISSING_RESOLUTION_CHAIN" in result["validation_errors"]
+
+
+def test_triage_does_not_treat_reported_snippet_as_observed_source(
+    source_workflow, triage_request, monkeypatch
+):
+    monkeypatch.setattr(
+        source_workflow.toolbox,
+        "sed",
+        Mock(side_effect=OSError("source unavailable")),
+    )
+    invoke = Mock(
+        return_value=TriageDecisionModel(
+            status="invalid",
+            reason="The reported snippet appears safe.",
+            evidence=["a.c:2"],
+            resolution_chain=["reported snippet -> a.c:2"],
+        )
+    )
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", invoke)
+
+    result = source_workflow.triage(triage_request)
+
+    invoke.assert_called_once()
+    assert result["status"] == "inconclusive"
+    assert result["decision_source"] == "validation_failure"
+    assert result["validation_errors"] == ["UNOBSERVED_CITATION:a.c:2"]
+
+
+def test_triage_retains_findings_after_model_parse_failure(
+    source_workflow, triage_request, monkeypatch
+):
+    monkeypatch.setattr(
+        source_workflow, "_invoke_triage_model", Mock(return_value=None)
+    )
+
+    result = source_workflow.triage(triage_request)
+
+    assert result["status"] == "inconclusive"
+    assert result["decision_source"] == "validation_failure"
+    assert result["validation_errors"] == ["TRIAGE_DECISION_PARSE_FAILED"]
+
+
+def test_triage_observes_model_tool_evidence_only_for_current_finding(
+    source_workflow, triage_request, tmp_path, monkeypatch
+):
+    (tmp_path / "a.py").write_text(
+        "\n" * 9 + "value = request.args['x']\n", encoding="utf-8"
+    )
+    provider = _FakeProvider()
+    tool = _FakeTool()
+    workflow = TriageWorkflow(
+        llm_provider=provider,
+        llama_query_model="dummy",
+        toolbox=source_workflow.toolbox,
+        plugin_config={},
+        model_tools=(tool,),
+        model_tool_max_rounds=2,
+    )
+
+    result = workflow.triage(triage_request)
+
+    assert result["status"] == "valid"
+    assert result["decision_source"] == "model"
+    assert result["evidence"] == ["a.py:10"]
+    assert provider.chat.bound_tools == [tool]
+    assert tool.calls == [{"path": "a.py", "start_line": 8, "end_line": 12}]
+
+    monkeypatch.setattr(
+        workflow,
+        "_invoke_triage_model",
+        Mock(
+            return_value=TriageDecisionModel(
+                status="invalid",
+                reason="The other file rules out the finding.",
+                evidence=["a.py:10"],
+                resolution_chain=["input -> a.py:10"],
+            )
+        ),
+    )
+
+    repeated = workflow.triage(triage_request)
+
+    assert repeated["status"] == "inconclusive"
+    assert repeated["decision_source"] == "validation_failure"
+    assert repeated["validation_errors"] == ["UNOBSERVED_CITATION:a.py:10"]

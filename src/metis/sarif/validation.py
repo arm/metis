@@ -18,9 +18,14 @@ from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.sarif.triage import METIS_MISSING_EVIDENCE_KEY
 from metis.sarif.triage import METIS_THREAT_MODEL_POLICY_KEY
 from metis.sarif.triage import METIS_TRIAGED_KEY
+from metis.sarif.triage import METIS_TRIAGE_DECISION_SOURCE_KEY
+from metis.sarif.triage import METIS_TRIAGE_EVIDENCE_KEY
 from metis.sarif.triage import METIS_TRIAGE_REASON_KEY
+from metis.sarif.triage import METIS_TRIAGE_RESOLUTION_CHAIN_KEY
 from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
 from metis.sarif.triage import METIS_TRIAGE_TIMESTAMP_KEY
+from metis.sarif.triage import METIS_TRIAGE_UNRESOLVED_HOPS_KEY
+from metis.sarif.triage import METIS_TRIAGE_VALIDATION_ERRORS_KEY
 from metis.sarif.writer import SARIF_VERSION
 
 
@@ -375,12 +380,26 @@ def _validate_triage_properties(properties: dict[str, Any], prefix: str) -> None
     ):
         if key in properties and not isinstance(properties[key], str):
             raise ValueError(f"{prefix} {key} must be a string")
-    for key in (METIS_EVIDENCE_REQUIREMENTS_KEY, METIS_MISSING_EVIDENCE_KEY):
+    for key in (
+        METIS_EVIDENCE_REQUIREMENTS_KEY,
+        METIS_MISSING_EVIDENCE_KEY,
+        METIS_TRIAGE_EVIDENCE_KEY,
+        METIS_TRIAGE_RESOLUTION_CHAIN_KEY,
+        METIS_TRIAGE_UNRESOLVED_HOPS_KEY,
+        METIS_TRIAGE_VALIDATION_ERRORS_KEY,
+    ):
         if key in properties and (
             not isinstance(properties[key], list)
             or any(not isinstance(item, str) for item in properties[key])
         ):
             raise ValueError(f"{prefix} {key} must be an array of strings")
+    if METIS_TRIAGE_DECISION_SOURCE_KEY in properties and properties[
+        METIS_TRIAGE_DECISION_SOURCE_KEY
+    ] not in ("model", "validation_failure", "policy"):
+        raise ValueError(
+            f"{prefix} {METIS_TRIAGE_DECISION_SOURCE_KEY} must be "
+            "model, validation_failure, or policy"
+        )
     coverage = properties.get(METIS_EVIDENCE_COVERAGE_KEY)
     if METIS_EVIDENCE_COVERAGE_KEY in properties and (
         not isinstance(coverage, dict)

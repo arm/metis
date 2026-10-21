@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+from itertools import islice
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 from threading import Lock
 from typing import Sequence
 
@@ -83,9 +85,10 @@ class NavigationCapability:
             return
         if not base.exists():
             return
-        for root, _, files in os.walk(base):
+        for root, directories, files in os.walk(base):
+            directories.sort(key=lambda name: (name.lower(), name))
             root_path = Path(root)
-            for name in files:
+            for name in sorted(files, key=lambda name: (name.lower(), name)):
                 candidate = root_path / name
                 if not candidate.is_symlink() and candidate.is_file():
                     yield candidate
@@ -147,7 +150,7 @@ class NavigationCapability:
                     continue
                 found.append(item)
         results: list[str] = []
-        for item in sorted(set(found), key=lambda p: p.lower()):
+        for item in sorted(set(found), key=lambda path: (path.lower(), path)):
             results.append(item)
             if len(results) >= max_results:
                 break
@@ -166,8 +169,13 @@ class NavigationCapability:
         target = self._resolve_path(path)
         if not target.is_file():
             raise FileNotFoundError(str(target))
-        lines = source_lines(target.read_text(encoding="utf-8", errors="ignore"))
         start_idx = max(0, start_line - 1)
-        end_idx = min(len(lines), end_line)
-        body = "\n".join(lines[start_idx:end_idx])
+        with target.open(encoding="utf-8", errors="ignore") as source:
+            if end_line < 0:
+                lines = source.readlines()[:end_line]
+            else:
+                lines = islice(
+                    source, min(start_idx, sys.maxsize), min(end_line, sys.maxsize)
+                )
+            body = "".join(lines)
         return self._clip(SourceMap.number_text(body, start_idx + 1))

@@ -20,6 +20,7 @@ from metis.engine.concurrency import _current_cancellation
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import ModelToolResultError
 from metis.engine.model_tool_runner import _response_reached_output_limit
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
@@ -54,6 +55,7 @@ class JsonPromptRequest:
     max_tool_rounds: int | None = None
     on_output_limit: Callable[[], None] | None = None
     max_input_tokens: int | None = None
+    on_tool_result: Callable[[str, dict[str, Any], str], None] | None = None
 
 
 def rendered_prompt_token_count(
@@ -273,8 +275,11 @@ class JsonPromptRunner:
                                 max_tool_rounds=max_tool_rounds,
                                 token_counter=token_counter,
                                 max_input_tokens=request.max_input_tokens,
+                                on_tool_result=request.on_tool_result,
                             )
                             _cancellation_checkpoint()
+                            if request.on_tool_result is not None:
+                                tool_evidence = observed_evidence
                             parsed = request.parse(response_text)
                             if parsed is None:
                                 tool_evidence = observed_evidence
@@ -310,7 +315,12 @@ class JsonPromptRunner:
                 except Exception as exc:
                     _cancellation_checkpoint()
                     if isinstance(
-                        exc, (ModelToolConfigurationError, ModelInputLimitError)
+                        exc,
+                        (
+                            ModelToolConfigurationError,
+                            ModelInputLimitError,
+                            ModelToolResultError,
+                        ),
                     ):
                         raise
                     if _certificate_verification_failed(exc):
