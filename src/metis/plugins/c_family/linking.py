@@ -37,6 +37,7 @@ class ParsedFunction:
     calls: tuple[CFamilyCallSite, ...]
     value_bindings: tuple[ValueBinding, ...]
     macro_function_mask: _MacroFunctionMask | None = None
+    visible_languages: frozenset[str] | None = None
 
 
 def _visible_value_binding(
@@ -61,7 +62,7 @@ def _resolve_calls(
     graph: CodeGraph,
     functions: list[ParsedFunction],
     declarations: list[CFamilyFunctionSyntax],
-    global_languages: dict[str, str],
+    global_reference_languages: dict[tuple[str, int, int], frozenset[str]],
     global_scopes: dict[str, tuple[str, ...]],
     value_declarations: dict[tuple[str, str], list[int]],
 ) -> None:
@@ -203,13 +204,22 @@ def _resolve_calls(
                 tuple(
                     dict.fromkeys(
                         candidate.node.unique_name
+                        for language in sorted(
+                            global_reference_languages[
+                                (
+                                    construct.file_path,
+                                    reference.start_byte,
+                                    reference.end_byte,
+                                )
+                            ]
+                        )
                         for candidate in _reference_candidates(
                             reference,
                             definitions_by_name,
                             definitions_by_qualified_name,
                             value_declarations,
                             file_path=construct.file_path,
-                            language=global_languages[construct.unique_name],
+                            language=language,
                             lexical_scope=global_scopes[construct.unique_name],
                             value_bindings=(),
                         )
@@ -299,7 +309,11 @@ def _reference_candidates(
     candidates = [
         candidate
         for candidate in candidates
-        if candidate.node.language == language
+        if (
+            language in candidate.visible_languages
+            if candidate.visible_languages is not None
+            else candidate.node.language == language
+        )
         and (
             not candidate.node.has_internal_linkage
             or candidate.node.file_path == file_path
@@ -416,8 +430,11 @@ def _call_candidates(
     candidates = [
         candidate
         for candidate in candidates
-        if not candidate.node.has_internal_linkage
-        or candidate.node.file_path == caller.node.file_path
+        if (candidate.visible_languages is None or "cpp" in candidate.visible_languages)
+        and (
+            not candidate.node.has_internal_linkage
+            or candidate.node.file_path == caller.node.file_path
+        )
     ]
     if not call.qualified_name:
         candidates = _visible_anonymous_namespace_candidates(

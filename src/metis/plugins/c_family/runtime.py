@@ -94,6 +94,10 @@ class TreeSitterRuntime:
             if not full.is_file():
                 raise FileNotFoundError(str(full))
             source = full.read_bytes()
+        if source and not source.endswith(b"\n"):
+            # A preprocessor directive needs its newline; without one a valid
+            # final `#define` parses as a MISSING node.
+            source += b"\n"
         parser = get_parser(self.language_name)
         diagnostic_tree = parser.parse(source)
         parse_source, tree, macro_function_masks = (
