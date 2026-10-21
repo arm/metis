@@ -38,6 +38,7 @@ from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.scope import select_review_targets
 from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.utils import read_file_content
+from metis.utils import resolve_path_within_root
 
 logger = logging.getLogger("metis")
 
@@ -288,7 +289,10 @@ class SimpleLlmReviewService:
     ) -> dict[str, Any] | None:
         source_view = self._repository.source_view_for_path(file_path)
         if source_view is None:
-            snippet = read_file_content(file_path)
+            source_path = resolve_path_within_root(
+                self._config.codebase_path, os.path.abspath(file_path)
+            )
+            snippet = read_file_content(str(source_path))
             anchor_source_hash = None
         else:
             snippet = source_view.canonical.decode("utf-8", errors="ignore")
@@ -446,8 +450,9 @@ class SimpleLlmReviewService:
                 memory_service,
                 path=relative_path,
             )
+            source_path = resolve_path_within_root(self._config.codebase_path, abs_path)
             try:
-                original_content = read_file_content(abs_path)
+                original_content = read_file_content(str(source_path))
             except Exception as exc:
                 logger.error(f"Error processing review for {file_diff.path}: {exc}")
                 continue
