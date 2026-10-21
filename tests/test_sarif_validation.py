@@ -109,6 +109,45 @@ def test_validate_sarif_checks_every_location():
         validate_metis_sarif(payload)
 
 
+@pytest.mark.parametrize("decision_source", ["model", "validation_failure", "policy"])
+def test_validate_sarif_preserves_optional_triage_decision_metadata(decision_source):
+    payload = _payload()
+    payload["runs"][0]["results"][0]["properties"] = {
+        "metisTriageEvidence": ["src/a.py:1"],
+        "metisTriageResolutionChain": ["Source location inspected"],
+        "metisTriageUnresolvedHops": [],
+        "metisTriageDecisionSource": decision_source,
+        "metisTriageValidationErrors": [],
+    }
+    assert parse_metis_sarif(_encoded(payload)) == payload
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("metisTriageEvidence", "src/a.py:1"),
+        ("metisTriageResolutionChain", [1]),
+        ("metisTriageUnresolvedHops", [None]),
+        ("metisTriageValidationErrors", {}),
+    ],
+)
+def test_validate_sarif_rejects_malformed_triage_decision_lists(key, value):
+    payload = _payload()
+    payload["runs"][0]["results"][0]["properties"] = {key: value}
+    with pytest.raises(ValueError, match=key):
+        validate_metis_sarif(payload)
+
+
+@pytest.mark.parametrize("value", ["unknown", []])
+def test_validate_sarif_rejects_unknown_triage_decision_sources(value):
+    payload = _payload()
+    payload["runs"][0]["results"][0]["properties"] = {
+        "metisTriageDecisionSource": value
+    }
+    with pytest.raises(ValueError, match="metisTriageDecisionSource"):
+        validate_metis_sarif(payload)
+
+
 def test_validate_sarif_enforces_injected_structural_limits_at_boundary():
     payload = _payload()
 

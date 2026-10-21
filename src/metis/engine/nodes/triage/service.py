@@ -43,6 +43,7 @@ class TriageClassifierService:
         usage_hooks: UsageHooks | None,
         model_tool_max_contract_chars: int,
         navigation_manifest: CapabilityManifest,
+        max_input_tokens: int | None = None,
     ) -> None:
         self._llm_provider = llm_provider
         self._model = model
@@ -54,6 +55,7 @@ class TriageClassifierService:
         self._usage_hooks = usage_hooks
         self._model_tool_max_contract_chars = model_tool_max_contract_chars
         self._navigation_manifest = navigation_manifest
+        self._max_input_tokens = max_input_tokens
         self._local = threading.local()
 
     def classify(
@@ -134,6 +136,7 @@ class TriageClassifierService:
                 ),
                 model_tools=model_tools,
                 model_tool_max_rounds=(model_tool_max_rounds if model_tools else None),
+                max_input_tokens=self._max_input_tokens,
             )
             self._local.workflow = workflow
             self._local.workflow_key = workflow_key

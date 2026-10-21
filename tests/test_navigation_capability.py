@@ -29,21 +29,30 @@ def test_cat_emits_numbered_lines(tmp_path):
     assert out == "1: line1\n2: line2"
 
 
-def test_sed_emits_numbered_slice(tmp_path):
+@pytest.mark.parametrize(
+    ("text", "start", "end", "expected"),
+    [
+        ("a\nb\nc\nd\ne\n", 2, 4, "2: b\n3: c\n4: d"),
+        ("before\n\nafter\n", 2, 2, "2: "),
+        ("before\n\nafter\n", 1, 2, "1: before\n2: "),
+    ],
+)
+def test_sed_emits_numbered_slice(tmp_path, text, start, end, expected):
     source = tmp_path / "a.txt"
-    source.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    source.write_text(text, encoding="utf-8")
 
     runner = _build_runner(tmp_path)
-    out = runner.sed("a.txt", 2, 4)
-    assert out == "2: b\n3: c\n4: d"
+    assert runner.sed("a.txt", start, end) == expected
 
 
-def test_sed_clamps_past_eof(tmp_path):
+@pytest.mark.parametrize("end", [100, 10**30])
+def test_sed_clamps_past_eof(tmp_path, end):
     source = tmp_path / "a.txt"
     source.write_text("a\nb\n", encoding="utf-8")
 
     runner = _build_runner(tmp_path)
-    assert runner.sed("a.txt", 1, 100) == "1: a\n2: b"
+    assert runner.sed("a.txt", 1, end) == "1: a\n2: b"
+    assert runner.sed("a.txt", end, end) == ""
 
 
 def test_cat_missing_file_raises(tmp_path):

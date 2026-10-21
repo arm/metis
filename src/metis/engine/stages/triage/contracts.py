@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from typing import Literal
 from typing import Protocol
 from typing_extensions import NotRequired
 from typing_extensions import Required
@@ -23,6 +24,11 @@ from .models import TriageRun
 class TriageDecision(TypedDict):
     status: Required[str]
     reason: Required[str]
+    evidence: NotRequired[list[str]]
+    resolution_chain: NotRequired[list[str]]
+    unresolved_hops: NotRequired[list[str]]
+    decision_source: NotRequired[Literal["model", "validation_failure", "policy"]]
+    validation_errors: NotRequired[list[str]]
     evidence_obligations: NotRequired[list[str]]
     evidence_coverage: NotRequired[dict[str, int]]
     missing_evidence: NotRequired[list[str]]
