@@ -19,19 +19,39 @@ from .evidence_text import (
 )
 
 
+def _append_source_section(
+    state: TriageState,
+    sections: list[str],
+    *,
+    tool_name: str,
+    tool_args: dict,
+    section_label: str,
+    output: str,
+) -> None:
+    section = f"[{section_label}]\n{output}"
+    sections.append(section)
+    if output and tool_name in {"sed", "grep", "cat"}:
+        state.setdefault("source_observations", []).append(
+            {
+                "tool": tool_name,
+                "arguments": dict(tool_args),
+                "output": output,
+                "section": section,
+            }
+        )
+
+
 def _safe_tool_capture(
     state: TriageState,
     sections: list[str],
     *,
     tool_name: str,
     tool_args: dict,
+    error_label: str,
     section_label: str | None = None,
-    error_label: str | None = None,
     max_lines: int = C.DEFAULT_CAPTURE_MAX_LINES,
     max_chars: int = C.DEFAULT_CAPTURE_MAX_CHARS,
-    append_error_section: bool = False,
     append_empty_section: bool = True,
-    emit_debug: bool = True,
     invoke,
 ) -> str | None:
     try:
@@ -39,29 +59,33 @@ def _safe_tool_capture(
     except CancelledError:
         raise
     except Exception as exc:
-        if append_error_section and error_label:
-            sections.append(f"[{error_label}]\n{exc}")
-        if emit_debug:
-            _emit_debug(
-                state,
-                "tool_call",
-                tool_name=tool_name,
-                tool_args=tool_args,
-                tool_output=f"Tool execution failed: {exc}",
-            )
-        return None
-
-    clipped = _limit_output(output, max_lines=max_lines, max_chars=max_chars)
-    if section_label and (append_empty_section or str(output or "").strip()):
-        sections.append(f"[{section_label}]\n{clipped}")
-    if emit_debug:
+        sections.append(f"[{error_label}]\n{exc}")
         _emit_debug(
             state,
             "tool_call",
             tool_name=tool_name,
             tool_args=tool_args,
-            tool_output=clipped,
+            tool_output=f"Tool execution failed: {exc}",
         )
+        return None
+
+    clipped = _limit_output(output, max_lines=max_lines, max_chars=max_chars)
+    if section_label and (append_empty_section or str(output or "").strip()):
+        _append_source_section(
+            state,
+            sections,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            section_label=section_label,
+            output=clipped,
+        )
+    _emit_debug(
+        state,
+        "tool_call",
+        tool_name=tool_name,
+        tool_args=tool_args,
+        tool_output=clipped,
+    )
     return output
 
 
@@ -115,7 +139,6 @@ def _collect_file_context(
         error_label="FILE_WINDOW_ERROR",
         max_lines=C.DEFAULT_CAPTURE_MAX_LINES,
         max_chars=C.DEFAULT_CAPTURE_MAX_CHARS,
-        append_error_section=True,
         invoke=lambda: toolbox.sed(file_path, start, end),
     )
     exact = _safe_tool_capture(
@@ -133,7 +156,6 @@ def _collect_file_context(
         error_label="REPORTED_LINE_ERROR",
         max_lines=C.REPORTED_LINE_MAX_LINES,
         max_chars=C.REPORTED_LINE_MAX_CHARS,
-        append_error_section=True,
         invoke=lambda: toolbox.sed(file_path, line, line),
     )
     if exact:
@@ -165,19 +187,14 @@ def _gather_symbol_definition_hits(
     file_path: str,
     max_followup_hits: int,
     max_sections: int,
-) -> tuple[list[tuple[str, int]], set[str], list[str]]:
+) -> tuple[list[tuple[str, int]], set[str]]:
     followup_hits: list[tuple[str, int]] = []
     definition_hints: set[str] = set()
-
-    if not symbols:
-        return followup_hits, definition_hints, []
-
     local_path = file_path or "."
 
-    def _probe_symbol(symbol: str, path: str, mode: str) -> bool:
+    for symbol in symbols:
         if len(sections) >= max_sections or len(followup_hits) >= max_followup_hits:
-            return False
-        hit_found = False
+            break
         probes = (
             _token_pattern(symbol),
             _call_pattern(symbol),
@@ -194,33 +211,24 @@ def _gather_symbol_definition_hits(
                     toolbox,
                     "grep",
                     pattern=probe,
-                    path=path,
-                    mode=mode,
+                    path=local_path,
+                    mode="local",
                 ),
-                section_label=f"SYMBOL_GREP {symbol} IN {path} ({mode})",
+                section_label=f"SYMBOL_GREP {symbol} IN {local_path} (local)",
+                error_label=f"SYMBOL_GREP_ERROR {symbol} IN {local_path} (local)",
                 max_lines=C.RELATED_GREP_MAX_LINES,
                 max_chars=C.RELATED_GREP_MAX_CHARS,
-                append_error_section=False,
                 append_empty_section=False,
-                invoke=lambda p=path, q=probe: toolbox.grep(q, p),
+                invoke=lambda p=local_path, q=probe: toolbox.grep(q, p),
             )
             if output is None:
                 continue
             parsed = _parse_grep_hits(output)
             if parsed:
-                hit_found = True
                 _extend_hits(followup_hits, parsed, max_total=max_followup_hits)
                 for hit_path, hit_line in parsed[: C.PROBE_HINT_HITS]:
                     definition_hints.add(f"{symbol} @ {hit_path}:{hit_line}")
-        return hit_found
-
-    unresolved: list[str] = []
-    for symbol in symbols:
-        if len(sections) >= max_sections:
-            break
-        if not _probe_symbol(symbol, local_path, "local"):
-            unresolved.append(symbol)
-    return followup_hits, definition_hints, unresolved
+    return followup_hits, definition_hints
 
 
 def _collect_hit_context_sections(
@@ -255,7 +263,6 @@ def _collect_hit_context_sections(
             error_label=f"HIT_CONTEXT_ERROR {path}:{hit_line}",
             max_lines=C.HIT_CONTEXT_MAX_LINES,
             max_chars=C.HIT_CONTEXT_MAX_CHARS,
-            append_error_section=True,
             invoke=lambda p=path, s=start, e=end: toolbox.sed(p, s, e),
         )
 
@@ -284,26 +291,25 @@ def _collect_use_site_sections(
         if symbol in seen_symbols:
             continue
         seen_symbols.add(symbol)
-        if len(symbol) < 3:
-            continue
         pattern = _call_pattern(symbol)
         for path in paths:
             if len(sections) >= max_sections:
                 break
+            tool_args = _tool_debug_args(
+                toolbox,
+                "grep",
+                pattern=pattern,
+                path=path,
+                mode="caller_or_wrapper",
+            )
             output = _safe_tool_capture(
                 state,
                 sections,
                 tool_name="grep",
-                tool_args=_tool_debug_args(
-                    toolbox,
-                    "grep",
-                    pattern=pattern,
-                    path=path,
-                    mode="caller_or_wrapper",
-                ),
+                tool_args=tool_args,
+                error_label=f"CALLER_GREP_ERROR {symbol} IN {path}",
                 max_lines=C.RELATED_GREP_MAX_LINES,
                 max_chars=C.RELATED_GREP_MAX_CHARS,
-                append_error_section=False,
                 invoke=lambda p=path, q=pattern: toolbox.grep(q, p),
             )
             if not output:
@@ -315,9 +321,17 @@ def _collect_use_site_sections(
             ]
             if not hits:
                 continue
-            sections.append(
-                f"[CALLER_GREP {symbol} IN {path}]\n"
-                f"{_limit_output(output, max_lines=C.RELATED_GREP_MAX_LINES, max_chars=C.RELATED_GREP_MAX_CHARS)}"
+            _append_source_section(
+                state,
+                sections,
+                tool_name="grep",
+                tool_args=tool_args,
+                section_label=f"CALLER_GREP {symbol} IN {path}",
+                output=_limit_output(
+                    output,
+                    max_lines=C.RELATED_GREP_MAX_LINES,
+                    max_chars=C.RELATED_GREP_MAX_CHARS,
+                ),
             )
             for hit_path, hit_line in hits:
                 if len(sections) >= max_sections:
@@ -342,7 +356,6 @@ def _collect_use_site_sections(
                     error_label=f"CALLER_CONTEXT_ERROR {hit_path}:{hit_line}",
                     max_lines=C.TARGETED_HIT_CONTEXT_MAX_LINES,
                     max_chars=C.TARGETED_HIT_CONTEXT_MAX_CHARS,
-                    append_error_section=True,
                     invoke=lambda p=hit_path, s=start, e=end: toolbox.sed(p, s, e),
                 )
             if seen_context:

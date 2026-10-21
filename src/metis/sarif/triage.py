@@ -16,6 +16,11 @@ METIS_FINDING_ID_KEY = "metisFindingId"
 METIS_TRIAGE_STATUS_KEY = "metisTriageStatus"
 METIS_TRIAGE_REASON_KEY = "metisTriageReason"
 METIS_TRIAGE_TIMESTAMP_KEY = "metisTriageTimestamp"
+METIS_TRIAGE_EVIDENCE_KEY = "metisTriageEvidence"
+METIS_TRIAGE_RESOLUTION_CHAIN_KEY = "metisTriageResolutionChain"
+METIS_TRIAGE_UNRESOLVED_HOPS_KEY = "metisTriageUnresolvedHops"
+METIS_TRIAGE_DECISION_SOURCE_KEY = "metisTriageDecisionSource"
+METIS_TRIAGE_VALIDATION_ERRORS_KEY = "metisTriageValidationErrors"
 METIS_EVIDENCE_REQUIREMENTS_KEY = "metisEvidenceRequirements"
 METIS_EVIDENCE_COVERAGE_KEY = "metisEvidenceCoverage"
 METIS_MISSING_EVIDENCE_KEY = "metisMissingEvidence"
@@ -269,6 +274,23 @@ def apply_triage_result(
 def _apply_triage_metadata(
     properties: dict[str, Any], metadata: dict[str, Any]
 ) -> None:
+    for field, key in (
+        ("evidence", METIS_TRIAGE_EVIDENCE_KEY),
+        ("resolution_chain", METIS_TRIAGE_RESOLUTION_CHAIN_KEY),
+        ("unresolved_hops", METIS_TRIAGE_UNRESOLVED_HOPS_KEY),
+        ("validation_errors", METIS_TRIAGE_VALIDATION_ERRORS_KEY),
+    ):
+        value = metadata.get(field)
+        if isinstance(value, list):
+            properties[key] = list(value)
+        else:
+            properties.pop(key, None)
+    decision_source = metadata.get("decision_source")
+    if isinstance(decision_source, str):
+        properties[METIS_TRIAGE_DECISION_SOURCE_KEY] = decision_source
+    else:
+        properties.pop(METIS_TRIAGE_DECISION_SOURCE_KEY, None)
+
     evidence_requirements = metadata.get("evidence_requirements")
     if isinstance(evidence_requirements, list):
         properties[METIS_EVIDENCE_REQUIREMENTS_KEY] = [

@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 from metis.engine.execution import ExecutionStatus
+from metis.sarif.triage import apply_triage_result
 from metis.sarif.triage import extract_findings
 
 
@@ -137,12 +140,18 @@ def test_triage_payload_marks_failed_finding_inconclusive(engine, monkeypatch):
 
     assert first["properties"]["metisTriaged"] is True
     assert first["properties"]["metisTriageStatus"] == "valid"
+    assert "metisTriageDecisionSource" not in first["properties"]
+    assert "metisTriageEvidence" not in first["properties"]
     assert second["properties"]["metisTriaged"] is True
     assert second["properties"]["metisTriageStatus"] == "inconclusive"
     assert (
         "Triage failed before a decision" in second["properties"]["metisTriageReason"]
     )
     assert second["properties"]["metisMissingEvidence"] == ["triage execution failed"]
+    assert second["properties"]["metisTriageDecisionSource"] == "validation_failure"
+    assert second["properties"]["metisTriageValidationErrors"] == [
+        "triage execution failed"
+    ]
     triage_events = [
         event
         for event in progress_events
@@ -184,7 +193,8 @@ def test_inconclusive_finding_makes_triage_execution_inconclusive(engine, monkey
     assert result.diagnostics == ()
 
 
-def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
+@pytest.mark.parametrize("decision_source", [None, "model", "validation_failure"])
+def test_triage_payload_writes_evidence_metadata(engine, monkeypatch, decision_source):
     payload = {
         "version": "2.1.0",
         "runs": [{"results": [{"message": {"text": "A"}, "ruleId": "R1"}]}],
@@ -195,6 +205,11 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
             return {
                 "status": "inconclusive",
                 "reason": "missing caller",
+                "evidence": ["src/a.py:1"],
+                "resolution_chain": ["Reported call is present at src/a.py:1"],
+                "unresolved_hops": ["Caller definition unavailable"],
+                "validation_errors": [],
+                **({"decision_source": decision_source} if decision_source else {}),
                 "evidence_obligations": ["local_context", "use_site"],
                 "evidence_coverage": {"local_context": 1, "use_site": 0},
                 "missing_evidence": ["use_site"],
@@ -217,6 +232,13 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch):
     assert props["metisEvidenceRequirements"] == ["local_context", "use_site"]
     assert props["metisEvidenceCoverage"] == {"local_context": 1, "use_site": 0}
     assert props["metisMissingEvidence"] == ["use_site"]
+    assert props["metisTriageEvidence"] == ["src/a.py:1"]
+    assert props["metisTriageResolutionChain"] == [
+        "Reported call is present at src/a.py:1"
+    ]
+    assert props["metisTriageUnresolvedHops"] == ["Caller definition unavailable"]
+    assert props["metisTriageDecisionSource"] == (decision_source or "policy")
+    assert props["metisTriageValidationErrors"] == []
     assert props["metisThreatModelPolicy"] == {
         "claim_type": "caller_contract",
         "disposition": "integration_risk",
@@ -338,8 +360,6 @@ def test_annotation_projection_ignores_malformed_result_collections():
 
 
 def test_negative_annotation_indices_cannot_modify_neighbors():
-    from metis.sarif.triage import apply_triage_result
-
     payload = {"runs": [{"results": [{}]}]}
     for run_index, result_index in ((-1, 0), (-2, 0), (0, -1), (0, -2)):
         assert not apply_triage_result(
@@ -350,3 +370,39 @@ def test_negative_annotation_indices_cannot_modify_neighbors():
             reason="local check",
         )
     assert payload == {"runs": [{"results": [{}]}]}
+
+
+def test_retriage_clears_previous_optional_decision_metadata():
+    payload = {"runs": [{"results": [{"properties": {"metisFindingId": "stable"}}]}]}
+    metadata = {
+        "evidence": ["src/a.py:1"],
+        "resolution_chain": ["Source location inspected"],
+        "unresolved_hops": [],
+        "decision_source": "model",
+        "validation_errors": [],
+    }
+    assert apply_triage_result(
+        payload,
+        run_index=0,
+        result_index=0,
+        status="valid",
+        reason="confirmed",
+        metadata=metadata,
+    )
+    assert apply_triage_result(
+        payload,
+        run_index=0,
+        result_index=0,
+        status="invalid",
+        reason="legacy classifier result",
+    )
+    properties = payload["runs"][0]["results"][0]["properties"]
+    assert properties["metisFindingId"] == "stable"
+    assert properties["metisTriageStatus"] == "invalid"
+    assert not {
+        "metisTriageEvidence",
+        "metisTriageResolutionChain",
+        "metisTriageUnresolvedHops",
+        "metisTriageDecisionSource",
+        "metisTriageValidationErrors",
+    }.intersection(properties)

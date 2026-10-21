@@ -159,6 +159,14 @@ class TriageService:
             status=decision["status"],
             reason=decision["reason"],
             metadata={
+                "evidence": decision.get("evidence"),
+                "resolution_chain": decision.get("resolution_chain"),
+                "unresolved_hops": decision.get("unresolved_hops"),
+                "decision_source": decision.get(
+                    "decision_source",
+                    "policy" if "threat_model_policy" in decision else None,
+                ),
+                "validation_errors": decision.get("validation_errors"),
                 "evidence_requirements": decision.get("evidence_obligations"),
                 "evidence_coverage": decision.get("evidence_coverage"),
                 "missing_evidence": decision.get("missing_evidence"),
@@ -180,6 +188,8 @@ class TriageService:
             status="inconclusive",
             reason=f"Triage failed before a decision could be produced: {exc}",
             metadata={
+                "decision_source": "validation_failure",
+                "validation_errors": ["triage execution failed"],
                 "evidence_requirements": ["triage_execution"],
                 "evidence_coverage": {"triage_execution": 0},
                 "missing_evidence": ["triage execution failed"],

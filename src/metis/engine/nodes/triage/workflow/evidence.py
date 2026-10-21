@@ -20,11 +20,6 @@ from .evidence_tools import (
     _gather_symbol_definition_hits,
 )
 from .debug import _emit_debug
-from .obligations import (
-    OBLIGATION_USE_SITE,
-    compute_obligation_coverage,
-    derive_obligations,
-)
 
 
 _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -85,7 +80,7 @@ def _derive_line_symbols(
 
     out: list[str] = []
     seen: set[str] = set()
-    for term in line_terms + snippet_candidates + prose_terms + exact_candidates:
+    for term in line_terms + snippet_candidates + exact_candidates + prose_terms:
         if not term or term in seen:
             continue
         if len(term) > 64:
@@ -103,7 +98,7 @@ def _is_probe_term(term: str) -> bool:
     text = str(term or "").strip()
     if not text:
         return False
-    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,127}$", text))
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", text))
 
 
 def _section_labels(sections: list[str]) -> list[str]:
@@ -121,14 +116,39 @@ def _finalize_evidence_pack_state(
     state: TriageState, sections: list[str]
 ) -> TriageState:
     evidence_pack = "\n\n".join(sections)
+    visible_chars = min(len(evidence_pack), C.EVIDENCE_PACK_MAX_CHARS)
+    section_offsets: dict[str, int] = {}
+    offset = 0
+    for section in sections:
+        section_offsets.setdefault(section, offset)
+        offset += len(section) + 2
+    source_observations = []
+    for observation in state.get("source_observations", []):
+        section = observation["section"]
+        section_offset = section_offsets.get(section)
+        if section_offset is None:
+            continue
+        output = observation["output"]
+        output_offset = section_offset + len(section) - len(output)
+        if output_offset >= visible_chars:
+            continue
+        source_observations.append(
+            {
+                "tool": observation["tool"],
+                "arguments": observation["arguments"],
+                "output": output[: visible_chars - output_offset],
+            }
+        )
     if len(evidence_pack) > C.EVIDENCE_PACK_MAX_CHARS:
         evidence_pack = evidence_pack[: C.EVIDENCE_PACK_MAX_CHARS] + "\n...[truncated]"
     new_state = cast(TriageState, dict(state))
     new_state["evidence_pack"] = evidence_pack
+    new_state["source_observations"] = source_observations
     return new_state
 
 
 def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
+    state = cast(TriageState, {**state, "source_observations": []})
     file_path = state.get("finding_file_path", "") or ""
     line = int(state.get("finding_line", 1) or 1)
     is_metis_source = bool(state.get("finding_is_metis", False))
@@ -166,11 +186,7 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
         max_symbol_terms=max_symbol_terms,
     )
 
-    (
-        followup_hits,
-        definition_hints,
-        unresolved_symbols,
-    ) = _gather_symbol_definition_hits(
+    followup_hits, definition_hints = _gather_symbol_definition_hits(
         state,
         sections,
         toolbox=toolbox,
@@ -196,21 +212,7 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
 
     sections = _enforce_section_limit(sections, max_sections=pre_use_site_max_sections)
 
-    symbol_unresolved_hops = [
-        f"SYMBOL_DEFINITION_UNRESOLVED:{symbol}" for symbol in unresolved_symbols
-    ]
-
-    obligations = derive_obligations(
-        analyzer_supported=False,
-        analyzer_unresolved_hops=symbol_unresolved_hops,
-    )
-    obligation_coverage, obligation_missing = compute_obligation_coverage(
-        obligations=obligations,
-        sections=sections,
-        unresolved_hops=symbol_unresolved_hops,
-        has_definition_hints=bool(definition_hints),
-    )
-    if OBLIGATION_USE_SITE in obligation_missing:
+    if not followup_hits:
         _collect_use_site_sections(
             state,
             sections,
@@ -221,27 +223,11 @@ def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
             max_sections=max_sections,
         )
         sections = _enforce_section_limit(sections, max_sections=max_sections)
-        obligation_coverage, obligation_missing = compute_obligation_coverage(
-            obligations=obligations,
-            sections=sections,
-            unresolved_hops=symbol_unresolved_hops,
-            has_definition_hints=bool(definition_hints),
-        )
-
-    evidence_gate_missing = [
-        f"OBLIGATION_MISSING:{name}" for name in obligation_missing
-    ]
-    state["evidence_obligations"] = obligations
-    state["obligation_coverage"] = obligation_coverage
-    state["evidence_gate_missing"] = evidence_gate_missing
     if codegraph_context:
         sections.append(f"[CODEGRAPH_CONTEXT]\n{codegraph_context}")
     _emit_debug(
         state,
-        "evidence_gate",
-        obligations=obligations,
-        obligation_coverage=obligation_coverage,
-        missing=evidence_gate_missing,
+        "evidence_collection",
         section_labels=_section_labels(sections),
     )
 

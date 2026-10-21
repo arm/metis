@@ -17,14 +17,14 @@ checkpoint persistence, and output-path selection remain at the CLI boundary.
    starting with line-local context and following concrete symbol definitions
    and use sites.
 4. Build a bounded evidence pack.
-5. Derive evidence obligations and coverage from the collected sections.
+5. Record the source lines actually supplied to the model, after output limits.
 6. Ask the model for a structured decision:
    - `status`: `valid` | `invalid` | `inconclusive`
    - `reason`
    - `evidence` (`file:line`)
    - `resolution_chain`
    - `unresolved_hops`
-7. Apply deterministic validation rules, then annotate SARIF:
+7. Validate the structured response and its source citations, then annotate SARIF:
    - `metisTriaged`
    - `metisTriageStatus`
    - `metisTriageReason`
@@ -32,6 +32,10 @@ checkpoint persistence, and output-path selection remain at the CLI boundary.
    - conditional `metisEvidenceRequirements` (list),
      `metisEvidenceCoverage` (mapping), `metisMissingEvidence` (list), and
      `metisThreatModelPolicy` (mapping) when available
+   - optional `metisTriageEvidence`, `metisTriageResolutionChain`, and
+     `metisTriageUnresolvedHops` (lists)
+   - optional `metisTriageDecisionSource` (`model`, `validation_failure`, or
+     `policy`) and `metisTriageValidationErrors` (list)
 
 ```text
 SARIF finding
@@ -47,7 +51,7 @@ Bounded evidence pack
 LLM structured decision
     |
     v
-Deterministic validation and triage adjudication
+Structured response and source-citation validation
     |
     v
 SARIF annotations
@@ -83,23 +87,30 @@ Metis accepts SARIF from Metis itself and from external tools.
 
 This keeps triage generic while allowing richer reuse of Metis-native hints when present.
 
-## Evidence obligations and gate
-The triage node computes obligation coverage from its collected
-sections and unresolved symbol hops before the model decision is finalized.
+## Model decisions and source validation
 
-If required obligations are missing, triage forces `inconclusive` via deterministic gate instead of accepting an overconfident status.
+The model decides whether source evidence supports the finding (`valid`),
+refutes it (`invalid`), or cannot settle it (`inconclusive`). Python does not
+change that judgment based on words in the explanation, unresolved-hop labels,
+macro-resolution text, or counts of evidence sections.
 
-## Adjudication (deterministic guardrail)
-The triage node does not accept model output blindly.
+Both decisive statuses require citations and a resolution chain in the built-in
+workflow. Citations use `file:line` or `file:start-end`. They must refer to source
+lines actually displayed in the initial evidence or successful navigation-tool
+results for that finding, remain inside the codebase, and match current source.
+These checks verify provenance, not the semantic truth of the model's reasoning.
+Triage enforces `max_token_length` and the configured tool-round limit.
 
-Deterministic rules then decide the final status:
-- Contradiction signals can force `invalid`.
-- Critical unresolved hops force `inconclusive`.
-- Strong evidence + clear resolution chain can remain `valid` when uncertainty is non-critical.
-- Invalid-to-valid direct upgrades are blocked by invariant checks.
-- Status-specific obligation checks can downgrade `valid`/`invalid` to `inconclusive` when coverage is insufficient.
+Unusable citations or an unparseable response produce `inconclusive` with
+`metisTriageDecisionSource: validation_failure` and machine-readable errors.
+The finding remains in SARIF. Validated model decisions use source `model`.
+Existing document-backed threat-model scope exclusions retain their policy
+behavior, are attributed with source `policy`, and preserve
+`metisThreatModelPolicy`.
 
-This prevents overconfident status flips while avoiding unnecessary `inconclusive` outcomes when evidence is complete.
+Legacy evidence-coverage properties and external classifier schemas remain
+compatible. Existing status names, finding identities, and CLI exit behavior
+are unchanged; the stronger citation checks apply only to the built-in workflow.
 
 ## Scope note
 This flow is focused on static triage decisions for SARIF findings.

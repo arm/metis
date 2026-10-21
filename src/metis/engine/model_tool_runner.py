@@ -22,6 +22,10 @@ class ModelToolConfigurationError(ValueError):
     """Raised when model tools are enabled without required runtime support."""
 
 
+class ModelToolResultError(RuntimeError):
+    """Raised when retained tool results cannot be observed before parsing."""
+
+
 class ModelInputLimitError(ValueError):
     """Raised when the rendered conversation exceeds its input budget."""
 
@@ -130,6 +134,7 @@ def invoke_model_with_tools(
     max_tool_rounds: int,
     token_counter: Callable[[str], int] | None = None,
     max_input_tokens: int | None = None,
+    on_tool_result: Callable[[str, dict[str, Any], str], None] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     _cancellation_checkpoint()
     with runlog.span(
@@ -150,6 +155,7 @@ def invoke_model_with_tools(
         tool_by_name = {getattr(tool, "name", ""): tool for tool in tools}
         messages = prompt.invoke(variables).to_messages()
         evidence: list[str] = []
+        observations: list[tuple[str, dict[str, Any], str]] = []
         last_response = None
         for round_index in range(1, max_tool_rounds + 1):
             require_model_input_budget(messages, token_counter, max_input_tokens)
@@ -166,6 +172,7 @@ def invoke_model_with_tools(
                 },
             )
             if _response_reached_output_limit(last_response):
+                _observe_tool_results(observations, on_tool_result)
                 raise ModelOutputLimitError(
                     "model response reached its output token limit",
                     tool_evidence=tuple(evidence),
@@ -174,6 +181,7 @@ def invoke_model_with_tools(
                 content = _message_content_text(last_response)
                 loop_span.end(attributes={"response": content, "rounds": round_index})
                 _cancellation_checkpoint()
+                _observe_tool_results(observations, on_tool_result)
                 return content, tuple(evidence)
             messages.append(last_response)
             for index, tool_call in enumerate(tool_calls):
@@ -225,6 +233,9 @@ def invoke_model_with_tools(
                             attributes={"output": content},
                             exc=exc,
                         )
+                content = str(content)
+                if status == "success" and on_tool_result is not None:
+                    observations.append((name, args, content))
                 evidence.append(
                     f"Tool: {name}\n"
                     f"Arguments: {json.dumps(args, sort_keys=True, default=str)}\n"
@@ -234,7 +245,7 @@ def invoke_model_with_tools(
                 runlog.bump("tool_calls")
                 messages.append(
                     ToolMessage(
-                        content=str(content),
+                        content=content,
                         name=name,
                         tool_call_id=tool_call_id,
                         status=status,
@@ -259,6 +270,7 @@ def invoke_model_with_tools(
             },
         )
         if _response_reached_output_limit(last_response):
+            _observe_tool_results(observations, on_tool_result)
             raise ModelOutputLimitError(
                 "model response reached its output token limit",
                 tool_evidence=tuple(evidence),
@@ -266,8 +278,26 @@ def invoke_model_with_tools(
         content = _message_content_text(last_response)
         loop_span.end(attributes={"response": content, "rounds": max_tool_rounds + 1})
         _cancellation_checkpoint()
+        _observe_tool_results(observations, on_tool_result)
         return content, tuple(evidence)
     raise AssertionError("model tool loop exited without a response")
+
+
+def _observe_tool_results(
+    observations: list[tuple[str, dict[str, Any], str]],
+    callback: Callable[[str, dict[str, Any], str], None] | None,
+) -> None:
+    if callback is None:
+        return
+    for name, args, content in observations:
+        try:
+            callback(name, args, content)
+        except CancelledError:
+            raise
+        except Exception as exc:
+            raise ModelToolResultError(
+                f"Could not observe result of tool {name!r}"
+            ) from exc
 
 
 def model_messages_token_count(

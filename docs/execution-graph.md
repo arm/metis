@@ -621,6 +621,11 @@ Exhausted output-limit retries call `JsonPromptRequest.on_output_limit` once and
 return `None`, or raise `ModelOutputLimitError` when no callback is configured.
 Successful retries do not call the callback.
 
+`JsonPromptRequest.on_tool_result` optionally observes successful tool names,
+arguments, and rendered outputs before parsing a response or retaining evidence
+for an output-limit retry. Discarded evidence is not delivered. Observer errors
+abort the request rather than being retried as provider failures.
+
 External stages may bind the existing `review_request`, `sarif`, and `codegraph`
 graph inputs or another stage's outputs. Adding another `$inputs` field requires
 a core `ExecutionInputs` change. External stages execute through

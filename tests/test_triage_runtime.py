@@ -15,6 +15,7 @@ def test_triage_runtime_uses_the_granted_navigation_capability(engine):
 
     assert workflow.toolbox is navigation
     assert workflow.model_tool_max_rounds == 6
+    assert workflow.max_input_tokens == engine._config.max_token_length
 
 
 def test_triage_plugin_lookup_uses_manifest_filename_patterns(engine):

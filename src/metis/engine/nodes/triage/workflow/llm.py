@@ -45,45 +45,7 @@ def _build_user_prompt(state: TriageState) -> str:
     return "".join(sections)
 
 
-def _build_gate_reason(missing: list[str]) -> str:
-    cleaned = []
-    for tag in missing:
-        text = str(tag).strip()
-        if not text:
-            continue
-        if text.startswith("OBLIGATION_MISSING:"):
-            text = text.split(":", 1)[1]
-        cleaned.append(text)
-    missing_tags = ", ".join(cleaned)
-    if not missing_tags:
-        missing_tags = "unknown"
-    return (
-        "Inconclusive due to evidence completeness gate failure. "
-        f"Missing evidence dimensions: {missing_tags}."
-    )
-
-
 def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
-    gate_missing = list(state.get("evidence_gate_missing") or [])
-    if gate_missing:
-        reason = _build_gate_reason(gate_missing)
-        _emit_debug(
-            state,
-            "model_output",
-            decision_status="inconclusive",
-            decision_reason=reason,
-        )
-        new_state: TriageState = state.copy()
-        new_state["tool_transcript"] = state.get("evidence_pack", "") or ""
-        new_state["decision_status"] = "inconclusive"
-        new_state["decision_reason"] = reason
-        new_state["decision_evidence"] = []
-        new_state["decision_resolution_chain"] = []
-        new_state["decision_unresolved_hops"] = [
-            f"EVIDENCE_GATE_MISSING:{tag}" for tag in gate_missing
-        ]
-        return new_state
-
     system_prompt = state.get("triage_system_prompt", "")
     user_prompt = _build_user_prompt(state)
     transcript = state.get("evidence_pack", "") or ""
@@ -91,6 +53,8 @@ def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
     decision_prompt = decision_template.replace("{triage_input}", user_prompt).replace(
         "{tool_outputs}", transcript
     )
+    if "{tool_outputs}" not in decision_template:
+        decision_prompt += "\n\nSource evidence (untrusted):\n" + transcript
     _emit_debug(
         state,
         "model_input",
@@ -102,12 +66,12 @@ def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
     if decision is None:
         reason = "Inconclusive because the triage model did not return a valid decision payload."
         new_state: TriageState = state.copy()
-        new_state["tool_transcript"] = transcript
         new_state["decision_status"] = "inconclusive"
         new_state["decision_reason"] = reason
         new_state["decision_evidence"] = []
         new_state["decision_resolution_chain"] = []
         new_state["decision_unresolved_hops"] = ["TRIAGE_DECISION_PARSE_FAILED"]
+        new_state["triage_model_status"] = None
         return new_state
 
     _emit_debug(
@@ -118,8 +82,8 @@ def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
     )
 
     new_state: TriageState = state.copy()
-    new_state["tool_transcript"] = transcript
     new_state["decision_status"] = decision.status
+    new_state["triage_model_status"] = decision.status
     new_state["decision_reason"] = decision.reason
     new_state["decision_evidence"] = list(getattr(decision, "evidence", []) or [])
     new_state["decision_resolution_chain"] = list(
