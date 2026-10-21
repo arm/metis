@@ -3,6 +3,8 @@
 
 from typing import Any, cast
 
+import pytest
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from metis.providers.embedding_adapter import LangChainEmbeddingAdapter
@@ -40,6 +42,28 @@ def test_chat_model_forwards_supported_runtime_options() -> None:
     assert llm.reasoning_effort == "high"
     assert llm.max_tokens == 256
     assert llm.use_responses_api is True
+
+
+@pytest.mark.parametrize(
+    "model", ["gpt-6-astra", "gpt-6-astra-2026-09-03", "gpt-6-sol"]
+)
+@pytest.mark.parametrize("temperature", [0.0, 0.1, 1.0])
+def test_gpt6_requests_omit_temperature(model, temperature):
+    provider = OpenAICompatibleChatProvider(_chat_config(model="gpt-test"))
+    chat = provider.get_chat_model(
+        model=model, temperature=temperature, max_tokens=64000
+    )
+    payload = chat._get_request_payload([HumanMessage(content="Review this code.")])
+    assert "temperature" not in payload
+    assert payload["model"] == model
+    assert payload["max_output_tokens"] == 64000
+
+
+def test_other_models_still_receive_requested_temperature():
+    provider = OpenAICompatibleChatProvider(_chat_config(model="gpt-6-astra"))
+    chat = provider.get_chat_model(model="gpt-4.1", temperature=0.1)
+    payload = chat._get_request_payload([HumanMessage(content="Review this code.")])
+    assert payload["temperature"] == 0.1
 
 
 def test_chat_model_applies_configured_max_retries() -> None:

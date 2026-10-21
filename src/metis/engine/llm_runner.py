@@ -3,6 +3,7 @@
 
 import time
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,11 @@ from metis.engine.model_tool_runner import (
     model_tool_system_prompt,
     require_max_tool_rounds,
 )
+from metis.engine.model_tool_runner import ModelOutputLimitError
+from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import _response_reached_output_limit
+from metis.engine.model_tool_runner import model_messages_token_count
+from metis.engine.model_tool_runner import require_model_input_budget
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,21 @@ class JsonPromptRequest:
     chat_model_kwargs: dict[str, Any] | None = None
     model_tools: tuple[Any, ...] = ()
     max_tool_rounds: int | None = None
+    max_input_tokens: int | None = None
+
+
+def rendered_prompt_token_count(
+    token_counter: Callable[[str], int],
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    variables: dict[str, Any],
+    model_tools: tuple[Any, ...] = (),
+) -> int:
+    prompt = _json_chat_prompt(system_prompt, user_prompt, model_tools)
+    return model_messages_token_count(
+        prompt.invoke(variables).to_messages(), token_counter
+    )
 
 
 def _json_chat_prompt(
@@ -85,7 +106,13 @@ class JsonPromptRunner:
 
     def invoke(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
+        output_limit_error = None
         tool_evidence: tuple[str, ...] = ()
+        token_counter = (
+            self._llm_provider.count_tokens
+            if request.max_input_tokens is not None
+            else None
+        )
         max_tool_rounds = (
             require_max_tool_rounds(request.max_tool_rounds)
             if request.model_tools
@@ -116,6 +143,11 @@ class JsonPromptRunner:
                     request.model_tools,
                     tool_evidence,
                 )
+                require_model_input_budget(
+                    prompt.invoke(request.variables).to_messages(),
+                    token_counter,
+                    request.max_input_tokens,
+                )
                 parsed = None
                 structured_output = getattr(chat, "with_structured_output", None)
                 if (
@@ -123,19 +155,24 @@ class JsonPromptRunner:
                     and request.response_model is not None
                     and callable(structured_output)
                 ):
-                    try:
-                        parsed = request.parse(
-                            (
-                                prompt
-                                | structured_output(
-                                    request.response_model,
-                                    method="function_calling",
-                                )
-                            ).invoke(request.variables)
+                    structured_result = (
+                        prompt
+                        | structured_output(
+                            request.response_model,
+                            method="function_calling",
+                            include_raw=True,
                         )
-                    except Exception as exc:
-                        last_failure = f"structured validation failed: {exc}"
-                if parsed is None:
+                    ).invoke(request.variables)
+                    if _response_reached_output_limit(structured_result.get("raw")):
+                        raise ModelOutputLimitError(
+                            "model response reached its output token limit"
+                        )
+                    if structured_result.get("parsing_error") is not None:
+                        raise ValueError(
+                            f"structured validation failed: {structured_result['parsing_error']}"
+                        )
+                    parsed = request.parse(structured_result.get("parsed"))
+                else:
                     if active_tools:
                         assert max_tool_rounds is not None
                         response_text, observed_evidence = invoke_model_with_tools(
@@ -144,20 +181,31 @@ class JsonPromptRunner:
                             request.variables,
                             active_tools,
                             max_tool_rounds=max_tool_rounds,
+                            token_counter=token_counter,
+                            max_input_tokens=request.max_input_tokens,
                         )
                         parsed = request.parse(response_text)
                         if parsed is None:
                             tool_evidence = observed_evidence
                     else:
-                        response_text = (prompt | chat | StrOutputParser()).invoke(
-                            request.variables
-                        )
+                        response = (prompt | chat).invoke(request.variables)
+                        if _response_reached_output_limit(response):
+                            raise ModelOutputLimitError(
+                                "model response reached its output token limit"
+                            )
+                        response_text = StrOutputParser().invoke(response)
                         parsed = request.parse(response_text)
                 if parsed is not None:
                     return parsed
                 last_failure = request.invalid_message
+            except CancelledError:
+                raise
+            except ModelOutputLimitError as exc:
+                output_limit_error = exc
+                tool_evidence = exc.tool_evidence
+                last_failure = str(exc)
             except Exception as exc:
-                if isinstance(exc, ModelToolConfigurationError):
+                if isinstance(exc, (ModelToolConfigurationError, ModelInputLimitError)):
                     raise
                 last_failure = str(exc)
             if attempt < self._max_attempts - 1:
@@ -171,6 +219,11 @@ class JsonPromptRunner:
                 )
                 if self._retry_backoff_seconds > 0:
                     time.sleep(min(self._retry_backoff_seconds * (2**attempt), 30.0))
+        if output_limit_error is not None:
+            raise ModelOutputLimitError(
+                f"{request.label} reached the model output token limit "
+                f"after {self._max_attempts} attempts"
+            ) from output_limit_error
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,
@@ -202,6 +255,7 @@ def invoke_langchain_json_prompt_with_retry(
     chat_model_kwargs=None,
     model_tools=(),
     max_tool_rounds=None,
+    max_input_tokens=None,
 ):
     return JsonPromptRunner(llm_provider, usage_runtime).invoke(
         JsonPromptRequest(
@@ -222,5 +276,6 @@ def invoke_langchain_json_prompt_with_retry(
             chat_model_kwargs=chat_model_kwargs,
             model_tools=tuple(model_tools or ()),
             max_tool_rounds=max_tool_rounds,
+            max_input_tokens=max_input_tokens,
         )
     )

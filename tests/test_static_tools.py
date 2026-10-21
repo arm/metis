@@ -118,3 +118,24 @@ def test_describe_tool_reports_grep_backend(tmp_path):
     runner = StaticToolRunner(codebase_path=str(tmp_path))
     runner._has_grep = False
     assert runner.describe_tool("grep") == {"backend": "python_regex"}
+
+
+@pytest.mark.parametrize("shell", [False, True])
+def test_recursive_grep_does_not_follow_external_symlinks(tmp_path, shell):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "local.c").write_text("visible\n", encoding="utf-8")
+    outside = tmp_path / "outside.c"
+    outside.write_text("private\n", encoding="utf-8")
+    (root / "linked.c").symlink_to(outside)
+    runner = StaticToolRunner(codebase_path=str(root))
+    runner._has_grep = shell
+    assert "private" not in runner.grep("private|visible", ".")
+    with pytest.raises(ValueError, match="escapes"):
+        runner.cat("linked.c")
+
+
+def test_shell_grep_returns_relative_paths_for_option_like_filename(tmp_path):
+    (tmp_path / "-example.c").write_text("target\n", encoding="utf-8")
+    runner = StaticToolRunner(codebase_path=str(tmp_path))
+    assert runner.grep("target", "-example.c") == "./-example.c:1:target"

@@ -1,7 +1,7 @@
 # Metis: AI-Powered Security Code Review
 
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
-[![Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Ruff](https://img.shields.io/badge/lint%20%26%20format-Ruff-D7FF64.svg)](https://docs.astral.sh/ruff/)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/arm/metis/badge)](https://securityscorecards.dev/viewer/?uri=github.com/arm/metis)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10876/badge)](https://www.bestpractices.dev/projects/10876)
@@ -30,9 +30,6 @@ Metis is an open-source, agentic AI security framework for deep security code re
 
 - **Provider Flexibility**
   Support for major LLM services and local models (OpenAI, Azure OpenAI, Anthropic, Gemini, AWS Bedrock, Bedrock Mantle, vLLM, Ollama, llama.cpp, LiteLLM etc.). See [Set up LLM Provider](#2-set-up-llm-provider).
-
-![Demo](.github/demo.gif)
-
 
 ### Supported Languages
 
@@ -171,7 +168,7 @@ Metis configuration can be over-ridden using a YAML configuration file (`metis.y
 - **Index storage:** backend-specific storage parameters for commands that still use the index.
 - **Tool defaults:** tool manifests define per-tool runtime defaults such as
   `index.search` result limits.
-- **Reachability:** tree-sitter reachability tuning, including review-file mode and path-confirmation limits.
+- **Reachability:** legacy tree-sitter settings remain accepted for optional triage; ordinary review commands use the simple LLM review path.
 
 This file is **required** to run Metis and should be customized per deployment.
 
@@ -228,13 +225,34 @@ planned tree-sitter, model-tool, MCP, and private-tool extension path.
 Builds the legacy vector index used by `ask` and `update`.
 
 ### `review_code`
-Performs a full security review of the codebase. For C/C++ files, Metis uses deterministic tree-sitter reachability plus targeted semantic audit passes; in mixed-language codebases, those C/C++ results are merged with normal plugin reviews for other languages.
+Performs a security review of each selected file using the simple LLM review path and its language prompt, including C/C++. Read-only navigation tools are available by default to inspect related source. Findings remain anchored to the reviewed file. Metis does not run reachability discovery for review commands.
 
 ### `review_dir`
-Performs a targeted security review of a single directory. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
+Performs simple LLM reviews of the supported source files in a single directory, with the same navigation tools and language prompts as `review_code`.
 
 ### `review_file <path>`
-Performs a targeted security review of a single file. C/C++ files use targeted reachability context by default, while non-C/C++ files use the language plugin review path. Configure the C/C++ reachability mode in `metis.yaml`.
+Performs a simple LLM review of one file. For C/C++, the model uses the concise security prompt and can inspect related definitions and callers with navigation tools. Use `--tools none` to disable navigation, or `--tools index,navigation` to also allow index retrieval.
+
+The review commands honour `query.max_tokens` and the existing model settings.
+For GPT-6 models, the OpenAI provider omits unsupported temperature values.
+Missing, invalid, rejected, and token-limited model responses are failures, not
+clean reviews. Exhausted retries make non-interactive review commands exit with
+status `1`; a completed response with an empty findings list remains successful.
+Existing YAML files and `--non-interactive --command` invocations remain valid.
+When model tools are enabled, `metis_engine.max_token_length` also bounds the
+rendered prompt and accumulated navigation history. Reviews split source chunks
+to leave room for the prompt; an oversized tool conversation fails without
+retrying it. Patch reviews retain unified-diff context and can omit oversized
+full-file context from the prompt while preserving original-source anchors.
+This input budget is separate from the output cap in `query.max_tokens`.
+Review and triage default to a 64,000-token output cap. `query.max_tokens`
+controls both, including C/C++ triage. Custom configuration files that omit
+this setting also use 64,000. An explicit value takes precedence; choose a
+lower value when using a model with a smaller supported output limit.
+Reasoning defaults to `medium`. Explicit `query.reasoning_effort` or
+`llm_provider.reasoning_effort` settings remain supported, with the query
+setting taking precedence. Explicit C/C++ triage reasoning overrides remain
+supported as well.
 
 ### `review_patch <patch.diff>`
 Reviews a diff/patch file and highlights potential security issues introduced by the change.

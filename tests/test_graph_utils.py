@@ -8,6 +8,8 @@ from metis.engine.graphs.utils import (
     sanitize_review_payload,
 )
 from metis.engine.graphs.review import review_node_llm
+from metis.engine.graphs.review import _normalize_reviews
+from metis.engine.graphs.schemas import ReviewResponseModel
 
 
 def test_build_review_system_prompt_requires_placeholder():
@@ -99,3 +101,23 @@ def test_review_node_llm_keeps_partial_reviews():
     assert issue["cwe"] == "CWE-Unknown"
     assert issue["severity"] == ""
     assert issue["confidence"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, "", {"reviews": None}, {"reviews": "[]"}, {}, ReviewResponseModel()],
+)
+def test_review_normalization_rejects_missing_collection(payload):
+    assert _normalize_reviews(payload) is None
+
+
+@pytest.mark.parametrize(
+    "payload", [{"reviews": []}, '{"reviews": []}', ReviewResponseModel(reviews=[])]
+)
+def test_review_normalization_accepts_completed_empty_collection(payload):
+    assert _normalize_reviews(payload) == []
+
+
+def test_review_node_fails_when_retries_return_no_review():
+    with pytest.raises(RuntimeError, match="valid review after retries"):
+        review_node_llm({"snippet": "int main(void) {}"}, lambda *_args: None)

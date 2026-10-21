@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from threading import Lock
 from typing import Sequence
 
 from metis.engine.source import SourceMap
@@ -31,6 +32,7 @@ class StaticToolRunner:
         self.max_chars = max_chars
         self._has_grep = shutil.which("grep") is not None
         self._has_find = shutil.which("find") is not None
+        self._subprocess_lock = Lock()
 
     def describe_tool(self, name: str) -> dict[str, str]:
         if name == "grep":
@@ -60,13 +62,14 @@ class StaticToolRunner:
         *,
         ok_returncodes: tuple[int, ...] = (0,),
     ) -> str:
-        proc = subprocess.run(
-            list(argv),
-            cwd=str(self.codebase_path),
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-        )
+        with self._subprocess_lock:
+            proc = subprocess.run(
+                list(argv),
+                cwd=str(self.codebase_path),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
         stdout = (proc.stdout or "").strip()
         stderr = (proc.stderr or "").strip()
         if proc.returncode not in ok_returncodes:
@@ -88,13 +91,18 @@ class StaticToolRunner:
         for root, _, files in os.walk(base):
             root_path = Path(root)
             for name in files:
-                yield root_path / name
+                candidate = root_path / name
+                if not candidate.is_symlink() and candidate.is_file():
+                    yield candidate
 
     def grep(self, pattern: str, path: str) -> str:
         target = self._resolve_path(path)
         if self._has_grep:
+            relative_path = target.relative_to(self.codebase_path).as_posix()
+            if relative_path.startswith("-"):
+                relative_path = f"./{relative_path}"
             return self._run(
-                ["grep", "-HREn", "--", pattern, str(target)],
+                ["grep", "-HrEn", "--", pattern, relative_path],
                 ok_returncodes=(0, 1),
             )
 

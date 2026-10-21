@@ -3,6 +3,8 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from metis.engine.graphs.schemas import TriageDecisionModel
 from metis.engine.reachability.domain import FunctionNode
 from metis.engine.reachability.graph import ReachabilityGraph
@@ -247,3 +249,31 @@ def test_reachability_triage_uses_structured_fallback_after_tool_parse_failure(
     assert len(fake_runner.requests) == 2
     assert fake_runner.requests[0].model_tools
     assert fake_runner.requests[1].model_tools == ()
+
+
+@pytest.mark.parametrize("max_tokens", [None, 5000, 64000])
+def test_reachability_triage_honors_configured_output_budget(tmp_path, max_tokens):
+    settings = {} if max_tokens is None else {"max_tokens": max_tokens}
+    runner = ReachabilityTriageRunner(
+        Mock(),
+        "gpt-6.1-sol",
+        None,
+        str(tmp_path),
+        options=ReachabilityReviewOptions(max_workers=1),
+        chat_model_kwargs=settings,
+    )
+    fake_runner = _FakePromptRunner()
+    runner._runner = fake_runner
+    runner._invoke_decision(
+        ReachabilityTriageRequest(
+            message="reported overflow", file_path="main.c", line=11
+        ),
+        "source evidence",
+        model_tools=(),
+        max_tool_rounds=None,
+        label="triage",
+    )
+    assert fake_runner.request.max_tokens == (
+        64000 if max_tokens is None else max_tokens
+    )
+    assert fake_runner.request.chat_model_kwargs == settings

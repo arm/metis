@@ -2,9 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+from pathlib import Path
+import tomllib
 
 from metis.sarif.writer import generate_sarif
 from metis.sarif.utils import read_file_lines, create_fingerprint
+from metis.version import __version__
+
+
+def test_sarif_reports_the_release_version():
+    project_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    project_version = tomllib.loads(project_path.read_text(encoding="utf-8"))[
+        "project"
+    ]["version"]
+    assert __version__ == project_version
+    driver = generate_sarif({"reviews": []})["runs"][0]["tool"]["driver"]
+    assert driver["version"] == project_version
+    assert driver["fullName"] == f"Metis v{project_version}"
 
 
 def test_read_file_lines(tmp_path):

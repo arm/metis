@@ -41,41 +41,35 @@ def _reachability(engine, result=None):
     return reachability
 
 
-def test_review_code_uses_reachability_for_c_cpp(engine):
+@pytest.mark.parametrize("filename", ["test.c", "test.cpp"])
+def test_review_code_uses_simple_review_for_c_cpp(engine, filename):
     reachability = _reachability(
         engine,
         [{"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}],
     )
     engine.review.review_file = Mock(
-        return_value={"file": "test.c", "reviews": ["legacy"]}
+        return_value={"file": filename, "reviews": [{"issue": "simple"}]}
     )
 
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
+    results = list(engine.review.review_code(get_code_files_func=lambda: [filename]))
 
-    assert results == [
-        {"file": "test.c", "reviews": [{"issue": "Issue", "confidence": "High"}]}
-    ]
-    reachability.review_codebase.assert_called_once()
-    options = reachability.review_codebase.call_args.kwargs["options"]
-    assert options.lens_profile == "review"
-    assert options.confirm_paths is False
-    engine.review.review_file.assert_not_called()
+    assert results == [{"file": filename, "reviews": [{"issue": "simple"}]}]
+    reachability.review_codebase.assert_not_called()
+    engine.review.review_file.assert_called_once_with(filename)
 
 
-def test_review_file_uses_focused_reachability_when_global_cache_empty(engine):
-    expected = {"file": "test.c", "reviews": [{"issue": "focused"}]}
+def test_review_file_uses_simple_review_for_c(engine):
+    expected = {"file": "test.c", "reviews": [{"issue": "simple"}]}
     reachability = _reachability(engine)
     reachability.review_file.return_value = expected
-    engine.review._review_file_standard = Mock(
-        return_value={"file": "test.c", "reviews": ["legacy"]}
-    )
+    engine.review._review_file_standard = Mock(return_value=expected)
 
     result = engine.review.review_file("./tests/data/test.c")
 
     assert result == expected
-    reachability.review_file.assert_called_once()
+    reachability.review_file.assert_not_called()
     reachability.review_codebase.assert_not_called()
-    engine.review._review_file_standard.assert_not_called()
+    engine.review._review_file_standard.assert_called_once_with("./tests/data/test.c")
 
 
 def test_review_code_uses_legacy_for_non_c_cpp(engine):
@@ -94,8 +88,8 @@ def test_review_code_uses_legacy_for_non_c_cpp(engine):
     engine.review.review_file.assert_called_once()
 
 
-def test_review_code_validates_reachability_results_before_returning(engine):
-    _reachability(
+def test_explicit_reachability_results_can_still_be_aggregated(engine):
+    reachability = _reachability(
         engine,
         [
             {
@@ -138,7 +132,9 @@ def test_review_code_validates_reachability_results_before_returning(engine):
         ]
     )
 
-    results = list(engine.review.review_code(get_code_files_func=lambda: ["test.c"]))
+    results = engine.review.aggregate_review_results(
+        {"reviews": reachability.review_codebase.return_value}, deduplicate=False
+    )["reviews"]
 
     assert len(results) == 1
     assert [item["issue"] for item in results[0]["reviews"]] == ["real"]

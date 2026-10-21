@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from collections import deque
 from functools import partial
 from typing import Any
 from typing import cast
@@ -10,6 +11,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.source import SourceMap
 from metis.utils import split_snippet, parse_json_output
 from .schemas import ReviewResponseModel, review_schema_prompt
@@ -23,12 +26,14 @@ from .types import ReviewRequest, ReviewState
 logger = logging.getLogger("metis")
 
 
-def _normalize_reviews(raw) -> list[dict]:
+def _normalize_reviews(raw) -> list[dict] | None:
     """
     Normalize arbitrary LLM responses into review dicts, preserving partially
     structured entries with empty fields when necessary.
     """
     if isinstance(raw, ReviewResponseModel):
+        if "reviews" not in raw.model_fields_set:
+            return None
         return [
             normalize_review_fields(r) for r in (raw.model_dump().get("reviews") or [])
         ]
@@ -45,10 +50,10 @@ def _normalize_reviews(raw) -> list[dict]:
     elif raw not in (None, ""):
         logger.warning("Unexpected review payload type %s", type(raw).__name__)
 
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and isinstance(payload.get("reviews"), list):
         return sanitize_review_payload(payload)
 
-    return []
+    return None
 
 
 def _build_body_text(state: ReviewState) -> str:
@@ -68,10 +73,13 @@ def _build_body_text(state: ReviewState) -> str:
             "",
         ]
     else:
-        original_file = state.get("original_file") or ""
+        original_file = state.get("original_file")
         sections = [
+            f"FILE: {state.get('relative_file') or state.get('file_path', '')}",
             "ORIGINAL_FILE:",
-            SourceMap.number_text(original_file, 1) if original_file else "",
+            SourceMap.number_text(original_file, 1)
+            if original_file is not None
+            else "[Full-file context omitted.]",
             "",
             "FILE_CHANGES:",
             snippet,
@@ -109,7 +117,9 @@ def review_node_llm(
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    reviews = invoke_review(system_prompt, body_text) or []
+    reviews = invoke_review(system_prompt, body_text)
+    if reviews is None:
+        raise RuntimeError("Model did not return a valid review after retries")
     new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
     return new_state
@@ -197,30 +207,22 @@ class ReviewGraph:
                 label="Review graph",
                 batch_size=1,
                 invalid_message="expected review JSON object",
-                final_keep_message="returning no findings for this chunk",
+                final_keep_message="marking this file review failed",
                 response_model=ReviewResponseModel,
                 chat_model_kwargs=self.chat_model_kwargs,
                 model_tools=self.model_tools,
                 max_tool_rounds=self.model_tool_max_rounds,
+                max_input_tokens=self.max_token_length if self.model_tools else None,
             )
         )
 
-    def _build_app(self, language_prompts, default_prompt_key):
+    def _build_app(self, language_prompts, default_prompt_key, build_prompt):
         cache_key = (id(language_prompts), default_prompt_key)
         cached = self._app_cache.get(cache_key)
         if cached is not None:
             return cached
 
         graph = StateGraph(cast(Any, ReviewState))
-        build_prompt = partial(
-            review_node_build_prompt,
-            language_prompts=language_prompts,
-            default_prompt_key=default_prompt_key,
-            report_prompt=self.report_prompt,
-            custom_prompt_text=self.custom_prompt_text,
-            custom_guidance_precedence=self.custom_guidance_precedence,
-            schema_prompt_section=self._schema_prompt_section,
-        )
         review = partial(
             review_node_llm,
             invoke_review=self._invoke_review_model,
@@ -248,6 +250,15 @@ class ReviewGraph:
         relative_file = request.get("relative_file")
         mode = request.get("mode", "file")
         original_file = request.get("original_file")
+        build_prompt = partial(
+            review_node_build_prompt,
+            language_prompts=language_prompts,
+            default_prompt_key=default_prompt_key,
+            report_prompt=self.report_prompt,
+            custom_prompt_text=self.custom_prompt_text,
+            custom_guidance_precedence=self.custom_guidance_precedence,
+            schema_prompt_section=self._schema_prompt_section,
+        )
 
         rel_path = relative_file or file_path
         if mode == "file":
@@ -256,23 +267,61 @@ class ReviewGraph:
             smap = SourceMap.for_text(rel_path, original_file)
         else:
             smap = None
-        chunks = split_snippet(
-            snippet, self.max_token_length, self.llm_provider.count_tokens
+        base_state: ReviewState = {
+            "file_path": file_path,
+            "source_map": smap,
+            "relative_file": relative_file,
+            "mode": mode,
+            "original_file": original_file,
+        }
+        system_prompt = build_prompt(base_state)["system_prompt"]
+
+        def input_tokens(state: ReviewState) -> int:
+            return rendered_prompt_token_count(
+                self.llm_provider.count_tokens,
+                system_prompt=system_prompt,
+                user_prompt="{body_text}",
+                variables={"body_text": _build_body_text(state)},
+                model_tools=self.model_tools,
+            )
+
+        if self.model_tools:
+            if (
+                mode == "patch"
+                and input_tokens({**base_state, "snippet": snippet})
+                > self.max_token_length
+            ):
+                base_state["original_file"] = None
+            if input_tokens(base_state) >= self.max_token_length:
+                raise ModelInputLimitError(
+                    "Review prompt context exceeds the model input limit"
+                )
+        chunks = deque(
+            split_snippet(
+                snippet, self.max_token_length, self.llm_provider.count_tokens
+            )
         )
         accumulated = []
-        app = self._build_app(language_prompts, default_prompt_key)
-        for chunk, chunk_start in chunks:
+        app = self._build_app(language_prompts, default_prompt_key, build_prompt)
+        while chunks:
+            chunk, chunk_start = chunks.popleft()
             chunk_end = chunk_start + chunk.count("\n")
-            state = {
-                "file_path": file_path,
+            state: ReviewState = {
+                **base_state,
                 "snippet": chunk,
                 "chunk_start": chunk_start,
                 "chunk_end": chunk_end,
-                "source_map": smap,
-                "relative_file": relative_file,
-                "mode": mode,
-                "original_file": original_file,
             }
+            if self.model_tools and input_tokens(state) > self.max_token_length:
+                parts = split_snippet(chunk, max(1, len(chunk) // 2), len)
+                if len(parts) == 1:
+                    raise ModelInputLimitError(
+                        "Review input cannot fit one source fragment"
+                    )
+                chunks.extendleft(
+                    (text, chunk_start + start - 1) for text, start in reversed(parts)
+                )
+                continue
             out = app.invoke(state)
             chunk_reviews = out.get("parsed_reviews", []) or []
             if chunk_reviews:

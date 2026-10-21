@@ -23,7 +23,7 @@ metis_engine:
     hnsw_ef_search: 40
     hnsw_dist_method: "vector_cosine_ops"
   reachability_confirmation_model: "gpt-5.5"
-  reachability_reasoning_effort: "low"
+  reachability_reasoning_effort: "medium"
   reachability_max_paths: 0
   reachability_max_paths_per_sink: 3
   reachability_max_path_length: 25
@@ -54,5 +54,6 @@ embedding_provider:
 
 query:
   similarity_top_k: 5
-  max_tokens: 5000
+  max_tokens: 64000
+  reasoning_effort: medium
   temperature: 0.0

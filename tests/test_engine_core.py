@@ -196,7 +196,7 @@ def test_index_tool_exposes_langchain_search_tool(engine):
     ]
 
 
-def test_navigation_tool_exposes_triage_model_tools_without_review_tools(tmp_path):
+def test_navigation_tool_exposes_review_and_triage_model_tools(tmp_path):
     backend = Mock()
     backend.init = Mock()
     backend.get_retrievers = Mock(return_value=("code-retriever", "docs-retriever"))
@@ -215,10 +215,11 @@ def test_navigation_tool_exposes_triage_model_tools_without_review_tools(tmp_pat
     review_tools = engine.tools.langchain_tools()
     triage_tools = engine.tools.triage_langchain_tools()
 
-    assert review_tools == ()
+    assert [tool.name for tool in review_tools] == ["grep", "find_name", "cat", "sed"]
+    assert "assigned review scope" in review_tools[0].metadata["metis_contract"]
     assert [tool.name for tool in triage_tools] == ["grep", "find_name", "cat", "sed"]
     assert triage_tools[0].metadata["metis_contract_max_chars"] == 6000
-    assert engine.tools.model_tool_max_rounds() is None
+    assert engine.tools.model_tool_max_rounds() == 6
     assert engine.tools.triage_model_tool_max_rounds() == 6
     assert "a.py:2:beta" in triage_tools[0].invoke({"pattern": "beta", "path": "."})
 
@@ -240,6 +241,8 @@ def test_navigation_tool_omits_triage_model_tools_when_disabled(tmp_path):
 
     assert engine.tools.triage_langchain_tools() == ()
     assert engine.tools.triage_model_tool_max_rounds() is None
+    assert engine.tools.langchain_tools() == ()
+    assert engine.tools.model_tool_max_rounds() is None
 
 
 def test_index_search_uses_manifest_tool_config(monkeypatch):

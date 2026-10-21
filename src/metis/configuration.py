@@ -119,10 +119,10 @@ def load_runtime_config(config_path=None, enable_psql=False):
     runtime["llama_query_model"] = llama_query_model
     if query_cfg.get("temperature") is not None:
         runtime["llama_query_temperature"] = query_cfg["temperature"]
-    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens")
-    runtime["llama_query_reasoning_effort"] = query_cfg.get(
-        "reasoning_effort"
-    ) or llm_cfg.get("reasoning_effort")
+    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens", 64000)
+    runtime["llama_query_reasoning_effort"] = (
+        query_cfg.get("reasoning_effort") or llm_cfg.get("reasoning_effort") or "medium"
+    )
     runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
     chat_model_kwargs: dict[str, object] = {}
     if runtime.get("llama_query_temperature") is not None:

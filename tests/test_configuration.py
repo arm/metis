@@ -14,6 +14,58 @@ def _write_config(tmp_path, content: str):
     return config_path
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("", 64000),
+        ("query: {}\n", 64000),
+        ("query:\n  max_tokens: 4096\n", 4096),
+        ("query:\n  max_tokens: null\n", None),
+    ],
+)
+def test_query_output_budget_defaults_and_overrides(
+    tmp_path, monkeypatch, query, expected
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    config_path = _write_config(
+        tmp_path, "llm_provider:\n  name: openai\n  model: gpt-6.1-sol\n" + query
+    )
+    runtime = load_runtime_config(config_path)
+    assert runtime["llama_query_max_tokens"] == expected
+    if expected is None:
+        assert "max_tokens" not in runtime["chat_model_kwargs"]
+    else:
+        assert runtime["chat_model_kwargs"]["max_tokens"] == expected
+
+
+def test_packaged_config_uses_64000_output_tokens(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    runtime = load_runtime_config()
+    assert runtime["llama_query_max_tokens"] == 64000
+    assert runtime["chat_model_kwargs"]["max_tokens"] == 64000
+    assert runtime["chat_model_kwargs"]["reasoning_effort"] == "medium"
+    assert runtime["reachability_reasoning_effort"] == "medium"
+
+
+@pytest.mark.parametrize(
+    ("provider_effort", "query_effort", "expected"),
+    [(None, None, "medium"), ("high", None, "high"), ("high", "low", "low")],
+)
+def test_reasoning_defaults_to_medium_and_preserves_overrides(
+    tmp_path, monkeypatch, provider_effort, query_effort, expected
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    content = "llm_provider:\n  name: openai\n  model: gpt-6.1-sol\n"
+    if provider_effort is not None:
+        content += f"  reasoning_effort: {provider_effort}\n"
+    if query_effort is not None:
+        content += f"query:\n  reasoning_effort: {query_effort}\n"
+    runtime = load_runtime_config(_write_config(tmp_path, content))
+    assert runtime["llama_query_reasoning_effort"] == expected
+    assert runtime["chat_model_kwargs"]["reasoning_effort"] == expected
+
+
 def test_load_metis_config_uses_yml_when_yaml_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "metis.yml").write_text("selected: yml\n", encoding="utf-8")
@@ -65,7 +117,10 @@ query:
         "max_retries": 5,
     }
     assert runtime["llm_max_retries"] == 5
-    assert runtime["chat_model_kwargs"] == {"reasoning_effort": "high"}
+    assert runtime["chat_model_kwargs"] == {
+        "max_tokens": 64000,
+        "reasoning_effort": "high",
+    }
     assert runtime["model_tool_max_rounds"] == 9
     assert runtime["index_search_config"] == {}
     assert runtime["memory"] == {
@@ -363,7 +418,10 @@ query:
     assert runtime["model"] == "claude-opus-4-8"
     assert runtime["llama_query_model"] == "claude-sonnet-4-6"
     assert runtime["llm_provider"]["model"] == "claude-opus-4-8"
-    assert runtime["chat_model_kwargs"] == {}
+    assert runtime["chat_model_kwargs"] == {
+        "max_tokens": 64000,
+        "reasoning_effort": "medium",
+    }
     assert "embedding_provider" not in runtime
 
 
@@ -412,7 +470,7 @@ llm_provider:
     assert runtime["llm_provider"]["aws_profile"] == "example-profile"
     assert runtime["llm_provider"]["aws_region"] == "example-region"
     assert runtime["llama_query_model"] == "anthropic.claude-example"
-    assert runtime["llama_query_max_tokens"] is None
+    assert runtime["llama_query_max_tokens"] == 64000
     assert "embedding_provider" not in runtime
 
 

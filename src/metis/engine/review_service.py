@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError
 from typing import Any
 
 import unidiff
@@ -12,11 +13,8 @@ import unidiff
 from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
 
-from .diff_utils import process_diff_file
 from .graphs.types import ReviewRequest
 from .helpers import apply_custom_guidance, summarize_changes
-from .reachability.progress import ReachabilityProgress as Progress
-from .reachability.progress import emit_progress
 from .repository import EngineRepository
 from .review_reachability import ReachabilityReviewBackend
 from .review_validation import ReviewFindingValidator
@@ -115,25 +113,6 @@ class ReviewService:
         file_path,
         progress_callback=None,
     ):
-        if (
-            self._reachability_backend is not None
-            and self._reachability_backend.is_file_in_codebase(file_path)
-            and self._reachability_backend.supports_file(file_path)
-        ):
-            try:
-                result = self._reachability_backend.file_review(
-                    file_path,
-                    progress_callback=progress_callback,
-                )
-            except Exception:
-                logger.debug(
-                    "Tree-sitter file review failed for %s; falling back to standard review",
-                    file_path,
-                    exc_info=True,
-                )
-            else:
-                if result is not None:
-                    return self._finalize_single_review_result(result)
         return self._finalize_single_review_result(
             self._review_file_standard(file_path)
         )
@@ -181,7 +160,7 @@ class ReviewService:
             return self._review_graph_factory().review(req)
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {e}")
-            return None
+            raise
 
     def _is_file_in_codebase(self, file_path):
         return bool(
@@ -217,54 +196,8 @@ class ReviewService:
         if not files:
             return
 
-        reachability_backend = self._reachability_backend
-        run_codebase_reachability = (
-            reachability_backend is not None
-            and reachability_backend.should_review_codebase(
-                files,
-                review_file_func=review_file_func,
-            )
-        )
-        reachability_failed = False
-        if run_codebase_reachability:
-            assert reachability_backend is not None
-            try:
-                results = self._get_reachability_reviews(
-                    files=files,
-                    progress_callback=progress_callback,
-                )
-            except Exception:
-                logger.debug(
-                    "Tree-sitter codebase review failed; falling back to standard review",
-                    exc_info=True,
-                )
-                reachability_failed = True
-            else:
-                emit_progress(
-                    progress_callback,
-                    Progress.REVIEW_OUTPUT_AGGREGATION_START,
-                    files=len(results),
-                )
-                results = self.aggregate_review_results(
-                    {"reviews": results},
-                    deduplicate=False,
-                ).get("reviews", results)
-                emit_progress(
-                    progress_callback,
-                    Progress.REVIEW_OUTPUT_AGGREGATION_DONE,
-                    files=len(results),
-                )
-                for result in results:
-                    yield result
-                files = reachability_backend.remaining_standard_files(files)
-                if not files:
-                    return
-
-        review_fn = (
-            self._review_file_standard
-            if review_file_func is None and reachability_failed
-            else review_file_func or self.review_file
-        )
+        review_fn = review_file_func or self.review_file
+        failures = []
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
@@ -279,14 +212,22 @@ class ReviewService:
                 path = future_to_path[future]
                 try:
                     result = future.result()
+                except CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
+                    failures.append(str(path))
                     yield None
                     continue
                 if result:
                     yield result
                 else:
                     yield None
+        if failures:
+            raise RuntimeError(
+                f"Review failed for {len(failures)} file(s): "
+                + ", ".join(failures[:10])
+            )
 
     def review_patch(
         self,
@@ -317,14 +258,9 @@ class ReviewService:
             plugin = self._repository.get_plugin_for_path(file_diff.path)
             if not plugin:
                 continue
-            snippet = process_diff_file(
-                self._config.codebase_path,
-                file_diff,
-                self._config.max_token_length,
-                token_counter=self._config.llm_provider.count_tokens,
-            )
-            if not snippet:
+            if not file_diff.added and not file_diff.removed:
                 continue
+            snippet = str(file_diff)
             language_prompts = plugin.get_prompts()
             try:
                 original_content = read_file_content(abs_path)
@@ -340,7 +276,7 @@ class ReviewService:
                 review_dict = self._review_graph_factory().review(req)
             except Exception as e:
                 logger.error(f"Error processing review for {file_diff.path}: {e}")
-                review_dict = None
+                raise
             if review_dict:
                 file_reviews.append(review_dict)
                 issues = "\n".join(

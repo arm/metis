@@ -159,7 +159,7 @@ class ReachabilityTriageRunner:
         return self._runner.invoke(
             JsonPromptRequest(
                 model=self._model,
-                max_tokens=5000,
+                max_tokens=self._chat_model_kwargs.get("max_tokens", 64000),
                 temperature=0.1,
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=_USER_PROMPT,

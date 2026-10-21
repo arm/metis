@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import json
 
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import ModelOutputLimitError
+from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_tool_system_prompt
 from metis.engine.model_tool_runner import require_max_tool_rounds
@@ -148,3 +152,67 @@ def test_require_max_tool_rounds_rejects_missing_value():
         match="max_tool_rounds must be configured when model_tools are used",
     ):
         require_max_tool_rounds(None)
+
+
+def test_truncated_tool_request_is_rejected_before_execution():
+    tool = _FakeTool()
+    chat = _FakeChat()
+    chat.bound_chat.invoke = lambda _messages: AIMessage(
+        content="",
+        response_metadata={
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+        tool_calls=[
+            {"name": tool.name, "id": "partial", "args": {"query": "allocator"}}
+        ],
+    )
+    with pytest.raises(ModelOutputLimitError):
+        invoke_model_with_tools(
+            chat, _prompt(), {"body": "review"}, (tool,), max_tool_rounds=1
+        )
+    assert tool.calls == []
+
+
+def test_identical_navigation_contracts_are_included_once():
+    first = _FakeTool()
+    second = _FakeTool()
+    second.name = "sed"
+    prompt = model_tool_system_prompt("Review.", (first, second))
+    assert prompt.count(first.metadata["metis_contract"]) == 1
+    assert "[index_search, sed]" in prompt
+
+
+@pytest.mark.parametrize("max_tool_rounds", [1, 2])
+def test_input_limit_stops_tool_history_before_the_next_model_call(max_tool_rounds):
+    tool = _FakeTool()
+    chat = _FakeChat()
+    with pytest.raises(ModelInputLimitError, match="max_input_tokens=64"):
+        invoke_model_with_tools(
+            chat,
+            _prompt(),
+            {"body": "review this"},
+            (tool,),
+            max_tool_rounds=max_tool_rounds,
+            token_counter=len,
+            max_input_tokens=64,
+        )
+    assert len(tool.calls) == 1
+    assert len(chat.bound_chat.messages) == 1
+    assert chat.messages == []
+
+
+@pytest.mark.parametrize(
+    ("block_type", "id_key"),
+    [("function_call", "call_id"), ("tool_use", "id"), ("tool_call", "id")],
+)
+def test_input_count_does_not_double_count_tool_calls(block_type, id_key):
+    call = {"id": "call-1", "name": "lookup", "args": {"query": "guard"}}
+    message = AIMessage(
+        content=[{"type": block_type, id_key: call["id"]}], tool_calls=[call]
+    )
+    assert model_messages_token_count([message], len) == len(str(message.content))
+    message.tool_calls.append({**message.tool_calls[0], "id": "call-2"})
+    assert model_messages_token_count([message], len) == len(
+        str(message.content)
+    ) + len(json.dumps(message.tool_calls[1:], sort_keys=True))

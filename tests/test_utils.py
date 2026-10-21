@@ -23,6 +23,20 @@ def test_extract_json_content_pure_json_object():
     assert json.loads(result) == {"key": "value"}
 
 
+@pytest.mark.parametrize(
+    "snippet", ["}", "]", "if (ready) { work(); }", "char quote = '\"';"]
+)
+def test_embedded_json_preserves_quoted_c_delimiters(snippet):
+    payload = {"reviews": [{"code_snippet": snippet}]}
+    response = "Analysis: " + json.dumps(payload) + " End of report."
+    assert json.loads(extract_json_content(response)) == payload
+
+
+def test_embedded_json_keeps_invalid_first_candidate_unchanged():
+    response = 'First: [not JSON] then {"reviews": []}'
+    assert extract_json_content(response) == response
+
+
 def test_extract_json_content_pure_json_array():
     """Extract pure JSON array unchanged."""
     result = extract_json_content("[1, 2, 3]")

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.4+fixes.1 (Maintenance snapshot)
+
+Tag: `metis-v1.5.4-fixes.1`. Based directly on 1.5.4 with selected fixes; this snapshot does not adopt the 1.5.5 interfaces.
+
+### Changes
+
+* Use simple LLM review for C/C++ file, directory, repository, and patch reviews, with the concise C/C++ prompt and default read-only navigation tools backported from main. Preserve the 1.5.4 CLI, configuration format, and optional triage.
+* Package navigation guidance with the wheel, return relative grep paths, and prevent recursive navigation from following external file symlinks.
+* Bound rendered review prompts and navigation history using the existing input budget, share identical tool instructions, and preserve unified-diff context and source anchors in large patch reviews.
+
+### Bug Fixes
+
+* Omit unsupported temperature parameters for GPT-6 models, including Astra.
+* Report version 1.5.4+fixes.1 in SARIF metadata, matching the package and CLI version.
+* Default review and triage output budgets to 64,000 tokens, including custom configurations that omit `query.max_tokens`. Honour explicit budgets in C/C++ triage instead of overriding them with 5,000 tokens.
+* Default review and triage reasoning effort to `medium` while preserving explicit reasoning overrides.
+* Parse embedded JSON with the standard JSON decoder so quoted braces and brackets in code snippets do not break valid model responses.
+* Reject missing and token-limited model output, preserve completed tool evidence across retries, and propagate exhausted review failures to the CLI instead of reporting a successful empty review.
+
 ## [1.5.4](https://github.com/arm/metis/compare/metis-v1.5.3...metis-v1.5.4) (2026-09-17)
 
 

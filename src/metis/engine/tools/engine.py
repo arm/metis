@@ -18,13 +18,13 @@ class EngineTools:
     navigation: NavigationTool
 
     def langchain_tools(self) -> tuple[object, ...]:
-        return (*self.index.langchain_tools(),)
+        return (*self.index.langchain_tools(), *self.navigation.langchain_tools())
 
     def triage_langchain_tools(self) -> tuple[object, ...]:
         return (*self.navigation.langchain_tools(),)
 
     def model_tool_max_rounds(self) -> int | None:
-        if not self.index.has_model_tools():
+        if not (self.index.has_model_tools() or self.navigation.has_model_tools()):
             return None
         return self.config.model_tool_max_rounds
 
