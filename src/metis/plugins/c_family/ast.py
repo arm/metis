@@ -144,6 +144,7 @@ class CFamilyAstMixin:
         if scope_node is None:
             return out
         exclude_symbols = frozenset(exclude_symbols or ())
+        has_unstructured_control: bool | None = None
 
         for node in scope_nodes or self._iter_nodes(scope_node):
             node_kind = _node_kind(node)
@@ -194,6 +195,11 @@ class CFamilyAstMixin:
                         )
                     )
                 arguments = _node_child_by_field_name(node, "arguments")
+                if has_unstructured_control is None:
+                    has_unstructured_control = any(
+                        _node_kind(candidate) in {"goto_statement", "labeled_statement"}
+                        for candidate in _walk_expression_nodes(scope_node)
+                    )
                 out.append(
                     CFamilyCallSite(
                         symbol=symbol,
@@ -216,6 +222,7 @@ class CFamilyAstMixin:
                             node,
                             scope_node,
                             source,
+                            has_unstructured_control=has_unstructured_control,
                         ),
                         result=_call_result(node, scope_node, source),
                         lexical_argument_spans=_lexical_argument_spans(
@@ -640,10 +647,11 @@ def _code_expression(node: Any, source: bytes) -> CodeExpression | None:
     text = _normalized_syntax(_node_text(node, source))
     if not text:
         return None
+    value_nodes = _walk_value_expression_nodes(node)
     identifiers = tuple(
         dict.fromkeys(
             _normalized_syntax(_node_text(candidate, source))
-            for candidate in _walk_value_expression_nodes(node)
+            for candidate in value_nodes
             if _node_kind(candidate) == "identifier"
             and _normalized_syntax(_node_text(candidate, source))
         )
@@ -651,7 +659,7 @@ def _code_expression(node: Any, source: bytes) -> CodeExpression | None:
     field_paths = tuple(
         dict.fromkeys(
             _normalize_field_path(_node_text(candidate, source))
-            for candidate in _walk_value_expression_nodes(node)
+            for candidate in value_nodes
             if _node_kind(candidate) == "field_expression"
             and _normalize_field_path(_node_text(candidate, source))
         )
@@ -716,11 +724,10 @@ def _preceding_must_conditions(
     node: Any,
     scope_node: Any,
     source: bytes,
+    *,
+    has_unstructured_control: bool,
 ) -> tuple[ControlCondition, ...]:
-    if any(
-        _node_kind(candidate) in {"goto_statement", "labeled_statement"}
-        for candidate in _walk_expression_nodes(scope_node)
-    ):
+    if has_unstructured_control:
         return ()
 
     conditions: list[ControlCondition] = []
@@ -741,6 +748,8 @@ def _preceding_must_conditions(
                 terminal = _terminal_guard_condition(statement, source)
                 if terminal is not None:
                     conditions.append(terminal)
+                    continue
+                if not conditions:
                     continue
                 killed = set(_written_identifiers(statement, source))
                 killed.update(_addressed_identifiers(statement, source))

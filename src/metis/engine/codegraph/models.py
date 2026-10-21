@@ -311,10 +311,15 @@ class CodeGraph:
             if not name:
                 continue
             existing = self.public_declarations.setdefault(name, [])
+            seen = None
+            if type(locations) is list and len(locations) > 1:
+                seen = set(existing)
             for location in locations or []:
                 location = str(location or "").strip()
-                if location and location not in existing:
+                if location and location not in (existing if seen is None else seen):
                     existing.append(location)
+                    if seen is not None:
+                        seen.add(location)
 
     def resolve_all_calls(self) -> None:
         for node in self.nodes.values():

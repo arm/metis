@@ -89,6 +89,10 @@ def execute(invocation: NodeInvocation) -> NodeResult:
                 )
             )
 
+    schema_json = json.dumps(
+        DeduplicationDecision.model_json_schema(), separators=(",", ":")
+    )
+
     def packet_fits(candidates: list[dict[str, object]]) -> bool:
         candidate_json = json.dumps(candidates, separators=(",", ":"))
         request_tokens = rendered_prompt_token_count(
@@ -97,9 +101,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
             user_prompt=USER_PROMPT,
             variables={"candidate_findings": candidate_json},
         )
-        schema_tokens = invocation.context.runtime.token_counter(
-            json.dumps(DeduplicationDecision.model_json_schema(), separators=(",", ":"))
-        )
+        schema_tokens = invocation.context.runtime.token_counter(schema_json)
         return (
             request_tokens + schema_tokens
             <= invocation.context.runtime.max_token_length

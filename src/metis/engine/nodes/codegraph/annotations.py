@@ -100,11 +100,11 @@ def normalize_sink_type(value: object) -> str:
 
 
 def _annotate_automatic_sources(graph: CodeGraph) -> None:
-    incoming: dict[str, set[str]] = {name: set() for name in graph.nodes}
+    called: set[str] = set()
     for caller in graph.nodes.values():
         for callee in caller.resolved_calls:
-            if callee in incoming and callee != caller.unique_name:
-                incoming[callee].add(caller.unique_name)
+            if callee in graph.nodes and callee != caller.unique_name:
+                called.add(callee)
     structured_global_entries = {
         target
         for construct in graph.globals.values()
@@ -121,7 +121,7 @@ def _annotate_automatic_sources(graph: CodeGraph) -> None:
                 or node.name in graph.public_declarations
             )
         )
-        if node.is_source or (incoming[name] and not global_entry and not public_entry):
+        if node.is_source or (name in called and not global_entry and not public_entry):
             continue
         if node.has_internal_linkage and not global_entry:
             continue
@@ -208,6 +208,8 @@ def _annotate_configured_functions(
 ) -> tuple[int, int]:
     sources = {entry.name.lower(): entry for entry in settings.source_functions}
     sinks = {entry.name.lower(): entry for entry in settings.security_functions}
+    if not sources and not sinks:
+        return 0, 0
     configured_sources = 0
     configured_sinks = 0
     for node in graph.nodes.values():
@@ -218,7 +220,7 @@ def _annotate_configured_functions(
             node.is_source = True
             reason = (source.reason or "").strip() or "configured in metis.yaml"
             node.source_reason = f"configured source function: {reason}"
-        if node.is_sink:
+        if not sinks or node.is_sink:
             continue
         matched_calls = [call for call in node.calls if call.lower() in sinks]
         if not matched_calls:

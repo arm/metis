@@ -6,12 +6,15 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
 from concurrent.futures import CancelledError
 from typing import Any
 from typing import TYPE_CHECKING
 
 from metis.chat_model_options import merge_chat_model_kwargs
 from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph import FunctionNode
 from metis.engine.nodes.reachability.graph_utils import function_for_location
 from metis.engine.stages.triage.models import TriageRequest
 from metis.engine.tools.navigation import navigation_model_tools
@@ -64,6 +67,8 @@ class TriageClassifierService:
         unavailable_files: tuple[str, ...] = (),
         model: str | None = None,
         model_tool_max_rounds: int | None = None,
+        codegraph_file_nodes: Mapping[str, Sequence[FunctionNode]] | None = None,
+        codegraph_callers: Mapping[str, Sequence[str]] | None = None,
     ) -> dict | None:
         normalized_path = self._normalize_path(finding.file_path)
         unavailable = {self._normalize_path(path) for path in unavailable_files}
@@ -83,7 +88,13 @@ class TriageClassifierService:
             "threat_model_context": threat_model_context,
         }
         if codegraph is not None and normalized_path not in unavailable:
-            context = _codegraph_context(codegraph, normalized_path, finding.line)
+            context = _codegraph_context(
+                codegraph,
+                normalized_path,
+                finding.line,
+                file_nodes=codegraph_file_nodes,
+                callers_by_node=codegraph_callers,
+            )
             if context:
                 request["codegraph_context"] = context
         return self._workflow(navigation, model_tool_max_rounds, model).triage(request)
@@ -144,14 +155,30 @@ class TriageClassifierService:
         return str(prompts.get("triage_navigation") or "").strip()
 
 
-def _codegraph_context(graph: CodeGraph, file_path: str, line: int) -> str:
-    target = function_for_location(graph, file_path, line)
+def _codegraph_context(
+    graph: CodeGraph,
+    file_path: str,
+    line: int,
+    *,
+    file_nodes: Mapping[str, Sequence[FunctionNode]] | None = None,
+    callers_by_node: Mapping[str, Sequence[str]] | None = None,
+) -> str:
+    target = function_for_location(
+        graph,
+        file_path,
+        line,
+        nodes=file_nodes.get(file_path, ()) if file_nodes is not None else None,
+    )
     if target is None:
         return ""
-    callers = sorted(
-        node.unique_name
-        for node in graph.nodes.values()
-        if target.unique_name in node.resolved_calls
+    callers = (
+        sorted(
+            node.unique_name
+            for node in graph.nodes.values()
+            if target.unique_name in node.resolved_calls
+        )
+        if callers_by_node is None
+        else callers_by_node.get(target.unique_name, ())
     )
     callees = sorted(target.resolved_calls)
     unresolved = sorted(graph.unresolved_calls_for(target))
