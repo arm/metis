@@ -88,8 +88,11 @@ def test_packaged_execution_graph_omits_index_initialization(tmp_path, monkeypat
     assert review["inputs"]["codegraph"] == "initialize.codegraph"
     assert "codegraph" not in review["nodes"]
     assert "inputs" not in review["nodes"]["simple_llm_review"]
-    for node in ("simple_llm_review", "reachability"):
-        assert review["nodes"][node]["capabilities"] == ["memory", "navigation"]
+    assert set(review["nodes"]) == {"simple_llm_review", "finding_dedup", "result"}
+    assert review["nodes"]["simple_llm_review"]["capabilities"] == [
+        "memory",
+        "navigation",
+    ]
     assert "inputs" not in review["nodes"]["finding_dedup"]
     assert "inputs" not in review["nodes"]["result"]
     assert "outputs" not in triage
@@ -403,6 +406,13 @@ llm_provider:
         "enabled": True,
         "max_commits": 75,
     }
+
+
+def test_threat_model_rejects_code_generation_option():
+    with pytest.raises(
+        ValueError, match="Unknown metis_engine.threat_model settings: on_missing"
+    ):
+        configuration._threat_model_config({"on_missing": "create"})
 
 
 @pytest.mark.parametrize("value", (2, [], "invalid"))

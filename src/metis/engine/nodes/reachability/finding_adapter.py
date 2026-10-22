@@ -9,6 +9,8 @@ from typing import Any
 from metis.engine.nodes.codegraph.annotations import normalize_sink_type
 from metis.engine.nodes.reachability import VulnerabilityFinding
 from metis.engine.source import SourceMap
+from metis.severity import SEVERITY_PRIORITY
+from metis.utils import safe_int
 
 REACHABILITY_REASONING_METADATA_PREFIXES = (
     "Primary location:",
@@ -63,7 +65,7 @@ def review_item_to_finding(
     root_cause, evidence = split_reachability_reasoning(item.get("reasoning"))
     primary_file = str(item.get("primary_file") or "")
     primary_function = str(item.get("primary_function") or "")
-    line_number = _safe_int(item.get("line_number"), 0)
+    line_number = safe_int(item.get("line_number"), 0)
     raw_path = item.get("path")
     return VulnerabilityFinding(
         finding_id,
@@ -100,7 +102,7 @@ def review_item_to_finding(
 def review_sort_key(item: Mapping[str, Any]) -> tuple[int, int, str]:
     severity = str(item.get("severity") or "")
     return (
-        {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get(severity, 4),
+        len(SEVERITY_PRIORITY) - SEVERITY_PRIORITY.get(severity, 0),
         int(item.get("line_number") or 0),
         str(item.get("issue") or ""),
     )
@@ -136,13 +138,6 @@ def split_reachability_reasoning(reasoning: object) -> tuple[str, str]:
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        return int(value)
     except (TypeError, ValueError):
         return default
 

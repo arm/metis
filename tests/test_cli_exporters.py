@@ -86,6 +86,7 @@ def test_external_sarif_exports_without_metis_properties(tmp_path):
             {
                 "results": [
                     {
+                        "level": "error",
                         "message": {"text": "External format marker"},
                         "locations": [
                             {
@@ -111,6 +112,7 @@ def test_external_sarif_exports_without_metis_properties(tmp_path):
     assert issues[0]["line"] == "7"
     assert issues[0]["snippet"] == "external marker"
     assert issues[0]["triageStatus"] == ""
+    assert issues[0]["severity"] == "Unknown"
     csv_path = export_csv(sarif, tmp_path / "external.csv")
     with csv_path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
@@ -118,6 +120,7 @@ def test_external_sarif_exports_without_metis_properties(tmp_path):
     assert rows[0]["Issue"] == "External format marker"
     assert rows[0]["File"] == "external.txt"
     assert rows[0]["Line"] == "7"
+    assert rows[0]["Severity"] == "Unknown"
 
 
 @pytest.mark.parametrize(
@@ -158,18 +161,22 @@ def test_html_template_keeps_placeholder_text_in_report_and_metadata(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("severity", "expected"),
+    ("severity", "expected", "sarif_level"),
     [
-        ("high", "High"),
-        ("HIGH", "High"),
-        (" critical ", "Critical"),
-        ("medium", "Medium"),
-        ("LOW", "Low"),
-        ("unknown", "Unknown"),
-        ("CustomCase", "CustomCase"),
+        ("high", "High", "error"),
+        ("HIGH", "High", "error"),
+        (" critical ", "Critical", "error"),
+        ("medium", "Medium", "warning"),
+        ("LOW", "Low", "note"),
+        ("unknown", "Unknown", "warning"),
+        ("CustomCase", "CustomCase", "warning"),
+        ("crit", "crit", "warning"),
+        ("hıgh", "hıgh", "warning"),
     ],
 )
-def test_exports_normalize_known_severity_names(tmp_path, severity, expected):
+def test_html_normalizes_severity_while_csv_preserves_case(
+    tmp_path, severity, expected, sarif_level
+):
     report = {
         "reviews": [
             {
@@ -183,8 +190,11 @@ def test_exports_normalize_known_severity_names(tmp_path, severity, expected):
     assert data["issues"][0]["severity"] == expected
     assert data["severityCounts"] == {expected: 1}
     assert data["fileStats"]["audit.txt"]["maxSeverity"] == (
-        "Unknown" if expected == "CustomCase" else expected
+        expected if expected in ("Critical", "High", "Medium", "Low") else "Unknown"
     )
+    assert data["severityOrder"] == ["Critical", "High", "Medium", "Low", "Unknown"]
+    sarif = generate_sarif(report, read_source=False)
+    assert sarif["runs"][0]["results"][0]["level"] == sarif_level
     csv_path = export_csv(report, tmp_path / "report.csv")
     with csv_path.open(newline="") as stream:
-        assert next(csv.DictReader(stream))["Severity"] == expected
+        assert next(csv.DictReader(stream))["Severity"] == severity.strip()

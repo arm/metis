@@ -25,7 +25,6 @@ REQUIRED_PROMPT_KEYS = (
     "security_review",
     "security_review_file",
     "security_review_checks",
-    "validation_review",
     "snippet_security_summary",
 )
 
@@ -39,10 +38,7 @@ def _make_manifest(registry_module, **overrides):
         "priority": 0,
         "implementation": "tests.fake_plugins:FakePlugin",
         "config_resource": "metis.plugins.languages:c.yaml",
-        "capabilities": {
-            "codegraph": True,
-            "c_family_triage_evidence": True,
-        },
+        "capabilities": {"codegraph": True},
         "prompt_profile": "c_family",
     }
     data.update(overrides)
@@ -330,6 +326,10 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
         "verilog",
     ]
     assert missing_by_language == {}
+    allowed_keys = {*REQUIRED_PROMPT_KEYS, "triage_navigation"}
+    for language in registry.supported_language_names():
+        prompts = registry.get_prompts_for_language(language)
+        assert prompts.keys() <= allowed_keys, language
 
 
 def test_explicit_replacement_overrides_resolved_manifest_fields(monkeypatch):

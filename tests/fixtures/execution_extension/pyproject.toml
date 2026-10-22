@@ -32,3 +32,6 @@ entry-points."metis.execution_stages".e2e_pool = "metis_e2e_extension:pool_stage
 entry-points."metis.execution_stages".e2e_seed = "metis_e2e_extension:seed_stage"
 entry-points."metis.execution_stages".e2e_wait = "metis_e2e_extension:wait_stage"
 entry-points."metis.providers"."metis_e2e.chat" = "metis_e2e_extension:OfflineProvider"
+
+[tool.pyproject-fmt]
+max_supported_python = "3.14"

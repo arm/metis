@@ -63,10 +63,6 @@ metis_engine:
             capabilities:
               - memory
               - navigation
-          reachability:
-            capabilities:
-              - memory
-              - navigation
           finding_dedup: {}
           result:
             formats:
@@ -97,8 +93,9 @@ Execution topology describes what runs and how values flow. Deterministic graph
 annotations live under `metis_engine.codegraph`; reachability tuning lives under
 `metis_engine.reachability`. Model and reasoning settings default to the shared
 provider and query configuration. A node may override the model within that
-provider with its `model` field. Reachability first covers selected function
-source with the language plugin's normal security-review prompt, batching
+provider with its `model` field. Simple LLM review is the default; add Reachability
+to `review.nodes` to enable it. Reachability first covers selected function source
+with the language plugin's normal security-review prompt, batching
 nearby functions from the same file in source order. The prompt includes
 deterministic CodeGraph evidence and syntax-derived direct-callee return
 contracts. Findings identify every necessary-condition alternative for the
@@ -128,7 +125,7 @@ overridden explicitly. Quote YAML names such as `on`, `off`, `yes`, and `no`.
 
 ### Initialize
 
-- `threat_model` updates threat-model memory and returns its initialization
+- `threat_model` updates or reuses threat-model memory and returns its initialization
   status.
 
 - `codegraph` uses language providers such as Tree-sitter to build, validate,
@@ -197,7 +194,8 @@ CodeGraph.
 
 `simple_llm_review` retries missing, invalid, and token-limited model responses.
 Exhausted retries fail the file review; a valid response with no findings remains
-a successful review.
+a successful review. File targets resolve from the codebase root; see
+[review paths](config/review_code_paths.md) for scope and validation rules.
 
 Both discovery nodes support [navigation](capabilities/navigation.md) when granted;
 the packaged graph enables it.
@@ -244,7 +242,11 @@ resolves semantic duplicates once for the whole review. Its distinct output
 contract makes it the only valid input to `result`. Patch results pass through
 unchanged.
 
+Analysis or deduplication failures raise `ExecutionGraphError` from
+`MetisEngine.execute_review()`, with validated findings in `result.outputs["review"]`.
+
 `result` validates and publishes the finalized review before generating SARIF.
+Canonical findings and SARIF share normalized, unique IDs for triage annotation matching.
 Its `formats` list declares
 the representations written for that execution. Every listed format is saved.
 Review publishes canonical `findings` for JSON, HTML, and CSV renderers and
@@ -318,7 +320,21 @@ filesystems that equate those names. JSON, SARIF, HTML, and CSV replace
 the destination atomically after a complete write, preserving the prior file if
 rendering or writing fails.
 
+When Triage binds its input to `review.sarif`, its JSON preserves the Metis `reviews`
+envelope with triage annotations; standalone SARIF triage exports its annotated
+SARIF object as JSON.
+
 ### Review checkpoints and resume
+
+With review checkpoints enabled, the graph CLI saves completed stage outputs,
+status, and diagnostics to `.metis/checkpoints/graph.<run-id>.json` before the next
+stage. These snapshots do not automatically resume stages or replace reports.
+Failed writes are logged and preserve the previous snapshot.
+
+Graph and post-review triage write `.checkpoint.sarif` beside the selected output.
+Disable this with `metis_engine.triage_checkpoint_every: 0`. To resume, supply the
+checkpoint contents as `metis_engine.execution.inputs.sarif` in triage-only YAML;
+completed findings are skipped unless `--include-triaged` is set.
 
 Built-in review producers persist successful work items under the codebase's
 private Metis state directory. Review checkpoints are enabled by default in the
@@ -332,11 +348,10 @@ packaged `metis.yaml`:
 Every review of that codebase automatically reuses compatible records,
 independent of its output filename. A changed source, prompt, threat-model
 context, model setting, Metis version, response schema, or chunk plan produces a
-different record key and reruns that work. Simple and reachability reviews with
-model tools enabled bypass answer checkpoints: retrieved repository/index
-evidence is not covered by a stable packet revision identity. The packaged graph
-enables navigation for both nodes, so its discovery calls run afresh. Removing
-the navigation grant allows tool-free checkpoint reuse.
+different record key and reruns that work. Simple reviews replay navigation reads;
+failed reads or changes to evidence or tool settings prevent reuse. Simple reviews
+with Index or unknown tools, and reachability reviews with model tools, bypass
+answer checkpoints.
 
 Simple review checkpoints contain validated per-file results; patch records also
 retain each completed file summary. Reachability checkpoints contain validated
@@ -350,6 +365,8 @@ preserved and treated as a cache miss; failed writes are logged. Metis does not
 remove or rebuild them automatically, because another process may have repaired
 the file after the failure was observed. Malformed individual records are skipped
 without hiding other valid records.
+Checkpoint directories must resolve inside the codebase; symlinked SQLite files
+are not opened.
 
 Short lowercase ASCII producer identifiers retain readable filenames. Other
 identifiers use an exact-name digest so case, Unicode normalization and long
@@ -442,9 +459,13 @@ values in that result.
 
 `concurrent.futures.CancelledError` propagates directly after active stage work
 drains and does not expose a partial `ExecutionResult`. An inconclusive stage
-retains valid outputs and later stages continue. The non-interactive graph CLI
-keeps its zero exit code for inconclusive execution and exits nonzero for an
-execution error.
+retains valid outputs and later stages continue. After saving validated outputs,
+the graph CLI exits nonzero for execution errors or `review.file_failed`,
+`review.dedup_failed`, or `triage.finding_failed` diagnostics. Other inconclusive
+results retain a zero exit code.
+
+On `ExecutionGraphError`, the CLI saves available outputs without replacing the
+original error; unavailable formats leave existing files untouched.
 
 ## Built-in implementation layout
 
@@ -619,12 +640,17 @@ included in that estimate.
 
 Exhausted output-limit retries call `JsonPromptRequest.on_output_limit` once and
 return `None`, or raise `ModelOutputLimitError` when no callback is configured.
-Successful retries do not call the callback.
+Successful retries do not call the callback. Output-limit recovery takes precedence
+over refusals. Other unfinished or refused responses and invalid tool calls raise
+`ModelResponseIncompleteError` after retries; malformed output returns `None`.
+Transport failures propagate when non-retryable or retries are exhausted.
 
 `JsonPromptRequest.on_tool_result` optionally observes successful tool names,
 arguments, and rendered outputs. Observations are buffered until the tool loop
-completes or retains evidence for an output-limit retry, before response parsing.
-Observer errors abort the request rather than being retried as provider failures.
+completes or retains evidence for an unfinished-output retry, before response parsing.
+`JsonPromptRequest.on_tool_error` is a no-argument notification of tool failure,
+called before model followup so cache owners can reject incomplete evidence.
+Observer errors abort rather than retry the request; cancellation propagates.
 
 External stages may bind the existing `review_request`, `sarif`, and `codegraph`
 graph inputs or another stage's outputs. Adding another `$inputs` field requires
@@ -802,6 +828,8 @@ do not import the execution service or capability implementations.
 Only selected entry points are loaded. Missing registrations, duplicate names,
 wrong-stage registrations, invalid configuration, and incompatible port
 connections fail before execution.
+`concurrent.futures.CancelledError` from an entry-point loader or registration
+factory propagates unchanged; other loading failures retain their original cause.
 
 Node-specific tuning is separate from topology. This fragment shows only the
 Review stage:
@@ -956,6 +984,11 @@ to each call site. Nodes do not receive or invoke other executable nodes:
 keeping execution in the runner preserves dependency validation, ordering,
 diagnostics, and replacement by another registration such as
 `reachability_v2`.
+
+`MetisEngine.execute_graph(callbacks={"stage_completed_callback": callback})`
+calls the callback after each stage with an `ExecutionResult` containing all
+validated outputs published so far, converted to their public representation.
+The callback runs before the next stage; its exceptions propagate.
 
 Registrations are scoped by stage, so Review and Triage may both define a
 `result` node. Built-in names cannot be silently replaced. A private

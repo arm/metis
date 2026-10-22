@@ -12,7 +12,9 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelOutputLimitError
+from metis.engine.model_tool_runner import ModelResponseIncompleteError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import ModelToolResultError
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import model_tool_system_prompt
@@ -80,7 +82,8 @@ def _prompt():
     )
 
 
-def test_model_tool_system_prompt_includes_and_clips_tool_contracts():
+@pytest.mark.parametrize("limit", (6, float("inf")))
+def test_model_tool_system_prompt_includes_and_clips_tool_contracts(limit):
     first = _FakeTool()
     second = _FakeTool()
     second.name = "lookup"
@@ -88,7 +91,7 @@ def test_model_tool_system_prompt_includes_and_clips_tool_contracts():
     long_contract_tool.name = "read"
     long_contract_tool.metadata = {
         "metis_contract": "0123456789abcdef",
-        "metis_contract_max_chars": 6,
+        "metis_contract_max_chars": limit,
     }
     prompt = model_tool_system_prompt(
         "Return JSON.", (first, second, long_contract_tool)
@@ -100,7 +103,8 @@ def test_model_tool_system_prompt_includes_and_clips_tool_contracts():
     assert "MODEL TOOL CONTRACTS" in prompt
     assert prompt.count(first.metadata["metis_contract"]) == 1
     assert "[index_search, lookup]" in prompt
-    assert "[read]\n012345\n[contract truncated]" in prompt
+    expected = "012345\n[contract truncated]" if limit == 6 else "0123456789abcdef"
+    assert f"[read]\n{expected}" in prompt
 
 
 @pytest.mark.parametrize("max_tool_rounds", [1, 2])
@@ -151,6 +155,7 @@ def test_failed_tool_output_is_not_observed(monkeypatch):
     tool = _FakeTool()
     chat = _FakeChat()
     observer = Mock()
+    error_observer = Mock()
     monkeypatch.setattr(tool, "invoke", Mock(side_effect=ValueError("read failed")))
 
     result, evidence = invoke_model_with_tools(
@@ -160,12 +165,39 @@ def test_failed_tool_output_is_not_observed(monkeypatch):
         (tool,),
         max_tool_rounds=1,
         on_tool_result=observer,
+        on_tool_error=error_observer,
     )
 
     assert result == '{"reviews": []}'
     assert "Status: error" in evidence[0]
     assert chat.messages[-1][-1].status == "error"
     observer.assert_not_called()
+    error_observer.assert_called_once_with()
+
+
+@pytest.mark.parametrize("error", [ValueError("observer failed"), CancelledError()])
+def test_failed_tool_observer_error_aborts_before_followup(monkeypatch, error):
+    tool = _FakeTool()
+    chat = _FakeChat()
+    observer = Mock(side_effect=error)
+    monkeypatch.setattr(tool, "invoke", Mock(side_effect=ValueError("read failed")))
+    expected = (
+        CancelledError if isinstance(error, CancelledError) else ModelToolResultError
+    )
+
+    with pytest.raises(expected) as raised:
+        invoke_model_with_tools(
+            chat,
+            _prompt(),
+            {"body": "review this"},
+            (tool,),
+            max_tool_rounds=1,
+            on_tool_error=observer,
+        )
+
+    assert raised.value is error or raised.value.__cause__ is error
+    observer.assert_called_once_with()
+    assert chat.messages == []
 
 
 @pytest.mark.parametrize("error", [RuntimeError("provider failed"), CancelledError()])
@@ -197,12 +229,26 @@ def test_failed_tool_loop_discards_observations(monkeypatch, error):
 
 
 @pytest.mark.parametrize(
+    ("metadata", "error_type"),
+    [
+        ({"finish_reason": "length"}, ModelOutputLimitError),
+        (
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "content_filter"},
+            },
+            ModelResponseIncompleteError,
+        ),
+        ({"status": "failed"}, ModelResponseIncompleteError),
+    ],
+)
+@pytest.mark.parametrize(
     ("max_tool_rounds", "collect_evidence"),
     [(1, False), (2, True), (1, True)],
     ids=["truncated-tool-call", "truncated-followup", "truncated-forced-final"],
 )
 def test_output_limit_stops_tools_and_preserves_completed_evidence(
-    max_tool_rounds, collect_evidence
+    max_tool_rounds, collect_evidence, metadata, error_type
 ):
     tool = _FakeTool()
     observer = Mock()
@@ -218,7 +264,7 @@ def test_output_limit_stops_tools_and_preserves_completed_evidence(
     )
     limited_response = AIMessage(
         content='{"reviews": []}',
-        response_metadata={"finish_reason": "length"},
+        response_metadata=metadata,
         tool_calls=[] if collect_evidence else tool_request.tool_calls,
     )
     responses = iter(
@@ -232,7 +278,7 @@ def test_output_limit_stops_tools_and_preserves_completed_evidence(
         def invoke(self, _messages):
             return next(responses)
 
-    with pytest.raises(ModelOutputLimitError) as raised:
+    with pytest.raises(error_type) as raised:
         invoke_model_with_tools(
             Chat(),
             _prompt(),

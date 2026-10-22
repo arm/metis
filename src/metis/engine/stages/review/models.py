@@ -17,6 +17,10 @@ from pydantic import Field
 from pydantic import model_validator
 from typing_extensions import TypedDict
 
+REVIEW_FILE_FAILED = "review.file_failed"
+REVIEW_DEDUP_FAILED = "review.dedup_failed"
+REVIEW_FAILURE_CODES = frozenset({REVIEW_FILE_FAILED, REVIEW_DEDUP_FAILED})
+
 
 class ReviewRequest(TypedDict):
     file_path: Required[str]
@@ -44,6 +48,7 @@ class ReviewState(TypedDict, total=False):
     debug_callback: Any
     system_prompt: str
     parsed_reviews: list[dict[str, Any]]
+    navigation_evidence: list[dict[str, Any] | None]
 
 
 class ReviewCommand(BaseModel):

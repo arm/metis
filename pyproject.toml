@@ -1,6 +1,6 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = [ "setuptools>=84.0.0" ]
+requires = [ "setuptools>=84.2.1" ]
 
 [project]
 name = "metis"
@@ -19,39 +19,38 @@ classifiers = [
 ]
 dependencies = [
   "chromadb>=1.5.9",
-  "langchain==1.4.2",
-  "langchain-core==1.6.4",
-  "langchain-openai==1.6.3",
-  "langgraph==1.2.12",
-  "langsmith==0.14.0",
+  "langchain==1.4.7",
+  "langchain-core==1.7.0",
+  "langchain-openai==1.7.2",
+  "langgraph==1.2.16",
+  "langsmith==0.14.12",
   "llama-index>=0.14.25",
   "llama-index-vector-stores-chroma>=0.6.0",
   "pathspec>=1.1.1",
   "prompt-toolkit>=3.0.53",
-  "pydantic>=2.13.5",
+  "pydantic>=2.14.1",
   "pyyaml>=6.0.3",
   "rich>=15.0.0",
-  "tree-sitter==0.25.2",
-  "tree-sitter-language-pack==1.8.1",
+  "tree-sitter==0.26.0",
+  "tree-sitter-language-pack==1.22.1",
   "unidiff>=1.0.1",
 ]
 optional-dependencies.all-providers = [
   "metis[anthropic,bedrock,bedrock-mantle,gemini]",
 ]
 optional-dependencies.anthropic = [
-  "langchain-anthropic>=1.7.2",
+  "langchain-anthropic>=1.7.6",
   "llama-index-llms-langchain>=0.9.0",
 ]
 optional-dependencies.azure = []
 optional-dependencies.bedrock = [
-  "boto3>=1.43.99",
-  "langchain-aws>=1.7.9",
+  "boto3>=1.43.118",
+  "langchain-aws>=1.9.0",
 ]
 optional-dependencies.bedrock-mantle = [
-  "anthropic[aws]>=1.7.0",
-  "boto3>=1.43.99",
-  "langchain-anthropic>=1.7.2",
-  "llama-index-llms-langchain>=0.9.0",
+  "anthropic>=1.17.0",
+  "boto3>=1.43.118",
+  "langchain-aws[anthropic]>=1.9.0",
 ]
 optional-dependencies.dev = [
   "metis[all-providers]",
@@ -60,25 +59,25 @@ optional-dependencies.dev = [
   "metis[test]",
 ]
 optional-dependencies.gemini = [
-  "langchain-google-genai>=4.4.0",
+  "langchain-google-genai>=4.4.2",
 ]
 optional-dependencies.lint = [
   "bandit>=1.9.4",
-  "mypy>=2.3.1",
-  "pre-commit>=4.6.2",
-  "ruff>=0.16.8",
+  "mypy>=2.4.0",
+  "pre-commit>=4.7.0",
+  "ruff>=0.17.2",
 ]
 optional-dependencies.postgres = [
   "llama-index-vector-stores-postgres>=0.9.0",
 ]
 optional-dependencies.qdrant = [
-  "llama-index-vector-stores-qdrant>=0.10.3",
-  "qdrant-client<1.19",
+  "llama-index-vector-stores-qdrant>=0.10.4",
+  "qdrant-client>=1.20.0",
 ]
 optional-dependencies.test = [
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
-  "setuptools>=82.0.1",
+  "setuptools>=84.2.1",
 ]
 scripts.metis = "metis.cli.entry:main"
 entry-points."metis.providers"."anthropic.chat" = "metis.providers.anthropic:AnthropicProvider"
@@ -121,3 +120,4 @@ lint.isort.force-single-line = true
 
 [tool.pyproject-fmt]
 keep_full_version = true
+max_supported_python = "3.14"

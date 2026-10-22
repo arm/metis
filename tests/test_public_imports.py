@@ -76,3 +76,45 @@ def test_public_contracts_import_concurrently_without_loading_engine(order):
         timeout=30,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("order", [("output", "utils"), ("utils", "output")])
+def test_cli_output_imports_preserve_legacy_aliases(order):
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            dedent(
+                """
+                import importlib
+                import sys
+
+                for name in sys.argv[1:]:
+                    importlib.import_module(f"metis.cli.{name}")
+                from metis.cli import output
+                from metis.cli import utils
+
+                names = (
+                    "METIS_VERSION REPORT_TEMPLATE export_csv export_html export_sarif "
+                    "output_format output_path_identity output_files_for_formats "
+                    "graph_output_files save_output"
+                ).split()
+                for name in names:
+                    assert getattr(utils, name) is getattr(output, name)
+                for name in ("entry", "commands", "triage_checkpoints"):
+                    importlib.import_module(f"metis.cli.{name}")
+                assert output.graph_output_files(None, {}, quiet=True) == {
+                    "review": [], "triage": []
+                }
+                """
+            ),
+            *order,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

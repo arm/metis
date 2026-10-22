@@ -25,9 +25,8 @@ def create_memory_service(
 
 
 def _memory_path(root: Path, configured_path: str) -> Path:
-    path = Path(configured_path)
     try:
-        return resolve_path_within_root(root, path)
+        return resolve_path_within_root(root, configured_path)
     except ValueError as exc:
         raise ValueError(
             "Repository memory path must stay under codebase_path"

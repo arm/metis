@@ -100,17 +100,6 @@ prompts:
        - Do not report generic style, performance, or portability issues unless they create a concrete security impact.
        - Do not assume a missing mitigation is a vulnerability unless the surrounding code, ABI contract, platform profile, privilege level, or change context shows that mitigation is required.
        - When reporting an issue, identify the exact instruction sequence, the externally controlled value or privileged state involved, the trust boundary, severity, preconditions, and the minimal remediation.
-  validation_review: |-
-    You will be given:
-    SNIPPET: The relevant AArch64 assembly snippet.
-
-    REVIEW: A list of potential security issues discovered.
-
-    Your task is to:
-    1. Validate each item against SNIPPET.
-    2. Remove false positives or issues already mitigated (e.g., proven bounds checks, balanced stack restore, preserved callee-saved registers, required barriers already present).
-    3. Keep only issues that definitely represent real security risks.
-    4. If no real issues remain, respond with an empty array: [].
   snippet_security_summary: |-
     Summarize the security implications of these AArch64 assembly changes in one paragraph.
     Focus on memory safety, ABI/calling-convention correctness, privilege boundaries, control-flow integrity, synchronization/barriers, and secret handling.

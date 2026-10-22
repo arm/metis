@@ -298,7 +298,9 @@ def test_fully_inactive_source_skips_llm_review(tmp_path, node_jobs):
     repository.get_plugin_for_path = lambda _: SimpleNamespace(get_prompts=dict)
     graph = Mock()
     graph.review.return_value = None
-    service = SimpleLlmReviewService(SimpleNamespace(), repository, lambda *_: graph)
+    service = SimpleLlmReviewService(
+        SimpleNamespace(codebase_path=str(tmp_path)), repository, lambda *_: graph
+    )
 
     assert service._review_file_standard(str(source)) is None
     graph.review.assert_not_called()

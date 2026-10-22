@@ -39,9 +39,6 @@ prompts:
        - Check hardcoded secrets, weak cryptography, and predictable security tokens produced by non-cryptographic randomness.
        - Do not report stylistic, reliability, or maintainability concerns unless they create a concrete security impact.
 
-  validation_review: |-
-    Validate the following Perl security review against the supplied code. Keep only findings with concrete evidence and a clear security impact, account for existing validation or escaping, and return an empty list if no finding remains valid.
-
   snippet_security_summary: |-
     Summarize the concrete security implications of these Perl code changes in one concise paragraph. Do not introduce issues that are not present in the supplied findings.
 

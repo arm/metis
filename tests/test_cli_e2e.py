@@ -12,6 +12,9 @@ import sys
 import pytest
 import yaml
 
+from metis.configuration import load_execution_config
+from metis.sarif.writer import generate_sarif
+
 from test_execution_e2e import extension_environment
 from test_execution_e2e import extension_graph
 from test_execution_e2e import (
@@ -72,7 +75,7 @@ def test_cli_executes_installed_extension_and_publishes_reports(
     json_path = (
         tmp_path / "report.json"
         if explicit
-        else next((tmp_path / "results").glob("*.json"))
+        else next((tmp_path / "results").glob("graph_review_*.json"))
     )
     report = json.loads(json_path.read_text())
     assert report["reviews"][0]["reviews"][0]["id"] == "e2e-1"
@@ -107,6 +110,79 @@ def test_cli_executes_installed_extension_and_publishes_reports(
     ]
     assert events.index("seed") < events.index("join") < events.index("review")
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    ("runs", "error"),
+    [
+        (None, None),
+        ([], None),
+        ([{}], None),
+        ([{"results": []}], None),
+        ([{"results": None}], "SARIF run 0 results must be an array"),
+        ([{"results": {}}], "SARIF run 0 results must be an array"),
+        (
+            [{"results": [{"message": {"text": "Pending finding"}}, None]}],
+            "SARIF result 0:1 must be an object",
+        ),
+    ],
+)
+def test_config_only_triage_validates_findings_before_publication(
+    installed_execution_extension, tmp_path, runs, error
+):
+    triage = load_execution_config()["stages"]["triage"]
+    triage["inputs"] = {"sarif": "$inputs.sarif"}
+    triage["nodes"]["triage"]["capabilities"] = ["navigation"]
+    triage["nodes"]["result"] = {
+        "filename": "results/triaged",
+        "formats": ["json", "sarif"],
+    }
+    finding = {
+        "issue": "Already handled",
+        "metisTriaged": True,
+        "metisTriageStatus": "valid",
+    }
+    sarif = generate_sarif({"reviews": [{"file": "source.c", "reviews": [finding]}]})
+    if runs is not None:
+        sarif["runs"] = runs
+    write_execution_config(
+        tmp_path / "input.yaml",
+        {
+            "inputs": {"sarif": sarif},
+            "stages": {"triage": triage},
+        },
+    )
+    output = tmp_path / "results" / "triaged.json"
+    output.parent.mkdir()
+    output.write_text("previous report", encoding="utf-8")
+
+    completed = run_cli(
+        installed_execution_extension,
+        tmp_path,
+        "--log-workflow-debug",
+        "--log-workflow-debug-path",
+        "trace.ndjson",
+        config_file="input.yaml",
+    )
+
+    trace = [
+        json.loads(line)
+        for line in (tmp_path / "trace.ndjson").read_text().splitlines()
+    ]
+    assert not any(item.get("kind") == "prompt" for item in trace)
+    if error:
+        assert completed.returncode == 1, completed.stdout + completed.stderr
+        assert error in completed.stdout
+        assert "Execution graph complete" not in completed.stdout
+        assert output.read_text() == "previous report"
+        assert not output.with_suffix(".sarif").exists()
+        return
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert json.loads(output.read_text()) == sarif
+    assert json.loads(output.with_suffix(".sarif").read_text()) == json.loads(
+        output.read_text()
+    )
+    assert not (tmp_path / ".metis" / "codegraph.sqlite3").exists()
 
 
 def test_cli_uses_filename_from_external_result_node(
@@ -237,3 +313,87 @@ def test_cli_reports_invalid_yaml_before_engine_setup(
     assert "Traceback" not in completed.stderr
     assert not (tmp_path / "events.jsonl").exists()
     assert not (tmp_path / "results").exists()
+
+
+@pytest.mark.parametrize("root_name", ["~", "~metis-unknown-user"])
+def test_config_cli_keeps_literal_tilde_root_state_local(tmp_path, root_name):
+    from metis.generated_artifacts import generated_artifact_paths
+
+    root = tmp_path / root_name
+    root.mkdir()
+    home_directory = tmp_path / "home"
+    home_directory.mkdir()
+    sentinel = home_directory / "sentinel.txt"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    execution = {
+        "inputs": {"review_request": {"mode": "code"}},
+        "stages": {
+            "review": {
+                "nodes": {
+                    "simple_llm_review": {},
+                    "finding_dedup": {},
+                    "result": {
+                        "filename": str(root / "reports/review"),
+                        "formats": ["json", "sarif"],
+                    },
+                }
+            },
+            "triage": {
+                "inputs": {"sarif": "review.sarif"},
+                "nodes": {
+                    "triage": {"capabilities": ["navigation"]},
+                    "result": {
+                        "filename": str(root / "reports/triage"),
+                        "formats": ["json", "sarif"],
+                    },
+                },
+            },
+        },
+    }
+    configuration = {
+        "llm_provider": {
+            "name": "openai",
+            "model": "gpt-5.5",
+            "base_url": "http://127.0.0.1:9/v1",
+        },
+        "metis_engine": {"llm_max_retries": 0, "execution": execution},
+    }
+    (tmp_path / "input.yaml").write_text(
+        yaml.safe_dump(configuration), encoding="utf-8"
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "metis",
+            "--config",
+            "input.yaml",
+            "--codebase-path",
+            f"./{root_name}",
+        ],
+        cwd=tmp_path,
+        env=extension_environment(
+            tmp_path,
+            HOME=home_directory,
+            OPENAI_API_KEY="offline-placeholder",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert list(home_directory.iterdir()) == [sentinel]
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    assert list((root / ".metis/checkpoints").glob("graph.*.json"))
+    reports = set((root / "reports").iterdir())
+    assert {path.name for path in reports} == {
+        "review.json",
+        "review.sarif",
+        "triage.json",
+        "triage.sarif",
+    }
+    assert generated_artifact_paths(root) == {path.resolve() for path in reports}
+    assert json.loads((root / "reports/review.json").read_text()) == {"reviews": []}
+    assert json.loads((root / "reports/triage.json").read_text()) == {"reviews": []}

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable
+from concurrent.futures import CancelledError
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -25,6 +27,9 @@ from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.graph import StageConfiguration
+from metis.engine.stages.catalog import StageCatalog
+from metis.engine.stages.contracts import StageContract
+from metis.engine.stages.contracts import StageRegistration
 
 
 class _Configuration(BaseModel):
@@ -46,6 +51,71 @@ class _EntryPoint:
 
 def _context(tmp_path: Path) -> CapabilityContext:
     return CapabilityContext(tmp_path, Mock(), max_workers=2, max_token_length=2048)
+
+
+@pytest.mark.parametrize(
+    ("catalog_type", "registration", "resolve_args"),
+    (
+        (
+            NodeCatalog,
+            NodeRegistration("external", "review", _Configuration, {}, {}, Mock()),
+            ("review", "external"),
+        ),
+        (StageCatalog, StageRegistration("external", StageContract({})), ("external",)),
+        (
+            CapabilityCatalog,
+            CapabilityRegistration(
+                CapabilityManifest("external"), _Configuration, Mock()
+            ),
+            ("external",),
+        ),
+    ),
+)
+@pytest.mark.parametrize("use_factory", (False, True))
+def test_catalog_loading_validates_before_caching_and_preserves_cancellation(
+    catalog_type, registration, resolve_args, use_factory
+):
+    entry_point = Mock()
+    entry_point.name = ".".join(resolve_args)
+    factory = Mock()
+    entry_point.load.return_value = factory
+    loader = factory if use_factory else entry_point.load
+    catalog = catalog_type((), (entry_point,))
+    assert entry_point.load.call_count == 0
+
+    for error in (CancelledError("cancelled"), OSError("unavailable")):
+        loader.side_effect = error
+        expected_type = (
+            CancelledError if isinstance(error, CancelledError) else RuntimeError
+        )
+        with pytest.raises(expected_type) as raised:
+            catalog.resolve(*resolve_args)
+        if isinstance(error, CancelledError):
+            assert raised.value is error
+        else:
+            assert "failed to load: unavailable" in str(raised.value)
+            assert raised.value.__cause__ is error
+
+    loader.side_effect = None
+    loader.return_value = object()
+    with pytest.raises(
+        TypeError, match=f"did not return a {type(registration).__name__}"
+    ):
+        catalog.resolve(*resolve_args)
+
+    loader.return_value = (
+        replace(registration, manifest=CapabilityManifest("other"))
+        if isinstance(registration, CapabilityRegistration)
+        else replace(registration, name="other")
+    )
+    with pytest.raises(ValueError, match="returned registration"):
+        catalog.resolve(*resolve_args)
+
+    loader.return_value = registration
+    assert catalog.resolve(*resolve_args) is registration
+    loads = entry_point.load.call_count
+    assert catalog.resolve(*resolve_args) is registration
+    assert entry_point.load.call_count == loads
 
 
 def _registration(

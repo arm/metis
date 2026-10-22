@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from collections.abc import Callable
+from collections.abc import Iterator
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
+from fnmatch import fnmatch
+from functools import partial
 from glob import has_magic
 from pathlib import Path
+from stat import S_ISDIR
 from typing import Any
 from typing import Literal
 
@@ -20,6 +26,8 @@ from pydantic import Field
 
 from metis import runlog
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineState
@@ -28,12 +36,12 @@ from metis.memory import MemoryService
 from metis.memory.fingerprints import file_fingerprint
 from metis.memory.fingerprints import input_fingerprint
 from metis.memory.fingerprints import repo_fingerprint
-from metis.utils import parse_json_output
 from metis.utils import resolve_path_within_root
 from metis.utils import split_snippet
 from metis.utils import string_list
 
 from .history import write_history_records
+from .parsing import parse_records as _parse_distilled_records
 
 logger = logging.getLogger("metis")
 
@@ -95,7 +103,7 @@ class _ThreatSourceClaimRecordModel(BaseModel):
 
 
 class _ThreatSourceClaimResponseModel(BaseModel):
-    records: list[_ThreatSourceClaimRecordModel] = Field(default_factory=list)
+    records: list[_ThreatSourceClaimRecordModel]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -108,30 +116,9 @@ class _ThreatSourceClaimReductionRecordModel(_ThreatSourceClaimRecordModel):
 
 
 class _ThreatSourceClaimReductionResponseModel(BaseModel):
-    records: list[_ThreatSourceClaimReductionRecordModel] = Field(default_factory=list)
+    records: list[_ThreatSourceClaimReductionRecordModel]
 
     model_config = ConfigDict(extra="forbid")
-
-
-def _parse_distilled_records(
-    raw: Any,
-    *,
-    response_model: type[BaseModel],
-) -> list[dict[str, Any]] | None:
-    if isinstance(raw, BaseModel):
-        data = raw.model_dump()
-    elif isinstance(raw, dict):
-        data = raw
-    elif isinstance(raw, str):
-        data = parse_json_output(raw)
-    else:
-        return None
-
-    try:
-        records = response_model.model_validate(data).model_dump()["records"]
-    except (TypeError, ValueError):
-        return None
-    return records
 
 
 def initialize_threat_model_memory(
@@ -155,11 +142,58 @@ def initialize_threat_model_memory(
         if str(extension).lower() != ".pdf"
     }
     threat_sources = _find_threat_sources(
-        repo_root,
+        Path(config.codebase_path).expanduser().absolute(),
         threat_config,
         supported_extensions=supported_extensions,
         is_metisignored=repository.is_metisignored,
+        onerror=partial(
+            repository.handle_discovery_error, discovery_root=str(repo_root)
+        ),
     )
+    snapshot_fp = input_fingerprint(
+        {
+            "snapshot_version": 3,
+            "sources": {
+                source.path.relative_to(repo_root).as_posix(): file_fingerprint(
+                    source.path
+                )
+                for source in threat_sources
+            },
+            "settings": threat_config,
+            "model": config.llama_query_model,
+            "provider": (
+                config.llm_provider.cache_identity()
+                if config.llm_provider is not None
+                else {}
+            ),
+            "model_options": config.chat_model_kwargs,
+            "max_token_length": config.max_token_length,
+            "prompts": _PROMPTS,
+            "tool_version": service.tool_version,
+            "repo": repo_fp,
+        }
+    )
+    authoritative_sources = [
+        source.path.relative_to(repo_root).as_posix() for source in threat_sources
+    ]
+    previous_records = list(service.iter_records(THREAT_MODEL_NAMESPACE))
+    if previous_records and all(
+        record.metadata.get("snapshot_fingerprint") == snapshot_fp
+        and (
+            record.artifact_type != "threat_model_authoritative"
+            or (
+                isinstance(record.body_json, dict)
+                and bool(record.body_json.get("distilled_claims"))
+            )
+        )
+        for record in previous_records
+    ):
+        return {
+            "status": "ok",
+            "records_written": 0,
+            "records_deleted": 0,
+            "authoritative_sources": authoritative_sources,
+        }
     candidate_records = _build_threat_model_snapshot(
         config,
         service,
@@ -167,23 +201,26 @@ def initialize_threat_model_memory(
         repo_fp,
         threat_sources,
     )
-    records_deleted = 0
-    for namespace in (
-        (*THREAT_MODEL_NAMESPACE, "authoritative"),
-        (*THREAT_MODEL_NAMESPACE, "contracts"),
-        (*THREAT_MODEL_NAMESPACE, "history"),
-    ):
-        replacement = [
-            record for record in candidate_records if record.namespace == namespace
-        ]
-        records_deleted += service.replace_records(namespace, replacement)
+    if not candidate_records:
+        candidate_records.append(
+            MemoryRecord.create(
+                namespace=THREAT_MODEL_NAMESPACE,
+                key="snapshot",
+                artifact_type="threat_model_snapshot",
+                memory_type="semantic",
+                tool_version=service.tool_version,
+                repo_fingerprint=repo_fp,
+                input_fingerprint=snapshot_fp,
+            )
+        )
+    for record in candidate_records:
+        record.metadata["snapshot_fingerprint"] = snapshot_fp
+    records_deleted = service.replace_records(THREAT_MODEL_NAMESPACE, candidate_records)
     return {
         "status": "ok",
         "records_written": len(candidate_records),
         "records_deleted": records_deleted,
-        "authoritative_sources": [
-            source.path.relative_to(repo_root).as_posix() for source in threat_sources
-        ],
+        "authoritative_sources": authoritative_sources,
     }
 
 
@@ -216,6 +253,9 @@ def _build_threat_model_snapshot(
                 config,
                 repo_root,
                 source,
+                fallback_token_limit=max(
+                    1, int(config.max_token_length) // (4 * len(threat_sources))
+                ),
             )
             if prepared is None:
                 raise RuntimeError(
@@ -303,6 +343,8 @@ def _prepare_threat_source(
     config,
     repo_root: Path,
     threat_source: ThreatSource,
+    *,
+    fallback_token_limit: int,
 ) -> PreparedThreatSource | None:
     try:
         text = threat_source.path.read_text(encoding="utf-8")
@@ -314,11 +356,20 @@ def _prepare_threat_source(
         rel_path=rel_path,
         text=text,
     )
-    summary = (
-        "; ".join(claim["statement"] for claim in distilled_claims)
-        or text.strip()
-        or f"Authoritative threat model/security guidance from {rel_path}."
-    )
+    summary = "; ".join(claim["statement"] for claim in distilled_claims)
+    if not summary:
+        excerpt = split_snippet(
+            text.strip() or f"Project security guidance from {rel_path}.",
+            fallback_token_limit,
+            (
+                lambda value: config.llm_provider.count_tokens(
+                    value, model=config.llama_query_model
+                )
+            )
+            if config.llm_provider is not None
+            else None,
+        )[0][0]
+        summary = f"Source excerpt (distillation unavailable): {excerpt}"
     return PreparedThreatSource(
         threat_source=threat_source,
         rel_path=rel_path,
@@ -457,16 +508,32 @@ def _model_distilled_source_claims(
     model = config.llama_query_model
     if llm_provider is None or not model:
         return []
-    evidence_chunks = [
-        chunk
-        for chunk, _ in split_snippet(
-            text,
-            int(config.max_token_length),
-            lambda value: llm_provider.count_tokens(value, model=model),
-        )
-    ]
-    if not evidence_chunks:
-        return []
+    evidence_chunks = []
+    next_chunks = [text] if text else []
+    while len(next_chunks) != len(evidence_chunks):
+        evidence_chunks = next_chunks
+        next_chunks = []
+        for batch_index, evidence in enumerate(evidence_chunks, start=1):
+            prompt_tokens = rendered_prompt_token_count(
+                lambda value: llm_provider.count_tokens(value, model=model),
+                system_prompt=_PROMPTS["source_distillation_system"],
+                user_prompt=_PROMPTS["source_distillation_user"],
+                variables={
+                    "path": rel_path,
+                    "batch_index": batch_index,
+                    "total_batches": len(evidence_chunks),
+                    "evidence": evidence,
+                },
+            )
+            if prompt_tokens <= config.max_token_length:
+                next_chunks.append(evidence)
+                continue
+            parts = split_snippet(evidence, max(1, len(evidence) // 2), len)
+            if len(parts) == 1:
+                raise ModelInputLimitError(
+                    "Threat-model source prompt cannot hold one source fragment"
+                )
+            next_chunks.extend(part for part, _ in parts)
     try:
         records: list[dict[str, Any]] = []
         for batch_index, evidence in enumerate(evidence_chunks, start=1):
@@ -498,7 +565,7 @@ def _model_distilled_source_claims(
                 invalid_message="invalid threat-model distillation response",
                 final_keep_message="returning no distilled source claims",
                 response_model=_ThreatSourceClaimResponseModel,
-                temperature=0.0,
+                max_input_tokens=int(config.max_token_length),
                 chat_model_kwargs=config.chat_model_kwargs,
             )
             if batch_records is None:
@@ -534,6 +601,16 @@ def _model_reduce_source_claim_group(
     if llm_provider is None or not model:
         return claims
     try:
+        if (
+            rendered_prompt_token_count(
+                lambda value: llm_provider.count_tokens(value, model=model),
+                system_prompt=_PROMPTS["source_reduction_system"],
+                user_prompt=_PROMPTS["source_reduction_user"],
+                variables={"evidence": evidence},
+            )
+            > config.max_token_length
+        ):
+            return claims
         records = invoke_langchain_json_prompt_with_retry(
             llm_provider,
             config.usage_runtime,
@@ -551,7 +628,7 @@ def _model_reduce_source_claim_group(
             invalid_message="invalid threat-model source claim deduplication response",
             final_keep_message="keeping unreduced source claims",
             response_model=_ThreatSourceClaimReductionResponseModel,
-            temperature=0.0,
+            max_input_tokens=int(config.max_token_length),
             chat_model_kwargs=config.chat_model_kwargs,
         )
     except CancelledError:
@@ -609,13 +686,46 @@ def _source_claim_reduce_evidence(claims: list[dict[str, Any]]) -> str:
     )
 
 
+def _glob_threat_sources(
+    path: Path, parts: tuple[str, ...], *, onerror: Callable[[OSError], None]
+) -> Iterator[Path]:
+    try:
+        if not parts:
+            path.lstat()
+            yield path
+            return
+        component, remaining = parts[0], parts[1:]
+        if not has_magic(component):
+            yield from _glob_threat_sources(
+                path / component, remaining, onerror=onerror
+            )
+            return
+        if component == "**" and S_ISDIR(path.stat().st_mode):
+            yield from _glob_threat_sources(path, remaining, onerror=onerror)
+        for child in path.iterdir():
+            if component == "**":
+                if not child.is_symlink() and child.is_dir():
+                    yield from _glob_threat_sources(child, parts, onerror=onerror)
+                elif not remaining and sys.version_info >= (3, 13):
+                    yield child
+            elif fnmatch(child.name, component):
+                yield from _glob_threat_sources(child, remaining, onerror=onerror)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    except OSError as error:
+        onerror(error)
+
+
 def _find_threat_sources(
     repo_root: Path,
     threat_config: dict[str, Any],
     *,
     supported_extensions: set[str],
     is_metisignored: Callable[[str], bool],
+    onerror: Callable[[OSError], None],
 ) -> list[ThreatSource]:
+    logical_root = repo_root
+    repo_root = repo_root.resolve()
     resolved_paths: set[Path] = set()
     for pattern in string_list(threat_config.get("source_patterns")):
         pattern_path = Path(pattern)
@@ -623,18 +733,33 @@ def _find_threat_sources(
         if suffix and not has_magic(suffix) and suffix not in supported_extensions:
             continue
         if pattern_path.is_absolute():
-            try:
-                pattern_path = pattern_path.relative_to(repo_root)
-            except ValueError:
+            for root in (logical_root, repo_root):
+                if pattern_path.is_relative_to(root):
+                    pattern_path = pattern_path.relative_to(root)
+                    break
+            else:
                 continue
         if ".." in pattern_path.parts:
             continue
-        for path in repo_root.glob(pattern_path.as_posix()):
+        if not pattern_path.parts:
+            raise ValueError("Threat-model source patterns must name a file or glob")
+        if pattern.endswith(os.sep) or (os.altsep and pattern.endswith(os.altsep)):
+            continue
+        if sys.version_info < (3, 13) and any(
+            "**" in component and component != "**" for component in pattern_path.parts
+        ):
+            raise ValueError(
+                "Invalid pattern: '**' can only be an entire path component"
+            )
+        for path in _glob_threat_sources(
+            repo_root, pattern_path.parts, onerror=onerror
+        ):
             resolved = _safe_repo_path(repo_root, path)
             if (
                 resolved is None
                 or resolved.suffix.lower() not in supported_extensions
-                or is_metisignored(str(resolved))
+                or is_metisignored(path.relative_to(repo_root).as_posix())
+                or is_metisignored(resolved.relative_to(repo_root).as_posix())
             ):
                 continue
             resolved_paths.add(resolved)

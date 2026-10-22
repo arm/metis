@@ -96,6 +96,8 @@ private_analysis = "external_metis_capabilities.analysis:registration"
 
 The entry-point name must match the registration and manifest name. A package
 may contain both external nodes and external capabilities.
+`concurrent.futures.CancelledError` from registration loading or its factory
+propagates unchanged; other loading failures retain their original cause.
 
 ## Thread safety and lifetime
 

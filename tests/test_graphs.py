@@ -1,18 +1,25 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from unittest.mock import Mock
+
+import pytest
 
 from metis.engine.ask import AskGraph
 from metis.engine.ask.models import AskRequest
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.simple_llm_review.graph import (
     ReviewGraph,
+    _normalize_reviews,
     review_node_build_prompt,
     review_node_llm,
     review_node_parse,
 )
 from metis.engine.stages.review.models import ReviewState
 from metis.providers.base import ChatProvider
+from metis.sarif.triage import TRIAGE_ANNOTATION_KEYS
 
 
 class _Doc:
@@ -52,7 +59,6 @@ def test_review_nodes_pipeline_parses():
     language_prompts = {
         "security_review_file": "Do a security review [[REVIEW_SCHEMA_FIELDS]]",
         "security_review_checks": "Checks...",
-        "validation_review": "Validate...",
     }
     s1 = review_node_build_prompt(
         state,
@@ -88,6 +94,50 @@ def test_review_nodes_pipeline_parses():
 
     s3 = review_node_parse(s2)
     assert s3.get("parsed_reviews") and isinstance(s3["parsed_reviews"], list)
+
+
+@pytest.mark.parametrize("as_text", [False, True])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"findings": [{"issue": "buffer overflow"}]},
+        {"reviews": [], "findings": [{"issue": "buffer overflow"}]},
+    ],
+)
+def test_review_parser_rejects_unrecognized_top_level_fields(payload, as_text):
+    raw = json.dumps(payload) if as_text else payload
+
+    assert _normalize_reviews(raw) is None
+
+
+def test_review_parser_preserves_explicit_empty_and_partial_review_entries():
+    assert _normalize_reviews({"reviews": []}) == []
+
+    reviews = _normalize_reviews({"reviews": [{"issue": "buffer overflow"}]})
+
+    assert reviews is not None and len(reviews) == 1
+    assert reviews[0]["issue"] == "buffer overflow"
+    assert reviews[0]["confidence"] == 0.0
+
+
+@pytest.mark.parametrize("as_text", [False, True])
+def test_review_parser_discards_reserved_triage_annotations(as_text):
+    payload = {
+        "reviews": [
+            {
+                "issue": "Check input",
+                "customEvidence": "preserved",
+                **{key: True for key in TRIAGE_ANNOTATION_KEYS},
+            }
+        ]
+    }
+
+    reviews = _normalize_reviews(json.dumps(payload) if as_text else payload)
+
+    assert reviews is not None and len(reviews) == 1
+    assert not TRIAGE_ANNOTATION_KEYS.intersection(reviews[0])
+    assert reviews[0]["customEvidence"] == "preserved"
 
 
 def test_review_body_includes_threat_model_context():
@@ -159,11 +209,12 @@ def test_simple_review_checkpoint_key_tracks_effective_input():
     assert graph.checkpoint_key(request) is None
 
 
-def test_patch_context_can_be_omitted_without_losing_source_anchors():
+@pytest.mark.parametrize("model_tools", [(), (object(),)])
+def test_patch_context_can_be_omitted_without_losing_source_anchors(model_tools):
     provider = Mock()
     provider.count_tokens.side_effect = lambda text, **_: len(text)
     graph = ReviewGraph(
-        provider, {}, None, "", "test-model", 4000, model_tools=(object(),)
+        provider, {}, None, "", "test-model", 4000, model_tools=model_tools
     )
     graph._prompt_runner.invoke = Mock(
         return_value=[
@@ -194,3 +245,40 @@ def test_patch_context_can_be_omitted_without_losing_source_anchors():
     assert "FILE: target.c" in body
     assert diff in body and "int filler;" not in body
     assert result["reviews"][0]["anchor"]["start_line"] == 1001
+
+
+def test_simple_review_without_tools_bounds_complete_prompts():
+    provider = Mock()
+    provider.count_tokens.side_effect = lambda text, **_: len(text)
+    graph = ReviewGraph(provider, {}, None, "", "test-model", 4000)
+
+    def respond(request):
+        assert (
+            rendered_prompt_token_count(
+                graph._token_counter,
+                system_prompt=request.system_prompt,
+                user_prompt=request.user_prompt,
+                variables=request.variables,
+            )
+            <= graph.max_token_length
+        )
+        return []
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    request = {
+        "file_path": "target.c",
+        "snippet": "int value;\n" * 500,
+        "language_prompts": {
+            "security_review_file": "Review. [[REVIEW_SCHEMA_FIELDS]]",
+            "security_review_checks": "Check.",
+        },
+    }
+
+    assert graph.review(request)["reviews"] == []
+    assert graph._prompt_runner.invoke.call_count > 1
+
+    graph.max_token_length = 1
+    graph._prompt_runner.invoke.reset_mock()
+    with pytest.raises(ModelInputLimitError, match="prompt context exceeds"):
+        graph.review(request)
+    graph._prompt_runner.invoke.assert_not_called()

@@ -95,7 +95,7 @@ class TreeSitterRuntime:
                 raise FileNotFoundError(str(full))
             source = full.read_bytes()
         parser = get_parser(self.language_name)
-        diagnostic_tree = parser.parse_bytes(source)
+        diagnostic_tree = parser.parse(source)
         parse_source, tree, macro_function_masks = (
             _recover_macro_function_wrappers(parser, source, diagnostic_tree)
             if self.language_name == "c"
@@ -125,7 +125,7 @@ def _recover_declaration_annotations(
     source: bytes,
     original_tree: Any,
 ) -> tuple[bytes, Any]:
-    if not original_tree.root_node().has_error():
+    if not original_tree.root_node.has_error:
         return source, original_tree
     spans = _declaration_annotation_spans(original_tree, source)
     if not spans:
@@ -135,24 +135,24 @@ def _recover_declaration_annotations(
     for start, end in spans:
         _mask_non_newlines(parse_source, source, start, end)
     recovered_source = bytes(parse_source)
-    recovered_tree = parser.parse_bytes(recovered_source)
+    recovered_tree = parser.parse(recovered_source)
     # Only retain masks in a valid declaration prefix, never in signatures or
     # expressions swallowed by the original error node.
-    root = recovered_tree.root_node()
-    nodes = iter(root.child(index) for index in range(root.child_count()))
+    root = recovered_tree.root_node
+    nodes = iter(root.child(index) for index in range(root.child_count))
     node = next(nodes, None)
     for start, end in spans:
-        while node is not None and node.end_byte() <= start:
+        while node is not None and node.end_byte <= start:
             node = next(nodes, None)
         declarator = (
             node.child_by_field_name("declarator") if node is not None else None
         )
         if (
             node is not None
-            and node.kind() == "declaration"
-            and not node.has_error()
+            and node.type == "declaration"
+            and not node.has_error
             and declarator is not None
-            and end <= declarator.start_byte()
+            and end <= declarator.start_byte
         ):
             continue
         parse_source[start:end] = source[start:end]
@@ -160,7 +160,7 @@ def _recover_declaration_annotations(
         return source, original_tree
     if parse_source != recovered_source:
         recovered_source = bytes(parse_source)
-        recovered_tree = parser.parse_bytes(recovered_source)
+        recovered_tree = parser.parse(recovered_source)
     original_functions = _function_anchors(original_tree, source)
     recovered_functions = _function_anchors(recovered_tree, recovered_source)
     if original_functions < recovered_functions:
@@ -174,16 +174,16 @@ def _declaration_annotation_spans(
 ) -> tuple[_Span, ...]:
     lexical_source = _mask_c_comments_and_literals(source)
     spans: list[_Span] = []
-    root = tree.root_node()
-    for index in range(root.child_count()):
+    root = tree.root_node
+    for index in range(root.child_count):
         node = root.child(index)
         if (
             node is None
-            or not node.has_error()
-            or node.kind() not in {"declaration", "function_definition", "ERROR"}
+            or not node.has_error
+            or node.type not in {"declaration", "function_definition", "ERROR"}
         ):
             continue
-        start, end = node.start_byte(), node.end_byte()
+        start, end = node.start_byte, node.end_byte
         brace_depth = 0
         scanned_until = start
         for match in _IDENTIFIER_CALL.finditer(lexical_source, start, end):
@@ -209,14 +209,14 @@ def _recover_macro_function_wrappers(
     source: bytes,
     original_tree: Any,
 ) -> tuple[bytes, Any, tuple[_MacroFunctionMask, ...]]:
-    if not original_tree.root_node().has_error():
+    if not original_tree.root_node.has_error:
         return source, original_tree, ()
     masks = _macro_function_masks(parser, source)
     if not masks:
         return source, original_tree, ()
 
     parse_source = _render_macro_function_masks(source, masks)
-    recovered_tree = parser.parse_bytes(parse_source)
+    recovered_tree = parser.parse(parse_source)
     recovered_anchors = _function_anchors(recovered_tree, parse_source)
     expected_anchors = {
         (mask.name_start, mask.name_end, mask.body_start) for mask in masks
@@ -345,8 +345,8 @@ def _macro_function_definitions(
 ) -> tuple[_MacroFunctionDefinition, ...]:
     lexical_source = None
     definitions: list[_MacroFunctionDefinition] = []
-    for node in _walk_nodes(tree.root_node()):
-        if node.kind() != "preproc_function_def":
+    for node in _walk_nodes(tree.root_node):
+        if node.type != "preproc_function_def":
             continue
         name_node = node.child_by_field_name("name")
         parameters_node = node.child_by_field_name("parameters")
@@ -354,15 +354,15 @@ def _macro_function_definitions(
         if name_node is None or parameters_node is None or value_node is None:
             continue
         parameters = tuple(
-            source[child.start_byte() : child.end_byte()].decode("ascii")
+            source[child.start_byte : child.end_byte].decode("ascii")
             for child in _walk_nodes(parameters_node)
-            if child.kind() == "identifier"
+            if child.type == "identifier"
         )
         if not parameters or len(parameters) != len(set(parameters)):
             continue
         if lexical_source is None:
             lexical_source = _mask_c_comments_and_literals(source)
-        value_span = (value_node.start_byte(), value_node.end_byte())
+        value_span = (value_node.start_byte, value_node.end_byte)
         parameter_indexes = {
             parameter.encode("ascii"): parameter_index
             for parameter_index, parameter in enumerate(parameters)
@@ -376,9 +376,7 @@ def _macro_function_definitions(
         )
         definitions.append(
             _MacroFunctionDefinition(
-                name=source[name_node.start_byte() : name_node.end_byte()].decode(
-                    "ascii"
-                ),
+                name=source[name_node.start_byte : name_node.end_byte].decode("ascii"),
                 parameters=parameters,
                 referenced_parameter_indexes=referenced_parameters,
                 passthrough_parameter_index=_passthrough_parameter_index(
@@ -571,19 +569,18 @@ def _probe_function_signature(
     parameters: bytes,
 ) -> bool:
     probe = declaration + b" " + name + b" " + parameters + b" {}"
-    root = parser.parse_bytes(probe).root_node()
-    if root.has_error() or root.child_count() != 1:
+    root = parser.parse(probe).root_node
+    if root.has_error or root.child_count != 1:
         return False
     function = root.child(0)
-    if function is None or function.kind() != "function_definition":
+    if function is None or function.type != "function_definition":
         return False
     declarator = function.child_by_field_name("declarator")
     body = function.child_by_field_name("body")
     if declarator is None or body is None:
         return False
     return any(
-        child.kind() == "identifier"
-        and probe[child.start_byte() : child.end_byte()] == name
+        child.type == "identifier" and probe[child.start_byte : child.end_byte] == name
         for child in _walk_nodes(declarator)
     )
 
@@ -614,26 +611,22 @@ def _render_macro_function_masks(
 
 def _function_anchors(tree: Any, source: bytes) -> set[tuple[int, int, int]]:
     anchors: set[tuple[int, int, int]] = set()
-    for node in _walk_nodes(tree.root_node()):
-        if node.kind() != "function_definition":
+    for node in _walk_nodes(tree.root_node):
+        if node.type != "function_definition":
             continue
         declarator = node.child_by_field_name("declarator")
         body = node.child_by_field_name("body")
         if declarator is None or body is None:
             continue
         name = next(
-            (
-                child
-                for child in _walk_nodes(declarator)
-                if child.kind() == "identifier"
-            ),
+            (child for child in _walk_nodes(declarator) if child.type == "identifier"),
             None,
         )
         if name is None or not _IDENTIFIER.fullmatch(
-            source[name.start_byte() : name.end_byte()]
+            source[name.start_byte : name.end_byte]
         ):
             continue
-        anchors.add((name.start_byte(), name.end_byte(), body.start_byte()))
+        anchors.add((name.start_byte, name.end_byte, body.start_byte))
     return anchors
 
 

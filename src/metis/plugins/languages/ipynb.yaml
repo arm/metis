@@ -33,19 +33,7 @@ prompts:
         - Unsafe filesystem or cloud storage access
         - Include the jupyter notebook metadata in the review to check for any security implications.
       - Do not report code quality, style, performance, or maintainability issues unless they directly impact security.
-  validation_review: |-
-    Validate the following Jupyter notebook security review.
-    You will be given:
-    SNIPPET: The relevant Jupyter notebook code snippet.
-    REVIEW: A list of potential security issues identified in the code changes.
-    Your tasks are:
-    1. Examine each item in REVIEW and verify whether it represents a genuine security issue based on the SNIPPET.
-    2. Remove issues that are false positives or are already mitigated.
-    3. Keep only issues that represent real security risks.
-    4. Improve the remaining findings by adding missing technical details or security impact where necessary.
-    5. If no valid security issues remain, respond with an empty array ([]).
   snippet_security_summary: "Summarize the security implications of these Jupyter notebook code changes."
-  attempt_fix: "Based on the issues detected in the Jupyter notebook code changes, propose a fix patch. Issues: {issues} Patch: {patch}"
   security_review_file: |-
     You are a thorough security engineer specializing in Python and Jupyter notebooks.
     Always tie every finding directly to evidence in FILE and CONTEXT.

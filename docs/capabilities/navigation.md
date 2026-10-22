@@ -15,8 +15,11 @@ Current operations:
 the codebase root, including when the input path is absolute. Native grep may
 prefix relative paths with `./`.
 
-The packaged graph grants navigation to `simple_llm_review`, `reachability`, and
-`triage`. Discovery uses it to resolve missing evidence in callers, definitions,
+Navigation uses native `grep` and `find` when they support the required options;
+missing or incompatible tools use the timeout-controlled Python fallback.
+
+The packaged graph grants navigation to `simple_llm_review` and `triage`.
+Discovery uses it to resolve missing evidence in callers, definitions,
 shared state, and lifecycle paths. Supporting evidence may come from other files;
 findings remain anchored in the assigned review scope. Reachability's generic
 fallback receives the same grant. A custom execution graph must explicitly grant
@@ -38,12 +41,15 @@ the model once for all tools that share it.
 
 Execution boundaries:
 
-- Paths must remain inside the codebase root.
+- Paths must remain inside the codebase root. Prefix literal names beginning
+  with `~` with `./` to avoid home-directory expansion.
 - Recursive searches do not follow symlinks. Direct paths may resolve symlinks
   only within the codebase root.
-- Subprocess calls use the configured timeout and returned text is clipped to
-  the configured output limit.
-- Tool failures remain visible as errors; they are not converted into evidence.
+- `.metis` state and unchanged registered reports are excluded from reads and
+  searches; edited reports remain available. Unreadable registry data fails the operation.
+- The configured timeout covers waiting for other subprocesses and traversal;
+  timed-out searches are killed and drained. Returned text is clipped to the output limit.
+- Tool failures remain visible as errors rather than empty evidence.
 - Navigation returns original source. Retrieved text does not establish that a
   branch is active in the selected compilation profile.
 - Tool use retains the configured round limit and conversation history.
@@ -62,9 +68,8 @@ When a tool-assisted patch prompt cannot fit the whole original file, it omits
 that full-file context and uses the diff and navigation instead. Finding anchors
 still resolve against the full original source.
 
-Tool-assisted discovery bypasses persisted review-answer checkpoints because
-retrieved source is not part of the packet's stable identity. It still records
-model/tool activity in the run log when workflow tracing is enabled.
+Simple review reuses checkpoints only after replaying navigation reads and verifying
+unchanged evidence. See [checkpoint compatibility](../execution-graph.md#review-checkpoints-and-resume).
 
 ## Configuration
 

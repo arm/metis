@@ -335,6 +335,33 @@ def test_interrupted_materialization_can_retry_on_same_service(tmp_path):
     assert service.load(references[0]).node_count() == 0
 
 
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("leaf_link", [False, True])
+def test_codegraph_store_confines_default_state_path(tmp_path, external, leaf_link):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    destination = (tmp_path if external else repository) / "relocated"
+    destination.mkdir()
+    target = destination / "codegraph.sqlite3"
+    state = repository / ".metis"
+    if leaf_link:
+        state.mkdir()
+        (state / "codegraph.sqlite3").symlink_to(target)
+    else:
+        state.symlink_to(destination, target_is_directory=True)
+
+    if external:
+        with pytest.raises(ValueError, match="Path escapes codebase"):
+            SQLiteCodeGraphStore(str(repository))
+        assert not list(destination.iterdir())
+    else:
+        store = SQLiteCodeGraphStore(str(repository))
+        reference = _save_graph(store)
+        assert target.is_file()
+        reopened = SQLiteCodeGraphStore(str(repository))
+        assert reopened.load(reference, codebase_path=str(repository)).node_count() == 1
+
+
 @pytest.mark.parametrize("revision", [2**63 - 1, 2**63, 2**80])
 def test_unknown_graph_revisions_handle_sqlite_integer_limits(tmp_path, revision):
     store = SQLiteCodeGraphStore(str(tmp_path))
@@ -345,6 +372,27 @@ def test_unknown_graph_revisions_handle_sqlite_integer_limits(tmp_path, revision
     with pytest.raises(ValueError, match="reference does not exist"):
         store.load(unknown, codebase_path=str(tmp_path))
     assert store.load(original, codebase_path=str(tmp_path)).node_count() == 1
+
+
+def test_existing_codegraph_store_rechecks_relocated_state(tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    store = SQLiteCodeGraphStore(str(repository))
+    reference = _save_graph(store)
+    outside = tmp_path / "outside"
+    (repository / ".metis").rename(outside)
+    (repository / ".metis").symlink_to(outside, target_is_directory=True)
+    saved = outside / "codegraph.sqlite3"
+    before = saved.read_bytes()
+
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        _save_graph(store)
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        store.load(reference, codebase_path=str(repository))
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        store.reference_for_fingerprint("stable-input", codebase_path=str(repository))
+
+    assert saved.read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -507,7 +555,7 @@ def test_graph_migration_failure_rolls_back_metadata_and_records(tmp_path, monke
         patch.setattr(
             graph_store,
             "_connect",
-            lambda path: sqlite3.connect(path, factory=InterruptedMigration),
+            lambda path, **_kwargs: sqlite3.connect(path, factory=InterruptedMigration),
         )
         with pytest.raises(RuntimeError, match="inert migration interruption"):
             SQLiteCodeGraphStore(str(tmp_path))

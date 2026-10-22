@@ -12,6 +12,7 @@ from typing import Any
 from typing import TypeGuard
 
 from metis.json_io import atomic_text_writer
+from metis.json_io import json_object_from_pairs
 from metis.sarif.triage import METIS_EVIDENCE_COVERAGE_KEY
 from metis.sarif.triage import METIS_EVIDENCE_REQUIREMENTS_KEY
 from metis.sarif.triage import METIS_FINDING_ID_KEY
@@ -26,6 +27,7 @@ from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
 from metis.sarif.triage import METIS_TRIAGE_TIMESTAMP_KEY
 from metis.sarif.triage import METIS_TRIAGE_UNRESOLVED_HOPS_KEY
 from metis.sarif.triage import METIS_TRIAGE_VALIDATION_ERRORS_KEY
+from metis.sarif.triage import TRIAGE_DECISION_SOURCES
 from metis.sarif.writer import SARIF_VERSION
 
 
@@ -72,21 +74,13 @@ def _parse_json_object(data: bytes, limits: SarifLimits) -> dict[str, Any]:
     except UnicodeDecodeError:
         raise ValueError("JSON must be valid UTF-8") from None
 
-    def object_from_pairs(pairs):
-        value = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("JSON contains a duplicate mapping key")
-            value[key] = item
-        return value
-
     def reject_constant(_value):
         raise ValueError("JSON contains a non-finite number")
 
     try:
         payload = json.loads(
             text,
-            object_pairs_hook=object_from_pairs,
+            object_pairs_hook=json_object_from_pairs,
             parse_constant=reject_constant,
         )
     except (json.JSONDecodeError, RecursionError):
@@ -393,12 +387,13 @@ def _validate_triage_properties(properties: dict[str, Any], prefix: str) -> None
             or any(not isinstance(item, str) for item in properties[key])
         ):
             raise ValueError(f"{prefix} {key} must be an array of strings")
-    if METIS_TRIAGE_DECISION_SOURCE_KEY in properties and properties[
-        METIS_TRIAGE_DECISION_SOURCE_KEY
-    ] not in ("model", "validation_failure", "policy"):
+    if (
+        METIS_TRIAGE_DECISION_SOURCE_KEY in properties
+        and properties[METIS_TRIAGE_DECISION_SOURCE_KEY] not in TRIAGE_DECISION_SOURCES
+    ):
         raise ValueError(
             f"{prefix} {METIS_TRIAGE_DECISION_SOURCE_KEY} must be "
-            "model, validation_failure, or policy"
+            f"{', '.join(TRIAGE_DECISION_SOURCES[:-1])}, or {TRIAGE_DECISION_SOURCES[-1]}"
         )
     coverage = properties.get(METIS_EVIDENCE_COVERAGE_KEY)
     if METIS_EVIDENCE_COVERAGE_KEY in properties and (

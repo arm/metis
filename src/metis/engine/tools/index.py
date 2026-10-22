@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from copy import deepcopy
-
 from langchain_core.tools import StructuredTool
 
-from metis.engine.capabilities.catalog import get_capability_contract
 from metis.engine.capabilities.index import IndexCapability
 from metis.engine.capabilities.manifest import CapabilityManifest
+
+from .manifest import manifest_model_tools
+from .manifest import model_tool_enabled
 
 
 def index_model_tools(
@@ -19,21 +19,11 @@ def index_model_tools(
     operation = _index_search_operation(manifest)
     if operation is None or not capability.supports_search():
         return ()
-    contract = get_capability_contract(manifest)
-    metadata: dict[str, object] | None = None
-    if contract:
-        metadata = {
-            "metis_contract": contract,
-            "metis_contract_max_chars": max_contract_chars,
-        }
-    return (
-        StructuredTool.from_function(
-            func=capability.search,
-            name=operation.name,
-            description=operation.description,
-            args_schema=deepcopy(operation.input_schema) or None,
-            metadata=metadata,
-        ),
+    return manifest_model_tools(
+        manifest,
+        (operation,),
+        lambda operation: capability.search,
+        max_contract_chars=max_contract_chars,
     )
 
 
@@ -42,7 +32,7 @@ def _index_search_operation(manifest: CapabilityManifest):
         return None
     for operation in manifest.operations:
         if operation.id == "index.search":
-            if operation.status == "active" and "model_tool" in operation.surfaces:
+            if model_tool_enabled(operation):
                 return operation
             return None
     return None

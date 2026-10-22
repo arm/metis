@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from langchain_core.callbacks import Callbacks
@@ -11,6 +12,44 @@ from metis.providers.base import ChatProvider
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
 from metis.utils import anthropic_token_count
+
+
+def claude_chat_model_kwargs(
+    options: Mapping[str, Any],
+    *,
+    model: Any,
+    callbacks: Any,
+    max_retries: int,
+    supports_temperature: bool,
+    reject_sampling_conflict: bool,
+    provider_name: str,
+) -> dict[str, Any]:
+    if not model:
+        raise ValueError("Missing chat model configuration")
+    params = {"model": model, "max_retries": max_retries}
+    max_tokens = options.get("max_tokens")
+    if max_tokens is not None:
+        params["max_tokens"] = int(max_tokens)
+    if reject_sampling_conflict and "top_p" in options and "temperature" in options:
+        raise ValueError(
+            f"{provider_name} chat model accepts either temperature or top_p, not both."
+        )
+    temperature = options.get("temperature")
+    if supports_temperature and temperature is not None:
+        params["temperature"] = float(temperature)
+    if callbacks is not None:
+        params["callbacks"] = callbacks
+    for optional_key in (
+        "timeout",
+        "default_request_timeout",
+        "max_retries",
+        "top_k",
+        "top_p",
+        "stop_sequences",
+    ):
+        if optional_key in options:
+            params[optional_key] = options[optional_key]
+    return params
 
 
 class AnthropicProvider(ChatProvider):
@@ -53,39 +92,16 @@ class AnthropicProvider(ChatProvider):
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
         model_name = requested_model or positional_model or self.default_model
-        if not model_name:
-            raise ValueError("Missing chat model configuration")
-
-        params: dict[str, Any] = {
-            "model": model_name,
-            "api_key": self.api_key,
-            "max_retries": self.max_retries,
-        }
-        max_tokens = kwargs.get("max_tokens")
-        if max_tokens is not None:
-            params["max_tokens"] = int(max_tokens)
-        if "top_p" in kwargs and "temperature" in kwargs:
-            raise ValueError(
-                "Anthropic chat model accepts either temperature or top_p, not both."
-            )
-        if self.supports_temperature and "top_p" not in kwargs:
-            temperature = kwargs.get("temperature")
-            if temperature is not None:
-                params["temperature"] = float(temperature)
+        params = claude_chat_model_kwargs(
+            kwargs,
+            model=model_name,
+            callbacks=callbacks,
+            max_retries=self.max_retries,
+            supports_temperature=self.supports_temperature,
+            reject_sampling_conflict=True,
+            provider_name="Anthropic",
+        )
+        params["api_key"] = self.api_key
         if self.base_url:
             params["base_url"] = self.base_url
-        if callbacks is not None:
-            params["callbacks"] = callbacks
-
-        for optional_key in (
-            "timeout",
-            "default_request_timeout",
-            "max_retries",
-            "top_k",
-            "top_p",
-            "stop_sequences",
-        ):
-            if optional_key in kwargs:
-                params[optional_key] = kwargs[optional_key]
-
         return ChatAnthropic(**cast(dict[str, Any], params))

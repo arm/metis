@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from metis.cli import entry
 from metis.usage.context import current_operation, current_scope
@@ -21,6 +22,7 @@ class _DummyEngine:
         self.usage_runtime = UsageRuntime(codebase_path)
         self.closed = False
         self.indexing = self
+        self.execution = SimpleNamespace(configuration=_kwargs["execution_config"])
 
     def usage_command(self, command_name, target=None, display_name=None):
         return self.usage_runtime.command(

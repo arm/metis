@@ -48,8 +48,8 @@ def test_codegraph_store_closes_connections(tmp_path, monkeypatch):
     connections: list[sqlite3.Connection] = []
     connect = codegraph_store._connect
 
-    def tracked_connect(location: str) -> sqlite3.Connection:
-        connection = connect(location)
+    def tracked_connect(location: str, **kwargs) -> sqlite3.Connection:
+        connection = connect(location, **kwargs)
         connections.append(connection)
         return connection
 
@@ -506,7 +506,10 @@ def test_materialize_includes_suffix_pattern_sources(tmp_path):
 
     reference = service.materialize()
 
-    assert selections == [{"include_suffixed_sources": True}] * 2
+    assert (
+        selections
+        == [{"include_suffixed_sources": True, "apply_review_filters": False}] * 2
+    )
     assert reference.failed_files == ()
 
 

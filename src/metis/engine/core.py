@@ -49,7 +49,9 @@ from .repository import EngineRepository
 from .runtime import EngineConfig
 from .runtime import EngineState
 from .stages.configuration import ExecutionConfiguration
+from .stages.review.models import REVIEW_FAILURE_CODES
 from .stages.review.models import ReviewCommand
+from .stages.triage.models import TRIAGE_FINDING_FAILED
 from .tools.index import index_model_tools
 from .tools.navigation import navigation_model_tools
 
@@ -82,7 +84,18 @@ class MetisEngine:
         runlog: RunLogSession | None = None,
         **kwargs: Any,
     ) -> None:
-        self.codebase_path = codebase_path
+        codebase_root = Path(codebase_path)
+        if str(codebase_path).startswith("~"):
+            codebase_root = codebase_root.expanduser()
+        elif str(codebase_root).startswith("~"):
+            codebase_root = codebase_root.absolute()
+        if not codebase_root.is_dir():
+            raise NotADirectoryError(
+                f"Codebase path is not a directory: {codebase_path}"
+            )
+        if ".." in codebase_root.parts:
+            codebase_root = codebase_root.resolve()
+        self.codebase_path = str(codebase_root)
         self._runlog = runlog
         self._close_lock = RLock()
         self._closed = False
@@ -279,6 +292,11 @@ class MetisEngine:
                 ReviewCommand(mode=mode, target=target),
                 callbacks=callbacks,
             )
+            if any(
+                diagnostic.code in REVIEW_FAILURE_CODES
+                for diagnostic in result.diagnostics
+            ):
+                raise ExecutionGraphError(result)
             review = _require_execution_outputs(result)["review"]
             span.end(
                 status=result.status.value,
@@ -292,6 +310,20 @@ class MetisEngine:
         include_triaged: bool | None = None,
         callbacks: dict[str, object] | None = None,
     ) -> ExecutionResult:
+        callbacks = dict(callbacks or {})
+        stage_completed = callbacks.get("stage_completed_callback")
+        if callable(stage_completed):
+
+            def publish_stage(result: ExecutionResult) -> None:
+                stage_completed(
+                    ExecutionResult(
+                        result.status,
+                        _execution_value(dict(result.outputs)),
+                        result.diagnostics,
+                    )
+                )
+
+            callbacks["stage_completed_callback"] = publish_stage
         with self._execution_span(
             "configured_graph", {"include_triaged": include_triaged}
         ) as span:
@@ -440,7 +472,7 @@ class MetisEngine:
                 if self._triage_service is None:
                     raise RuntimeError("Triage stage is not configured")
                 checkpoint_callback = self._triage_service.checkpoint_callback(
-                    checkpoint_path
+                    checkpoint_path, codebase_path=self.codebase_path
                 )
             result = self.execution.execute_triage(
                 payload,
@@ -452,6 +484,11 @@ class MetisEngine:
                     "checkpoint_callback": checkpoint_callback,
                 },
             )
+            if any(
+                diagnostic.code == TRIAGE_FINDING_FAILED
+                for diagnostic in result.diagnostics
+            ):
+                raise ExecutionGraphError(result)
             triage = _require_execution_outputs(result)["triage"]
             span.end(
                 status=result.status.value,

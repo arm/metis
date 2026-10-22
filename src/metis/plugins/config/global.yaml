@@ -13,10 +13,11 @@ general_prompts:
     directly necessary to explain another issue.
   security_review_report: |-
     3. How to Report
-        - List all identified security issues in a JSON array.
-        - Each element must strictly follow this structure:
+        - Return a JSON object with only a "reviews" key containing an array
+          of all identified security issues.
+        - Each array element must strictly follow this structure:
           [[REVIEW_SCHEMA_FIELDS]]
-        - IMPORTANT: If no identified security issues are found, return: {\"reviews\": []}
+        - IMPORTANT: If no identified security issues are found, return: {"reviews": []}
   triage_system_prompt: |-
     You triage one reported static-analysis finding against source.
     Treat the reported line as potentially inaccurate.

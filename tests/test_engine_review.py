@@ -3,17 +3,28 @@
 
 import json
 import logging
+import os
+import subprocess
+from concurrent.futures import CancelledError
+from hashlib import sha256
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from unidiff.errors import UnidiffParseError
 
 from metis.cli.review_checkpoints import review_checkpoint_callbacks
+from metis.cli.review_checkpoints import stage_checkpoint_callback
+from metis.cli.utils import save_output
+from metis.engine import ExecutionGraphError
 from metis.engine import MetisEngine
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
 from metis.engine.execution.contracts import NodeCallbacks
+from metis.engine.execution import ExecutionResult
+from metis.engine.execution import ExecutionStatus
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import ModelProviderConfigurationError
 from metis.engine.llm_runner import rendered_prompt_token_count
@@ -32,6 +43,7 @@ from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
+from metis.sarif.triage import TRIAGE_ANNOTATION_KEYS
 from metis.version import __version__ as METIS_VERSION
 
 
@@ -90,21 +102,61 @@ def test_simple_llm_review_processes_the_selected_scope(engine):
     assert service.execute_standard_review_with_outcome.call_args.args == (files,)
 
 
-def test_simple_review_stops_scheduling_after_provider_configuration_failure(
-    engine,
+@pytest.mark.parametrize("failure", ["first", "second", "cancelled"])
+def test_simple_review_stops_scheduling_and_retains_completed_results(
+    tmp_path, dummy_llm, capability_settings, failure
 ):
-    service = _simple_llm_review(engine)
-    files = tuple(f"file-{index}.c" for index in range(20))
-    calls: list[str] = []
-
-    def fail(path: str) -> None:
-        calls.append(path)
-        raise ModelProviderConfigurationError("bad certificate")
-
-    with pytest.raises(ModelProviderConfigurationError, match="bad certificate"):
-        service._review_files(files, fail, engine.execution._jobs)
-
-    assert 0 < len(calls) <= engine._config.max_workers
+    files = [tmp_path / f"file-{index}.c" for index in range(3)]
+    for path in files:
+        path.write_text("int unchecked;\n", encoding="utf-8")
+    engine = MetisEngine(
+        codebase_path=str(tmp_path),
+        llm_provider=dummy_llm,
+        max_workers=1,
+        max_token_length=20_000,
+        llama_query_model="gpt-test",
+        similarity_top_k=3,
+        capability_settings=capability_settings,
+        execution_config={
+            "inputs": {"review_request": {"mode": "code"}},
+            "stages": {
+                "review": {
+                    "nodes": {
+                        "simple_llm_review": {},
+                        "finding_dedup": {},
+                        "result": {},
+                    }
+                }
+            },
+        },
+    )
+    engine.repository.get_code_files = Mock(return_value=list(map(str, files)))
+    graph = engine._get_review_graph()
+    error = (
+        CancelledError("cancelled")
+        if failure == "cancelled"
+        else ModelProviderConfigurationError("bad certificate")
+    )
+    completed = [] if failure == "first" else [{"reviews": [{"issue": "Check input"}]}]
+    graph.review = Mock(side_effect=[*completed, error])
+    try:
+        if failure == "cancelled":
+            with pytest.raises(CancelledError):
+                engine.execute_review("code")
+        else:
+            with pytest.raises(ExecutionGraphError, match="bad certificate") as caught:
+                engine.execute_review("code")
+            if completed:
+                output = caught.value.result.outputs["review"]
+                assert [group["file"] for group in output["findings"]["reviews"]] == [
+                    files[0].name
+                ]
+                assert len(output["sarif"]["runs"][0]["results"]) == 1
+            else:
+                assert not caught.value.result.outputs
+        assert graph.review.call_count == len(completed) + 1
+    finally:
+        engine.close()
 
 
 def test_simple_review_orders_results_by_selected_file(engine):
@@ -114,7 +166,7 @@ def test_simple_review_orders_results_by_selected_file(engine):
     for path in files:
         Path(path).write_text("int value;\n", encoding="utf-8")
     graph = Mock()
-    graph.review.side_effect = lambda request: {
+    graph.review.side_effect = lambda request, **_kwargs: {
         "reviews": [{"issue": request["relative_file"]}]
     }
     service = SimpleLlmReviewService(
@@ -124,6 +176,9 @@ def test_simple_review_orders_results_by_selected_file(engine):
     )
 
     class ReverseJobs:
+        def with_cancellation(self, _cancellation):
+            return self
+
         def run(self, jobs, worker, **_kwargs):
             return [worker(job) for job in reversed(jobs)]
 
@@ -166,6 +221,7 @@ def test_simple_review_uses_profile_bytes_and_anchors_raw_source(engine) -> None
         )
     )
     graph = engine._get_review_graph(None, None)
+    graph.max_token_length = 20_000
 
     def model_response(request):
         body = request.variables["body_text"]
@@ -383,7 +439,60 @@ def test_patch_review_uses_simple_llm_review(engine):
         memory_service=None,
         review_graph=engine._get_review_graph(),
         checkpoint_session=None,
+        failures=[],
     )
+
+
+@pytest.mark.parametrize("failure_kind", ["source", "model", "configuration"])
+def test_patch_review_retains_completed_files_after_failure(
+    engine, tmp_path, monkeypatch, failure_kind
+):
+    patch = tmp_path / "changes.patch"
+    names = ("first.c", "second.c", "third.c")
+    patch.write_text(
+        "".join(
+            f"--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n-int old;\n+int active;\n"
+            for name in names
+        )
+    )
+    for name in names:
+        (Path(engine.codebase_path) / name).write_text("int active;\n")
+    graph = Mock()
+    issue = {"reviews": [{"issue": "Check active"}]}
+    if failure_kind == "source":
+        (Path(engine.codebase_path) / "second.c").write_bytes(b"\xff")
+        graph.review.return_value = issue
+    else:
+        error = (
+            ModelProviderConfigurationError
+            if failure_kind == "configuration"
+            else RuntimeError
+        )
+        graph.review.side_effect = [issue, error("review failed"), issue]
+    monkeypatch.setattr(
+        "metis.engine.nodes.simple_llm_review.service.summarize_changes",
+        lambda *args, **kwargs: "Completed summary",
+    )
+    service = SimpleLlmReviewService(
+        engine._config, engine.repository, lambda *args: graph
+    )
+
+    run = service.run_review(
+        ReviewCommand(mode="patch", target=str(patch)), jobs=engine.execution._jobs
+    )
+
+    assert run.status is ReviewStatus.INCONCLUSIVE
+    assert run.result is not None
+    expected_names = (
+        ["first.c"] if failure_kind == "configuration" else ["first.c", "third.c"]
+    )
+    assert [group.file for group in run.result.reviews] == expected_names
+    assert run.result.overall_changes == "\n\n".join(
+        "Completed summary" for _ in expected_names
+    )
+    assert len(run.diagnostics) == 1
+    assert run.diagnostics[0].code == "review.file_failed"
+    assert "second.c" in run.diagnostics[0].message
 
 
 def test_patch_review_resumes_completed_files(engine, tmp_path, monkeypatch):
@@ -678,21 +787,77 @@ class _DummyReviewGraph:
         self._review = review
         self.requests = []
 
-    def review(self, req):
+    def review(self, req, *, collect_navigation_evidence=False):
         self.requests.append(req)
         if self._review is None:
             return {"file": "test.py", "reviews": []}
         return self._review
 
 
-def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
-    (Path(engine.codebase_path) / "test.py").write_text(
+@pytest.mark.parametrize(
+    "filename", ["café.c", "tab\tname.c", "../café.c", "~sample.c", "~/name.c"]
+)
+def test_patch_review_decodes_git_quoted_paths(engine, tmp_path, filename):
+    root = Path(engine.codebase_path)
+    target = root / filename
+    before = root / "before" / target.name
+    before.parent.mkdir()
+    before.write_text("int func(void) { return 0; }\n", encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("int func(void) { return 1; }\n", encoding="utf-8")
+    completed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.quotePath=true",
+            "diff",
+            "--no-index",
+            "--",
+            str(before.relative_to(root)),
+            os.path.relpath(target, root),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 1, completed.stderr
+    patch = tmp_path / "quoted.diff"
+    patch.write_text(completed.stdout, encoding="utf-8")
+    graph = _DummyReviewGraph(None)
+    service = _simple_llm_review(engine)
+    if filename.startswith("../"):
+        with pytest.raises(ValueError, match="escapes codebase"):
+            service.review_patch(str(patch), review_graph=graph)
+        assert graph.requests == []
+        return
+
+    result = service.review_patch(str(patch), review_graph=graph)
+
+    assert result["reviews"][0]["file"] == filename
+    (request,) = graph.requests
+    assert request["file_path"] == str(target)
+    assert request["original_file"] == target.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("parent_alias", [False, True])
+def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path, parent_alias):
+    root = Path(engine.codebase_path)
+    source = root / "test.py"
+    patch_path = "test.py"
+    if parent_alias:
+        (root / "src" / "nested").mkdir(parents=True)
+        (root / "alias").symlink_to(root / "src" / "nested", target_is_directory=True)
+        source.write_text("wrong_file\n", encoding="utf-8")
+        source = root / "src" / "test.py"
+        patch_path = "alias/../test.py"
+    source.write_text(
         "print('Old')\n",
         encoding="utf-8",
     )
     patch_file = tmp_path / "change.diff"
     patch_file.write_text(
-        "--- a/test.py\n+++ b/test.py\n@@ -1,1 +1,1 @@\n-print('Old')\n+print('New')\n"
+        f"--- a/{patch_path}\n+++ b/{patch_path}\n@@ -1,1 +1,1 @@\n-print('Old')\n+print('New')\n"
     )
     review_graph = _DummyReviewGraph(
         {"file": "test.py", "reviews": [{"issue": "Issue"}]}
@@ -711,8 +876,9 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
 
     result = _simple_llm_review(engine).review_patch(str(patch_file))
     assert "reviews" in result and isinstance(result["reviews"], list)
-    assert any(r.get("file") == "test.py" for r in result["reviews"])
+    assert result["reviews"][0]["file"] == source.relative_to(root).as_posix()
     (request,) = review_graph.requests
+    assert request["file_path"] == str(source)
     assert request["mode"] == "patch"
     assert request["original_file"] == "print('Old')\n"
     assert request["snippet"] == patch_file.read_text()
@@ -721,13 +887,45 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path):
     with pytest.raises(ModelInputLimitError, match="input too large"):
         _simple_llm_review(engine).review_patch(str(patch_file))
 
+    review_graph.review.side_effect = RuntimeError("invalid review")
+    with pytest.raises(RuntimeError, match="invalid review"):
+        _simple_llm_review(engine).review_patch(str(patch_file))
 
-def test_review_patch_handles_parse_error(engine, tmp_path):
+    review_graph.review.side_effect = CancelledError()
+    with pytest.raises(CancelledError):
+        _simple_llm_review(engine).run_review(
+            ReviewCommand(mode="patch", target=str(patch_file)),
+            jobs=engine.execution._jobs,
+        )
+
+    source.write_bytes(b"\xff")
+    with pytest.raises(UnicodeDecodeError):
+        _simple_llm_review(engine).review_patch(str(patch_file))
+
+    failed = _simple_llm_review(engine).run_review(
+        ReviewCommand(mode="patch", target=str(patch_file)),
+        jobs=engine.execution._jobs,
+    )
+    assert failed.status is ReviewStatus.FAILED
+    assert failed.result is None
+    assert failed.diagnostics[0].code == "review.file_failed"
+
+
+@pytest.mark.parametrize(
+    "patch_text",
+    [
+        "INVALID PATCH FORMAT",
+        "--- a/test.c\n+++ b/test.c\n@@ -1 +1 @@\n-int old;\n",
+    ],
+)
+def test_review_patch_rejects_invalid_patch(engine, tmp_path, patch_text):
     bad_patch_file = tmp_path / "bad.diff"
-    bad_patch_file.write_text("INVALID PATCH FORMAT")
-    result = _simple_llm_review(engine).review_patch(str(bad_patch_file))
-    assert "reviews" in result
-    assert result["reviews"] == []
+    bad_patch_file.write_text(patch_text, encoding="utf-8")
+
+    with pytest.raises(
+        (ValueError, UnidiffParseError), match="(no file changes|Hunk is shorter)"
+    ):
+        _simple_llm_review(engine).review_patch(str(bad_patch_file))
 
 
 def test_simple_review_receives_granted_navigation(engine):
@@ -784,3 +982,380 @@ def test_simple_review_receives_granted_navigation(engine):
     )
     assert run.status is ReviewStatus.SUCCEEDED
     assert graph._prompt_runner.invoke.call_count > 1
+
+
+@pytest.mark.parametrize(
+    ("operation", "mode", "relocated_state"),
+    [
+        ("sed", "file", False),
+        ("grep", "file", True),
+        ("find_name", "file", False),
+        ("grep", "patch", False),
+        ("find_name", "file", True),
+    ],
+)
+def test_navigation_review_replays_evidence_before_resume(
+    engine, tmp_path, monkeypatch, operation, mode, relocated_state
+):
+    target = Path(engine.codebase_path) / "caller.c"
+    target.write_text("void caller(void) { guard(); }\n", encoding="utf-8")
+    helper = Path(engine.codebase_path) / "ignored" / "guard.c"
+    helper.parent.mkdir()
+    helper.write_text("void guard(void) {}\n", encoding="utf-8")
+    (Path(engine.codebase_path) / ".gitignore").write_text("ignored/\n")
+    if relocated_state:
+        state_path = Path(engine.codebase_path) / "private" / "cache"
+        state_path.mkdir(parents=True)
+        (Path(engine.codebase_path) / ".metis").symlink_to(
+            state_path, target_is_directory=True
+        )
+        (Path(engine.codebase_path) / "state-alias").symlink_to(
+            state_path, target_is_directory=True
+        )
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+    arguments = {
+        "sed": {"path": "ignored/guard.c", "start_line": 1, "end_line": 1},
+        "grep": {"pattern": "guard", "path": "."},
+        "find_name": {"name": "guard.c"},
+    }[operation]
+
+    def respond(request):
+        tools = {tool.name: tool for tool in request.model_tools}
+        output = str(tools[operation].invoke(arguments))
+        request.on_tool_result(operation, arguments, output)
+        return [{"issue": "guard needs checking", "code_snippet": "guard();"}]
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    replay = Mock(wraps=graph.checkpoint_evidence_valid)
+    monkeypatch.setattr(graph, "checkpoint_evidence_valid", replay)
+    monkeypatch.setattr(
+        "metis.engine.nodes.simple_llm_review.service.summarize_changes",
+        Mock(return_value="guard summary"),
+    )
+    callbacks = review_checkpoint_callbacks(
+        codebase_path=engine.codebase_path, enabled=True
+    )
+    node_callbacks = NodeCallbacks(
+        checkpoint=callbacks["review_checkpoint_callback"],
+        resume=callbacks["review_resume_callback"],
+    )
+    command_target = target
+    if mode == "patch":
+        command_target = tmp_path / "caller.patch"
+        command_target.write_text(
+            "--- a/caller.c\n+++ b/caller.c\n@@ -1 +1 @@\n"
+            "-void caller(void) {}\n+void caller(void) { guard(); }\n",
+            encoding="utf-8",
+        )
+
+    def review():
+        run = _simple_llm_review(engine).run_review(
+            ReviewCommand(mode=mode, target=str(command_target)),
+            jobs=engine.execution._jobs,
+            navigation=navigation,
+            checkpoint_session=ReviewCheckpointSession(
+                "simple_llm_review", node_callbacks
+            ),
+        )
+        stage_checkpoint_callback(codebase_path=engine.codebase_path)(
+            ExecutionResult(
+                ExecutionStatus.OK,
+                {"review": {"findings": run.result.model_dump(mode="json")}},
+            )
+        )
+        if operation == "grep":
+            root = Path(engine.codebase_path)
+            save_output(
+                [root / "review.json", root / "review.sarif"],
+                run.result.model_dump(mode="json"),
+                quiet=True,
+                codebase_path=root,
+            )
+        return run
+
+    first = review()
+    second = review()
+    assert first.status is second.status is ReviewStatus.SUCCEEDED
+    assert first.result == second.result
+    for run in (first, second):
+        assert all(
+            "navigation_evidence" not in group
+            for group in run.result.model_dump()["reviews"]
+        )
+    graph._prompt_runner.invoke.assert_called_once()
+
+    if operation == "find_name":
+        added = helper.parent / "new" / "guard.c"
+        added.parent.mkdir()
+        added.write_text("void another_guard(void) {}\n", encoding="utf-8")
+    else:
+        helper.write_text("void guard(void) { abort(); }\n", encoding="utf-8")
+    replay.reset_mock()
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 2
+    replay.assert_called_once()
+
+    helper.unlink()
+    if operation == "sed":
+        graph._prompt_runner.invoke.side_effect = lambda request: []
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 3
+
+
+@pytest.mark.parametrize("mode", ["file", "patch"])
+@pytest.mark.parametrize("invalid_review", [{}, {"reviews": None}, {"reviews": ""}])
+def test_review_resume_requires_explicit_review_collection(
+    engine, mode, invalid_review
+):
+    target = Path(engine.codebase_path) / "caller.c"
+    target.write_text("int caller;\n")
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+    graph._prompt_runner.invoke = Mock(return_value=[])
+    if mode == "patch":
+        target = target.with_suffix(".patch")
+        target.write_text(
+            "--- a/caller.c\n+++ b/caller.c\n@@ -1 +1 @@\n-int old;\n+int caller;\n"
+        )
+    records = {}
+    callbacks = NodeCallbacks(
+        checkpoint=lambda payload, *_: records.update(
+            {payload["key"]: payload["record"]}
+        ),
+        resume=lambda _: records,
+    )
+
+    def review():
+        return _simple_llm_review(engine).run_review(
+            ReviewCommand(mode=mode, target=str(target)),
+            jobs=engine.execution._jobs,
+            navigation=navigation,
+            checkpoint_session=ReviewCheckpointSession("simple_llm_review", callbacks),
+        )
+
+    assert review().status is ReviewStatus.SUCCEEDED
+    record = next(iter(records.values()))
+    if mode == "file":
+        record.pop("reviews")
+        record.update(invalid_review)
+    else:
+        record["review"] = invalid_review
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 2
+
+
+@pytest.mark.parametrize("mode", ["file", "patch"])
+def test_simple_review_checkpoint_cannot_mark_discovery_triaged(engine, mode):
+    target = Path(engine.codebase_path) / "caller.c"
+    target.write_text("int caller;\n")
+    graph = engine._get_review_graph()
+    graph.max_token_length = 20_000
+    graph._prompt_runner.invoke = Mock(return_value=[{"issue": "Check caller"}])
+    if mode == "patch":
+        target = target.with_suffix(".patch")
+        target.write_text(
+            "--- a/caller.c\n+++ b/caller.c\n@@ -1 +1 @@\n-int old;\n+int caller;\n"
+        )
+    records = {}
+    callbacks = NodeCallbacks(
+        checkpoint=lambda payload, *_: records.update(
+            {payload["key"]: payload["record"]}
+        ),
+        resume=lambda _: records,
+    )
+
+    def review():
+        return _simple_llm_review(engine).run_review(
+            ReviewCommand(mode=mode, target=str(target)),
+            jobs=engine.execution._jobs,
+            checkpoint_session=ReviewCheckpointSession("simple_llm_review", callbacks),
+        )
+
+    assert review().status is ReviewStatus.SUCCEEDED
+    record = next(iter(records.values()))
+    review_record = record if mode == "file" else record["review"]
+    review_record["reviews"][0].update({key: True for key in TRIAGE_ANNOTATION_KEYS})
+    review_record["reviews"][0]["customEvidence"] = "preserved"
+
+    run = review()
+
+    graph._prompt_runner.invoke.assert_called_once()
+    finding = run.result.reviews[0].reviews[0].model_dump()
+    assert not TRIAGE_ANNOTATION_KEYS.intersection(finding)
+    assert finding["customEvidence"] == "preserved"
+
+
+@pytest.mark.parametrize("mode", ("file", "patch"))
+@pytest.mark.parametrize("case", ("disabled", "complete", "overflow", "tool_error"))
+def test_navigation_checkpoints_bound_evidence_across_chunks(
+    engine, tmp_path, monkeypatch, mode, case
+):
+    target = Path(engine.codebase_path) / "caller.c"
+    source = "int first;\nint second;\nint third;\n"
+    target.write_text(source, encoding="utf-8")
+    helper = target.with_suffix(".txt")
+    helper.write_text("supporting evidence\n", encoding="utf-8")
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+    monkeypatch.setattr(
+        "metis.engine.nodes.simple_llm_review.graph._MAX_CHECKPOINT_TOOL_OBSERVATIONS",
+        2,
+    )
+    chunks = [(line, index) for index, line in enumerate(source.splitlines(True), 1)]
+    monkeypatch.setattr(graph, "_chunks", lambda _snippet: chunks)
+    calls = []
+    arguments = {"path": helper.name}
+
+    def respond(request):
+        chunk = len(calls) % len(chunks)
+        calls.append(request)
+        tool = next(tool for tool in request.model_tools if tool.name == "cat")
+        content = str(tool.invoke(arguments))
+        disabled = (
+            case == "disabled"
+            or (case == "overflow" and chunk == 2)
+            or (case == "tool_error" and chunk > 0)
+        )
+        if disabled:
+            assert request.on_tool_result is request.on_tool_error is None
+        elif case == "tool_error":
+            request.on_tool_error()
+        elif chunk < 2:
+            request.on_tool_result("cat", arguments, content)
+            if case == "overflow" and chunk == 1:
+                request.on_tool_result("cat", arguments, content)
+        return []
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    session = (
+        None
+        if case == "disabled"
+        else ReviewCheckpointSession("simple_llm_review", NodeCallbacks())
+    )
+    if mode == "patch":
+        target = tmp_path / "caller.patch"
+        target.write_text(
+            "--- a/caller.c\n+++ b/caller.c\n@@ -1 +1,3 @@\n-int before;\n"
+            + "".join(f"+{line}" for line in source.splitlines(True)),
+            encoding="utf-8",
+        )
+    for _ in range(2):
+        run = _simple_llm_review(engine).run_review(
+            ReviewCommand(mode=mode, target=str(target)),
+            jobs=engine.execution._jobs,
+            navigation=navigation,
+            checkpoint_session=session,
+        )
+        assert run.status is ReviewStatus.SUCCEEDED
+        if session is not None:
+            assert session.has_records == (case == "complete")
+    assert len(calls) == len(chunks) * (1 if case == "complete" else 2)
+
+
+def test_navigation_checkpoint_validates_records_and_propagates_cancel(
+    engine, monkeypatch
+):
+    target = Path(engine.codebase_path) / "helper.c"
+    target.write_text("int helper;\n", encoding="utf-8")
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    observation = {
+        "name": "sed",
+        "arguments": {"path": "helper.c", "start_line": 1, "end_line": 1},
+        "output_sha256": sha256(navigation.sed("helper.c", 1, 1).encode()).hexdigest(),
+    }
+    assert graph.checkpoint_evidence_valid({"navigation_evidence": [observation]})
+    resolve_path = Mock(wraps=navigation._resolve_path)
+    monkeypatch.setattr(navigation, "_resolve_path", resolve_path)
+    for evidence in (
+        None,
+        [None],
+        [{}],
+        [{**observation, "name": "index_search"}],
+        [observation] * 1025,
+        [{**observation, "output_sha256": "z" * 64}],
+        [{**observation, "output_sha256": "0" * 63}],
+    ):
+        assert not graph.checkpoint_evidence_valid({"navigation_evidence": evidence})
+    resolve_path.assert_not_called()
+    for arguments in (
+        {"path": "../outside", "start_line": 1, "end_line": 1},
+        {"path": "helper.c", "start_line": "1", "end_line": 1},
+    ):
+        assert not graph.checkpoint_evidence_valid(
+            {"navigation_evidence": [{**observation, "arguments": arguments}]}
+        )
+    monkeypatch.setattr(navigation, "_resolve_path", Mock(side_effect=CancelledError()))
+    with pytest.raises(CancelledError):
+        graph.checkpoint_evidence_valid({"navigation_evidence": [observation]})
+
+
+def test_navigation_checkpoint_key_tracks_tool_configuration(engine):
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    request = {
+        "file_path": str(Path(engine.codebase_path) / "caller.c"),
+        "snippet": "int caller;",
+        "language_prompts": {"security_review_file": "Review."},
+    }
+    original = graph.checkpoint_key(request)
+    assert original is not None
+    graph.model_tool_max_rounds += 1
+    assert graph.checkpoint_key(request) != original
+    graph.model_tool_max_rounds -= 1
+    navigation.max_chars += 1
+    assert graph.checkpoint_key(request) != original
+    navigation.max_chars -= 1
+    graph.model_tools[0].metadata["metis_contract"] += "Changed rule."
+    assert graph.checkpoint_key(request) != original
+    graph.model_tools += (Mock(name="index_search"),)
+    assert graph.checkpoint_key(request) is None
+
+
+def test_parallel_navigation_checkpoints_keep_each_files_evidence(engine):
+    codebase = Path(engine.codebase_path)
+    targets = tuple(codebase / name for name in ("first.c", "second.c"))
+    for target in targets:
+        target.write_text(f"int {target.stem};\n", encoding="utf-8")
+        target.with_suffix(".txt").write_text(f"context for {target.stem}\n")
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+    barrier = Barrier(2, timeout=5)
+    synchronize = True
+
+    def respond(request):
+        body = request.variables["body_text"]
+        filename = "first.txt" if "int first;" in body else "second.txt"
+        arguments = {"path": filename}
+        tool = next(tool for tool in request.model_tools if tool.name == "cat")
+        if synchronize:
+            barrier.wait()
+        request.on_tool_result("cat", arguments, str(tool.invoke(arguments)))
+        if synchronize:
+            barrier.wait()
+        return []
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    session = ReviewCheckpointSession("simple_llm_review", NodeCallbacks())
+
+    def review():
+        return _simple_llm_review(engine).run_files(
+            tuple(map(str, targets)),
+            jobs=engine.execution._jobs,
+            navigation=navigation,
+            checkpoint_session=session,
+        )
+
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 2
+    synchronize = False
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 2
+    (codebase / "first.txt").write_text("changed helper\n")
+    assert review().status is ReviewStatus.SUCCEEDED
+    assert graph._prompt_runner.invoke.call_count == 3

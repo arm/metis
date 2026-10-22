@@ -7,17 +7,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import fields
-from datetime import datetime
-from datetime import timezone
 from typing import Any
+
+from metis.utils import utc_now_iso as utc_now_iso
 
 from .base import Namespace
 
 _STORE_METADATA_FIELDS = frozenset({"namespace", "key", "created_at"})
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass(slots=True)

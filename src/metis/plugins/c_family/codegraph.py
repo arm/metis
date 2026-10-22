@@ -66,7 +66,7 @@ class ParsedFileGraph:
 
 class CFamilyCodeGraphProvider:
     __metis_cache_identity__ = (
-        "metis.plugins.c_family.codegraph:CFamilyCodeGraphProvider:3"
+        "metis.plugins.c_family.codegraph:CFamilyCodeGraphProvider:4"
     )
 
     def __init__(self, context: CodeGraphProviderContext) -> None:
@@ -203,18 +203,14 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 
         source = parsed.parse_source
-        root = parsed.tree.root_node()
+        root = parsed.tree.root_node
         root_nodes = tuple(self._iter_nodes(root))
         diagnostics: list[CodeGraphDiagnostic] = []
-        diagnostic_root = parsed.diagnostic_tree.root_node()
-        if diagnostic_root.has_error():
+        diagnostic_root = parsed.diagnostic_tree.root_node
+        if diagnostic_root.has_error:
             diagnostic_nodes = tuple(self._iter_nodes(diagnostic_root))
             syntax_error = next(
-                (
-                    node
-                    for node in diagnostic_nodes
-                    if node.is_error() or node.is_missing()
-                ),
+                (node for node in diagnostic_nodes if node.is_error or node.is_missing),
                 diagnostic_root,
             )
             diagnostics.append(
@@ -228,8 +224,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     code="codegraph.partial_parse",
                     phase="parse",
                     line=_node_line(syntax_error),
-                    start_byte=int(syntax_error.start_byte()),
-                    end_byte=int(syntax_error.end_byte()),
+                    start_byte=int(syntax_error.start_byte),
+                    end_byte=int(syntax_error.end_byte),
                     partial_output=True,
                 )
             )
@@ -355,8 +351,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 calls=list(dict.fromkeys(call.symbol for call in call_sites)),
                 references=list(references),
                 end_line=_node_end_line(node),
-                start_byte=int(node.start_byte()),
-                end_byte=int(node.end_byte()),
+                start_byte=int(node.start_byte),
+                end_byte=int(node.end_byte),
                 is_public_entrypoint=is_public_entrypoint,
                 entrypoint_reason=(
                     "non-static function definition" if is_public_entrypoint else ""
@@ -408,7 +404,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     macro_function_mask=(
                         None
                         if body is None or macro_masks_by_body is None
-                        else macro_masks_by_body.get(int(body.start_byte()))
+                        else macro_masks_by_body.get(int(body.start_byte))
                     ),
                 )
             )
@@ -474,7 +470,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         root_declarator = _node_child_by_field_name(function_node, "declarator")
         declared_name = _declarator_name_node(root_declarator)
         function_declarator = (
-            declared_name.parent() if declared_name is not None else None
+            declared_name.parent if declared_name is not None else None
         )
         while (
             function_declarator is not None and function_declarator is not function_node
@@ -485,7 +481,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     "parameters",
                 )
                 break
-            function_declarator = function_declarator.parent()
+            function_declarator = function_declarator.parent
         references = [
             reference
             for node in scope_nodes
@@ -514,9 +510,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 bindings.append(
                     ValueBinding(
                         name=_node_text(name_node, source).strip(),
-                        declaration_byte=int(name_node.start_byte()),
-                        scope_start_byte=int(scope.start_byte()),
-                        scope_end_byte=int(scope.end_byte()),
+                        declaration_byte=int(name_node.start_byte),
+                        scope_start_byte=int(scope.start_byte),
+                        scope_end_byte=int(scope.end_byte),
                         targets=list(binding_targets) if binding_targets else None,
                     )
                 )
@@ -532,25 +528,25 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     "optional_parameter_declaration",
                     "parameter_declaration",
                 }
-                parameter_list = node.parent() if is_parameter else None
+                parameter_list = node.parent if is_parameter else None
                 owns_function_parameter = (
                     is_parameter
                     and function_parameters is not None
                     and parameter_list is not None
-                    and int(parameter_list.start_byte())
-                    == int(function_parameters.start_byte())
-                    and int(parameter_list.end_byte())
-                    == int(function_parameters.end_byte())
+                    and int(parameter_list.start_byte)
+                    == int(function_parameters.start_byte)
+                    and int(parameter_list.end_byte)
+                    == int(function_parameters.end_byte)
                 )
                 owns_catch_parameter = (
                     is_parameter
                     and parameter_list is not None
-                    and _node_kind(parameter_list.parent()) == "catch_clause"
+                    and _node_kind(parameter_list.parent) == "catch_clause"
                 )
                 owns_lambda_parameter = (
                     is_parameter
                     and parameter_list is not None
-                    and _node_kind(parameter_list.parent()) == "lambda_declarator"
+                    and _node_kind(parameter_list.parent) == "lambda_declarator"
                 )
                 if is_parameter and (
                     not owns_function_parameter
@@ -558,7 +554,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     and not owns_lambda_parameter
                 ):
                     continue
-                if node_kind == "init_declarator" and _node_kind(node.parent()) == (
+                if node_kind == "init_declarator" and _node_kind(node.parent) == (
                     "declaration"
                 ):
                     continue
@@ -601,9 +597,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     bindings.append(
                         ValueBinding(
                             name=_node_text(name_node, source).strip(),
-                            declaration_byte=int(name_node.start_byte()),
-                            scope_start_byte=int(scope.start_byte()),
-                            scope_end_byte=int(scope.end_byte()),
+                            declaration_byte=int(name_node.start_byte),
+                            scope_start_byte=int(scope.start_byte),
+                            scope_end_byte=int(scope.end_byte),
                             targets=(
                                 list(binding_targets) if is_pointer_binding else None
                             ),
@@ -620,7 +616,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 binding = _visible_value_binding(
                     tuple(bindings),
                     name=_node_text(left, source).strip(),
-                    at_byte=int(node.start_byte()),
+                    at_byte=int(node.start_byte),
                 )
                 is_pointer_binding = binding is not None and binding.targets is not None
                 binding_targets = _function_value_references(
@@ -661,9 +657,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         for node in root_nodes:
             if _node_kind(node) != "declaration":
                 continue
-            parent = node.parent()
+            parent = node.parent
             while parent is not None and _node_kind(parent) not in local_scope_kinds:
-                parent = parent.parent()
+                parent = parent.parent
             if parent is not None:
                 continue
             lexical_scope = _lexical_scope(node, source)
@@ -694,7 +690,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     )
                 for visible_name in visible_names:
                     declarations.setdefault((rel_path, visible_name), []).append(
-                        int(name_node.start_byte())
+                        int(name_node.start_byte)
                     )
         return declarations
 
@@ -717,7 +713,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         for node in root_nodes or self._iter_nodes(root):
             if _node_kind(node) != "init_declarator":
                 continue
-            parent = node.parent()
+            parent = node.parent
             while parent is not None and _node_kind(parent) not in {
                 "class_specifier",
                 "compound_statement",
@@ -727,7 +723,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 "union_specifier",
                 "ERROR",
             }:
-                parent = parent.parent()
+                parent = parent.parent
             if parent is not None:
                 continue
             references = self._global_symbol_references(node, source)
@@ -799,8 +795,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         references: list[SymbolReference] = []
         covered_ranges: list[tuple[int, int]] = []
         for candidate in self._iter_nodes(value):
-            start_byte = int(candidate.start_byte())
-            end_byte = int(candidate.end_byte())
+            start_byte = int(candidate.start_byte)
+            end_byte = int(candidate.end_byte)
             if any(
                 start_byte >= covered_start and end_byte <= covered_end
                 for covered_start, covered_end in covered_ranges
@@ -849,7 +845,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             return True
         if "static" not in self._declaration_words(node, source):
             return False
-        parent = node.parent() if node is not None else None
+        parent = node.parent if node is not None else None
         while parent is not None:
             if _node_kind(parent) in {
                 "class_specifier",
@@ -857,7 +853,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 "union_specifier",
             }:
                 return False
-            parent = parent.parent()
+            parent = parent.parent
         return True
 
     def _is_typedef(self, node, source: bytes) -> bool:
@@ -870,8 +866,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     def _declaration_prefix(self, node, source: bytes) -> str:
         declarator = _node_child_by_field_name(node, "declarator")
         if declarator is not None:
-            start = int(node.start_byte())
-            end = int(declarator.start_byte())
+            start = int(node.start_byte)
+            end = int(declarator.start_byte)
             if end > start:
                 return source[start:end].decode("utf-8", errors="ignore")
         text = _node_text(node, source)
@@ -1069,10 +1065,10 @@ def _declaration_declarators(node: Any) -> tuple[Any, ...]:
 
     declarators: list[Any] = []
     expecting_declarator = False
-    first_start_byte = int(first_declarator.start_byte())
+    first_start_byte = int(first_declarator.start_byte)
     for child in _node_children(node):
         child_kind = _node_kind(child)
-        if int(child.start_byte()) == first_start_byte:
+        if int(child.start_byte) == first_start_byte:
             declarators.append(child)
             continue
         if not declarators:
@@ -1102,7 +1098,7 @@ def _binding_scope(candidate: Any, function_node: Any) -> Any:
             "while_statement",
         }:
             return current
-        current = current.parent()
+        current = current.parent
     return _node_child_by_field_name(function_node, "body") or function_node
 
 
@@ -1114,7 +1110,7 @@ def _value_declaration_kind(
     name_node = _declarator_name_node(declarator)
     if name_node is None:
         return "unnamed"
-    current = name_node.parent()
+    current = name_node.parent
     pointer_depth = 0
     while current is not None:
         current_kind = _node_kind(current)
@@ -1131,7 +1127,7 @@ def _value_declaration_kind(
             "parameter_declaration",
         }:
             return "value"
-        current = current.parent()
+        current = current.parent
     return "value"
 
 
@@ -1198,8 +1194,8 @@ def _symbol_reference_from_expression(
     return SymbolReference(
         symbol=symbol,
         line=_node_line(current),
-        start_byte=int(current.start_byte()),
-        end_byte=int(current.end_byte()),
+        start_byte=int(current.start_byte),
+        end_byte=int(current.end_byte),
     )
 
 
@@ -1220,11 +1216,11 @@ def _has_parse_error_between_declarator_and_body(
 ) -> bool:
     if declarator is None or body is None:
         return False
-    declarator_end = int(declarator.end_byte())
-    body_start = int(body.start_byte())
+    declarator_end = int(declarator.end_byte)
+    body_start = int(body.start_byte)
     return any(
-        child.is_error()
-        and declarator_end <= int(child.start_byte())
-        and int(child.end_byte()) <= body_start
+        child.is_error
+        and declarator_end <= int(child.start_byte)
+        and int(child.end_byte) <= body_start
         for child in _node_children(function_node)
     )

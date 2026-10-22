@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -20,6 +21,7 @@ from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import FunctionNode
 from metis.engine.codegraph import GlobalConstruct
+from metis.utils import resolve_path_within_root
 
 _STORE_SCHEMA_VERSION = 2
 _FUNCTION_NODE = TypeAdapter(FunctionNode)
@@ -35,8 +37,9 @@ class StoredCodeGraph:
 
 class SQLiteCodeGraphStore:
     def __init__(self, codebase_path: str) -> None:
-        self.location = os.path.abspath(
-            os.path.join(codebase_path, ".metis", "codegraph.sqlite3")
+        self._root = resolve_path_within_root(codebase_path, ".")
+        self.location = str(
+            resolve_path_within_root(self._root, ".metis/codegraph.sqlite3")
         )
         self._lock = threading.RLock()
         self._initialize()
@@ -49,7 +52,7 @@ class SQLiteCodeGraphStore:
     ) -> CodeGraphReference | None:
         with self._lock:
             try:
-                with closing(_connect(self.location)) as connection:
+                with closing(_connect(self.location, root=self._root)) as connection:
                     for row in connection.execute(
                         """
                         SELECT revision
@@ -98,7 +101,7 @@ class SQLiteCodeGraphStore:
         content_hash = _records_hash(records)
         with self._lock:
             try:
-                with closing(_connect(self.location)) as connection:
+                with closing(_connect(self.location, root=self._root)) as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     cursor = connection.execute(
                         """
@@ -149,7 +152,7 @@ class SQLiteCodeGraphStore:
     ) -> CodeGraph:
         with self._lock:
             try:
-                with closing(_connect(self.location)) as connection:
+                with closing(_connect(self.location, root=self._root)) as connection:
                     stored = _read_stored_graph(
                         connection,
                         codebase_path=codebase_path,
@@ -167,7 +170,7 @@ class SQLiteCodeGraphStore:
         directory = os.path.dirname(self.location)
         try:
             os.makedirs(directory, exist_ok=True)
-            with closing(_connect(self.location)) as connection:
+            with closing(_connect(self.location, root=self._root)) as connection:
                 connection.execute("PRAGMA foreign_keys = OFF")
                 with connection:
                     connection.execute("BEGIN IMMEDIATE")
@@ -436,7 +439,9 @@ def _retain_graph_revisions(connection: sqlite3.Connection) -> None:
     )
 
 
-def _connect(location: str) -> sqlite3.Connection:
+def _connect(location: str, *, root: Path | None = None) -> sqlite3.Connection:
+    if root is not None:
+        location = str(resolve_path_within_root(root, location))
     connection = sqlite3.connect(location)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection

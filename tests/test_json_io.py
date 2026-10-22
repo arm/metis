@@ -134,6 +134,35 @@ def test_atomic_text_writer_supports_valid_long_basenames(tmp_path):
     assert list(tmp_path.iterdir()) == [target]
 
 
+def test_atomic_text_writer_resolves_parent_without_following_output_symlink(tmp_path):
+    parent = tmp_path / "reports"
+    (parent / "nested").mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent / "nested", target_is_directory=True)
+    protected = tmp_path / "protected.txt"
+    protected.write_text("untouched", encoding="utf-8")
+    target = parent / "report.txt"
+    target.symlink_to(protected)
+
+    with atomic_text_writer(alias / ".." / "report.txt") as handle:
+        handle.write("replacement")
+
+    assert target.read_text() == "replacement"
+    assert not target.is_symlink()
+    assert protected.read_text() == "untouched"
+    assert set(parent.iterdir()) == {parent / "nested", target}
+
+
+@pytest.mark.parametrize("ancestor", ["missing", "file"])
+def test_atomic_text_writer_rejects_invalid_parent_components(tmp_path, ancestor):
+    (tmp_path / "file").write_text("not a directory", encoding="utf-8")
+    target = tmp_path / "report.json"
+    target.write_text("previous", encoding="utf-8")
+    with pytest.raises(OSError):
+        write_json_atomic(tmp_path / ancestor / ".." / target.name, {}, indent=2)
+    assert target.read_text() == "previous"
+
+
 def test_atomic_text_writer_cleans_up_after_interruption(tmp_path):
     target = tmp_path / "report.txt"
     target.write_text("previous", encoding="utf-8")

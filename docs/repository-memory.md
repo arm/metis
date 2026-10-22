@@ -162,11 +162,9 @@ configuration's `metis_engine.threat_model.source_patterns` are collected and
 stored as authoritative project data. The packaged configuration includes
 generic patterns that match names such as `SECURITY.md` and `THREAT_MODEL.md`;
 those names are configuration defaults, not an additional implicit discovery
-path.
+path. Only matching files not excluded by `.metisignore` are collected.
 
-Metis does not infer threat context from arbitrary repository prose, source-code
-shape, or git history in this path. If automation needs a large set of files,
-pass those files or globs explicitly so the source set is deterministic.
+Select authoritative files or globs explicitly for a deterministic source set.
 
 Authority is not a confidence score. It tells Metis how strongly a record may
 affect analysis:
@@ -226,6 +224,10 @@ repository context:
    explicit policy and caller contracts from the source files.
 4. Build the vector index when `initialize.nodes` contains `index`.
 
+Successful snapshots, including empty ones, are reused across restarts while their
+inputs and processing configuration remain unchanged. Failed distillation is
+retried on the next initialization.
+
 Memory is a capability rather than a mandatory edge between every node. A node
 uses it only when its contract declares or its existing service owns that
 dependency. Indexing is a separate initialization child and is not required
@@ -237,6 +239,8 @@ Metis splits each threat-model document into bounded evidence batches and asks
 the configured LLM for structured claims. LangChain validates a structured
 response when the provider supports it and falls back to parsing JSON text
 otherwise.
+Prompts must fit `max_token_length`, excluding provider-specific framing. If even
+one source fragment cannot fit, initialization fails without replacing memory.
 
 Deduplication happens in two stages:
 
@@ -248,10 +252,10 @@ Deduplication happens in two stages:
 
 If semantic reduction fails validation, omits source indexes, or returns no
 usable claims, Metis keeps all deterministically deduplicated input claims.
-If source distillation returns no valid response after retries, Metis preserves
-the source text in its authoritative record and continues without compiled
-claims. Provider exceptions and source read failures still abort initialization,
-so an incomplete snapshot does not replace existing repository memory.
+Over-budget reduction also keeps the input claims. Exhausted distillation retries
+retain source excerpts without compiled scope clauses. Provider, discovery, and
+read errors abort initialization. Replacement is atomic; failed initialization or
+writes preserve previous memory.
 
 ## Configuration
 
@@ -282,11 +286,14 @@ metis_engine:
       max_commits: 500
 ```
 
-Use `--config PATH` to select a configuration with a different threat-model
-source set. Enabling `history` distills recent commit messages and changed paths
-into short advisory lessons. History-derived records cannot create binding scope
-or automatically invalidate findings. Metis stores every unique lesson with
-valid commit provenance rather than applying a fixed record-count cap.
+Use `--config PATH` to select a different threat-model source set. Metis distills
+the matching documents into memory and refreshes that context when inputs change.
+If no documents exist, it does not generate a threat model from source code.
+
+Opt-in `history` distills commit messages and changed paths into advisory lessons;
+it requires Git and a readable history with at least one commit. Lessons cannot
+create binding scope or invalidate findings. Git errors, invalid provenance, or
+distillation failures abort initialization and preserve the previous snapshot.
 
 ## Review And Triage
 
@@ -299,6 +306,10 @@ An explicit binding out-of-scope policy can mark a finding invalid and store the
 applied policy in the SARIF result. Caller contracts and integration-risk
 clauses guide semantic review and triage instead of automatically invalidating
 a finding.
+
+`applies_to` uses repository-relative paths and globs; `repository` means global
+scope. Directories include descendants, `src/*.c` matches direct files, and
+`src/**/*.c` also matches nested files. Invalid or out-of-repository patterns are ignored.
 
 ## Testing
 

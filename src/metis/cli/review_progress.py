@@ -9,6 +9,8 @@ from rich.markup import escape
 from rich.progress import Progress
 from rich.progress import TaskID
 
+from metis.utils import safe_int
+
 from .triage_cli import TriageProgressReporter
 
 
@@ -459,18 +461,12 @@ def _node_start_description(
 
 
 def _positive_int(value):
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
+    parsed = safe_int(value, 0)
     return parsed if parsed > 0 else None
 
 
 def _non_negative_int(value):
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
+    parsed = safe_int(value, -1)
     return parsed if parsed >= 0 else None
 
 

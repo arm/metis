@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from concurrent.futures import CancelledError
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +15,13 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
+from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.memory import MemoryService
 from metis.memory.fingerprints import input_fingerprint
-from metis.utils import parse_json_output
-from metis.utils import split_snippet
+
+from .parsing import parse_records
 
 logger = logging.getLogger("metis")
 _PROMPTS = get_engine_prompts(
@@ -37,7 +39,7 @@ class _HistoryLessonModel(BaseModel):
 
 
 class _HistoryLessonResponseModel(BaseModel):
-    records: list[_HistoryLessonModel] = Field(default_factory=list)
+    records: list[_HistoryLessonModel]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -58,13 +60,7 @@ def write_history_records(
     commits = _git_history(repo_root, int(history_config["max_commits"]))
     if not commits:
         return
-    try:
-        lessons = _distill_history(config, commits)
-    except CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning("Git-history distillation failed: %s", exc)
-        return
+    lessons = _distill_history(config, commits)
     for index, lesson in enumerate(lessons):
         source_commits = [commits[item] for item in lesson["source_commit_indexes"]]
         body = {
@@ -96,23 +92,21 @@ def write_history_records(
 
 
 def _git_history(repo_root: Path, max_commits: int) -> list[dict[str, Any]]:
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "log",
-                "-n",
-                str(max_commits),
-                "--format=%x1e%H%x1f%cs%x1f%B%x1d",
-                "--name-only",
-            ],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return []
+    result = subprocess.run(
+        [
+            "git",
+            "log",
+            "-n",
+            str(max_commits),
+            "--format=%x1e%H%x1f%cs%x1f%B%x1d",
+            "--name-only",
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
     commits = []
     for entry in result.stdout.split("\x1e"):
@@ -139,35 +133,66 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
     if llm_provider is None or not model:
         raise RuntimeError("Git-history distillation requires an LLM")
 
-    evidence = "\n".join(
-        json.dumps(
-            {
-                "index": index,
-                "date": commit["date"],
-                "message": commit["message"],
-                "paths": commit["paths"],
-            },
-            separators=(",", ":"),
-        )
-        for index, commit in enumerate(commits)
-    )
-    chunks = split_snippet(
-        evidence,
-        int(config.max_token_length),
-        lambda text: llm_provider.count_tokens(text, model=model),
-    )
-    lessons: list[dict[str, Any]] = []
-    for chunk, _ in chunks:
-        supplied_indexes = {
-            int(json.loads(line)["index"]) for line in chunk.splitlines() if line
+    evidence_records = [
+        {
+            "index": index,
+            "date": commit["date"],
+            "message": commit["message"],
+            "paths": commit["paths"],
         }
+        for index, commit in enumerate(commits)
+    ]
+    batches = deque([evidence_records] if evidence_records else [])
+    lessons: list[dict[str, Any]] = []
+    while batches:
+        batch = batches.popleft()
+        evidence = "\n".join(
+            json.dumps(record, separators=(",", ":")) for record in batch
+        )
+        if (
+            rendered_prompt_token_count(
+                lambda value: llm_provider.count_tokens(value, model=model),
+                system_prompt=_PROMPTS["history_distillation_system"],
+                user_prompt=_PROMPTS["history_distillation_user"],
+                variables={"evidence": evidence},
+            )
+            > config.max_token_length
+        ):
+            if len(batch) > 1:
+                midpoint = len(batch) // 2
+                batches.extendleft(reversed([batch[:midpoint], batch[midpoint:]]))
+                continue
+            record = batch[0]
+            message = record["message"]
+            paths = record["paths"]
+            if message and paths:
+                parts = [{**record, "paths": []}, {**record, "message": ""}]
+            elif len(message) > 1:
+                midpoint = len(message) // 2
+                parts = [
+                    {**record, "message": message[:midpoint]},
+                    {**record, "message": message[midpoint:]},
+                ]
+            elif len(paths) > 1:
+                midpoint = len(paths) // 2
+                parts = [
+                    {**record, "paths": paths[:midpoint]},
+                    {**record, "paths": paths[midpoint:]},
+                ]
+            else:
+                raise ModelInputLimitError(
+                    "Git-history prompt cannot hold one commit fragment"
+                )
+            batches.extendleft([part] for part in reversed(parts))
+            continue
+        supplied_indexes = {record["index"] for record in batch}
         records = invoke_langchain_json_prompt_with_retry(
             llm_provider,
             config.usage_runtime,
             model=model,
             system_prompt=_PROMPTS["history_distillation_system"],
             user_prompt=_PROMPTS["history_distillation_user"],
-            variables={"evidence": chunk},
+            variables={"evidence": evidence},
             parse=_parse_history_lessons,
             logger=logger,
             label="git-history threat-model distillation",
@@ -175,7 +200,7 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
             invalid_message="invalid git-history distillation response",
             final_keep_message="returning no git-history lessons",
             response_model=_HistoryLessonResponseModel,
-            temperature=0.0,
+            max_input_tokens=int(config.max_token_length),
             chat_model_kwargs=config.chat_model_kwargs,
         )
         if records is None:
@@ -192,20 +217,7 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _parse_history_lessons(raw: Any) -> list[dict[str, Any]] | None:
-    if isinstance(raw, BaseModel):
-        payload = raw.model_dump()
-    elif isinstance(raw, dict):
-        payload = raw
-    elif isinstance(raw, str):
-        payload = parse_json_output(raw)
-    else:
-        return None
-    try:
-        return _HistoryLessonResponseModel.model_validate(payload).model_dump()[
-            "records"
-        ]
-    except (TypeError, ValueError):
-        return None
+    return parse_records(raw, response_model=_HistoryLessonResponseModel)
 
 
 def _dedupe_history_lessons(

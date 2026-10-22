@@ -3,19 +3,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from typing import Any
 
-
-def _as_tuple(values: Iterable[Any] | None) -> tuple[str, ...]:
-    if values is None:
-        return ()
-    if not isinstance(values, (list, tuple)) or any(
-        not isinstance(value, str) for value in values
-    ):
-        raise ValueError("Capability operation surfaces must be a list of strings")
-    return tuple(value.strip().lower() for value in values if value.strip())
+from metis.utils import normalized_string_tuple
 
 
 def _as_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -55,7 +47,14 @@ class CapabilityOperationManifest:
             raise ValueError(f"Capability operation {capability_id!r} requires a name")
         object.__setattr__(self, "id", capability_id)
         object.__setattr__(self, "name", name)
-        object.__setattr__(self, "surfaces", _as_tuple(self.surfaces))
+        object.__setattr__(
+            self,
+            "surfaces",
+            normalized_string_tuple(
+                self.surfaces,
+                error="Capability operation surfaces must be a list of strings",
+            ),
+        )
         object.__setattr__(self, "status", str(self.status or "active").strip().lower())
         if self.operation is not None:
             object.__setattr__(self, "operation", str(self.operation).strip() or None)

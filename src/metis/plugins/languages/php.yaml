@@ -41,17 +41,6 @@ prompts:
         - Improper input validation or sanitization
       - Pay extra attention to variables that are externally controlled (e.g., $_GET, $_POST).
       - Do not report on issues that do not affect security.
-  validation_review: |-
-    You will be given:
-    SNIPPET: The relevant PHP code snippet.
-        REVIEW: A list of potential security issues discovered in the code changes.
-
-    Your task is to:
-    1. Carefully examine each item in the REVIEW. Check if it's a genuine security concern by referencing the SNIPPET.
-    2. Remove any issues that are false positives or are already mitigated in the code (e.g., prepared statements for SQL, escaping for output).
-    3. Keep only the issues that definitely represent real security risks.
-    4. If an issue is missing details, add the necessary clarifications or background.
-    5. If no real issues remain after validation, respond with an empty array: [].
   snippet_security_summary: |-
     You are a thorough security engineer specializing in PHP.
     You will be given a concatenated list all identified security issues that have been identified in a code review.

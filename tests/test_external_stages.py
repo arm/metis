@@ -114,13 +114,14 @@ def test_external_stage_pipeline_invokes_black_boxes_and_applies_decisions(tmp_p
     assert props["metisMissingEvidence"] == []
 
 
-def test_external_analysis_rejects_config_without_required_bindings(tmp_path):
+@pytest.mark.parametrize("kind", ("analysis", "validation"))
+def test_external_stage_rejects_config_without_required_bindings(tmp_path, kind):
     codebase = tmp_path / "codebase"
     codebase.mkdir()
     service = ExternalStageService(
         codebase_path=str(codebase),
         config={
-            "analysis": {
+            kind: {
                 "broken": {
                     "command": ["fake-tool", "{codebase_path}"],
                     "timeout_seconds": 10,
@@ -129,12 +130,20 @@ def test_external_analysis_rejects_config_without_required_bindings(tmp_path):
         },
     )
 
-    with pytest.raises(ValueError, match="must reference"):
-        service.run_analysis(
-            "broken",
-            prompt="find security issues in this codebase",
-            run_dir=tmp_path / "run",
-        )
+    with pytest.raises(
+        ValueError, match=f"External {kind} stage 'broken' must reference"
+    ):
+        if kind == "analysis":
+            service.run_analysis(
+                "broken", prompt="find security issues", run_dir=tmp_path / "run"
+            )
+        else:
+            service.run_validation(
+                "broken",
+                input_sarif=tmp_path / "missing.sarif",
+                run_dir=tmp_path / "run",
+            )
+    assert not (tmp_path / "run").exists()
 
 
 _BLACK_BOX_SCRIPT = r"""

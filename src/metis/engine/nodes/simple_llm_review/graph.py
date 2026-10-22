@@ -3,6 +3,8 @@
 
 import logging
 from collections import deque
+from concurrent.futures import CancelledError
+from copy import deepcopy
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
@@ -12,8 +14,11 @@ from typing import cast
 from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END
 from langgraph.graph import StateGraph
+from pydantic import validate_call
 
 from metis import runlog
+from metis.engine.capabilities.navigation import NavigationCapability
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.llm_runner import rendered_prompt_token_count
@@ -37,6 +42,7 @@ from .schema import ReviewResponseModel
 from .schema import review_schema_prompt
 
 logger = logging.getLogger("metis")
+_MAX_CHECKPOINT_TOOL_OBSERVATIONS = 1024
 
 
 def _normalize_reviews(raw) -> list[dict] | None:
@@ -62,7 +68,11 @@ def _normalize_reviews(raw) -> list[dict] | None:
     elif raw not in (None, ""):
         logger.warning("Unexpected review payload type %s", type(raw).__name__)
 
-    if isinstance(payload, dict) and isinstance(payload.get("reviews"), list):
+    if (
+        isinstance(payload, dict)
+        and payload.keys() == {"reviews"}
+        and isinstance(payload["reviews"], list)
+    ):
         return sanitize_review_payload(payload)
 
     return None
@@ -139,11 +149,20 @@ def review_node_llm(
 ) -> ReviewState:
     body_text = _build_body_text(state)
     system_prompt = state.get("system_prompt") or ""
-    reviews = invoke_review(system_prompt, body_text)
+    navigation_evidence = (
+        list(state["navigation_evidence"]) if "navigation_evidence" in state else None
+    )
+    reviews = (
+        invoke_review(system_prompt, body_text, navigation_evidence=navigation_evidence)
+        if navigation_evidence is not None
+        else invoke_review(system_prompt, body_text)
+    )
     if reviews is None:
         raise RuntimeError("Model did not return a valid review after retries")
     new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
+    if navigation_evidence is not None:
+        new_state["navigation_evidence"] = navigation_evidence
     return new_state
 
 
@@ -221,7 +240,30 @@ class ReviewGraph:
         self._prompt_runner = JsonPromptRunner(self.llm_provider)
         self._app_cache: dict[tuple[int, str], Any] = {}
 
-    def _invoke_review_model(self, system_prompt, body_text):
+    def _invoke_review_model(
+        self, system_prompt, body_text, *, navigation_evidence=None
+    ):
+        collect_evidence = (
+            navigation_evidence is not None and None not in navigation_evidence
+        )
+
+        def invalidate():
+            navigation_evidence[:] = [None]
+
+        def observe(name, arguments, content):
+            if None in navigation_evidence:
+                return
+            if len(navigation_evidence) >= _MAX_CHECKPOINT_TOOL_OBSERVATIONS:
+                invalidate()
+                return
+            navigation_evidence.append(
+                {
+                    "name": name,
+                    "arguments": deepcopy(arguments),
+                    "output_sha256": sha256(content.encode("utf-8")).hexdigest(),
+                }
+            )
+
         with usage_operation("review_discovery"):
             return self._prompt_runner.invoke(
                 JsonPromptRequest(
@@ -239,9 +281,9 @@ class ReviewGraph:
                     chat_model_kwargs=self.chat_model_kwargs,
                     model_tools=self.model_tools,
                     max_tool_rounds=self.model_tool_max_rounds,
-                    max_input_tokens=(
-                        self.max_token_length if self.model_tools else None
-                    ),
+                    max_input_tokens=self.max_token_length,
+                    on_tool_result=observe if collect_evidence else None,
+                    on_tool_error=invalidate if collect_evidence else None,
                 )
             )
 
@@ -275,7 +317,8 @@ class ReviewGraph:
         return compiled
 
     def checkpoint_key(self, request: ReviewRequest) -> str | None:
-        if self.model_tools:
+        navigation_tools = self._navigation_tools()
+        if self.model_tools and navigation_tools is None:
             return None
         chunks = self._chunks(request["snippet"])
         chat_model_kwargs = {
@@ -285,7 +328,7 @@ class ReviewGraph:
         }
         return stable_json_hash(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "provider": self.llm_provider.cache_identity(),
                 "model": self.llama_query_model,
                 "max_token_length": self.max_token_length,
@@ -294,6 +337,19 @@ class ReviewGraph:
                 "custom_prompt_text": self.custom_prompt_text,
                 "custom_guidance_precedence": self.custom_guidance_precedence,
                 "schema_prompt": self._schema_prompt_section,
+                "model_tool_max_rounds": self.model_tool_max_rounds,
+                "navigation": [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.args_schema,
+                        "metadata": tool.metadata,
+                        "codebase_path": str(tool.func.__self__.codebase_path),
+                        "timeout_seconds": tool.func.__self__.timeout_seconds,
+                        "max_chars": tool.func.__self__.max_chars,
+                    }
+                    for tool in (navigation_tools or {}).values()
+                ],
                 "request": dict(request),
                 "chunk_plan": [
                     (start_line, stable_json_hash(chunk))
@@ -302,6 +358,66 @@ class ReviewGraph:
             }
         )
 
+    def _navigation_tools(self) -> dict[str, Any] | None:
+        tools = {}
+        for tool in self.model_tools:
+            name = getattr(tool, "name", "")
+            function = getattr(tool, "func", None)
+            if (
+                name not in {"grep", "find_name", "cat", "sed"}
+                or name in tools
+                or type(getattr(function, "__self__", None)) is not NavigationCapability
+                or getattr(function, "__func__", None)
+                is not getattr(NavigationCapability, name)
+            ):
+                return None
+            tools[name] = tool
+        return tools
+
+    def checkpoint_evidence_valid(self, record: dict[str, Any]) -> bool:
+        if not self.model_tools:
+            return True
+        tools = self._navigation_tools()
+        evidence = record.get("navigation_evidence")
+        if (
+            tools is None
+            or not isinstance(evidence, list)
+            or len(evidence) > _MAX_CHECKPOINT_TOOL_OBSERVATIONS
+        ):
+            return False
+        for observation in evidence:
+            if (
+                not isinstance(observation, dict)
+                or set(observation) != {"name", "arguments", "output_sha256"}
+                or not isinstance(observation["name"], str)
+                or observation["name"] not in tools
+                or not isinstance(observation["arguments"], dict)
+                or not isinstance(observation["output_sha256"], str)
+                or len(observation["output_sha256"]) != 64
+                or any(
+                    char not in "0123456789abcdef"
+                    for char in observation["output_sha256"]
+                )
+            ):
+                return False
+            try:
+                _cancellation_checkpoint()
+                result = validate_call(
+                    tools[observation["name"]].func,
+                    config={"strict": True},
+                )(**observation["arguments"])
+                _cancellation_checkpoint()
+            except CancelledError:
+                raise
+            except Exception:
+                return False
+            if (
+                sha256(str(result).encode("utf-8")).hexdigest()
+                != observation["output_sha256"]
+            ):
+                return False
+        return True
+
     def _chunks(self, snippet: str) -> list[tuple[str, int]]:
         return split_snippet(
             snippet,
@@ -309,7 +425,13 @@ class ReviewGraph:
             self._token_counter,
         )
 
-    def review(self, request: ReviewRequest, *, source_map: SourceMap | None = None):
+    def review(
+        self,
+        request: ReviewRequest,
+        *,
+        source_map: SourceMap | None = None,
+        collect_navigation_evidence: bool = False,
+    ):
         file_path = request["file_path"]
         snippet = request["snippet"]
         language_prompts = request["language_prompts"]
@@ -357,6 +479,15 @@ class ReviewGraph:
             "original_file": original_file,
             "threat_model_context": threat_model_context,
         }
+        navigation_evidence: list[dict[str, Any] | None] | None = (
+            []
+            if collect_navigation_evidence
+            and self.model_tools
+            and self._navigation_tools() is not None
+            else None
+        )
+        if navigation_evidence is not None:
+            base_state["navigation_evidence"] = []
         system_prompt = build_prompt(base_state)["system_prompt"]
 
         def input_tokens(state: ReviewState) -> int:
@@ -368,17 +499,15 @@ class ReviewGraph:
                 model_tools=self.model_tools,
             )
 
-        if self.model_tools:
-            if (
-                mode == "patch"
-                and input_tokens({**base_state, "snippet": snippet})
-                > self.max_token_length
-            ):
-                base_state["original_file"] = None
-            if input_tokens(base_state) >= self.max_token_length:
-                raise ModelInputLimitError(
-                    "Review prompt context exceeds the model input limit"
-                )
+        if (
+            mode == "patch"
+            and input_tokens({**base_state, "snippet": snippet}) > self.max_token_length
+        ):
+            base_state["original_file"] = None
+        if input_tokens(base_state) >= self.max_token_length:
+            raise ModelInputLimitError(
+                "Review prompt context exceeds the model input limit"
+            )
         chunks = deque(self._chunks(snippet))
         accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key, build_prompt)
@@ -391,7 +520,7 @@ class ReviewGraph:
                 "chunk_start": chunk_start,
                 "chunk_end": chunk_end,
             }
-            if self.model_tools and input_tokens(state) > self.max_token_length:
+            if input_tokens(state) > self.max_token_length:
                 parts = split_snippet(chunk, max(1, len(chunk) // 2), len)
                 if len(parts) == 1:
                     raise ModelInputLimitError(
@@ -424,6 +553,9 @@ class ReviewGraph:
                 out = app.invoke(state)
                 workflow_span.end(attributes={"final_state": out})
             chunk_reviews = out.get("parsed_reviews", []) or []
+            if navigation_evidence is not None:
+                navigation_evidence = out["navigation_evidence"]
+                base_state["navigation_evidence"] = navigation_evidence
             if chunk_reviews:
                 accumulated.extend(chunk_reviews)
 
@@ -433,6 +565,8 @@ class ReviewGraph:
             "file_path": file_path,
             "reviews": accumulated,
         }
+        if navigation_evidence is not None:
+            result["navigation_evidence"] = navigation_evidence
         runlog.event(
             "artifact",
             {

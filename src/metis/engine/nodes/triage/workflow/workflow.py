@@ -138,7 +138,10 @@ class TriageWorkflow:
             errors = source_evidence.errors or ["TRIAGE_DECISION_PARSE_FAILED"]
         else:
             errors = source_evidence.validate(decision)
-        result["decision_source"] = "validation_failure" if errors else "model"
+        if errors == ["TRIAGE_DECISION_PARSE_FAILED"]:
+            result["decision_source"] = "execution_failure"
+        else:
+            result["decision_source"] = "validation_failure" if errors else "model"
         result["decision_validation_errors"] = errors
         if errors:
             result["decision_status"] = "inconclusive"

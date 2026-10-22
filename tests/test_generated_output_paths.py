@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from metis.cli import entry, utils
+from metis.cli import entry
+from metis.cli import output as cli_output
+from metis.cli import utils
 from metis.engine.external_stages import service as external_service
 from metis.usage import runtime as usage_runtime
 
@@ -23,7 +25,7 @@ class FixedClock(datetime):
 def test_generated_cli_paths_preserve_successive_outputs(monkeypatch, tmp_path, kind):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(entry, "datetime", FixedClock)
-    monkeypatch.setattr(utils, "datetime", FixedClock)
+    monkeypatch.setattr(cli_output, "datetime", FixedClock)
     saved = []
     for iteration in range(2):
         if kind == "command":

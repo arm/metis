@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from contextlib import closing, nullcontext
+from copy import deepcopy
+import json
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -11,12 +14,18 @@ from types import SimpleNamespace
 import pytest
 
 from metis.cli import commands
+from metis.cli import output as cli_output
 from metis.cli import review_checkpoints
 from metis.cli.command_runtime import CommandRuntime
 from metis.cli.review_checkpoints import review_checkpoint_callbacks
 from metis.cli.review_progress import ExecutionGraphProgressReporter
 from metis.cli.review_progress import ReviewCodeProgressReporter
+from metis.engine import ExecutionGraphError
+from metis.engine.execution import ExecutionDiagnostic
+from metis.engine.execution import ExecutionResult
+from metis.engine.execution import ExecutionStatus
 from metis.engine.stages.review.models import ReviewCheckpointRecord
+from metis.sarif.writer import generate_sarif
 from metis.version import __version__ as METIS_VERSION
 
 
@@ -57,6 +66,14 @@ def test_review_progress_retains_rows_and_resume_position() -> None:
 
     reporter({"event": "execution_stage_start", "stage": "review"})
     reporter({"event": "codegraph_reused"})
+    reporter({"event": "review_files_start", "total": float("inf")})
+    reporter(
+        {
+            "event": "codegraph_progress",
+            "total": float("inf"),
+            "completed": float("inf"),
+        }
+    )
     reporter({"event": "review_files_start", "total": 10})
     reporter(
         {
@@ -362,6 +379,8 @@ def test_review_commands_route_through_graph(
     calls = []
 
     class _Engine:
+        codebase_path = str(tmp_path)
+
         def execute_review(self, mode, **kwargs):
             calls.append((mode, kwargs))
             return {
@@ -384,9 +403,7 @@ def test_review_commands_route_through_graph(
             **{k: v for k, v in func_kwargs.items() if k != "quiet"},
         ),
     )
-    monkeypatch.setattr(
-        commands, "_finalize_review_output", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(cli_output, "save_output", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
 
     target = None
@@ -414,6 +431,59 @@ def test_review_commands_route_through_graph(
         "html",
         "csv",
     }
+
+
+@pytest.mark.parametrize(
+    ("mode", "target"),
+    [
+        ("file", "src/source.c"),
+        ("dir", "src"),
+    ],
+)
+@pytest.mark.parametrize("symlink", [False, True])
+def test_review_paths_resolve_against_relative_codebase(
+    monkeypatch, tmp_path, mode, target, symlink
+):
+    monkeypatch.chdir(tmp_path)
+    source_dir = tmp_path / "project" / "src"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "source.c"
+    source_file.write_text("int main(void) { return 0; }", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "source.c").write_text("outside codebase", encoding="utf-8")
+    selected = source_file if mode == "file" else source_dir
+    if symlink:
+        link = tmp_path / "project" / "alias"
+        link.symlink_to(selected, target_is_directory=mode == "dir")
+        selected = link
+        target = "alias"
+    engine = SimpleNamespace(codebase_path="project")
+    args = SimpleNamespace(quiet=True)
+    calls = []
+    monkeypatch.setattr(
+        commands, "_run_review_command", lambda *arguments: calls.append(arguments)
+    )
+    runtime = CommandRuntime(command=f"review_{mode}", command_args=[target])
+
+    handler = commands.run_file_review if mode == "file" else commands.run_dir_review
+    handler(engine, target, args, runtime)
+
+    assert len(calls) == 1
+    assert calls[0][1:3] == (mode, str(selected))
+
+
+@pytest.mark.parametrize(
+    "handler", [commands.run_review, commands.run_file_review, commands.run_dir_review]
+)
+def test_review_commands_reject_missing_input(tmp_path, handler):
+    target = str(tmp_path / "missing")
+    with pytest.raises(OSError, match="not found"):
+        handler(
+            SimpleNamespace(codebase_path=str(tmp_path)),
+            target,
+            SimpleNamespace(quiet=True),
+            CommandRuntime(command="review", command_args=[target]),
+        )
 
 
 def test_review_producers_keep_separate_resumable_outputs(tmp_path):
@@ -650,9 +720,9 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        commands, "pretty_print_reviews", lambda *_args, **_kwargs: None
+        "metis.cli.utils.pretty_print_reviews", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(commands, "save_output", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli_output, "save_output", lambda *_args, **_kwargs: None)
 
     commands.run_review_code(engine, args, runtime)
 
@@ -680,10 +750,10 @@ def test_review_command_honors_explicit_format_in_addition_to_graph_formats(
     )
     saved: list[str] = []
 
-    def capture_output(_results, final_args, **_kwargs):
-        saved.extend(final_args.output_file)
+    def capture_output(paths, *_args, **_kwargs):
+        saved.extend(paths)
 
-    monkeypatch.setattr(commands, "_finalize_review_output", capture_output)
+    monkeypatch.setattr(cli_output, "save_output", capture_output)
 
     commands.run_review_code(
         _Engine(),
@@ -694,7 +764,20 @@ def test_review_command_honors_explicit_format_in_addition_to_graph_formats(
     assert {Path(path).suffix for path in saved} == {".json", ".sarif"}
 
 
-def test_run_review_code_preserves_review_output_when_triage_fails(monkeypatch):
+@pytest.mark.parametrize(
+    ("failure", "save_failure"),
+    [
+        (RuntimeError, None),
+        (CancelledError, None),
+        (CancelledError, OSError),
+        (RuntimeError, OSError),
+        (RuntimeError, CancelledError),
+        (None, OSError),
+    ],
+)
+def test_run_review_code_preserves_review_output_when_triage_fails(
+    monkeypatch, failure, save_failure
+):
     saved = []
 
     class _Engine:
@@ -705,8 +788,10 @@ def test_run_review_code_preserves_review_output_when_triage_fails(monkeypatch):
                 "sarif": {"version": "2.1.0", "runs": [{"results": []}]},
             }
 
-        def execute_triage(self, _payload, **_kwargs):
-            raise RuntimeError("provider unavailable")
+        def execute_triage(self, payload, **_kwargs):
+            if failure is not None:
+                raise failure("provider unavailable")
+            return {"formats": ("sarif",), "sarif": payload}
 
     args = SimpleNamespace(
         verbose=False,
@@ -725,16 +810,123 @@ def test_run_review_code_preserves_review_output_when_triage_fails(monkeypatch):
         ),
     )
     monkeypatch.setattr(commands, "print_console", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(commands, "pretty_print_reviews", lambda *_args: None)
-    monkeypatch.setattr(
-        commands,
-        "save_output",
-        lambda *_args, **kwargs: saved.append(kwargs["sarif_payload"]),
-    )
+    monkeypatch.setattr("metis.cli.utils.pretty_print_reviews", lambda *_args: None)
 
-    commands.run_review_code(_Engine(), args, runtime)
+    def save_output(*_args, **kwargs):
+        saved.append(kwargs["sarif_payload"])
+        if save_failure is not None:
+            raise save_failure("save failed")
+
+    monkeypatch.setattr(cli_output, "save_output", save_output)
+
+    expected_failure = (
+        save_failure if failure is None or save_failure is CancelledError else failure
+    )
+    with pytest.raises(expected_failure) as raised:
+        commands.run_review_code(_Engine(), args, runtime)
 
     assert saved == [{"version": "2.1.0", "runs": [{"results": []}]}]
+    if failure is not None and save_failure is OSError:
+        assert raised.value.__notes__ == [
+            "Saving completed review output also failed: save failed"
+        ]
+
+
+@pytest.mark.parametrize(
+    ("failed_stage", "missing_output"),
+    [("triage", None), ("review", None), ("review", "findings"), ("review", "sarif")],
+)
+def test_review_command_exports_available_outputs_before_raising(
+    tmp_path, failed_stage, missing_output
+):
+    results = {
+        "reviews": [
+            {"file": "source.c", "reviews": [{"id": "stable", "issue": "Finding"}]}
+        ]
+    }
+    original = generate_sarif(results)
+    partial = deepcopy(original)
+    outputs = {"sarif": partial}
+    if failed_stage == "triage":
+        partial["runs"][0]["results"][0]["properties"].update(
+            metisTriaged=True, metisTriageStatus="valid"
+        )
+    else:
+        outputs["findings"] = results
+    if missing_output:
+        outputs.pop(missing_output)
+    error = ExecutionGraphError(
+        ExecutionResult(
+            ExecutionStatus.ERROR if missing_output else ExecutionStatus.INCONCLUSIVE,
+            {failed_stage: outputs},
+            (
+                ExecutionDiagnostic(
+                    f"{failed_stage}.failed", "provider failed", "error"
+                ),
+            ),
+        )
+    )
+
+    class Engine:
+        codebase_path = str(tmp_path)
+
+        def execute_review(self, _mode, **_kwargs):
+            if failed_stage == "review":
+                raise error
+            return {"formats": ("json",), "findings": results, "sarif": original}
+
+        def execute_triage(self, _payload, **_kwargs):
+            assert failed_stage == "triage", "Incomplete review must skip triage"
+            raise error
+
+    output = tmp_path / "report.json"
+    sarif_output = output.with_suffix(".sarif")
+    output.write_text("previous findings")
+    sarif_output.write_text("previous SARIF")
+    args = SimpleNamespace(
+        quiet=True, triage=True, output_file=[str(output), str(sarif_output)]
+    )
+    with pytest.raises(ExecutionGraphError) as raised:
+        commands.run_review_code(
+            Engine(), args, CommandRuntime(command="review_code", command_args=[])
+        )
+    assert raised.value is error
+    if missing_output == "findings":
+        assert output.read_text() == "previous findings"
+    elif failed_stage == "triage":
+        saved = json.loads(output.read_text())
+        assert saved["reviews"][0]["reviews"][0]["metisTriageStatus"] == "valid"
+    else:
+        assert json.loads(output.read_text()) == results
+    if missing_output == "sarif":
+        assert sarif_output.read_text() == "previous SARIF"
+    else:
+        assert json.loads(sarif_output.read_text()) == partial
+    assert "metisTriaged" not in original["runs"][0]["results"][0]["properties"]
+
+
+def test_post_review_disabled_checkpoints_allow_checkpoint_named_output(tmp_path):
+    sarif = {"version": "2.1.0", "runs": []}
+
+    class Engine:
+        def execute_review(self, _mode, **_kwargs):
+            return {"formats": ("sarif",), "findings": {"reviews": []}, "sarif": sarif}
+
+        def execute_triage(self, payload, **kwargs):
+            assert kwargs["checkpoint_path"] is None
+            return {"formats": ("sarif",), "sarif": payload}
+
+    outputs = [
+        str(tmp_path / "report.sarif"),
+        str(tmp_path / "report.checkpoint.sarif"),
+    ]
+    args = SimpleNamespace(
+        quiet=True, triage=True, output_file=outputs, _triage_checkpoint_every=0
+    )
+    commands.run_review_code(
+        Engine(), args, CommandRuntime(command="review_code", command_args=[])
+    )
+    assert all(json.loads(Path(path).read_text()) == sarif for path in outputs)
 
 
 @pytest.mark.parametrize(
