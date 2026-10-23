@@ -117,7 +117,9 @@ class ExternalStageService:
         run_dir: str | Path | None = None,
     ) -> ExternalAnalysisResult:
         stage = self._analysis_stage(name)
-        _validate_analysis_bindings(name, stage)
+        _validate_bindings(
+            name, stage, label="analysis", required={"codebase_path", "output_sarif"}
+        )
         resolved_run_dir = _resolve_run_dir(run_dir)
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
         codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
@@ -167,7 +169,12 @@ class ExternalStageService:
         run_dir: str | Path | None = None,
     ) -> ExternalValidationResult:
         stage = self._validation_stage(name)
-        _validate_validation_bindings(name, stage)
+        _validate_bindings(
+            name,
+            stage,
+            label="validation",
+            required={"codebase_path", "input_sarif", "output_decision"},
+        )
         resolved_run_dir = _resolve_run_dir(run_dir)
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
         codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
@@ -246,30 +253,20 @@ class ExternalStageService:
             ) from exc
 
 
-def _validate_analysis_bindings(name: str, stage: ExternalStageCommandModel) -> None:
+def _validate_bindings(
+    name: str,
+    stage: ExternalStageCommandModel,
+    *,
+    label: str,
+    required: set[str],
+) -> None:
     placeholders = command_placeholders(stage.command)
     if "request_path" in placeholders:
         return
-    required = {"codebase_path", "output_sarif"}
     missing = sorted(required - placeholders)
     if missing:
         raise ValueError(
-            f"External analysis stage {name!r} must reference {{request_path}} "
-            "or placeholders: "
-            + ", ".join(f"{{{item}}}" for item in sorted(required))
-            + f"; missing {', '.join(missing)}"
-        )
-
-
-def _validate_validation_bindings(name: str, stage: ExternalStageCommandModel) -> None:
-    placeholders = command_placeholders(stage.command)
-    if "request_path" in placeholders:
-        return
-    required = {"codebase_path", "input_sarif", "output_decision"}
-    missing = sorted(required - placeholders)
-    if missing:
-        raise ValueError(
-            f"External validation stage {name!r} must reference {{request_path}} "
+            f"External {label} stage {name!r} must reference {{request_path}} "
             "or placeholders: "
             + ", ".join(f"{{{item}}}" for item in sorted(required))
             + f"; missing {', '.join(missing)}"

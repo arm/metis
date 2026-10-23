@@ -210,21 +210,50 @@ class EngineRepository:
             self._metisignore_loaded = True
             return self._metisignore_spec
 
+    def handle_discovery_error(
+        self, error: OSError, *, discovery_root: str | None = None
+    ) -> None:
+        metisignore_spec = self.load_metisignore()
+        path = error.filename
+        if path and discovery_root is not None:
+            path = os.path.relpath(path, discovery_root)
+        if (
+            metisignore_spec
+            and path
+            and metisignore_spec.match_file(self.normalize_match_path(path) + "/")
+            and not any(
+                pattern.include is False for pattern in metisignore_spec.patterns
+            )
+        ):
+            return
+        raise error
+
     def get_code_files(
-        self, *, include_suffixed_sources: bool = False, dir_path: str | None = None
+        self,
+        *,
+        include_suffixed_sources: bool = False,
+        dir_path: str | None = None,
+        apply_review_filters: bool = True,
     ):
         base_path = os.path.abspath(self._config.codebase_path)
         if dir_path:
-            base_path = os.path.join(base_path, dir_path)
+            base_path = str(
+                resolve_path_within_root(
+                    self._config.codebase_path, dir_path, preserve_aliases=True
+                )
+            )
+            if not os.path.isdir(base_path):
+                raise NotADirectoryError(f"Review directory not found: {base_path}")
         metisignore_spec = self.load_metisignore()
         file_list = []
-        for root, _, files in os.walk(base_path):
+        for root, _, files in os.walk(base_path, onerror=self.handle_discovery_error):
             for file in files:
                 full_path = os.path.join(root, file)
                 if not self.is_code_file_selected(
                     full_path,
                     include_suffixed_sources=include_suffixed_sources,
                     metisignore_spec=metisignore_spec,
+                    apply_review_filters=apply_review_filters,
                 ):
                     continue
                 file_list.append(full_path)
@@ -236,6 +265,7 @@ class EngineRepository:
         *,
         include_suffixed_sources: bool = False,
         metisignore_spec: pathspec.GitIgnoreSpec | None = None,
+        apply_review_filters: bool = True,
     ) -> bool:
         base_path = os.path.abspath(self._config.codebase_path)
         full_path = (
@@ -263,6 +293,8 @@ class EngineRepository:
         rel_path = self.normalize_match_path(full_path)
         if metisignore_spec and metisignore_spec.match_file(rel_path):
             return False
+        if not apply_review_filters:
+            return True
         include_paths = self._config.review_code_include_paths
         if include_paths and not self._review_path_spec(
             "include", include_paths

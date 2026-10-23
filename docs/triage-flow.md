@@ -3,6 +3,21 @@
 Triage accepts SARIF from Metis or other tools and annotates existing findings;
 it does not discover new findings. The packaged graph supplies Review's SARIF.
 A triage-only run uses existing SARIF without running Review.
+The interactive command also accepts Metis review and SARIF `.json` files,
+preserving their structure, decisions, and evidence. Completed findings are skipped
+unless `--include-triaged` is set. Invalid input fails before model calls or output
+replacement; source reads stay within the codebase.
+
+`--output-file` selects destinations and formats; otherwise the result node's
+`filename` is used, falling back to updating the input file. Interactive checkpoints
+use the selected SARIF output, or the chosen output basename with a `.sarif` suffix.
+Without an output setting, SARIF is checkpointed in place and JSON uses a sibling
+`.sarif`. Graph runs and post-review `--triage` use a separate `.checkpoint.sarif`; see
+[checkpoints and resume](execution-graph.md#review-checkpoints-and-resume).
+
+Completed decisions are flushed on completion or cancellation. Checkpoint write
+failures are logged without stopping triage. Post-review triage failure or
+cancellation also preserves completed Review output.
 
 ## End-to-end flow
 1. Read SARIF findings.
@@ -18,8 +33,8 @@ A triage-only run uses existing SARIF without running Review.
      `metisThreatModelPolicy` (mapping) when available
    - optional `metisTriageEvidence`, `metisTriageResolutionChain`, and
      `metisTriageUnresolvedHops` (lists)
-   - optional `metisTriageDecisionSource` (`model`, `validation_failure`, or
-     `policy`) and `metisTriageValidationErrors` (list)
+   - optional `metisTriageDecisionSource` (`model`, `validation_failure`,
+     `execution_failure`, or `policy`) and `metisTriageValidationErrors` (list)
 
 ## Evidence collection
 
@@ -54,16 +69,21 @@ Validated citations are exported as sorted, deduplicated codebase-relative paths
 single-line ranges use `file:line`.
 Triage enforces `max_token_length` and the configured tool-round limit.
 
-Unusable citations or an unparseable response produce `inconclusive` with
+Unusable citations produce `inconclusive` with
 `metisTriageDecisionSource: validation_failure` and machine-readable errors.
 The finding remains in SARIF. Validated model decisions use source `model`.
+Provider errors and exhausted retries use source `execution_failure`, leave
+`metisTriaged: false`, and emit `triage.finding_failed`. Reruns retry these findings.
+The CLI saves partial annotations and reports failure; graph runs exit nonzero.
+Missing evidence or unusable citations alone do not fail the command.
+`MetisEngine.execute_triage()` raises `ExecutionGraphError` with partial SARIF in
+`result.outputs["triage"]["sarif"]` on execution failure.
 Existing document-backed threat-model scope exclusions retain their policy
 behavior, are attributed with source `policy`, and preserve
 `metisThreatModelPolicy`.
 
-Legacy evidence-coverage properties and external classifier schemas remain
-compatible. Existing status names, finding identities, and CLI exit behavior
-are unchanged; the stronger citation checks apply only to the built-in workflow.
+Citation validation applies to the built-in workflow; external classifiers use
+their own response schemas.
 
 ## Analyzer support
 - Packaged CodeGraph support currently covers C and C++ through their shared

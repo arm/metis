@@ -9,6 +9,7 @@ from typing import Annotated
 import pytest
 
 from metis.cli import commands
+from metis.cli import output as cli_output
 from metis.cli.command_runtime import CommandRuntime
 from metis.engine.stages.configuration import BUILTIN_STAGE_CONTRACTS
 from metis.engine.stages.configuration import ExecutionConfiguration
@@ -47,9 +48,7 @@ def test_review_command_uses_result_filename_unless_cli_path_is_explicit(
         _metis_generated_output=generated,
     )
     monkeypatch.setattr(commands, "_execute_review", lambda *_args: outputs)
-    monkeypatch.setattr(
-        commands, "_finalize_review_output", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(cli_output, "save_output", lambda *_args, **_kwargs: None)
 
     commands.run_review_code(
         object(), args, CommandRuntime(command="review_code", command_args=[])
@@ -68,21 +67,22 @@ def test_triage_command_uses_result_filename_unless_cli_path_is_explicit(
     source.write_text(json.dumps(sarif if suffix == ".sarif" else {"reviews": []}))
     args = SimpleNamespace(quiet=True, output_file=output_files)
     saved = []
-    monkeypatch.setattr(
-        commands,
-        "run_triage_action",
-        lambda *_args, **_kwargs: {
+    engine = SimpleNamespace(
+        execute_triage=lambda _payload, **_kwargs: {
             "filename": "configured",
             "formats": ("sarif", "json"),
             "sarif": sarif,
         },
     )
     monkeypatch.setattr(
-        commands, "save_output", lambda paths, *_args, **_kwargs: saved.extend(paths)
+        commands, "run_triage_action", lambda _args, *, action, **_kwargs: action()
+    )
+    monkeypatch.setattr(
+        cli_output, "save_output", lambda paths, *_args, **_kwargs: saved.extend(paths)
     )
 
     commands.run_triage(
-        object(), str(source), args, CommandRuntime(command="triage", command_args=[])
+        engine, str(source), args, CommandRuntime(command="triage", command_args=[])
     )
 
     base = "explicit" if output_files else "configured"

@@ -1,17 +1,21 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import random
 import ssl
 import time
 from collections.abc import Callable
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from openai.types.responses import ResponseError
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
@@ -19,12 +23,13 @@ from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.concurrency import _current_cancellation
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.model_tool_runner import ModelOutputLimitError
+from metis.engine.model_tool_runner import ModelResponseIncompleteError
 from metis.engine.model_tool_runner import ModelToolConfigurationError
 from metis.engine.model_tool_runner import ModelToolResultError
-from metis.engine.model_tool_runner import _response_reached_output_limit
 from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
 from metis.engine.model_tool_runner import model_tool_system_prompt
+from metis.engine.model_tool_runner import require_completed_model_response
 from metis.engine.model_tool_runner import require_max_tool_rounds
 from metis.engine.model_tool_runner import require_model_input_budget
 from metis.runlog.langchain import ensure_runlog_callback
@@ -56,6 +61,7 @@ class JsonPromptRequest:
     on_output_limit: Callable[[], None] | None = None
     max_input_tokens: int | None = None
     on_tool_result: Callable[[str, dict[str, Any], str], None] | None = None
+    on_tool_error: Callable[[], None] | None = None
 
 
 def rendered_prompt_token_count(
@@ -148,7 +154,16 @@ class JsonPromptRunner:
     def _invoke_attempts(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
         confirmed_output_limit = False
+        incomplete_response: ModelResponseIncompleteError | None = None
         tool_evidence: tuple[str, ...] = ()
+        configured_retries = getattr(self._llm_provider, "max_retries", None)
+        max_transport_retries = (
+            max(0, configured_retries)
+            if isinstance(configured_retries, int)
+            else self._max_attempts - 1
+        )
+        transport_retries = 0
+        output_attempts = 0
         token_counter = (
             (lambda text: self._llm_provider.count_tokens(text, model=request.model))
             if request.max_input_tokens is not None
@@ -164,7 +179,7 @@ class JsonPromptRunner:
             request.system_prompt, request.user_prompt, request.model_tools
         )
         prompt.invoke(request.variables)
-        for attempt in range(self._max_attempts):
+        for attempt in range(self._max_attempts + max_transport_retries):
             _cancellation_checkpoint()
             response_text: Any = None
             parsed: Any = None
@@ -175,7 +190,9 @@ class JsonPromptRunner:
                 f"{request.label}:{attempt + 1}",
                 {
                     "attempt": attempt + 1,
-                    "max_attempts": self._max_attempts,
+                    "max_attempts": self._max_attempts + max_transport_retries,
+                    "max_output_attempts": self._max_attempts,
+                    "max_transport_retries": max_transport_retries,
                 },
             ) as attempt_span:
                 try:
@@ -190,8 +207,7 @@ class JsonPromptRunner:
                         model=request.model,
                         reasoning_effort=request.reasoning_effort,
                     )
-                    if attempt == 0:
-                        params["max_retries"] = 0
+                    params["max_retries"] = 0
                     params["callbacks"] = ensure_runlog_callback(
                         params.get("callbacks")
                     )
@@ -243,27 +259,24 @@ class JsonPromptRunner:
                         parsing_error = structured_result.get("parsing_error")
                         if isinstance(parsing_error, CancelledError):
                             raise parsing_error
-                        if _response_reached_output_limit(raw_response):
-                            confirmed_output_limit = True
-                            attempt_failure = (
-                                "model response reached its output token limit"
+                        require_completed_model_response(
+                            raw_response, tool_evidence=tool_evidence
+                        )
+                        try:
+                            parsed = request.parse(
+                                None
+                                if parsing_error is not None
+                                else structured_result.get("parsed")
                             )
-                        else:
-                            if parsing_error is not None:
-                                attempt_failure = (
-                                    f"structured validation failed: {parsing_error}"
-                                )
-                            else:
-                                try:
-                                    parsed = request.parse(
-                                        structured_result.get("parsed")
-                                    )
-                                except CancelledError:
-                                    raise
-                                except Exception as exc:
-                                    attempt_failure = (
-                                        f"structured validation failed: {exc}"
-                                    )
+                        except CancelledError:
+                            raise
+                        except Exception as exc:
+                            attempt_failure = f"structured validation failed: {exc}"
+                        if parsing_error is not None:
+                            parsed = None
+                            attempt_failure = (
+                                f"structured validation failed: {parsing_error}"
+                            )
                     if parsed is None and not used_structured_output:
                         if active_tools:
                             assert max_tool_rounds is not None
@@ -276,25 +289,24 @@ class JsonPromptRunner:
                                 token_counter=token_counter,
                                 max_input_tokens=request.max_input_tokens,
                                 on_tool_result=request.on_tool_result,
+                                on_tool_error=request.on_tool_error,
                             )
                             _cancellation_checkpoint()
-                            if request.on_tool_result is not None:
-                                tool_evidence = observed_evidence
-                            parsed = request.parse(response_text)
-                            if parsed is None:
-                                tool_evidence = observed_evidence
+                            tool_evidence = observed_evidence
                         else:
                             _cancellation_checkpoint()
                             response = (prompt | chat).invoke(request.variables)
                             _cancellation_checkpoint()
+                            require_completed_model_response(
+                                response, tool_evidence=tool_evidence
+                            )
                             response_text = StrOutputParser().invoke(response)
-                            if _response_reached_output_limit(response):
-                                confirmed_output_limit = True
-                                attempt_failure = (
-                                    "model response reached its output token limit"
-                                )
-                            else:
-                                parsed = request.parse(response_text)
+                        try:
+                            parsed = request.parse(response_text)
+                        except CancelledError:
+                            raise
+                        except Exception as exc:
+                            attempt_failure = f"response validation failed: {exc}"
                     if parsed is not None:
                         _cancellation_checkpoint()
                         attempt_span.end(
@@ -310,6 +322,11 @@ class JsonPromptRunner:
                 except ModelOutputLimitError as exc:
                     _cancellation_checkpoint()
                     confirmed_output_limit = True
+                    attempt_failure = str(exc)
+                    tool_evidence = exc.tool_evidence
+                except ModelResponseIncompleteError as exc:
+                    _cancellation_checkpoint()
+                    incomplete_response = exc
                     attempt_failure = str(exc)
                     tool_evidence = exc.tool_evidence
                 except Exception as exc:
@@ -341,39 +358,64 @@ class JsonPromptRunner:
                     },
                     exc=attempt_error,
                 )
-            if attempt < self._max_attempts - 1:
-                backoff_seconds = (
-                    min(self._retry_backoff_seconds * (2**attempt), 30.0)
-                    if self._retry_backoff_seconds > 0
-                    else 0.0
+            if attempt_error is not None:
+                if transport_retries >= max_transport_retries:
+                    raise attempt_error
+                backoff_seconds = _provider_retry_delay(
+                    attempt_error,
+                    max(
+                        0.0,
+                        min(self._retry_backoff_seconds * (2**transport_retries), 30.0)
+                        * random.uniform(0.75, 1.0),
+                    ),
                 )
-                runlog.event(
-                    "retry",
-                    {
-                        "operation": "llm",
-                        "label": request.label,
-                        "attempt": attempt + 2,
-                        "max_attempts": self._max_attempts,
-                        "backoff_ms": backoff_seconds * 1000.0,
-                        "reason": last_failure,
-                    },
+                transport_retries += 1
+                retry_kind = "transport retry"
+                retry_count = transport_retries
+                retry_limit = max_transport_retries
+            else:
+                output_attempts += 1
+                if output_attempts >= self._max_attempts:
+                    break
+                backoff_seconds = max(
+                    0.0,
+                    min(
+                        self._retry_backoff_seconds * (2 ** (output_attempts - 1)), 30.0
+                    ),
                 )
-                request.logger.warning(
-                    "%s failed for %d candidates; retrying (attempt %d/%d): %s",
-                    request.label,
-                    request.batch_size,
-                    attempt + 1,
-                    self._max_attempts,
-                    last_failure,
-                )
-                if backoff_seconds > 0:
-                    if _current_cancellation.get() is None:
-                        time.sleep(backoff_seconds)
-                    else:
-                        deadline = time.monotonic() + backoff_seconds
-                        while (remaining := deadline - time.monotonic()) > 0:
-                            _cancellation_checkpoint()
-                            time.sleep(min(remaining, 0.1))
+                retry_kind = "attempt"
+                retry_count = output_attempts
+                retry_limit = self._max_attempts
+            runlog.event(
+                "retry",
+                {
+                    "operation": "llm",
+                    "label": request.label,
+                    "attempt": attempt + 2,
+                    "max_attempts": self._max_attempts + max_transport_retries,
+                    "max_output_attempts": self._max_attempts,
+                    "transport_retries": transport_retries,
+                    "backoff_ms": backoff_seconds * 1000.0,
+                    "reason": last_failure,
+                },
+            )
+            request.logger.warning(
+                "%s failed for %d candidates; retrying (%s %d/%d): %s",
+                request.label,
+                request.batch_size,
+                retry_kind,
+                retry_count,
+                retry_limit,
+                last_failure,
+            )
+            if backoff_seconds > 0:
+                if _current_cancellation.get() is None:
+                    time.sleep(backoff_seconds)
+                else:
+                    deadline = time.monotonic() + backoff_seconds
+                    while (remaining := deadline - time.monotonic()) > 0:
+                        _cancellation_checkpoint()
+                        time.sleep(min(remaining, 0.1))
         _cancellation_checkpoint()
         if confirmed_output_limit:
             if request.on_output_limit is not None:
@@ -381,8 +423,11 @@ class JsonPromptRunner:
             else:
                 raise ModelOutputLimitError(
                     f"{request.label} reached the model output token limit "
-                    f"after {self._max_attempts} attempts"
+                    f"after {self._max_attempts} attempts",
+                    tool_evidence=tool_evidence,
                 )
+        elif incomplete_response is not None:
+            raise incomplete_response
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,
@@ -392,6 +437,58 @@ class JsonPromptRunner:
         )
         _cancellation_checkpoint()
         return None
+
+
+def _provider_retry_delay(error: Exception, default_seconds: float) -> float:
+    response_error = (
+        error.args[0] if isinstance(error, ValueError) and error.args else None
+    )
+    if isinstance(response_error, ResponseError) and response_error.code not in {
+        "server_error",
+        "rate_limit_exceeded",
+        "vector_store_timeout",
+        "failed_to_download_image",
+    }:
+        raise error
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    status_code = getattr(error, "status_code", getattr(response, "status_code", None))
+    if (
+        headers.get("x-should-retry") == "false"
+        or getattr(error, "code", None) == "insufficient_quota"
+        or (
+            isinstance(status_code, int)
+            and status_code not in {408, 409, 429}
+            and 400 <= status_code < 500
+            and headers.get("x-should-retry") != "true"
+        )
+    ):
+        raise error
+    retry_after: float | None = None
+    if headers.get("retry-after-ms") is not None:
+        try:
+            retry_after = float(headers["retry-after-ms"]) / 1000.0
+        except (TypeError, ValueError):
+            pass
+        if retry_after is not None and (
+            not math.isfinite(retry_after) or retry_after < 0
+        ):
+            retry_after = None
+    if retry_after is None and headers.get("retry-after") is not None:
+        value = headers["retry-after"]
+        try:
+            retry_after = float(value)
+        except (TypeError, ValueError):
+            try:
+                retry_after = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                pass
+    if retry_after is not None and math.isfinite(retry_after):
+        if retry_after > 120:
+            raise error
+        if retry_after >= 0:
+            return retry_after
+    return default_seconds
 
 
 def _certificate_verification_failed(error: BaseException) -> bool:
@@ -432,6 +529,7 @@ def invoke_langchain_json_prompt_with_retry(
     chat_model_kwargs=None,
     model_tools=(),
     max_tool_rounds=None,
+    max_input_tokens=None,
 ):
     return JsonPromptRunner(llm_provider, usage_runtime).invoke(
         JsonPromptRequest(
@@ -452,5 +550,6 @@ def invoke_langchain_json_prompt_with_retry(
             chat_model_kwargs=chat_model_kwargs,
             model_tools=tuple(model_tools or ()),
             max_tool_rounds=max_tool_rounds,
+            max_input_tokens=max_input_tokens,
         )
     )

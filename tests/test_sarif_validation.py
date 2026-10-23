@@ -8,6 +8,7 @@ import pytest
 from metis.engine.external_stages.service import (
     validate_metis_sarif as external_validate,
 )
+from metis.sarif.triage import apply_triage_result
 from metis.sarif.validation import SarifLimits
 from metis.sarif.validation import load_metis_sarif_file
 from metis.sarif.validation import parse_metis_sarif
@@ -109,7 +110,9 @@ def test_validate_sarif_checks_every_location():
         validate_metis_sarif(payload)
 
 
-@pytest.mark.parametrize("decision_source", ["model", "validation_failure", "policy"])
+@pytest.mark.parametrize(
+    "decision_source", ["model", "validation_failure", "execution_failure", "policy"]
+)
 def test_validate_sarif_preserves_optional_triage_decision_metadata(decision_source):
     payload = _payload()
     payload["runs"][0]["results"][0]["properties"] = {
@@ -119,6 +122,18 @@ def test_validate_sarif_preserves_optional_triage_decision_metadata(decision_sou
         "metisTriageDecisionSource": decision_source,
         "metisTriageValidationErrors": [],
     }
+    assert parse_metis_sarif(_encoded(payload)) == payload
+    assert apply_triage_result(
+        payload,
+        run_index=0,
+        result_index=0,
+        status="inconclusive",
+        reason="Awaiting evidence",
+        metadata={"decision_source": decision_source},
+    )
+    properties = payload["runs"][0]["results"][0]["properties"]
+    assert properties["metisTriageDecisionSource"] == decision_source
+    assert properties["metisTriaged"] is (decision_source != "execution_failure")
     assert parse_metis_sarif(_encoded(payload)) == payload
 
 

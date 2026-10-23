@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator
@@ -18,16 +18,13 @@ from .langchain import UsageCallbackHandler
 from .llamaindex import UsageLlamaIndexHandler
 from metis.json_io import write_json_atomic
 from metis.runlog.langchain import RUNLOG_CALLBACK_HANDLER
+from metis.utils import utc_now_iso as _utc_now
 
 from metis.providers.base import (
     EmbedModelKwargs,
     ProviderChatModelKwargs,
     RetrieverKwargs,
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _safe_label(value: str) -> str:

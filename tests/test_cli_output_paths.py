@@ -37,8 +37,7 @@ def test_html_output_preserves_explicit_suffix_case(tmp_path: Path):
 
 @pytest.mark.parametrize("names", [("Report", "report"), ("café", "cafe\u0301")])
 def test_filesystem_aliases_cannot_overwrite_another_stage(tmp_path, names):
-    from metis.cli.entry import _save_graph_outputs
-    from metis.engine.execution import ExecutionResult, ExecutionStatus
+    from metis.cli.output import save_graph_outputs
 
     (tmp_path / names[0]).touch()
     if not (tmp_path / names[1]).exists():
@@ -52,7 +51,7 @@ def test_filesystem_aliases_cannot_overwrite_another_stage(tmp_path, names):
         for name, filename in [("review", names[0]), ("triage", names[1])]
     }
     with pytest.raises(ValueError, match="distinct"):
-        _save_graph_outputs(None, ExecutionResult(ExecutionStatus.OK, outputs), True)
+        save_graph_outputs(None, outputs, True)
     assert not list(tmp_path.glob("*.sarif"))
 
 

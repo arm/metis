@@ -6,9 +6,12 @@ import json
 import math
 import os
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from functools import lru_cache
 from io import StringIO
 from pathlib import Path
+from typing import Any
 
 import tiktoken
 
@@ -39,6 +42,27 @@ _MODEL_FAMILY_CHARS_PER_TOKEN: tuple[tuple[tuple[str, ...], float], ...] = (
 )
 
 
+def safe_int[Default](value: Any, default: Default) -> int | Default:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def normalized_string_tuple(values: object, *, error: str) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if not isinstance(values, (list, tuple)) or any(
+        not isinstance(value, str) for value in values
+    ):
+        raise ValueError(error)
+    return tuple(value.strip().lower() for value in values if value.strip())
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def string_list(value: object) -> list[str]:
     if isinstance(value, str):
         text = value.strip()
@@ -51,14 +75,39 @@ def string_list(value: object) -> list[str]:
 def resolve_path_within_root(
     root: str | Path,
     path: str | Path,
+    *,
+    preserve_aliases: bool = False,
 ) -> Path:
-    resolved_root = Path(root).expanduser().resolve()
-    candidate = Path(path).expanduser()
+    root_path = Path(root)
+    if os.fspath(root).startswith("~"):
+        root_path = root_path.expanduser()
+    resolved_root = root_path.resolve()
+    logical_root = root_path.absolute() if preserve_aliases else resolved_root
+    candidate = Path(path)
+    if os.fspath(path).startswith("~"):
+        candidate = candidate.expanduser()
     if not candidate.is_absolute():
-        candidate = resolved_root / candidate
+        candidate = logical_root / candidate
     resolved = candidate.resolve()
+    if not resolved.is_relative_to(resolved_root) and resolved_root.is_dir():
+        for parent in (resolved, *resolved.parents):
+            if parent.is_dir() and parent.samefile(resolved_root):
+                resolved = resolved_root / resolved.relative_to(parent)
+                break
     if not resolved.is_relative_to(resolved_root):
         raise ValueError("Path escapes codebase")
+    if preserve_aliases:
+        if ".." not in candidate.parts:
+            for base in (logical_root, resolved_root):
+                if candidate.is_relative_to(base):
+                    return logical_root / candidate.relative_to(base)
+        else:
+            for parent in (candidate, *candidate.parents):
+                if parent.name == ".." and not parent.parent.is_dir():
+                    raise NotADirectoryError(
+                        f"Path parent is not a directory: {parent.parent}"
+                    )
+        return logical_root / resolved.relative_to(resolved_root)
     return resolved
 
 

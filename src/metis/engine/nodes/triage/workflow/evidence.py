@@ -15,6 +15,8 @@ from .debug import _emit_debug
 def triage_node_collect_evidence(state: TriageState, *, toolbox) -> TriageState:
     new_state: TriageState = {**state, "source_observations": []}
     file_path = state.get("finding_file_path", "") or ""
+    if file_path.startswith("~"):
+        file_path = f"./{file_path}"
     line = int(state.get("finding_line", 1) or 1)
     is_metis_source = bool(state.get("finding_is_metis", False))
     sections: list[str] = []

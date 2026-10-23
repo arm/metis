@@ -95,9 +95,7 @@ class SourceEvidence:
             try:
                 if self.root is None:
                     raise ValueError("No codebase root")
-                resolved = resolve_path_within_root(
-                    self.root, self.root / path if path.startswith("./") else path
-                )
+                resolved = resolve_path_within_root(self.root, self.root / path)
                 first = int(match[1])
                 last = int(match[2] or match[1])
             except (OSError, RuntimeError, ValueError):

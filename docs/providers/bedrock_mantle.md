@@ -1,7 +1,7 @@
 # Amazon Bedrock Mantle provider
 
 Use this provider for Anthropic Claude models exposed through Amazon Bedrock
-Mantle with AWS SigV4 authentication.
+Mantle with AWS SigV4 authentication, using LangChain's `ChatAnthropicMantle`.
 
 ## Install
 
@@ -32,8 +32,6 @@ Notes:
 
 - `aws_profile` is optional if your standard AWS credential chain is already
   configured through environment variables, an assumed role, ECS, or IMDS.
-  You can also set `aws_access_key_id` / `aws_secret_access_key` /
-  `aws_session_token` directly.
 - `aws_region` is optional if `AWS_REGION` or `AWS_DEFAULT_REGION` is set in
   the environment, but setting it explicitly in `metis.yaml` is recommended.
 - `temperature` is not sent by default. If your target model supports

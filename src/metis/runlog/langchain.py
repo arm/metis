@@ -10,6 +10,8 @@ from typing import Any
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
 
+from metis.utils import safe_int
+
 from .session import Span
 from .session import bump
 from .session import current_runlog
@@ -231,8 +233,5 @@ def _response_payload(response: Any) -> dict[str, Any]:
 
 
 def _positive_int(value: Any) -> int:
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError, OverflowError):
-        return 0
+    parsed = safe_int(value or 0, 0)
     return parsed if parsed > 0 else 0

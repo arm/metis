@@ -23,7 +23,6 @@ prompts:
          - Hardcoded secrets
          - Insecure use of libraries
        - Do not report on issues that do not affect security.
-  validation_review: Validate the following Python review for security concerns.
   snippet_security_summary: Summarize the security implications of these Python code changes.
   security_review_file: |-
     You are a thorough security engineer specializing in Python.

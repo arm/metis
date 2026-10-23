@@ -6,6 +6,10 @@ Metis now supports fine-grained control over which files are targeted during a c
 
 These settings allow you to filter files **specifically for the review process** without removing them from the project's broader context. This ensures that Metis stays fast and the results remain relevant.
 
+CodeGraph includes supported source files outside the review paths so cross-file
+calls remain available as context. It still respects `.metisignore`. Changing only
+review paths does not rebuild an otherwise unchanged CodeGraph.
+
 - **`review_code_include_paths`**: Limits the review to specific directories or files.
 - **`review_code_exclude_paths`**: Explicitly skips specific files or patterns during the review phase.
 
@@ -15,6 +19,12 @@ Compiled review patterns are reused across file selection and rebuilt when the
 ordered pattern lists change. Review patterns and `.metisignore` use pathspec's
 Python backend for consistent filename matching during concurrent discovery,
 including when optional native matching backends are installed.
+
+Codebase roots and directory targets must exist; empty directories are valid.
+Targets resolve from the codebase root and cannot escape it through symlinks or
+`..`. These checks apply to CLI, YAML, and direct engine calls. Discovery and read
+errors fail the review rather than producing a clean result.
+Prefix literal names beginning with `~` with `./` to avoid home-directory expansion.
 
 ---
 

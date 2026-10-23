@@ -16,6 +16,7 @@ from metis.engine.execution.contracts import NodeJobs
 from metis.engine.stages.review.models import ReviewFinding
 from metis.engine.stages.review.models import ReviewGroup
 from metis.engine.stages.review.models import StandardReviewResult
+from metis.utils import safe_int
 
 PacketFits = Callable[[list[dict[str, object]]], bool]
 
@@ -111,8 +112,7 @@ def _apply_final_adjudication(
         _finding_adjudication_payload(index, candidate)
         for index, candidate in enumerate(candidates)
     ]
-    original_limit = len(candidates)
-    merged = _UnionFind(original_limit)
+    merged = _UnionFind(len(candidates))
     representative_preferences = []
     saw_valid_decision = False
 
@@ -124,7 +124,6 @@ def _apply_final_adjudication(
         adjudicator,
         merged,
         representative_preferences,
-        original_limit,
         progress_callback=progress_callback,
         phase="candidate",
         jobs=jobs,
@@ -149,7 +148,6 @@ def _apply_final_adjudication(
             adjudicator,
             merged,
             representative_preferences,
-            original_limit,
             progress_callback=progress_callback,
             phase="representative",
             jobs=jobs,
@@ -170,7 +168,6 @@ def _run_adjudication_batches(
     adjudicator,
     merged,
     representative_preferences,
-    original_limit,
     *,
     progress_callback=None,
     phase="candidate",
@@ -194,12 +191,12 @@ def _run_adjudication_batches(
         ),
     )
     saw_valid_decision = False
-    for _index, decision in sorted(batch_results, key=lambda item: item[0]):
+    for batch_index, decision in sorted(batch_results, key=lambda item: item[0]):
         if _merge_decision_groups(
             merged,
             representative_preferences,
             decision,
-            original_limit,
+            {payload["index"] for payload in batches[batch_index]},
         ):
             saw_valid_decision = True
     return saw_valid_decision
@@ -286,23 +283,21 @@ def _merge_decision_groups(
     merged,
     representative_preferences,
     decision: DeduplicationDecision | None,
-    original_limit,
+    batch_indexes: set[int],
 ):
     if decision is None:
         return False
     accepted = False
     for group in decision.groups:
-        members = _valid_member_indexes(group.member_indexes, original_limit)
-        if len(members) < 2:
+        members = list(dict.fromkeys(group.member_indexes))
+        representative = group.representative_index
+        if (
+            len(members) < 2
+            or any(member not in batch_indexes for member in members)
+            or representative not in members
+        ):
             continue
-        requested_representative = _representative_index(
-            group.representative_index, members
-        )
-        representative = requested_representative
-        if representative is None:
-            representative = min(members)
-        if requested_representative is not None:
-            representative_preferences.append(representative)
+        representative_preferences.append(representative)
         for member in members:
             merged.union(representative, member)
         accepted = True
@@ -330,18 +325,6 @@ class _UnionFind:
         for index in range(len(self._parent)):
             grouped[self.find(index)].append(index)
         return grouped
-
-
-def _valid_member_indexes(raw: list[int], limit: int) -> list[int]:
-    members = []
-    for index in raw:
-        if 0 <= index < limit and index not in members:
-            members.append(index)
-    return members
-
-
-def _representative_index(index: int, members: list[int]) -> int | None:
-    return index if index in members else None
 
 
 def _finding_adjudication_payload(
@@ -373,7 +356,4 @@ def _finding_adjudication_payload(
 def _safe_int(value: object, default: int) -> int:
     if not isinstance(value, int | float | str | bytes | bytearray):
         return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+    return safe_int(value, default)

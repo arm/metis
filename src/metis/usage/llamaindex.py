@@ -9,13 +9,11 @@ from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from .collector import UsageCollector
 from .context import current_operation, current_scope
 from metis.utils import count_tokens
+from metis.utils import safe_int
 
 
 def _as_int(value: Any) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return 0
+    parsed = safe_int(value, 0)
     return parsed if parsed > 0 else 0
 
 

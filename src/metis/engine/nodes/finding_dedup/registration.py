@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import CancelledError
 from typing import cast
 
 from metis.engine.execution.contracts import EmptyNodeConfiguration
+from metis.engine.execution.contracts import ExecutionDiagnostic
+from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
@@ -15,9 +18,11 @@ from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.stages.review.execution import combine_review_runs
+from metis.engine.stages.review.models import REVIEW_DEDUP_FAILED
 from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import PatchReviewResult
 from metis.engine.stages.review.models import ReviewRun
+from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.usage import usage_operation
 
@@ -61,33 +66,46 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         if progress is not None:
             progress({"event": "findings_finalization_progress", **payload})
 
+    diagnostics: list[ExecutionDiagnostic] = []
+
     def adjudicate(
         candidates: list[dict[str, object]],
     ) -> DeduplicationDecision | None:
+        if diagnostics:
+            return None
         with usage_operation("finding_dedup"):
-            return invocation.context.prompts.invoke(
-                JsonPromptRequest(
-                    model=invocation.context.runtime.model,
-                    temperature=0.1,
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=USER_PROMPT,
-                    variables={
-                        "candidate_findings": json.dumps(
-                            candidates, separators=(",", ":")
-                        )
-                    },
-                    parse=_parse_decision,
-                    response_model=DeduplicationDecision,
-                    logger=logger,
-                    label="Final review deduplication",
-                    batch_size=len(candidates),
-                    invalid_message="expected duplicate groups JSON",
-                    final_keep_message="keeping this batch unchanged",
-                    chat_model_kwargs=dict(
-                        invocation.context.runtime.chat_model_kwargs
-                    ),
-                )
+            request = JsonPromptRequest(
+                model=invocation.context.runtime.model,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=USER_PROMPT,
+                variables={
+                    "candidate_findings": json.dumps(candidates, separators=(",", ":"))
+                },
+                parse=_parse_decision,
+                response_model=DeduplicationDecision,
+                logger=logger,
+                label="Final review deduplication",
+                batch_size=len(candidates),
+                invalid_message="expected duplicate groups JSON",
+                final_keep_message="keeping this batch unchanged",
+                chat_model_kwargs=dict(invocation.context.runtime.chat_model_kwargs),
             )
+            try:
+                decision = invocation.context.prompts.invoke(request)
+                if decision is None:
+                    raise ValueError("Finding deduplication returned no valid response")
+                return decision
+            except CancelledError:
+                raise
+            except Exception as exc:
+                diagnostics.append(
+                    ExecutionDiagnostic(
+                        code=REVIEW_DEDUP_FAILED,
+                        message=f"Finding deduplication failed; keeping original findings: {exc}",
+                        severity="error",
+                    )
+                )
+                return None
 
     schema_json = json.dumps(
         DeduplicationDecision.model_json_schema(), separators=(",", ":")
@@ -114,6 +132,8 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         progress_callback=report_progress,
         jobs=invocation.context.jobs,
     )
+    if diagnostics:
+        deduped = result
     if progress is not None:
         kept_count = sum(len(group.reviews) for group in deduped.reviews)
         progress(
@@ -127,9 +147,15 @@ def execute(invocation: NodeInvocation) -> NodeResult:
     return NodeResult(
         {
             "review": FinalReviewRun(
-                ReviewRun(combined.status, deduped, combined.diagnostics)
+                ReviewRun(
+                    ReviewStatus.INCONCLUSIVE if diagnostics else combined.status,
+                    deduped,
+                    combined.diagnostics,
+                )
             )
-        }
+        },
+        status=ExecutionStatus.INCONCLUSIVE if diagnostics else ExecutionStatus.OK,
+        diagnostics=tuple(diagnostics),
     )
 
 

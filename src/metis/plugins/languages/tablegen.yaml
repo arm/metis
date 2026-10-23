@@ -65,4 +65,3 @@ prompts:
     - Incorrect feature gating or privilege-related instructions becoming available.
     - Missing side effects / memory flags impacting reordering or optimization.
     Keep the summary concise and actionable.
-  validation_review: Validate the following TableGen review for security concerns.

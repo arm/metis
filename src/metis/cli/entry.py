@@ -17,10 +17,15 @@ from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
 from yaml import YAMLError
 
-from metis.configuration import build_embedding_provider_config, load_runtime_config
+from metis.configuration import build_embedding_provider_config
+from metis.configuration import load_execution_config
+from metis.configuration import load_runtime_config
 from metis.engine import MetisEngine
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
+from metis.engine.stages.configuration import ExecutionConfiguration
+from metis.engine.stages.review.models import REVIEW_FAILURE_CODES
+from metis.engine.stages.triage.models import TRIAGE_FINDING_FAILED
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
 from metis.providers.registry import get_chat_provider
@@ -36,7 +41,10 @@ except ImportError:
 from .command_registry import COMMANDS, completer
 from .command_runtime import CommandRuntime
 from .review_checkpoints import review_checkpoint_callbacks
+from .review_checkpoints import stage_checkpoint_callback
 from .review_progress import ExecutionGraphProgressReporter
+from .triage_checkpoints import triage_checkpoint_callbacks
+from .output import save_graph_outputs
 from .utils import (
     configure_logger,
     PG_SUPPORTED,
@@ -49,10 +57,6 @@ from .utils import (
     print_usage_summary,
     print_final_usage_summary,
     check_dir_exists,
-    save_output,
-    output_format,
-    output_files_for_formats,
-    output_path_identity,
     workflow_debug_context,
 )
 
@@ -78,117 +82,6 @@ def _execute_graph_with_progress(
             return engine.execute_graph(callbacks=callbacks, **kwargs)
         finally:
             reporter.finish()
-
-
-def _save_graph_outputs(
-    output_files,
-    result: ExecutionResult,
-    quiet,
-    *,
-    generated_output=False,
-):
-    outputs = result.outputs
-    review = outputs.get("review", {})
-    triage_result = outputs.get("triage", {})
-    findings = review.get("findings")
-    review_sarif = review.get("sarif")
-    triage_sarif = triage_result.get("sarif")
-    review_formats = tuple(review.get("formats", ()))
-    triage_formats = tuple(triage_result.get("formats", ()))
-    partial = result.status is ExecutionStatus.ERROR
-    if partial:
-        review_formats = tuple(
-            name
-            for name in review_formats
-            if (review_sarif is not None if name == "sarif" else findings is not None)
-        )
-        if triage_sarif is None:
-            triage_formats = ()
-    review_filename = review.get("filename")
-    triage_filename = triage_result.get("filename")
-    explicit_output = bool(output_files) and not generated_output
-    if (
-        not explicit_output
-        and review_formats
-        and triage_formats
-        and review_filename is not None
-        and triage_filename is not None
-    ):
-        review_paths = {
-            output_path_identity(Path(review_filename).with_suffix(f".{fmt}"))
-            for fmt in review_formats
-        }
-        triage_paths = {
-            output_path_identity(Path(triage_filename).with_suffix(f".{fmt}"))
-            for fmt in triage_formats
-        }
-        if review_paths & triage_paths:
-            raise ValueError("Output paths for graph stages must be distinct")
-    review_files: list[str] = []
-    triage_files: list[str] = []
-    explicit_files = (output_files or ()) if explicit_output else ()
-    for path in explicit_files:
-        format_name = output_format(path)
-        if format_name in triage_formats:
-            triage_files.append(path)
-        elif format_name in review_formats:
-            review_files.append(path)
-        elif triage_sarif is not None:
-            triage_formats = (*triage_formats, format_name)
-            triage_files.append(path)
-        elif (
-            review_sarif is not None if format_name == "sarif" else findings is not None
-        ):
-            review_formats = (*review_formats, format_name)
-            review_files.append(path)
-        elif partial:
-            print_console(
-                f"[yellow]No validated {format_name} output available for "
-                f"{escape(str(path))}.[/yellow]",
-                quiet,
-            )
-        else:
-            raise ValueError(f"Execution graph did not produce {format_name} output")
-
-    if triage_formats:
-        if triage_sarif is None:
-            raise ValueError("Execution graph did not produce triage results")
-        triage_files = output_files_for_formats(
-            triage_files
-            if explicit_output or triage_filename is None
-            else [triage_filename],
-            triage_formats,
-            command="graph_triage",
-            generated_output=not explicit_output,
-            reserved_paths={Path(path) for path in review_files},
-        )
-    if review_formats:
-        if ("sarif" in review_formats and review_sarif is None) or (
-            any(name != "sarif" for name in review_formats) and findings is None
-        ):
-            raise ValueError("Execution graph did not produce review results")
-        review_files = output_files_for_formats(
-            review_files
-            if explicit_output or review_filename is None
-            else [review_filename],
-            review_formats,
-            command="graph_review",
-            generated_output=not explicit_output,
-            reserved_paths={Path(path) for path in triage_files},
-        )
-        save_output(
-            review_files,
-            findings if findings is not None else review_sarif,
-            quiet,
-            sarif_payload=review_sarif,
-        )
-    if triage_formats:
-        save_output(
-            triage_files,
-            triage_sarif,
-            quiet,
-            sarif_payload=triage_sarif,
-        )
 
 
 def determine_output_file(cmd, args, cmd_args):
@@ -258,17 +151,23 @@ def build_engine(args, runtime):
     engine_runtime.pop("llm_provider", None)
 
     embedding_provider = None
-    embedding_provider_config = build_embedding_provider_config(
-        cast(dict | None, runtime.get("embedding_provider_raw_config"))
+    execution = ExecutionConfiguration.model_validate(
+        load_execution_config(runtime.get("execution_config"))
     )
+    engine_runtime["execution_config"] = execution
+    engine_runtime.pop("review_checkpoints_enabled", None)
+    if "index" in execution.selected_capabilities():
+        embedding_provider_config = build_embedding_provider_config(
+            cast(dict | None, runtime.get("embedding_provider_raw_config"))
+        )
+        if embedding_provider_config is not None:
+            embedding_provider_cls = get_embedding_provider(
+                str(embedding_provider_config["name"])
+            )
+            embedding_provider = embedding_provider_cls(
+                cast(dict, embedding_provider_config)
+            )
     llm_provider = chat_provider_cls(cast(dict, runtime["llm_provider"]))
-    if embedding_provider_config is not None:
-        embedding_provider_cls = get_embedding_provider(
-            str(embedding_provider_config["name"])
-        )
-        embedding_provider = embedding_provider_cls(
-            cast(dict, embedding_provider_config)
-        )
     engine_runtime.pop("embedding_provider_raw_config", None)
 
     usage_runtime = UsageRuntime(args.codebase_path)
@@ -538,6 +437,7 @@ def main():
 
 
 def _run_cli(args):
+    args.codebase_path = str(Path(args.codebase_path).absolute())
     with workflow_debug_context(args) as runlog_session:
         if runlog_session is not None:
             args._metis_runlog = runlog_session
@@ -554,16 +454,24 @@ def _run_cli(args):
                 config_path=args.config,
                 enable_psql=(args.backend == "postgres"),
             )
-            args._review_checkpoints_enabled = runtime.pop(
+            args._review_checkpoints_enabled = runtime.get(
                 "review_checkpoints_enabled", True
             )
+            args._triage_checkpoint_every = runtime.get("triage_checkpoint_every", 50)
             engine, vector_backend = build_engine(args, runtime)
             if not args.interactive:
+                execution = engine.execution.configuration
+                triage_stage = execution.stages.triage
+                triage_from_review = (
+                    triage_stage is not None
+                    and triage_stage.inputs.get("sarif") == "review.sarif"
+                )
                 with runlog.span(
                     "command",
                     "execution_graph",
                     {"include_triaged": bool(args.include_triaged)},
                 ) as command_span:
+                    generated_bases: dict[str, str] = {}
                     try:
                         determine_output_file("graph", args, [])
                         callbacks: dict[str, object] = {
@@ -573,6 +481,12 @@ def _run_cli(args):
                                 )
                             )
                         }
+                        if args._review_checkpoints_enabled:
+                            callbacks["stage_completed_callback"] = (
+                                stage_checkpoint_callback(
+                                    codebase_path=args.codebase_path,
+                                )
+                            )
                         callbacks.update(
                             review_checkpoint_callbacks(
                                 codebase_path=args.codebase_path,
@@ -581,39 +495,64 @@ def _run_cli(args):
                                 ),
                             )
                         )
-                        result = _execute_graph_with_progress(
-                            engine,
-                            args,
-                            callbacks,
+                        callbacks.update(
+                            triage_checkpoint_callbacks(
+                                output_files=args.output_file or [],
+                                generated_output=bool(
+                                    getattr(args, "_metis_generated_output", False)
+                                ),
+                                execution=execution.model_dump(),
+                                checkpoint_every=runtime.get(
+                                    "triage_checkpoint_every", 0
+                                ),
+                                quiet=args.quiet,
+                                generated_bases=generated_bases,
+                                codebase_path=args.codebase_path,
+                            )
                         )
-                        _save_graph_outputs(
+                        pending_error = None
+                        try:
+                            result = _execute_graph_with_progress(
+                                engine, args, callbacks
+                            )
+                        except CancelledError:
+                            raise
+                        except Exception as execution_error:
+                            result = getattr(execution_error, "result", None)
+                            if (
+                                not isinstance(result, ExecutionResult)
+                                or not result.outputs
+                            ):
+                                raise
+                            pending_error = execution_error
+                        save_graph_outputs(
                             args.output_file,
-                            result,
+                            result.outputs,
                             args.quiet,
                             generated_output=bool(
                                 getattr(args, "_metis_generated_output", False)
                             ),
+                            triage_from_review=triage_from_review,
+                            generated_bases=generated_bases,
+                            codebase_path=args.codebase_path,
+                            partial=result.status is ExecutionStatus.ERROR,
+                            pending_error=pending_error,
                         )
+                        if any(
+                            diagnostic.code in REVIEW_FAILURE_CODES
+                            for diagnostic in result.diagnostics
+                        ):
+                            raise RuntimeError("Review failed for one or more files.")
+                        if any(
+                            diagnostic.code == TRIAGE_FINDING_FAILED
+                            for diagnostic in result.diagnostics
+                        ):
+                            raise RuntimeError(
+                                "Triage failed for one or more findings."
+                            )
                     except CancelledError:
                         raise
                     except Exception as exc:
-                        partial = getattr(exc, "result", None)
-                        if isinstance(partial, ExecutionResult) and partial.outputs:
-                            try:
-                                _save_graph_outputs(
-                                    args.output_file,
-                                    partial,
-                                    args.quiet,
-                                    generated_output=bool(
-                                        getattr(args, "_metis_generated_output", False)
-                                    ),
-                                )
-                            except Exception as save_error:
-                                print_console(
-                                    f"[red]Unable to save partial outputs: "
-                                    f"{escape(str(save_error))}[/red]",
-                                    args.quiet,
-                                )
                         command_span.end(status="error", exc=exc)
                         print_console(
                             f"[bold red]Error:[/bold red] {escape(str(exc))}",

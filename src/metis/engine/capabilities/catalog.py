@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from metis.configuration import load_yaml
+from metis.engine.registration_loading import load_registration
 
 from .contracts import CapabilityRegistration
 from .manifest import CapabilityManifest
@@ -56,20 +57,12 @@ class CapabilityCatalog:
             raise ValueError(f"Capability {name!r} is not registered")
         if len(candidates) > 1:
             raise ValueError(f"Multiple capability packages register {name!r}")
-        try:
-            loaded = candidates[0].load()
-            registration = (
-                loaded()
-                if callable(loaded) and not isinstance(loaded, CapabilityRegistration)
-                else loaded
-            )
-        except Exception as exc:
-            raise RuntimeError(f"Capability {name!r} failed to load: {exc}") from exc
-        if not isinstance(registration, CapabilityRegistration):
-            raise TypeError(
-                f"Capability entry point {name!r} did not return a "
-                "CapabilityRegistration"
-            )
+        registration = load_registration(
+            candidates[0],
+            CapabilityRegistration,
+            label=f"Capability {name!r}",
+            entry_point_label=f"Capability entry point {name!r}",
+        )
         if registration.manifest.name != name:
             raise ValueError(
                 f"Capability entry point {name!r} returned registration "

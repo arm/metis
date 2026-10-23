@@ -3,8 +3,11 @@
 
 from uuid import uuid4
 from copy import deepcopy
+from urllib.parse import quote
 
 from metis.sarif.triage import METIS_FINDING_ID_KEY
+from metis.sarif.triage import METIS_URI_ENCODING_KEY
+from metis.sarif.triage import _apply_triage_properties
 from metis.version import __version__ as TOOL_VERSION
 from metis.sarif.utils import anchor_fingerprint, create_fingerprint, read_file_lines
 
@@ -74,6 +77,8 @@ def generate_sarif(
     tool_name="Metis",
     automation_id="metis-run-1",
     context_lines=DEFAULT_CONTEXT_LINES,
+    *,
+    read_source: bool = True,
 ):
     """
     Generate a SARIF (Static Analysis Results Interchange Format) report.
@@ -83,6 +88,7 @@ def generate_sarif(
         tool_name: Name of the tool producing the report.
         automation_id: Identifier for the automation run.
         context_lines: Number of lines of context to include around each issue.
+        read_source: Whether to read source files for snippets and context.
 
     Returns:
         A dict representing the SARIF JSON structure.
@@ -115,7 +121,7 @@ def generate_sarif(
     for review in results.get("reviews", []):
         file_path = review.get("file_path")
         artifact_uri = review.get("file") or file_path or "<unknown>"
-        lines = read_file_lines(file_path) if file_path else []
+        lines = read_file_lines(file_path) if read_source and file_path else []
         source_available = bool(lines) and lines != ["<source unavailable>"]
         total_lines = len(lines) if source_available else 0
 
@@ -123,7 +129,7 @@ def generate_sarif(
             finding_id = str(issue.get("id") or "").strip()
             if not finding_id or finding_id in finding_ids:
                 finding_id = uuid4().hex
-                issue["id"] = finding_id
+            issue["id"] = finding_id
             finding_ids.add(finding_id)
             text = issue.get("issue", "unspecified")
             anchor = (
@@ -182,7 +188,11 @@ def generate_sarif(
                 end = line_num + snippet_line_count - 1
                 context = snippet_text or "<context unavailable>"
 
-            properties = {METIS_FINDING_ID_KEY: finding_id}
+            properties = {
+                METIS_FINDING_ID_KEY: finding_id,
+                METIS_URI_ENCODING_KEY: "percent",
+            }
+            _apply_triage_properties(properties, issue)
             cwe_id = issue.get("cwe")
             if isinstance(cwe_id, str) and cwe_id.strip():
                 properties["cwe"] = cwe_id.strip()
@@ -234,7 +244,7 @@ def generate_sarif(
                 "locations": [
                     {
                         "physicalLocation": {
-                            "artifactLocation": {"uri": artifact_uri},
+                            "artifactLocation": {"uri": quote(artifact_uri)},
                             "region": {
                                 "startLine": line_num,
                                 "endLine": max(line_num, region_end_line),

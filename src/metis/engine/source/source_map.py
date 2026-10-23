@@ -309,8 +309,8 @@ class SourceMap:
         self, node: Any, *, symbol: str | None = None, kind: str = KIND_RANGE
     ) -> CodeAnchor:
         return self.anchor_for_bytes(
-            int(node.start_byte()),
-            int(node.end_byte()),
+            int(node.start_byte),
+            int(node.end_byte),
             symbol=symbol,
             kind=kind,
         )
@@ -527,7 +527,7 @@ class SourceMap:
                 _node_line,
             )
 
-            tree = get_parser(language).parse_bytes(self._source)
+            tree = get_parser(language).parse(self._source)
         except Exception:
             return []
         if tree is None:
@@ -535,7 +535,7 @@ class SourceMap:
 
         source = self._source
         out: list[tuple[int, int, str]] = []
-        stack = [tree.root_node()]
+        stack = [tree.root_node]
         while stack:
             node = stack.pop()
             if _node_kind(node) in {"function_definition", "method_definition"}:

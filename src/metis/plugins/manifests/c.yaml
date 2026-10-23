@@ -12,6 +12,5 @@ filename_patterns: []
 config_resource: languages/c.yaml
 capabilities:
   codegraph: true
-  c_family_triage_evidence: true
 priority: 0
 prompt_profile: c_family

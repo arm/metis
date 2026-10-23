@@ -85,18 +85,6 @@ prompts:
        - IMPORTANT: Do not report purely style, maintainability, or reliability issues unless they have a concrete security consequence.
        - Pay extra attention to variables that are externally controlled, including HTTP request data, headers, cookies, path/query parameters, message queue payloads, config files, environment variables, database content, uploaded files, webhook payloads, and serialized objects.
 
-  validation_review: |-
-    You will be given:
-    SNIPPET: The relevant Java/Kotlin code snippet.
-    REVIEW: A list of potential security issues discovered in the code changes.
-
-    Your task is to:
-    1. Carefully examine each item in the REVIEW. Check if it is a genuine security concern by referencing the SNIPPET.
-    2. Remove any issues that are false positives or are already mitigated in the code, such as parameterized queries, authorization checks, escaping, safe parser settings, allowlists, safe cryptographic APIs, or bounded resource usage.
-    3. Keep only issues that definitely represent real security risks.
-    4. If an issue is missing details, add the necessary clarifications or background using only evidence from the SNIPPET.
-    5. If no real issues remain after validation, respond with an empty array: [].
-
   snippet_security_summary: |-
     You are a thorough security engineer specializing in Java and Kotlin.
     You will be given a concatenated list of all identified security issues from a code review.

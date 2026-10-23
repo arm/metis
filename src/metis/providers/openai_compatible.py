@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from typing import Any, Required, TypedDict, cast
 
 from langchain_core.callbacks import Callbacks
@@ -60,6 +61,15 @@ class OpenAICompatibleChatProvider(ChatProvider):
     def count_tokens(self, text: str, model: str | None = None) -> int:
         return tiktoken_token_count(text, model or self.default_model)
 
+    def cache_identity(self) -> Mapping[str, object]:
+        identity = dict(super().cache_identity())
+        identity["base_url"] = self.base_url
+        if not self.base_url:
+            identity["base_url_environment"] = {
+                name: os.getenv(name) for name in ("OPENAI_API_BASE", "OPENAI_BASE_URL")
+            }
+        return identity
+
     def get_chat_model(
         self,
         *args: str,
@@ -75,6 +85,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
         params: dict[str, object] = {
             "model": model_name,
             "max_retries": self.max_retries,
+            "request_timeout": 600.0,
             "use_responses_api": True,
         }
         temperature = kwargs.get("temperature")

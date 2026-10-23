@@ -15,8 +15,12 @@ from typing import Iterable, Tuple
 
 from metis.json_io import atomic_text_writer
 from metis.json_io import write_json_atomic
+from metis.sarif.triage import METIS_TRIAGE_REASON_KEY
+from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
+from metis.sarif.triage import METIS_TRIAGE_TIMESTAMP_KEY
 from metis.sarif.triage import extract_findings
 from metis.sarif.writer import generate_sarif
+from metis.severity import SEVERITY_PRIORITY
 
 
 def export_html(
@@ -87,18 +91,14 @@ def _build_html_document(
 
     severity_counts = Counter()
     cwe_counts = Counter()
-    severity_priority = {
-        "Critical": 4,
-        "High": 3,
-        "Medium": 2,
-        "Low": 1,
-        "Unknown": 0,
-    }
     file_stats: dict[str, dict[str, object]] = {}
     folder_stats: dict[str, dict[str, object]] = {}
 
     for issue in issues:
         severity = issue.get("severity") or "Unknown"
+        if severity.capitalize() in SEVERITY_PRIORITY or severity.lower() == "unknown":
+            severity = severity.capitalize()
+        issue["severity"] = severity
         cwe = issue.get("cwe") or "CWE-Unknown"
         severity_counts[severity] += 1
         cwe_counts[cwe] += 1
@@ -115,8 +115,8 @@ def _build_html_document(
         )
         file_entry["count"] = int(file_entry["count"]) + 1
         file_entry["severityCounts"][severity] += 1
-        current_priority = severity_priority.get(file_entry["maxSeverity"], 0)
-        candidate_priority = severity_priority.get(severity, 0)
+        current_priority = SEVERITY_PRIORITY.get(file_entry["maxSeverity"], 0)
+        candidate_priority = SEVERITY_PRIORITY.get(severity, 0)
         if candidate_priority > current_priority:
             file_entry["maxSeverity"] = severity
 
@@ -149,6 +149,7 @@ def _build_html_document(
 
     payload = {
         "issues": list(issues),
+        "severityOrder": [*reversed(SEVERITY_PRIORITY), "Unknown"],
         "severityCounts": dict(severity_counts),
         "cweCounts": dict(cwe_counts),
         "fileStats": file_stats_serialized,
@@ -204,9 +205,6 @@ def _flatten_issues(report_data) -> list[dict]:
                 severity = severity.strip() or "Unknown"
             else:
                 severity = str(severity)
-            if severity.lower() in {"critical", "high", "medium", "low", "unknown"}:
-                severity = severity.capitalize()
-
             cwe = issue.get("cwe") or "CWE-Unknown"
             if isinstance(cwe, (list, tuple)):
                 cwe = ", ".join(str(item) for item in cwe if item)
@@ -233,10 +231,14 @@ def _flatten_issues(report_data) -> list[dict]:
                     "mitigation": _coerce_to_string(issue.get("mitigation")),
                     "confidence": _coerce_to_string(issue.get("confidence")),
                     "snippet": _coerce_to_string(issue.get("code_snippet")),
-                    "triageStatus": _coerce_to_string(issue.get("metisTriageStatus")),
-                    "triageReason": _coerce_to_string(issue.get("metisTriageReason")),
+                    "triageStatus": _coerce_to_string(
+                        issue.get(METIS_TRIAGE_STATUS_KEY)
+                    ),
+                    "triageReason": _coerce_to_string(
+                        issue.get(METIS_TRIAGE_REASON_KEY)
+                    ),
                     "triageTimestamp": _coerce_to_string(
-                        issue.get("metisTriageTimestamp")
+                        issue.get(METIS_TRIAGE_TIMESTAMP_KEY)
                     ),
                     "folder": folder,
                 }

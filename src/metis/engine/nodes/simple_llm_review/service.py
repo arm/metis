@@ -6,9 +6,12 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from codecs import escape_decode
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -20,12 +23,13 @@ from metis.engine.execution.contracts import NodeJobs
 from metis.engine.helpers import apply_custom_guidance
 from metis.engine.helpers import summarize_changes
 from metis.engine.llm_runner import ModelProviderConfigurationError
-from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
 from metis.engine.nodes.reachability.progress import emit_progress
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.source import SourceMap
 from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
+from metis.engine.stages.review.models import REVIEW_FILE_FAILED
 from metis.engine.stages.review.models import PatchReviewResult
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewDiagnostic
@@ -37,7 +41,6 @@ from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.scope import select_review_targets
 from metis.engine.threat_context_retrieval import get_threat_model_context
-from metis.utils import read_file_content
 from metis.utils import resolve_path_within_root
 
 logger = logging.getLogger("metis")
@@ -87,6 +90,7 @@ class SimpleLlmReviewService:
         if command.mode == "patch":
             graph_kwargs = {"navigation": navigation} if navigation is not None else {}
             review_graph = self._review_graph_factory(index, model, **graph_kwargs)
+            failures: list[ReviewFileFailure] = []
             result = PatchReviewResult.model_validate(
                 self.review_patch(
                     command.target,
@@ -94,9 +98,24 @@ class SimpleLlmReviewService:
                     memory_service=memory_service,
                     review_graph=review_graph,
                     checkpoint_session=checkpoint_session,
+                    failures=failures,
                 )
             )
-            return _review_run(result)
+            return ReviewRun(
+                status=(
+                    ReviewStatus.INCONCLUSIVE if result.reviews else ReviewStatus.FAILED
+                )
+                if failures
+                else ReviewStatus.SUCCEEDED,
+                result=result if result.reviews or not failures else None,
+                diagnostics=tuple(
+                    ReviewDiagnostic(
+                        code=REVIEW_FILE_FAILED,
+                        message=f"Review failed for {failure.path}: {failure.message}",
+                    )
+                    for failure in failures
+                ),
+            )
 
         files = select_review_targets(self._repository, command)
         emit_progress(
@@ -157,7 +176,7 @@ class SimpleLlmReviewService:
         )
         diagnostics = tuple(
             ReviewDiagnostic(
-                code="review.file_failed",
+                code=REVIEW_FILE_FAILED,
                 message=f"Review failed for {failure.path}: {failure.message}",
             )
             for failure in outcome.failures
@@ -190,8 +209,11 @@ class SimpleLlmReviewService:
         reviews_by_path: dict[str, dict[str, Any]] = {}
         failures_by_path: dict[str, ReviewFileFailure] = {}
         completed_files = 0
+        loaded_checkpoints = (
+            checkpoint_session is not None and checkpoint_session.has_records
+        )
 
-        if checkpoint_session is not None and checkpoint_session.has_records:
+        if loaded_checkpoints:
 
             def load_cached(path: str) -> tuple[str, dict[str, Any] | None]:
                 try:
@@ -248,6 +270,7 @@ class SimpleLlmReviewService:
                 memory_service=memory_service,
                 review_graph=review_graph,
                 checkpoint_session=checkpoint_session,
+                load_checkpoint=not loaded_checkpoints,
             ),
             jobs,
             on_complete=report_completion,
@@ -286,13 +309,15 @@ class SimpleLlmReviewService:
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
         cache_only: bool = False,
+        load_checkpoint: bool = True,
     ) -> dict[str, Any] | None:
+        source_path = resolve_path_within_root(
+            self._config.codebase_path, file_path, preserve_aliases=True
+        )
+        file_path = str(source_path)
         source_view = self._repository.source_view_for_path(file_path)
         if source_view is None:
-            source_path = resolve_path_within_root(
-                self._config.codebase_path, os.path.abspath(file_path)
-            )
-            snippet = read_file_content(str(source_path))
+            snippet = source_path.read_text(encoding="utf-8")
             anchor_source_hash = None
         else:
             snippet = source_view.canonical.decode("utf-8", errors="ignore")
@@ -326,27 +351,35 @@ class SimpleLlmReviewService:
         checkpoint_key = (
             graph.checkpoint_key(req) if checkpoint_session is not None else None
         )
-        if checkpoint_key is not None and checkpoint_session is not None:
+        if (
+            load_checkpoint
+            and checkpoint_key is not None
+            and checkpoint_session is not None
+        ):
             cached = checkpoint_session.get(f"file:{checkpoint_key}")
-            if cached is not None:
+            if cached is not None and isinstance(cached.get("reviews"), list):
                 try:
                     group = ReviewGroup.model_validate(cached)
                 except ValidationError:
                     pass
                 else:
-                    return _review_group_payload(
-                        group,
-                        relative_path=relative_path,
-                        file_path=file_path,
-                    )
+                    if graph.checkpoint_evidence_valid(cached):
+                        return _review_group_payload(
+                            group,
+                            relative_path=relative_path,
+                            file_path=file_path,
+                        )
         if cache_only:
             return None
 
         if source_view is None:
-            result = graph.review(req)
+            result = graph.review(
+                req, collect_navigation_evidence=checkpoint_key is not None
+            )
         else:
             result = graph.review(
                 req,
+                collect_navigation_evidence=checkpoint_key is not None,
                 source_map=SourceMap(
                     relative_path,
                     snippet,
@@ -354,6 +387,7 @@ class SimpleLlmReviewService:
                     anchor_source=source_view.raw,
                 ),
             )
+        navigation_evidence = result.get("navigation_evidence") if result else None
         if result:
             group = ReviewGroup.model_validate(result)
             result = _review_group_payload(
@@ -361,13 +395,19 @@ class SimpleLlmReviewService:
                 relative_path=relative_path,
                 file_path=file_path,
             )
-        if checkpoint_key is not None and checkpoint_session is not None and result:
+        if (
+            checkpoint_key is not None
+            and checkpoint_session is not None
+            and result
+            and (navigation_evidence is None or None not in navigation_evidence)
+        ):
             checkpoint_session.put(
                 f"file:{checkpoint_key}",
                 {
                     "reviews": [
                         review.model_dump(mode="json") for review in group.reviews
-                    ]
+                    ],
+                    "navigation_evidence": navigation_evidence,
                 },
             )
         return result
@@ -391,21 +431,31 @@ class SimpleLlmReviewService:
         *,
         on_complete: Callable[[Any, int, int], None] | None = None,
     ):
+        completed = []
+
         def review(path):
             try:
-                return path, self._review_file_task(review_fn, path), None
-            except (CancelledError, ModelProviderConfigurationError):
+                result = path, self._review_file_task(review_fn, path), None
+            except CancelledError:
+                raise
+            except ModelProviderConfigurationError as exc:
+                completed.append((path, None, exc))
                 raise
             except Exception as exc:
-                return path, None, exc
+                result = path, None, exc
+            completed.append(result)
+            return result
 
-        return jobs.run(
-            files,
-            review,
-            label=None,
-            result_key=str,
-            on_complete=on_complete,
-        )
+        try:
+            return jobs.with_cancellation(Event()).run(
+                files,
+                review,
+                label=None,
+                result_key=str,
+                on_complete=on_complete,
+            )
+        except ModelProviderConfigurationError:
+            return completed
 
     def review_patch(
         self,
@@ -415,47 +465,58 @@ class SimpleLlmReviewService:
         memory_service: MemoryService | None = None,
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
+        failures: list[ReviewFileFailure] | None = None,
     ):
-        patch_text = read_file_content(patch_file)
-        try:
-            diff = unidiff.PatchSet.from_string(patch_text)
-            logger.info("Parsed the patch file successfully.")
-        except Exception as e:
-            logger.error(f"Error parsing patch file: {e}")
-            return {"reviews": [], "overall_changes": ""}
+        patch_text = Path(patch_file).read_text(encoding="utf-8")
+        diff = unidiff.PatchSet.from_string(patch_text)
+        if patch_text.strip() and not diff:
+            raise ValueError("Patch file contains no file changes")
+        logger.info("Parsed the patch file successfully.")
         file_reviews = []
         overall_summaries = []
-        base_path = os.path.abspath(self._config.codebase_path)
         metisignore_spec = self._repository.load_metisignore()
         graph = review_graph or self._review_graph_factory(None, model)
         for file_diff in diff:
             if file_diff.is_removed_file or file_diff.is_binary_file:
                 continue
-            abs_path = (
-                file_diff.path
-                if os.path.isabs(file_diff.path)
-                else os.path.join(base_path, file_diff.path)
-            )
-            relative_path = self._repository.normalize_match_path(abs_path)
-            if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
-                continue
-            plugin = self._repository.get_plugin_for_path(file_diff.path)
+            patch_path = file_diff.path
+            if patch_path.startswith('"') and patch_path.endswith('"'):
+                patch_path = os.fsdecode(
+                    escape_decode(os.fsencode(patch_path[1:-1]))[0]
+                )
+            plugin = self._repository.get_plugin_for_path(patch_path)
             if not plugin:
                 continue
             if not file_diff.added and not file_diff.removed:
                 continue
             snippet = str(file_diff)
             language_prompts = plugin.get_prompts()
+            try:
+                source_path = resolve_path_within_root(
+                    self._config.codebase_path,
+                    Path(self._config.codebase_path).absolute() / patch_path,
+                    preserve_aliases=True,
+                )
+                abs_path = str(source_path)
+                relative_path = self._repository.normalize_match_path(abs_path)
+                if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
+                    continue
+                original_content = (
+                    source_path.read_text(encoding="utf-8")
+                    if source_path.exists()
+                    else ""
+                )
+            except CancelledError:
+                raise
+            except Exception as exc:
+                if failures is None:
+                    raise
+                failures.append(ReviewFileFailure(patch_path, str(exc)))
+                continue
             threat_model_context = get_threat_model_context(
                 memory_service,
                 path=relative_path,
             )
-            source_path = resolve_path_within_root(self._config.codebase_path, abs_path)
-            try:
-                original_content = read_file_content(str(source_path))
-            except Exception as exc:
-                logger.error(f"Error processing review for {file_diff.path}: {exc}")
-                continue
             req: ReviewRequest = {
                 "file_path": abs_path,
                 "snippet": snippet,
@@ -482,43 +543,52 @@ class SimpleLlmReviewService:
                         raise ValueError("incomplete patch checkpoint record")
                     cached_review = cached["review"]
                     cached_summary = cached["summary"]
-                    if cached_review is not None:
-                        group = ReviewGroup.model_validate(cached_review)
-                        review_dict = _review_group_payload(
-                            group,
-                            relative_path=relative_path,
-                            file_path=abs_path,
-                        )
+                    if not isinstance(cached_review, dict) or not isinstance(
+                        cached_review.get("reviews"), list
+                    ):
+                        raise ValueError("invalid patch checkpoint review")
+                    group = ReviewGroup.model_validate(cached_review)
+                    review_dict = _review_group_payload(
+                        group,
+                        relative_path=relative_path,
+                        file_path=abs_path,
+                    )
                     if cached_summary is not None and not isinstance(
                         cached_summary, str
                     ):
                         raise ValueError("invalid patch checkpoint summary")
+                    if not graph.checkpoint_evidence_valid(cached):
+                        raise ValueError("changed navigation evidence")
                     changes_summary = cached_summary
                 except ValueError:
                     cached = None
-                else:
-                    assert checkpoint_session is not None
 
             if cached is None:
                 checkpoint_group: ReviewGroup | None = None
                 try:
-                    review_dict = graph.review(req)
-                except (
-                    CancelledError,
-                    ModelProviderConfigurationError,
-                    ModelInputLimitError,
-                ):
+                    review_dict = graph.review(
+                        req, collect_navigation_evidence=checkpoint_key is not None
+                    )
+                    navigation_evidence = (
+                        review_dict.get("navigation_evidence") if review_dict else None
+                    )
+                    if review_dict:
+                        checkpoint_group = ReviewGroup.model_validate(review_dict)
+                        review_dict = _review_group_payload(
+                            checkpoint_group,
+                            relative_path=relative_path,
+                            file_path=abs_path,
+                        )
+                except CancelledError:
                     raise
                 except Exception as exc:
-                    logger.error(f"Error processing review for {file_diff.path}: {exc}")
+                    if failures is None:
+                        raise
+                    failures.append(ReviewFileFailure(patch_path, str(exc)))
+                    if isinstance(exc, ModelProviderConfigurationError):
+                        break
                     continue
                 if review_dict:
-                    checkpoint_group = ReviewGroup.model_validate(review_dict)
-                    review_dict = _review_group_payload(
-                        checkpoint_group,
-                        relative_path=relative_path,
-                        file_path=abs_path,
-                    )
                     issues = "\n".join(
                         issue.get("issue", "")
                         for issue in review_dict.get("reviews", [])
@@ -532,28 +602,30 @@ class SimpleLlmReviewService:
                         )
                         changes_summary = summarize_changes(
                             self._config.llm_provider,
-                            file_diff.path,
+                            patch_path,
                             issues,
                             summary_prompt,
                             model=model or self._config.llama_query_model,
                             chat_model_kwargs=self._config.chat_model_kwargs,
                             callbacks=self._config.usage_runtime.hooks.callbacks,
                         )
-                if checkpoint_key is not None and checkpoint_session is not None:
+                if (
+                    checkpoint_key is not None
+                    and checkpoint_session is not None
+                    and checkpoint_group is not None
+                    and (navigation_evidence is None or None not in navigation_evidence)
+                ):
                     checkpoint_session.put(
                         f"patch-file:{checkpoint_key}",
                         {
-                            "review": (
-                                {
-                                    "reviews": [
-                                        review.model_dump(mode="json")
-                                        for review in checkpoint_group.reviews
-                                    ]
-                                }
-                                if checkpoint_group is not None
-                                else None
-                            ),
+                            "review": {
+                                "reviews": [
+                                    review.model_dump(mode="json")
+                                    for review in checkpoint_group.reviews
+                                ]
+                            },
                             "summary": changes_summary,
+                            "navigation_evidence": navigation_evidence,
                         },
                     )
 
@@ -574,7 +646,10 @@ def _review_group_payload(
     return {
         "file": relative_path,
         "file_path": file_path,
-        "reviews": [review.model_dump(mode="python") for review in group.reviews],
+        "reviews": [
+            normalize_review_fields(review.model_dump(mode="python"))
+            for review in group.reviews
+        ],
     }
 
 

@@ -171,7 +171,9 @@ class CodeGraphService:
             )
 
     def _selected_files(self) -> tuple[str, ...]:
-        candidates = self._repository.get_code_files(include_suffixed_sources=True)
+        candidates = self._repository.get_code_files(
+            include_suffixed_sources=True, apply_review_filters=False
+        )
         return tuple(
             sorted({str(path) for path in candidates if self.supports_file(str(path))})
         )

@@ -25,9 +25,9 @@ def execute(invocation: NodeInvocation) -> NodeResult:
     if combined.result is None:
         raise ValueError("Review produced no result")
     findings = combined.result
-    sarif = SarifPayload.model_validate(
-        generate_sarif(findings.model_dump(mode="python"))
-    )
+    payload = findings.model_dump(mode="python")
+    sarif = SarifPayload.model_validate(generate_sarif(payload))
+    findings = type(findings).model_validate(payload)
     result = NodeResult(
         {
             "formats": invocation.formats or (),

@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from importlib import metadata
+
+from metis.engine.registration_loading import load_registration
+
 from .contracts import NodeRegistration
 from .contracts import StageName
 
@@ -48,21 +51,12 @@ class NodeCatalog:
             )
         if len(candidates) > 1:
             raise ValueError(f"Multiple execution node packages register {name!r}")
-        try:
-            loaded = candidates[0].load()
-            registration = (
-                loaded()
-                if callable(loaded) and not isinstance(loaded, NodeRegistration)
-                else loaded
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Execution node {stage}.{name} failed to load: {exc}"
-            ) from exc
-        if not isinstance(registration, NodeRegistration):
-            raise TypeError(
-                f"Execution node entry point {name!r} did not return a NodeRegistration"
-            )
+        registration = load_registration(
+            candidates[0],
+            NodeRegistration,
+            label=f"Execution node {stage}.{name}",
+            entry_point_label=f"Execution node entry point {name!r}",
+        )
         if registration.name != name or registration.stage != stage:
             raise ValueError(
                 f"Execution node entry point {name!r} returned registration "

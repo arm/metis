@@ -32,7 +32,6 @@ prompts:
       - Data buckets being made public.
       - Overly wide ranges of IPs or ports defined for permitting access.
       - Disabling security features such as scan-on-push in container storage.
-  validation_review: Validate the follow terraform review for security concerns
   snippet_security_summary: Summarize the security implications of the terraform code changes
   security_review_file: |-
     You are a thorough DecSecOps engineer specializing in Terraform.

@@ -3,8 +3,12 @@
 
 import logging
 import tempfile
+import json
+from concurrent.futures import CancelledError
 from dataclasses import replace
 from contextlib import closing
+from contextlib import nullcontext
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,6 +17,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 
 from metis.configuration import load_execution_config
+from metis.cli.review_checkpoints import stage_checkpoint_callback
 from metis.engine import MetisEngine
 from metis.engine import ExecutionGraphError
 from metis.engine.capabilities.engine import EngineCapabilities
@@ -46,6 +51,40 @@ def _execution_with_index() -> dict[str, object]:
     execution = load_execution_config()
     execution["stages"]["initialize"]["nodes"]["index"] = {"capabilities": ["index"]}
     return execution
+
+
+@pytest.mark.parametrize("kind", ["default", "mapping", "validated", "invalid"])
+def test_engine_execution_configuration_boundary(tmp_path, capability_settings, kind):
+    expected = ExecutionConfiguration.model_validate(load_execution_config())
+    configuration = {
+        "default": None,
+        "mapping": expected.model_dump(),
+        "validated": expected,
+        "invalid": {"stages": {}},
+    }[kind]
+    original = deepcopy(configuration) if isinstance(configuration, dict) else None
+    expectation = pytest.raises(ValueError) if kind == "invalid" else nullcontext()
+    with (
+        expectation,
+        closing(
+            MetisEngine(
+                codebase_path=str(tmp_path),
+                vector_backend=Mock(),
+                llm_provider=Mock(),
+                max_workers=1,
+                max_token_length=2048,
+                llama_query_model="gpt-test",
+                similarity_top_k=3,
+                capability_settings=capability_settings,
+                execution_config=configuration,
+            )
+        ) as engine,
+    ):
+        assert engine.execution.configuration.model_dump() == expected.model_dump()
+        if kind == "validated":
+            assert engine.execution.configuration is configuration
+    if isinstance(configuration, dict):
+        assert configuration == original
 
 
 def test_index_capability_rejects_missing_retrievers(capability_settings):
@@ -232,6 +271,32 @@ def test_index_tool_exposes_langchain_search_tool(engine, dummy_backend):
     ]
 
 
+def test_index_tools_only_expose_supported_search(engine, monkeypatch):
+    capability = engine.capabilities["index"]
+    manifest = engine.capabilities.manifest("index")
+    search = next(
+        operation for operation in manifest.operations if operation.id == "index.search"
+    )
+    custom = replace(
+        manifest,
+        operations=(
+            replace(search, operation="missing"),
+            replace(search, id="index.build", name="missing", operation="missing"),
+        ),
+    )
+    tools = index_model_tools(capability, custom, max_contract_chars=6000)
+    assert [tool.func for tool in tools] == [capability.search]
+    inactive = replace(search, status="inactive")
+    for disabled in (
+        replace(custom, status="inactive"),
+        replace(custom, operations=(inactive, search)),
+        replace(custom, operations=(replace(search, surfaces=("orchestration",)),)),
+    ):
+        assert index_model_tools(capability, disabled, max_contract_chars=6000) == ()
+    monkeypatch.setattr(capability, "supports_search", lambda: False)
+    assert index_model_tools(capability, custom, max_contract_chars=6000) == ()
+
+
 def test_memory_service_rejects_paths_outside_codebase(
     tmp_path, dummy_backend, capability_settings
 ):
@@ -255,8 +320,12 @@ def test_memory_service_rejects_paths_outside_codebase(
         )
 
 
+@pytest.mark.parametrize(
+    "location",
+    ["memory.sqlite3", "./~/memory.sqlite3", "./~metis-no-such-user/memory.sqlite3"],
+)
 def test_init_codebase_populates_memory_without_index(
-    tmp_path, dummy_backend, capability_settings
+    tmp_path, dummy_backend, capability_settings, location
 ):
     codebase = tmp_path / "repo"
     codebase.mkdir()
@@ -275,7 +344,7 @@ def test_init_codebase_populates_memory_without_index(
         capability_settings=capability_settings,
         memory_config={
             "backend": "sqlite",
-            "location": "memory.sqlite3",
+            "location": location,
         },
         threat_model_config={
             "source_patterns": ["SECURITY.*"],
@@ -293,6 +362,68 @@ def test_init_codebase_populates_memory_without_index(
     assert result["threat_model"]["authoritative_sources"] == ["SECURITY.md"]
     assert context
     assert context[0].metadata["binding"] is True
+    assert (codebase / location).is_file()
+    engine.close()
+
+
+def test_graph_saves_published_review_before_triage_cancellation(engine, monkeypatch):
+    run = ReviewRun(
+        ReviewStatus.INCONCLUSIVE,
+        StandardReviewResult.model_validate({"reviews": []}),
+    )
+    monkeypatch.setattr(
+        SimpleLlmReviewService, "run_review", lambda *_args, **_kwargs: run
+    )
+    checkpoint = stage_checkpoint_callback(codebase_path=engine.codebase_path)
+    snapshots = []
+
+    def publish(result):
+        snapshots.append(result)
+        checkpoint(result)
+
+    cancelled = CancelledError("triage cancelled")
+
+    def cancel(*_args, **_kwargs):
+        assert snapshots[-1].status is ExecutionStatus.INCONCLUSIVE
+        assert isinstance(snapshots[-1].outputs["review"]["sarif"], dict)
+        paths = list(Path(engine.codebase_path).glob(".metis/checkpoints/graph.*.json"))
+        assert len(paths) == 1
+        snapshot = json.loads(paths[0].read_text())
+        assert snapshot["outputs"]["review"]["sarif"]["runs"]
+        assert snapshot["status"] == "inconclusive"
+        assert snapshot["published_stages"] == ["initialize", "review"]
+        raise cancelled
+
+    monkeypatch.setattr(engine._triage_service, "triage_run", cancel)
+    with pytest.raises(CancelledError) as caught:
+        engine.execute_graph(callbacks={"stage_completed_callback": publish})
+
+    assert caught.value is cancelled
+
+
+@pytest.mark.parametrize("failure_code", ["review.file_failed", "review.dedup_failed"])
+def test_execute_review_raises_with_available_findings(
+    engine, monkeypatch, failure_code
+):
+    findings = StandardReviewResult.model_validate(
+        {"reviews": [{"file": "kept.c", "reviews": [{"issue": "Retained finding"}]}]}
+    )
+    result = ExecutionResult(
+        ExecutionStatus.INCONCLUSIVE,
+        {"review": {"findings": findings, "formats": ("json",)}},
+        (ExecutionDiagnostic(failure_code, "Model failed"),),
+    )
+    monkeypatch.setattr(
+        engine.execution, "execute_review", lambda *_args, **_kwargs: result
+    )
+
+    with pytest.raises(ExecutionGraphError) as caught:
+        engine.execute_review("code")
+
+    assert caught.value.result.outputs["review"]["findings"] == findings.model_dump(
+        mode="json"
+    )
+    assert caught.value.result.diagnostics[0].code == failure_code
 
 
 @pytest.mark.parametrize("mode", ["code", "file"])

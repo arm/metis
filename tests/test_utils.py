@@ -1,7 +1,13 @@
 import math
+from datetime import datetime
+from datetime import timezone
 
 import pytest
 
+from metis.utils import resolve_path_within_root
+from metis.utils import safe_int
+from metis.utils import normalized_string_tuple
+from metis.utils import utc_now_iso
 from metis.utils import (
     anthropic_token_count,
     count_tokens,
@@ -10,6 +16,123 @@ from metis.utils import (
     split_snippet,
     tiktoken_token_count,
 )
+
+
+def test_tolerant_integer_conversion_keeps_explicit_defaults_and_ranges():
+    for invalid in (None, "bad", "1.5", [], math.inf, -math.inf, math.nan):
+        assert safe_int(invalid, None) is None
+        assert safe_int(invalid, -1) == -1
+    for value, expected in (("2", 2), (b"3", 3), (2.9, 2), (-2, -2), (False, 0)):
+        assert safe_int(value, None) == expected
+
+
+def test_strict_manifest_list_normalization_does_not_coerce_values():
+    assert normalized_string_tuple(None, error="invalid list") == ()
+    for values in ([" One ", "", "  ", "TWO", "One"], ("One", "TWO", "One")):
+        assert normalized_string_tuple(values, error="invalid list") == (
+            "one",
+            "two",
+            "one",
+        )
+    for values in ("one", {"one"}, {"one": True}, [1], [None]):
+        with pytest.raises(ValueError, match="invalid list"):
+            normalized_string_tuple(values, error="invalid list")
+
+
+def test_utc_timestamp_uses_z_suffix_and_is_current():
+    before = datetime.now(timezone.utc)
+    timestamp = utc_now_iso()
+    assert timestamp.endswith("Z")
+    assert before <= datetime.fromisoformat(timestamp) <= datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize("preserve_aliases", [False, True])
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("./~/source.c", "~/source.c"),
+        ("./~metis-no-such-user/source.c", "~metis-no-such-user/source.c"),
+        ("~/source.c", "home/source.c"),
+        ("~metis-no-such-user/source.c", None),
+    ],
+)
+def test_source_paths_expand_only_leading_tilde(
+    tmp_path, monkeypatch, preserve_aliases, target, expected
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    if expected is None:
+        with pytest.raises(RuntimeError, match="home directory"):
+            resolve_path_within_root(
+                tmp_path, target, preserve_aliases=preserve_aliases
+            )
+    else:
+        assert (
+            resolve_path_within_root(
+                tmp_path, target, preserve_aliases=preserve_aliases
+            )
+            == tmp_path / expected
+        )
+
+
+@pytest.mark.parametrize("root_name", ["~", "~metis-no-such-user"])
+def test_source_paths_preserve_literal_root(tmp_path, monkeypatch, root_name):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / root_name
+    root.mkdir()
+    assert resolve_path_within_root(f"./{root_name}", "source.c") == root / "source.c"
+
+
+@pytest.mark.parametrize("preserve_aliases", [False, True])
+def test_source_paths_confine_case_aliases(tmp_path, preserve_aliases):
+    root = tmp_path / "Repository"
+    root.mkdir()
+    alias = tmp_path / "repository"
+    (root / "source.c").write_text("source", encoding="utf-8")
+    for relative in (".", "source.c", "new/source.c"):
+        if alias.exists():
+            assert (
+                resolve_path_within_root(
+                    root, alias / relative, preserve_aliases=preserve_aliases
+                )
+                == root / relative
+            )
+        else:
+            with pytest.raises(ValueError, match="Path escapes codebase"):
+                resolve_path_within_root(
+                    root, alias / relative, preserve_aliases=preserve_aliases
+                )
+    for outside in (tmp_path / "other/source.c", alias / "../source.c"):
+        with pytest.raises(ValueError, match="Path escapes codebase"):
+            resolve_path_within_root(root, outside, preserve_aliases=preserve_aliases)
+    prospective = tmp_path / "missing"
+    assert (
+        resolve_path_within_root(
+            prospective, "new/source.c", preserve_aliases=preserve_aliases
+        )
+        == prospective / "new/source.c"
+    )
+    with pytest.raises(ValueError, match="Path escapes codebase"):
+        resolve_path_within_root(
+            prospective, root / "source.c", preserve_aliases=preserve_aliases
+        )
+
+
+@pytest.mark.parametrize("ancestor", ["missing", "file", "alias"])
+def test_source_paths_validate_parent_components(tmp_path, ancestor):
+    (tmp_path / "file").write_text("not a directory", encoding="utf-8")
+    (tmp_path / "real" / "nested").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(
+        tmp_path / "real" / "nested", target_is_directory=True
+    )
+    target = f"{ancestor}/../new.c"
+    if ancestor == "alias":
+        result = resolve_path_within_root(tmp_path, target, preserve_aliases=True)
+        assert result == tmp_path / "real" / "new.c"
+        assert not result.exists()
+    else:
+        with pytest.raises(NotADirectoryError, match="Path parent"):
+            resolve_path_within_root(tmp_path, target, preserve_aliases=True)
 
 
 @pytest.mark.parametrize(

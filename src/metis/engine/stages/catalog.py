@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from importlib import metadata
 
+from metis.engine.registration_loading import load_registration
+
 from .contracts import StageRegistration
 
 EXECUTION_STAGE_ENTRY_POINT_GROUP = "metis.execution_stages"
@@ -48,22 +50,12 @@ class StageCatalog:
             raise ValueError(f"Execution stage {name!r} is not registered")
         if len(candidates) > 1:
             raise ValueError(f"Multiple execution stage packages register {name!r}")
-        try:
-            loaded = candidates[0].load()
-            registration = (
-                loaded()
-                if callable(loaded) and not isinstance(loaded, StageRegistration)
-                else loaded
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Execution stage {name!r} failed to load: {exc}"
-            ) from exc
-        if not isinstance(registration, StageRegistration):
-            raise TypeError(
-                f"Execution stage entry point {name!r} did not return a "
-                "StageRegistration"
-            )
+        registration = load_registration(
+            candidates[0],
+            StageRegistration,
+            label=f"Execution stage {name!r}",
+            entry_point_label=f"Execution stage entry point {name!r}",
+        )
         if registration.name != name:
             raise ValueError(
                 f"Execution stage entry point {name!r} returned registration "

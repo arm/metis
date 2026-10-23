@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import CancelledError
 from contextlib import nullcontext
+from copy import deepcopy
 from pathlib import Path
 import json
 import sys
@@ -11,7 +13,9 @@ from unittest.mock import Mock, call
 import pytest
 
 from metis.cli import entry
+from metis.cli import output as cli_output
 from metis.cli import command_registry
+from metis.engine import ExecutionGraphError
 from metis.engine.execution import ExecutionDiagnostic
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
@@ -250,19 +254,17 @@ def test_graph_outputs_are_projected_for_each_export_format(monkeypatch):
         "triage": {"formats": ["sarif"], "sarif": triage_sarif},
     }
     monkeypatch.setattr(
-        entry,
+        cli_output,
         "save_output",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
-    entry._save_graph_outputs(  # type: ignore[attr-defined]
+    cli_output.save_graph_outputs(
         ["graph.json", "report.html", "report.csv", "report.sarif"],
-        ExecutionResult(
-            ExecutionStatus.INCONCLUSIVE,
-            outputs,
-            (ExecutionDiagnostic("review.partial", "partial review", "warning"),),
-        ),
+        outputs,
         True,
+        triage_from_review=True,
+        codebase_path="repository",
     )
 
     assert calls[0][0] == (
@@ -271,13 +273,14 @@ def test_graph_outputs_are_projected_for_each_export_format(monkeypatch):
         True,
     )
     assert calls[0][1]["sarif_payload"]["runs"] == [{"id": "review"}]
+    assert calls[0][1]["codebase_path"] == "repository"
     assert calls[1] == (
         (
             ["report.sarif"],
-            triage_sarif,
+            findings,
             True,
         ),
-        {"sarif_payload": triage_sarif},
+        {"sarif_payload": triage_sarif, "codebase_path": "repository"},
     )
 
 
@@ -293,14 +296,14 @@ def test_graph_outputs_never_share_paths_between_review_and_triage(monkeypatch):
         "triage": {"formats": ["sarif", "json"], "sarif": sarif},
     }
     monkeypatch.setattr(
-        entry,
+        cli_output,
         "save_output",
         lambda output_files, *_args, **_kwargs: saved.append(output_files),
     )
 
-    entry._save_graph_outputs(  # type: ignore[attr-defined]
+    cli_output.save_graph_outputs(
         ["report.json", "report.html", "report.csv", "report.sarif"],
-        ExecutionResult(ExecutionStatus.OK, outputs),
+        outputs,
         True,
     )
 
@@ -347,14 +350,14 @@ def test_graph_output_filename_precedence(
         }
     }
     monkeypatch.setattr(
-        entry,
+        cli_output,
         "save_output",
         lambda output_files, *_args, **_kwargs: saved.append(output_files),
     )
 
-    entry._save_graph_outputs(  # type: ignore[attr-defined]
+    cli_output.save_graph_outputs(
         output_files,
-        ExecutionResult(ExecutionStatus.OK, outputs),
+        outputs,
         True,
         generated_output=generated_output,
     )
@@ -362,38 +365,84 @@ def test_graph_output_filename_precedence(
     assert saved == [expected]
 
 
-def test_default_graph_failure_exits_cleanly(monkeypatch):
+@pytest.mark.parametrize(
+    "save_failure", [None, OSError("save failed"), CancelledError("save cancelled")]
+)
+@pytest.mark.parametrize("failure", ["error", "inconclusive", "cancelled"])
+def test_default_graph_failure_exits_cleanly(monkeypatch, save_failure, failure):
     calls = []
-    engine = SimpleNamespace(
-        execute_graph=lambda **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("graph failed")
+
+    def execute_graph(**kwargs):
+        assert "stage_completed_callback" not in kwargs["callbacks"]
+        if failure == "cancelled":
+            raise CancelledError("graph cancelled")
+        raise ExecutionGraphError(
+            ExecutionResult(
+                ExecutionStatus(failure),
+                {"review": {"formats": ["json", "sarif"], "findings": {"reviews": []}}},
+                (ExecutionDiagnostic("execution.failed", "Model failed", "warning"),),
+            )
         )
+
+    def save_output(*_args, **_kwargs):
+        calls.append("saved")
+        if save_failure is not None:
+            raise save_failure
+
+    engine = SimpleNamespace(
+        execute_graph=execute_graph,
+        execution=SimpleNamespace(
+            configuration=entry.ExecutionConfiguration.model_validate(
+                entry.load_execution_config()
+            )
+        ),
     )
     monkeypatch.setattr(sys, "argv", ["metis"])
-    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        entry,
+        "load_runtime_config",
+        lambda **_kwargs: {"review_checkpoints_enabled": False},
+    )
     monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
     monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
+    monkeypatch.setattr(cli_output, "save_output", save_output)
     monkeypatch.setattr(
         entry,
         "print_console",
         lambda message, *_args, **_kwargs: calls.append(message),
     )
+    monkeypatch.setattr("metis.cli.utils.print_console", entry.print_console)
     monkeypatch.setattr(
         entry,
         "finalize_cli_session_and_close",
         lambda *_args: calls.append("closed"),
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    cancelled = failure == "cancelled" or isinstance(save_failure, CancelledError)
+    with pytest.raises(CancelledError if cancelled else SystemExit) as caught:
         entry.main()
 
-    assert "[bold red]Error:[/bold red] graph failed" in calls
     assert calls[-1] == "closed"
+    if failure == "cancelled":
+        assert str(caught.value) == "graph cancelled"
+        assert calls == ["closed"]
+        return
+    assert calls[0] == "saved"
+    if cancelled:
+        assert caught.value is save_failure
+        assert calls == ["saved", "closed"]
+        return
+    assert caught.value.code == 1
+    assert "[bold red]Error:[/bold red] Execution graph failed: Model failed" in calls
+    if save_failure is not None:
+        assert "[red]Unable to save partial outputs: save failed[/red]" in calls
 
 
+@pytest.mark.parametrize("with_index", [False, True])
 def test_build_engine_defers_embedding_model_construction(
     monkeypatch,
     tmp_path,
+    with_index,
 ):
     class ChatProvider:
         def __init__(self, _runtime):
@@ -444,6 +493,20 @@ def test_build_engine_defers_embedding_model_construction(
         "similarity_top_k": 3,
         "response_mode": "compact",
     }
+    runtime["execution_config"] = entry.load_execution_config()
+    if with_index:
+        runtime["execution_config"]["stages"]["initialize"]["nodes"]["index"] = {
+            "capabilities": ["index"]
+        }
+    original = deepcopy(runtime)
+    selected = []
+    selected_capabilities = entry.ExecutionConfiguration.selected_capabilities
+
+    def select(configuration):
+        selected.append(configuration)
+        return selected_capabilities(configuration)
+
+    monkeypatch.setattr(entry.ExecutionConfiguration, "selected_capabilities", select)
     monkeypatch.setenv("OPENAI_EMBEDDING_KEY", "embedding-key")
 
     monkeypatch.setattr(entry, "get_chat_provider", lambda _name: ChatProvider)
@@ -458,16 +521,25 @@ def test_build_engine_defers_embedding_model_construction(
 
     assert captured["embed_model_code"] is None
     assert captured["embed_model_docs"] is None
-    assert isinstance(
-        captured["engine_kwargs"]["embedding_provider"], EmbeddingProvider
+    assert runtime == original
+    assert captured["engine_kwargs"]["execution_config"] is selected[0]
+    assert isinstance(selected[0], entry.ExecutionConfiguration)
+    assert (
+        isinstance(captured["engine_kwargs"]["embedding_provider"], EmbeddingProvider)
+        is with_index
     )
     assert captured["engine_kwargs"]["usage_runtime"].codebase_path == str(tmp_path)
 
 
-def test_partial_graph_exports_sarif_without_findings_and_skips_failed_triage(tmp_path):
+@pytest.mark.parametrize(
+    "status", [ExecutionStatus.ERROR, ExecutionStatus.INCONCLUSIVE]
+)
+def test_partial_graph_exports_sarif_without_findings_and_skips_failed_triage(
+    tmp_path, status
+):
     sarif = {"version": "2.1.0", "runs": []}
     result = ExecutionResult(
-        ExecutionStatus.ERROR,
+        status,
         {
             "review": {"formats": ("json", "sarif"), "sarif": sarif},
             "triage": {"formats": ("sarif",)},
@@ -477,11 +549,98 @@ def test_partial_graph_exports_sarif_without_findings_and_skips_failed_triage(tm
     requested_json.write_text("previous report", encoding="utf-8")
     requested_sarif = tmp_path / "report.sarif"
 
-    entry._save_graph_outputs([str(requested_json), str(requested_sarif)], result, True)
+    error = ExecutionGraphError(result)
+    with pytest.raises(ExecutionGraphError) as raised:
+        cli_output.save_graph_outputs(
+            [str(requested_json), str(requested_sarif)],
+            result.outputs,
+            True,
+            pending_error=error,
+        )
+    assert raised.value is error
 
     assert json.loads(requested_sarif.read_text()) == sarif
     assert requested_json.read_text() == "previous report"
     assert set(tmp_path.iterdir()) == {requested_json, requested_sarif}
+
+
+@pytest.mark.parametrize("triage_from_review", [False, True])
+def test_graph_cli_plans_and_projects_from_engine_configuration(
+    tmp_path, monkeypatch, triage_from_review
+):
+    sarif = {"version": "2.1.0", "runs": []}
+    findings = {"reviews": [], "marker": "original review"}
+    configured = entry.load_execution_config()
+    configured["inputs"]["sarif"] = sarif
+    configured["stages"]["triage"]["inputs"]["sarif"] = (
+        "review.sarif" if triage_from_review else "$inputs.sarif"
+    )
+    outputs = {}
+    for name in ("review", "triage"):
+        node = configured["stages"][name]["nodes"]["result"]
+        node.update(filename=str(tmp_path / name), formats=["json", "sarif"])
+        outputs[name] = {**node, "sarif": sarif}
+    outputs["review"]["findings"] = findings
+    configuration = entry.ExecutionConfiguration.model_validate(configured)
+    stale = deepcopy(configured)
+    stale["stages"]["triage"]["inputs"]["sarif"] = (
+        "$inputs.sarif" if triage_from_review else "review.sarif"
+    )
+    stale["stages"]["triage"]["nodes"]["result"]["filename"] = str(tmp_path / "stale")
+    runtime = {
+        "execution_config": stale,
+        "review_checkpoints_enabled": False,
+        "triage_checkpoint_every": 1,
+    }
+    original = deepcopy(runtime)
+
+    def execute_graph(*, callbacks, **_kwargs):
+        callbacks["checkpoint_callback"](sarif, 1, 1)
+        return ExecutionResult(ExecutionStatus.OK, outputs)
+
+    engine = SimpleNamespace(
+        execution=SimpleNamespace(configuration=configuration),
+        execute_graph=execute_graph,
+        close=Mock(),
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["metis", "--quiet"])
+    monkeypatch.setattr(entry, "load_runtime_config", lambda **_kwargs: runtime)
+    monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
+
+    entry.main()
+
+    assert runtime == original
+    assert json.loads((tmp_path / "review.json").read_text()) == findings
+    assert json.loads((tmp_path / "triage.json").read_text()) == (
+        findings if triage_from_review else sarif
+    )
+    assert json.loads((tmp_path / "triage.sarif").read_text()) == sarif
+    assert json.loads((tmp_path / "triage.checkpoint.sarif").read_text()) == sarif
+    assert not list(tmp_path.glob("stale*"))
+    engine.close.assert_called_once_with()
+
+
+def test_build_engine_rejects_invalid_execution_before_constructing_resources(
+    monkeypatch,
+):
+    unexpected = Mock(side_effect=AssertionError("constructed a resource"))
+    monkeypatch.setattr(entry, "get_chat_provider", lambda _name: unexpected)
+    monkeypatch.setattr(entry, "get_embedding_provider", unexpected)
+    monkeypatch.setattr(entry, "UsageRuntime", unexpected)
+    monkeypatch.setattr(entry, "build_chroma_backend", unexpected)
+    runtime = {
+        "llm_provider_name": "inert",
+        "llm_provider": {},
+        "execution_config": {"stages": {}},
+    }
+    original = deepcopy(runtime)
+
+    with pytest.raises(ValueError, match="must contain a stage"):
+        entry.build_engine(None, runtime)
+
+    unexpected.assert_not_called()
+    assert runtime == original
 
 
 @pytest.mark.parametrize(
@@ -552,6 +711,8 @@ def test_build_engine_validates_embedding_before_provider_construction(
         pytest.fail("invalid embedding settings constructed a chat provider")
 
     monkeypatch.setattr(entry, "get_chat_provider", lambda _name: unexpected_provider)
+    execution = entry.load_execution_config()
+    execution["stages"]["initialize"]["nodes"]["index"] = {"capabilities": ["index"]}
     with pytest.raises(ValueError):
         entry.build_engine(
             None,
@@ -559,6 +720,7 @@ def test_build_engine_validates_embedding_before_provider_construction(
                 "llm_provider_name": "inert",
                 "llm_provider": {},
                 "embedding_provider_raw_config": embedding_config,
+                "execution_config": execution,
             },
         )
 

@@ -9,6 +9,7 @@ import pytest
 from metis.sarif.writer import generate_sarif
 from metis.sarif.utils import read_file_lines, create_fingerprint
 from metis.sarif.triage import METIS_FINDING_ID_KEY
+from metis.sarif.triage import extract_findings
 
 
 def test_read_file_lines(tmp_path):
@@ -101,6 +102,25 @@ def test_generate_sarif_single_issue(tmp_path):
     assert issue_entry["properties"][METIS_FINDING_ID_KEY] == finding_id
 
 
+@pytest.mark.parametrize(
+    ("file_path", "expected_uri"),
+    [
+        ("src/a #%.c", "src/a%20%23%25.c"),
+        ("src/café.c", "src/caf%C3%A9.c"),
+        ("a:b.c", "a%3Ab.c"),
+    ],
+)
+def test_generate_sarif_encodes_artifact_paths(file_path, expected_uri):
+    sarif = generate_sarif(
+        {"reviews": [{"file": file_path, "reviews": [{"issue": "Issue"}]}]}
+    )
+
+    location = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+    assert sarif["runs"][0]["results"][0]["properties"]["metisUriEncoding"] == "percent"
+    assert location["artifactLocation"]["uri"] == expected_uri
+    assert extract_findings(sarif)[0].file_path == file_path
+
+
 def test_review_finding_id_survives_serialization_and_sarif() -> None:
     from metis.engine.stages.review.models import ReviewFinding
 
@@ -116,10 +136,11 @@ def test_review_finding_id_survives_serialization_and_sarif() -> None:
     )
 
 
-def test_generate_sarif_repairs_duplicate_finding_ids() -> None:
+@pytest.mark.parametrize("finding_id", ["duplicate", " duplicate "])
+def test_generate_sarif_repairs_duplicate_finding_ids(finding_id) -> None:
     issues = [
-        {"id": "duplicate", "issue": "First"},
-        {"id": "duplicate", "issue": "Second"},
+        {"id": finding_id, "issue": "First"},
+        {"id": finding_id, "issue": "Second"},
     ]
 
     sarif = generate_sarif({"reviews": [{"file": "example.c", "reviews": issues}]})

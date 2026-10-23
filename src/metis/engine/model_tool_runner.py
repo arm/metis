@@ -14,6 +14,7 @@ from langchain_openai.chat_models.base import BaseChatOpenAI
 
 from metis import runlog
 from metis.engine.concurrency import _cancellation_checkpoint
+from metis.utils import safe_int
 
 logger = logging.getLogger("metis")
 
@@ -30,7 +31,7 @@ class ModelInputLimitError(ValueError):
     """Raised when the rendered conversation exceeds its input budget."""
 
 
-class ModelOutputLimitError(RuntimeError):
+class ModelResponseIncompleteError(RuntimeError):
     def __init__(
         self,
         message: str,
@@ -39,6 +40,49 @@ class ModelOutputLimitError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.tool_evidence = tool_evidence
+
+
+class ModelOutputLimitError(ModelResponseIncompleteError):
+    pass
+
+
+def require_completed_model_response(
+    response: object, *, tool_evidence: tuple[str, ...] = ()
+) -> None:
+    if _response_reached_output_limit(response):
+        raise ModelOutputLimitError(
+            "model response reached its output token limit",
+            tool_evidence=tool_evidence,
+        )
+    if getattr(response, "invalid_tool_calls", None):
+        raise ModelResponseIncompleteError(
+            "model response contained invalid tool calls",
+            tool_evidence=tool_evidence,
+        )
+    for attribute in ("response_metadata", "additional_kwargs"):
+        metadata = getattr(response, attribute, None)
+        if not isinstance(metadata, dict):
+            continue
+        status = str(metadata.get("status", "")).strip().lower()
+        if status in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+            raise ModelResponseIncompleteError(
+                f"model response did not complete: {status}",
+                tool_evidence=tool_evidence,
+            )
+        if metadata.get("refusal") or any(
+            str(metadata.get(key, "")).strip().lower() == "content_filter"
+            for key in ("finish_reason", "stop_reason", "stopReason")
+        ):
+            raise ModelResponseIncompleteError(
+                "model response was refused or filtered", tool_evidence=tool_evidence
+            )
+    content = getattr(response, "content", None)
+    if isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "refusal" for block in content
+    ):
+        raise ModelResponseIncompleteError(
+            "model response was refused", tool_evidence=tool_evidence
+        )
 
 
 def _response_reached_output_limit(response: object) -> bool:
@@ -135,6 +179,7 @@ def invoke_model_with_tools(
     token_counter: Callable[[str], int] | None = None,
     max_input_tokens: int | None = None,
     on_tool_result: Callable[[str, dict[str, Any], str], None] | None = None,
+    on_tool_error: Callable[[], None] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     _cancellation_checkpoint()
     with runlog.span(
@@ -171,12 +216,13 @@ def invoke_model_with_tools(
                     "tool_calls": tool_calls,
                 },
             )
-            if _response_reached_output_limit(last_response):
-                _observe_tool_results(observations, on_tool_result)
-                raise ModelOutputLimitError(
-                    "model response reached its output token limit",
-                    tool_evidence=tuple(evidence),
+            try:
+                require_completed_model_response(
+                    last_response, tool_evidence=tuple(evidence)
                 )
+            except ModelResponseIncompleteError:
+                _observe_tool_results(observations, on_tool_result)
+                raise
             if not tool_calls:
                 content = _message_content_text(last_response)
                 loop_span.end(attributes={"response": content, "rounds": round_index})
@@ -233,6 +279,15 @@ def invoke_model_with_tools(
                             attributes={"output": content},
                             exc=exc,
                         )
+                if status == "error" and on_tool_error is not None:
+                    try:
+                        on_tool_error()
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        raise ModelToolResultError(
+                            f"Could not observe failure of tool {name!r}"
+                        ) from exc
                 content = str(content)
                 if status == "success" and on_tool_result is not None:
                     observations.append((name, args, content))
@@ -269,12 +324,13 @@ def invoke_model_with_tools(
                 "final": True,
             },
         )
-        if _response_reached_output_limit(last_response):
-            _observe_tool_results(observations, on_tool_result)
-            raise ModelOutputLimitError(
-                "model response reached its output token limit",
-                tool_evidence=tuple(evidence),
+        try:
+            require_completed_model_response(
+                last_response, tool_evidence=tuple(evidence)
             )
+        except ModelResponseIncompleteError:
+            _observe_tool_results(observations, on_tool_result)
+            raise
         content = _message_content_text(last_response)
         loop_span.end(attributes={"response": content, "rounds": max_tool_rounds + 1})
         _cancellation_checkpoint()
@@ -360,20 +416,10 @@ def _tool_contract_sections(tools: tuple[Any, ...]) -> list[str]:
 
 def _clip_tool_contract(contract: str, max_chars: Any) -> str:
     text = contract.strip()
-    limit = _positive_int(max_chars)
-    if limit is None or len(text) <= limit:
+    limit = safe_int(max_chars, 0)
+    if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit].rstrip() + "\n[contract truncated]"
-
-
-def _positive_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed <= 0:
-        return None
-    return parsed
 
 
 def _debug_tool_args(args: Any) -> Any:

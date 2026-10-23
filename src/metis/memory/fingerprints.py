@@ -44,7 +44,8 @@ def _git_output(cwd: Path, *args: str) -> str | None:
             check=True,
             capture_output=True,
             text=True,
+            timeout=30,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() or None

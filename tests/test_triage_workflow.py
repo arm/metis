@@ -365,18 +365,28 @@ def test_triage_does_not_treat_reported_snippet_as_observed_source(
     assert result["validation_errors"] == ["UNOBSERVED_CITATION:a.c:2"]
 
 
-def test_triage_retains_findings_after_model_parse_failure(
-    source_workflow, triage_request, monkeypatch
+@pytest.mark.parametrize(
+    ("errors", "source"),
+    [
+        ([], "execution_failure"),
+        (["UNOBSERVED_CITATION:unseen.c:1"], "validation_failure"),
+    ],
+)
+def test_triage_distinguishes_parse_failure_from_citation_failure(
+    source_workflow, triage_request, monkeypatch, errors, source
 ):
-    monkeypatch.setattr(
-        source_workflow, "_invoke_triage_model", Mock(return_value=None)
-    )
+    def no_decision(_system, _prompt, *, source_evidence):
+        source_evidence.errors = errors
+        return None
+
+    monkeypatch.setattr(source_workflow, "_invoke_triage_model", no_decision)
 
     result = source_workflow.triage(triage_request)
 
     assert result["status"] == "inconclusive"
-    assert result["decision_source"] == "validation_failure"
-    assert result["validation_errors"] == ["TRIAGE_DECISION_PARSE_FAILED"]
+    assert result["decision_source"] == source
+    assert result["validation_errors"] == (errors or ["TRIAGE_DECISION_PARSE_FAILED"])
+    assert "TRIAGE_DECISION_PARSE_FAILED" in result["unresolved_hops"]
 
 
 def test_triage_observes_model_tool_evidence_only_for_current_finding(

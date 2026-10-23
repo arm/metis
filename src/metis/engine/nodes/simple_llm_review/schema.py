@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
-
 from pydantic import BaseModel, Field, confloat, constr, field_validator, ConfigDict
+
+from metis.severity import SEVERITY_ALIASES
+from metis.severity import SEVERITY_TITLES
+from metis.severity import Severity
 
 _CWE_PATTERN = r"^(CWE-[1-9][0-9]*|CWE-Unknown)$"
 _PROMPT_INDENT = "    "
@@ -43,9 +45,9 @@ class ReviewIssueModel(BaseModel):
         description="""The most appropriate CWE identifier in the format "CWE-<number>"
                       '(e.g. "CWE-79"). If no suitable CWE exists, respond with "CWE-Unknown"."""
     )
-    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = Field(
-        description="""A qualitative rating of the risk level based on CVSS 4.0.
-                       Choose one of: LOW, MEDIUM, HIGH, CRITICAL."""
+    severity: Severity = Field(
+        description=f"""A qualitative rating of the risk level based on CVSS 4.0.
+                       Choose one of: {", ".join(SEVERITY_TITLES)}."""
     )
 
     @field_validator("severity", mode="before")
@@ -53,12 +55,7 @@ class ReviewIssueModel(BaseModel):
     def _normalize_severity(cls, value: str):
         if isinstance(value, str):
             normalized = value.strip().upper()
-            mapping = {
-                "MED": "MEDIUM",
-                "MID": "MEDIUM",
-                "CRIT": "CRITICAL",
-            }
-            return mapping.get(normalized, normalized)
+            return SEVERITY_ALIASES.get(normalized, normalized)
         return value
 
     model_config = ConfigDict(extra="forbid")
@@ -66,11 +63,10 @@ class ReviewIssueModel(BaseModel):
 
 class ReviewResponseModel(BaseModel):
     reviews: list[ReviewIssueModel] = Field(
-        default_factory=list,
         description="Collection of structured security review findings",
     )
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 def review_schema_json():

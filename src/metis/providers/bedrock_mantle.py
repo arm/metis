@@ -3,65 +3,55 @@
 
 from __future__ import annotations
 
-from functools import cached_property
 from typing import Any, cast
 
 from langchain_core.callbacks import Callbacks
-from pydantic import Field
+from pydantic import model_validator
 
+from metis.providers.anthropic import claude_chat_model_kwargs
 from metis.providers.base import ChatProvider
 from metis.providers.config import ProviderConfigSpec
 from metis.utils import anthropic_token_count
 
-AnthropicBedrockMantle: Any
-AsyncAnthropicBedrockMantle: Any
-ChatAnthropic: Any
+ChatAnthropicMantle: Any
 ChatBedrockMantle: Any
 
 try:
-    from anthropic import AnthropicBedrockMantle
-    from anthropic import AsyncAnthropicBedrockMantle
-    from langchain_anthropic import ChatAnthropic
+    from langchain_aws import ChatAnthropicMantle
 except ModuleNotFoundError:
-    AnthropicBedrockMantle = None
-    AsyncAnthropicBedrockMantle = None
-    ChatAnthropic = None
+    ChatAnthropicMantle = None
 
 
-if ChatAnthropic is not None:
+if ChatAnthropicMantle is not None:
 
-    class ChatBedrockMantle(ChatAnthropic):
-        """Anthropic chat model transported through Amazon Bedrock Mantle."""
+    class ChatBedrockMantle(ChatAnthropicMantle):
+        """LangChain Mantle model with Metis connection option names."""
 
         aws_region: str | None = None
         aws_profile: str | None = None
-        bedrock_base_url: str | None = Field(default=None, alias="bedrock_base_url")
+        bedrock_base_url: str | None = None
+
+        @model_validator(mode="before")
+        @classmethod
+        def _resolve_gateway(cls, values: Any) -> Any:
+            if not isinstance(values, dict):
+                return values
+            values = dict(values)
+            values.setdefault("region_name", values.get("aws_region"))
+            values.setdefault("credentials_profile_name", values.get("aws_profile"))
+            values.setdefault("base_url", values.get("bedrock_base_url"))
+            for key in (
+                "bedrock_api_key",
+                "aws_access_key_id",
+                "aws_secret_access_key",
+                "aws_session_token",
+            ):
+                values.setdefault(key, None)
+            return values
 
         @property
         def _llm_type(self) -> str:
             return "anthropic-bedrock-mantle-chat"
-
-        def _bedrock_client_params(self) -> dict[str, Any]:
-            params: dict[str, Any] = {
-                "aws_region": self.aws_region,
-                "aws_profile": self.aws_profile,
-                "max_retries": self.max_retries,
-            }
-            if self.bedrock_base_url:
-                params["base_url"] = self.bedrock_base_url
-            if self.default_headers:
-                params["default_headers"] = self.default_headers
-            if self.default_request_timeout is None or self.default_request_timeout > 0:
-                params["timeout"] = self.default_request_timeout
-            return {key: value for key, value in params.items() if value is not None}
-
-        @cached_property
-        def _client(self) -> AnthropicBedrockMantle:
-            return AnthropicBedrockMantle(**self._bedrock_client_params())
-
-        @cached_property
-        def _async_client(self) -> AsyncAnthropicBedrockMantle:
-            return AsyncAnthropicBedrockMantle(**self._bedrock_client_params())
 
 else:
     ChatBedrockMantle = None
@@ -102,53 +92,25 @@ class BedrockMantleProvider(ChatProvider):
     ) -> Any:
         if ChatBedrockMantle is None:
             raise ModuleNotFoundError(
-                "Bedrock Mantle provider requires the anthropic and "
-                "langchain-anthropic extras."
+                "Bedrock Mantle provider requires the bedrock-mantle extra: "
+                "pip install 'metis[bedrock-mantle]'"
             )
         requested_model = kwargs.pop("model", None)
         positional_model = args[0] if args else None
         model_name = requested_model or positional_model or self.default_model
-        if not model_name:
-            raise ValueError("Missing chat model configuration")
-
-        params: dict[str, Any] = {
-            "model": model_name,
-            "aws_region": self.aws_region,
-            "aws_profile": self.aws_profile,
-            "max_retries": self.max_retries,
-        }
-        max_tokens = kwargs.get("max_tokens")
-        if max_tokens is not None:
-            params["max_tokens"] = int(max_tokens)
+        params = claude_chat_model_kwargs(
+            kwargs,
+            model=model_name,
+            callbacks=callbacks,
+            max_retries=self.max_retries,
+            supports_temperature=self.supports_temperature,
+            reject_sampling_conflict=self.supports_temperature,
+            provider_name="Bedrock Mantle",
+        )
+        params["aws_region"] = self.aws_region
+        params["aws_profile"] = self.aws_profile
         if self.base_url:
             params["bedrock_base_url"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
-        if self.supports_temperature:
-            if "top_p" in kwargs and "temperature" in kwargs:
-                raise ValueError(
-                    "Bedrock Mantle chat model accepts either temperature or top_p, not both."
-                )
-            if "temperature" in kwargs:
-                temperature = kwargs["temperature"]
-            elif "top_p" not in kwargs:
-                temperature = None
-            else:
-                temperature = None
-            if temperature is not None:
-                params["temperature"] = float(temperature)
-        if callbacks is not None:
-            params["callbacks"] = callbacks
-
-        for optional_key in (
-            "timeout",
-            "default_request_timeout",
-            "max_retries",
-            "top_k",
-            "top_p",
-            "stop_sequences",
-        ):
-            if optional_key in kwargs:
-                params[optional_key] = kwargs[optional_key]
-
         return ChatBedrockMantle(**cast(dict[str, Any], params))

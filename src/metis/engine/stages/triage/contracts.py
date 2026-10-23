@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-from typing import Literal
 from typing import Protocol
 from typing_extensions import NotRequired
 from typing_extensions import Required
@@ -16,6 +15,7 @@ from metis.engine.execution.contracts import DebugCallback
 from metis.engine.execution.contracts import NodeJobs
 from metis.engine.execution.contracts import ProgressCallback
 from metis.sarif.triage import SarifFinding
+from metis.sarif.triage import TriageDecisionSource
 from metis.memory import MemoryService
 
 from .models import TriageRun
@@ -27,7 +27,7 @@ class TriageDecision(TypedDict):
     evidence: NotRequired[list[str]]
     resolution_chain: NotRequired[list[str]]
     unresolved_hops: NotRequired[list[str]]
-    decision_source: NotRequired[Literal["model", "validation_failure", "policy"]]
+    decision_source: NotRequired[TriageDecisionSource]
     validation_errors: NotRequired[list[str]]
     evidence_obligations: NotRequired[list[str]]
     evidence_coverage: NotRequired[dict[str, int]]

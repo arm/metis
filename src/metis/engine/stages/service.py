@@ -265,9 +265,16 @@ class ExecutionGraphService:
                     if values or result.status is not ExecutionStatus.ERROR
                 )
                 if result.status is ExecutionStatus.ERROR:
-                    return ExecutionResult(result.status, outputs, tuple(diagnostics))
-                if result.status is ExecutionStatus.INCONCLUSIVE:
+                    status = ExecutionStatus.ERROR
+                elif result.status is ExecutionStatus.INCONCLUSIVE:
                     status = ExecutionStatus.INCONCLUSIVE
+                stage_completed = (callbacks or {}).get("stage_completed_callback")
+                if callable(stage_completed):
+                    stage_completed(
+                        ExecutionResult(status, dict(outputs), tuple(diagnostics))
+                    )
+                if result.status is ExecutionStatus.ERROR:
+                    return ExecutionResult(result.status, outputs, tuple(diagnostics))
             if cancellation.is_set():
                 raise CancelledError("Execution was cancelled")
             return ExecutionResult(status, outputs, tuple(diagnostics))

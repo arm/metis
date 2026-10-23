@@ -13,6 +13,15 @@ from pathlib import Path
 from typing import TextIO
 
 
+def json_object_from_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("JSON contains a duplicate mapping key")
+        value[key] = item
+    return value
+
+
 def write_json_atomic(
     path: str | Path,
     payload: object,
@@ -38,6 +47,8 @@ def atomic_text_writer(
 ) -> Iterator[TextIO]:
     """Replace a text output only after its complete contents reach disk."""
     target = Path(path)
+    target.parent.stat()
+    target = target.parent.resolve() / target.name
     if mode is None:
         try:
             mode = stat.S_IMODE(target.stat().st_mode)

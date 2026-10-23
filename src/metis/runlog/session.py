@@ -21,12 +21,12 @@ from concurrent.futures import CancelledError
 from contextvars import ContextVar
 from contextvars import Token
 from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Literal
 
 from metis.json_io import write_json_atomic
+from metis.utils import utc_now_iso as _utc_now
 
 from .encoding import PayloadEncoder
 from .schema import event_explanation
@@ -672,10 +672,6 @@ def _resolve_paths(
         output_dir / "meta.json",
         output_dir / "blobs",
     )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _materialize_attributes(attributes: Attributes) -> Mapping[str, Any]:

@@ -29,7 +29,6 @@ prompts:
          - Blind deserialization (`json.Unmarshal`/`yaml.Unmarshal`) into permissive structures without validating untrusted input, or use of `unsafe`/cgo without necessary guards.
        - Prioritize boundaries where external input enters the system and any privilege transitions.
        - Do not report on issues that do not affect security.
-  validation_review: Validate the following Go review for security concerns.
   snippet_security_summary: Summarize the security implications of these Go code changes.
   security_review_file: |-
     You are a thorough security engineer specializing in Go.

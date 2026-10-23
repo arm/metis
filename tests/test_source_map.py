@@ -473,10 +473,40 @@ def test_review_node_parse_patch_mode_resolves_against_original():
 
 
 def test_normalize_review_fields():
-    from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
+    from pydantic import ValidationError
 
-    assert normalize_review_fields({"severity": "med"})["severity"] == "Medium"
-    assert normalize_review_fields({"severity": "CRITICAL"})["severity"] == "Critical"
+    from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
+    from metis.engine.nodes.simple_llm_review.schema import ReviewIssueModel
+
+    issue = dict(
+        issue="Unchecked copy",
+        code_snippet="copy(input);",
+        reasoning="Input is unbounded",
+        mitigation="Check the input length",
+        confidence=0.9,
+        cwe="CWE-120",
+    )
+    assert ReviewIssueModel.model_json_schema()["properties"]["severity"]["enum"] == [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL",
+    ]
+    for raw, expected in (
+        ("low", "Low"),
+        ("medium", "Medium"),
+        ("HIGH", "High"),
+        ("CRITICAL", "Critical"),
+        (" med ", "Medium"),
+        ("mid", "Medium"),
+        ("crit", "Critical"),
+    ):
+        assert normalize_review_fields({"severity": raw})["severity"] == expected
+        assert ReviewIssueModel(**issue, severity=raw).severity == expected.upper()
+    for raw in ("Unknown", "CustomCase", "", None):
+        with pytest.raises(ValidationError):
+            ReviewIssueModel(**issue, severity=raw)
+        assert normalize_review_fields({"severity": raw})["severity"] == raw
     assert normalize_review_fields({})["cwe"] == "CWE-Unknown"
     assert normalize_review_fields({"cwe": "CWE-79"})["cwe"] == "CWE-79"
 

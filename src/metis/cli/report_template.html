@@ -202,13 +202,10 @@
             'Unknown': '#94a3b8'
         };
 
-        const severityRank = {
-            'Critical': 5,
-            'High': 4,
-            'Medium': 3,
-            'Low': 2,
-            'Unknown': 1
-        };
+        const severityOrder = payload.severityOrder;
+        const severityRank = Object.fromEntries(
+            severityOrder.map((severity, index) => [severity, severityOrder.length - index])
+        );
 
         let severityChartInstance = null;
         let cweChartInstance = null;
@@ -287,7 +284,6 @@
         }
 
         function populateFilters() {
-            const severityOrder = ['Critical', 'High', 'Medium', 'Low', 'Unknown'];
             const severities = uniqueValues('severity');
             const sortedSeverities = severityOrder.filter(value => severities.includes(value));
             const remainingSeverities = severities.filter(value => !severityOrder.includes(value)).sort((a, b) => a.localeCompare(b));
@@ -650,7 +646,6 @@
             const container = document.getElementById('severityChart');
             if (!container || typeof echarts === 'undefined') return;
             const empty = container.parentElement ? container.parentElement.querySelector('.chart-empty') : null;
-            const severityOrder = ['Critical', 'High', 'Medium', 'Low', 'Unknown'];
             const orderedEntries = severityOrder
                 .map(name => ({ name, value: severityCounts[name] || 0 }))
                 .filter(entry => entry.value > 0);

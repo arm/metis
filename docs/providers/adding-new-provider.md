@@ -16,7 +16,11 @@ range because there is not yet a top-level stable provider facade.
 For backends exposing the compatible Responses API, reuse the shared base
 classes in `src/metis/providers/openai_compatible.py`. A backend that supports
 only Chat Completions needs its own chat implementation because the shared base
-forces `use_responses_api=True`:
+forces `use_responses_api=True`.
+
+The shared provider defaults to a 600-second timeout (`timeout` or `request_timeout`
+can override it). `JsonPromptRunner` owns retries and sets SDK `max_retries=0`;
+see the [model-request contract](../execution-graph.md#external-stages).
 
 ```python
 from metis.providers.config import ApiKeySources

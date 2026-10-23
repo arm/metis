@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import CancelledError
 import logging
+from pathlib import Path
+import sqlite3
 from typing import cast
 
 from metis.engine.stages.triage.models import TriageRun
@@ -20,7 +22,9 @@ from metis.sarif.triage import (
     save_sarif_file,
 )
 from metis.sarif.utils import create_fingerprint
+from metis.generated_artifacts import generated_artifact_publication
 from metis import runlog
+from metis.utils import resolve_path_within_root
 
 
 from .contracts import TriageClassifier
@@ -91,13 +95,31 @@ class TriageService:
                 "scope_policy",
                 {"path": finding.file_path},
             ) as context_span:
+                context_path = finding.file_path
+                context_memory = memory_service
+                if (
+                    context_memory is not None
+                    and context_memory.repo_root
+                    and context_path
+                ):
+                    root = Path(context_memory.repo_root).expanduser().absolute()
+                    try:
+                        context_path = (
+                            resolve_path_within_root(
+                                root, root / context_path, preserve_aliases=True
+                            )
+                            .relative_to(root)
+                            .as_posix()
+                        )
+                    except (OSError, RuntimeError, ValueError):
+                        context_memory = None
                 threat_model_context = get_threat_model_context(
-                    memory_service,
-                    path=finding.file_path,
+                    context_memory,
+                    path=context_path,
                 )
                 policy = threat_model_scope_policy(
                     threat_model_context,
-                    path=finding.file_path,
+                    path=context_path,
                 )
                 override = threat_model_triage_override(policy)
                 context_span.end(
@@ -179,7 +201,7 @@ class TriageService:
             status="inconclusive",
             reason=f"Triage failed before a decision could be produced: {exc}",
             metadata={
-                "decision_source": "validation_failure",
+                "decision_source": "execution_failure",
                 "validation_errors": ["triage execution failed"],
                 "evidence_requirements": ["triage_execution"],
                 "evidence_coverage": {"triage_execution": 0},
@@ -279,7 +301,7 @@ class TriageService:
                 completed=progress_base + completed,
             )
             idx, finding = item
-            outcome = outcomes.pop(idx, None)
+            outcome = outcomes.get(idx)
             if outcome is None:
                 return
             _idx, _finding, decision, error = outcome
@@ -294,16 +316,51 @@ class TriageService:
                 checkpoint_callback=checkpoint_callback,
                 processed=processed,
             )
+            outcomes.pop(idx, None)
             if was_handled:
                 handled.add((finding.run_index, finding.result_index))
 
-        jobs.run(
-            scheduled,
-            invoke,
-            label=None,
-            result_key=lambda item: item[0],
-            on_complete=report_completion,
-        )
+        failure: BaseException | None = None
+        try:
+            jobs.run(
+                scheduled,
+                invoke,
+                label=None,
+                result_key=lambda item: item[0],
+                on_complete=report_completion,
+            )
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            try:
+                for idx, finding, decision, error in tuple(outcomes.values()):
+                    processed, was_handled = self._handle_finding_result(
+                        triaged_payload=triaged_payload,
+                        finding=finding,
+                        total=total,
+                        idx=idx,
+                        decision=decision,
+                        error=error,
+                        progress_callback=None,
+                        checkpoint_callback=None,
+                        processed=processed,
+                    )
+                    if was_handled:
+                        handled.add((finding.run_index, finding.result_index))
+                if processed > progress_base and (
+                    processed < total or failure is not None
+                ):
+                    self._invoke_callback(
+                        checkpoint_callback, triaged_payload, processed, processed
+                    )
+            except BaseException as checkpoint_error:
+                if failure is None:
+                    raise
+                logger.warning(
+                    "Unable to checkpoint completed triage decisions: %s",
+                    checkpoint_error,
+                )
         return processed, handled
 
     def triage_run(
@@ -350,6 +407,7 @@ class TriageService:
         target_path: str,
         *,
         checkpoint_every: int | None = None,
+        codebase_path: str | None = None,
     ) -> Callable[[dict, int, int], None]:
         every = checkpoint_every
         if every is None:
@@ -362,12 +420,16 @@ class TriageService:
             every = 0
 
         def checkpoint(triaged_payload: dict, processed: int, total: int) -> None:
-            if every <= 0:
+            if every <= 0 or processed <= 0:
                 return
-            if processed >= total:
+            if processed < total and processed % every != 0:
                 return
-            if processed % every != 0:
-                return
-            save_sarif_file(target_path, triaged_payload)
+            try:
+                with generated_artifact_publication(codebase_path, target_path):
+                    save_sarif_file(target_path, triaged_payload)
+            except (OSError, TypeError, ValueError, sqlite3.Error) as exc:
+                logger.error(
+                    "Unable to save triage checkpoint %s: %s", target_path, exc
+                )
 
         return checkpoint

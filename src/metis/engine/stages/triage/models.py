@@ -20,6 +20,8 @@ from metis.sarif.models import SarifPayload
 from metis.sarif.triage import SarifFinding
 from metis.sarif.triage import extract_findings
 
+TRIAGE_FINDING_FAILED = "triage.finding_failed"
+
 
 @dataclass(frozen=True, slots=True)
 class TriageRun:

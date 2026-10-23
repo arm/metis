@@ -38,6 +38,8 @@ from metis.engine.execution.graph import StageConfiguration
 from metis.engine.execution.runner import run_stage
 from metis.engine.nodes.codegraph import registration as codegraph_node
 from metis.engine.nodes.finding_dedup import registration as finding_dedup_node
+from metis.engine.nodes.finding_dedup.core import DeduplicationDecision
+from metis.engine.nodes.finding_dedup.core import consolidate_result
 from metis.engine.nodes.index import registration as index_node
 from metis.engine.nodes.reachability import review as reachability_review_node
 from metis.engine.nodes.result import review as review_results_node
@@ -330,9 +332,9 @@ def test_finding_dedup_fails_open_when_batch_exceeds_global_limit() -> None:
     prompt_runner.invoke.assert_not_called()
 
 
-def test_finding_dedup_keeps_candidates_when_model_returns_no_decision() -> None:
+def test_finding_dedup_keeps_candidates_when_model_finds_no_duplicates() -> None:
     prompt_runner = Mock()
-    prompt_runner.invoke.return_value = None
+    prompt_runner.invoke.return_value = DeduplicationDecision(groups=[])
     result = finding_dedup_node.execute(
         NodeInvocation(
             EmptyNodeConfiguration(),
@@ -348,6 +350,80 @@ def test_finding_dedup_keeps_candidates_when_model_returns_no_decision() -> None
 
     finalized = result.outputs["review"].review
     assert sum(len(group.reviews) for group in finalized.result.reviews) == 2
+    assert finalized.status is ReviewStatus.SUCCEEDED
+    assert result.status is ExecutionStatus.OK
+    assert result.diagnostics == ()
+
+
+def test_finding_dedup_cancellation_propagates() -> None:
+    service, _calls = _service(
+        review_run=_findings_run({"issue": "First report"}, {"issue": "Second report"})
+    )
+    service._prompt_runner.invoke.side_effect = CancelledError()
+    try:
+        with pytest.raises(CancelledError):
+            service.execute_graph()
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("members", "representative"),
+    [
+        ([0, 3], 0),
+        ([0, 1, 3], 0),
+        ([0, 1, 4], 0),
+        ([0, 1, -1], 0),
+        ([0, 1], 3),
+        ([0, 1], 2),
+        ([0, 0], 0),
+    ],
+)
+def test_finding_dedup_rejects_invalid_batch_groups(members, representative) -> None:
+    original = StandardReviewResult.model_validate(
+        {
+            "reviews": [
+                {
+                    "file": "one.c",
+                    "reviews": [
+                        {"id": "first", "issue": "First issue"},
+                        {"id": "second", "issue": "Second issue"},
+                        {"id": "third", "issue": "Third issue"},
+                    ],
+                },
+                {
+                    "file": "two.c",
+                    "reviews": [{"id": "unseen", "issue": "Unseen issue"}],
+                },
+            ]
+        }
+    )
+    packets = []
+
+    def adjudicate(packet):
+        packets.append([item["index"] for item in packet])
+        return DeduplicationDecision.model_validate(
+            {
+                "groups": [
+                    {
+                        "member_indexes": members,
+                        "representative_index": representative,
+                        "relationship": "duplicate",
+                    }
+                ]
+            }
+        )
+
+    result = consolidate_result(
+        original,
+        adjudicator=adjudicate,
+        packet_fits=lambda packet: len(packet) <= 3,
+        progress_callback=None,
+        jobs=_Jobs(),
+    )
+
+    assert packets == [[0, 1, 2], [0, 1, 2]]
+    assert result == original
 
 
 def test_finding_dedup_removes_exact_duplicates_without_model() -> None:
@@ -847,14 +923,25 @@ def test_configured_include_triaged_can_be_overridden_per_run() -> None:
     assert [run.total for run in runs] == [1, 0]
 
 
-def test_default_graph_runs_fixed_stages_and_passes_review_sarif():
+@pytest.mark.parametrize(
+    "review_status", [ReviewStatus.SUCCEEDED, ReviewStatus.INCONCLUSIVE]
+)
+def test_default_graph_runs_fixed_stages_and_passes_review_sarif(review_status):
     configuration = ExecutionConfiguration.model_validate(load_execution_config())
-    service, calls = _service(configuration)
+    service, calls = _service(configuration, review_run=_review_run(review_status))
+    snapshots = []
 
-    result = service.execute_graph()
+    result = service.execute_graph(
+        callbacks={"stage_completed_callback": snapshots.append}
+    )
 
-    assert result.status is ExecutionStatus.OK
-    assert calls == ["codegraph", "review", "review", "triage"]
+    expected_status = (
+        ExecutionStatus.OK
+        if review_status is ReviewStatus.SUCCEEDED
+        else ExecutionStatus.INCONCLUSIVE
+    )
+    assert result.status is snapshots[-1].status is expected_status
+    assert calls == ["codegraph", "review", "triage"]
     assert tuple(result.outputs) == ("initialize", "review", "triage")
     assert result.outputs["triage"]["sarif"] == result.outputs["review"]["sarif"]
 
@@ -960,17 +1047,6 @@ def test_profiled_codegraph_fails_when_source_graph_is_incomplete():
         with pytest.raises(RuntimeError, match="does not match the installed profile"):
             codegraph_node.registration.execute(invocation)
         codegraphs.materialize.assert_not_called()
-
-
-def test_inconclusive_review_still_feeds_triage():
-    service, calls = _service(
-        review_run=_review_run(ReviewStatus.INCONCLUSIVE),
-    )
-
-    result = service.execute_graph()
-
-    assert result.status is ExecutionStatus.INCONCLUSIVE
-    assert calls[-1] == "triage"
 
 
 def test_results_keep_sarif_in_memory_when_no_file_formats_are_requested():

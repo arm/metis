@@ -3,6 +3,14 @@
 Metis discovers language support from lightweight manifests. It imports a plugin
 class only after a file path matches that language.
 
+Parser grammars are downloaded on first use and cached per
+`tree-sitter-language-pack` version. Before running offline, download the
+languages you need while network access is available:
+
+```bash
+python -c "from tree_sitter_language_pack import download; download(['c', 'cpp'])"
+```
+
 ## File Layout
 
 | Path | Purpose |
@@ -84,8 +92,6 @@ prompts:
     ...
   security_review_checks: |-
     ...
-  validation_review: |-
-    ...
   snippet_security_summary: |-
     ...
 ```
@@ -97,7 +103,6 @@ Required prompt keys:
 | `security_review_file` | Single-file review. |
 | `security_review` | Patch review. |
 | `security_review_checks` | Language-specific review guidance. |
-| `validation_review` | Reserved compatibility prompt; currently not consumed at runtime. |
 | `snippet_security_summary` | Patch summary generation. |
 
 `prompts.triage_navigation` is optional and overrides the navigation-assisted

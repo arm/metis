@@ -39,7 +39,6 @@ prompts:
          - Hardcoded secrets or privileged addresses; reliance on `msg.sender` without proper trust boundaries.
        - Prioritize user-controlled inputs, value transfers, and external call sites.
        - Do not report on issues that do not affect security.
-  validation_review: Validate the following Solidity review for security concerns.
   snippet_security_summary: Summarize the security implications of these Solidity code changes.
   security_review_file: |-
     You are a thorough security engineer specializing in Solidity smart contracts and the EVM.

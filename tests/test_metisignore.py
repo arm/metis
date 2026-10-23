@@ -3,6 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import Mock
 import errno
 import os
 import threading
@@ -12,6 +13,7 @@ import pytest
 
 import metis.engine.capabilities.indexing as indexing_service_mod
 from metis.engine import MetisEngine
+from metis.engine import ExecutionGraphError
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 
 
@@ -70,6 +72,180 @@ def test_direct_code_file_selection_respects_metisignore(
 
     assert engine.repository.is_code_file_selected("keep.py") is True
     assert engine.repository.is_code_file_selected("drop.py") is False
+
+
+@pytest.mark.parametrize("root_path", ["missing", "file", "missing/..", "file/.."])
+def test_engine_rejects_invalid_codebase_roots(
+    tmp_path, dummy_backend, dummy_llm, capability_settings, root_path
+):
+    (tmp_path / "file").write_text("not a directory", encoding="utf-8")
+    with pytest.raises(NotADirectoryError, match="Codebase path"):
+        engine = _build_engine(
+            tmp_path / root_path,
+            dummy_backend,
+            dummy_llm,
+            capability_settings,
+        )
+        engine.close()
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "config"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "missing",
+        "source.c",
+        "missing/..",
+        "source.c/..",
+        "../outside",
+        "escape",
+        "empty",
+        "alias",
+        "parent_alias",
+        "absolute_alias",
+        "root_alias",
+        "unreadable",
+        "nested",
+        "ignored_nested",
+        "reincluded_nested",
+    ],
+)
+def test_directory_review_validates_scope(
+    tmp_path,
+    dummy_backend,
+    dummy_llm,
+    capability_settings,
+    monkeypatch,
+    entrypoint,
+    target,
+):
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / "source.c").write_text("int source;\n", encoding="utf-8")
+    (root / "empty").mkdir()
+    source_dir = root / "src"
+    source_dir.mkdir()
+    for name in ("keep.c", "ignored.c"):
+        (source_dir / name).write_text("int source;\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.c").write_text("int secret;\n", encoding="utf-8")
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    (root / "alias").symlink_to(source_dir, target_is_directory=True)
+    (root / ".metisignore").write_text(
+        "alias/ignored.c\nsrc/ignored.c\n", encoding="utf-8"
+    )
+    requested_target = target
+    if target == "parent_alias":
+        nested = source_dir / "nested"
+        nested.mkdir()
+        (root / "parent_alias").symlink_to(nested, target_is_directory=True)
+        requested_target = "parent_alias/.."
+    elif target == "absolute_alias":
+        alias = tmp_path / "absolute_alias"
+        alias.symlink_to(source_dir, target_is_directory=True)
+        requested_target = str(alias)
+    elif target == "root_alias":
+        requested_target = str(source_dir)
+        alias = tmp_path / "checkout"
+        alias.symlink_to(root, target_is_directory=True)
+        root = alias
+    blocked = None
+    if target in {"unreadable", "nested", "ignored_nested", "reincluded_nested"}:
+        blocked = root / target
+        if target != "unreadable":
+            blocked /= "unreadable"
+        blocked.mkdir(parents=True)
+        (blocked / "hidden.c").write_text("int hidden;\n", encoding="utf-8")
+        if target in {"ignored_nested", "reincluded_nested"}:
+            (blocked.parent / "keep.c").write_text("int keep;\n", encoding="utf-8")
+            patterns = f"{target}/unreadable/\n"
+            if target == "reincluded_nested":
+                patterns += f"!{target}/unreadable/hidden.c\n"
+            (root / ".metisignore").write_text(patterns, encoding="utf-8")
+    engine = _build_engine(
+        root,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_include_paths=["alias/"] if target == "alias" else [],
+        execution_config={
+            "inputs": {"review_request": {"mode": "dir", "target": requested_target}},
+            "stages": {
+                "review": {
+                    "nodes": {
+                        "simple_llm_review": {},
+                        "finding_dedup": {},
+                        "result": {"formats": ["sarif"]},
+                    }
+                }
+            },
+        },
+    )
+    graph = engine._get_review_graph()
+    graph.review = Mock(return_value={"reviews": [{"issue": "Check source"}]})
+    walk = Mock(wraps=os.walk)
+    monkeypatch.setattr("metis.engine.repository.os.walk", walk)
+    try:
+        if blocked is not None:
+            blocked.chmod(0)
+            try:
+                list(blocked.iterdir())
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("Directory permissions do not restrict this user")
+        if target not in {
+            "empty",
+            "alias",
+            "parent_alias",
+            "absolute_alias",
+            "root_alias",
+            "ignored_nested",
+        }:
+            with pytest.raises(ExecutionGraphError) as error:
+                if entrypoint == "api":
+                    engine.execute_review("dir", target=requested_target)
+                else:
+                    engine.execute_graph()
+            if blocked is not None:
+                message = "Permission denied"
+                walk.assert_called_once()
+            else:
+                message = (
+                    "Path escapes codebase"
+                    if target in {"../outside", "escape"}
+                    else "Path parent is not a directory"
+                    if target in {"missing/..", "source.c/.."}
+                    else "Review directory not found"
+                )
+                walk.assert_not_called()
+            assert any(
+                message in item.message for item in error.value.result.diagnostics
+            )
+            graph.review.assert_not_called()
+        else:
+            outputs = (
+                engine.execute_review("dir", target=requested_target)
+                if entrypoint == "api"
+                else engine.execute_graph().outputs["review"]
+            )
+            if target == "empty":
+                assert outputs["findings"] == {"reviews": []}
+                graph.review.assert_not_called()
+            else:
+                relative_file = "alias/keep.c" if target == "alias" else "src/keep.c"
+                if target == "ignored_nested":
+                    relative_file = "ignored_nested/keep.c"
+                assert outputs["findings"]["reviews"][0]["file"] == relative_file
+                graph.review.assert_called_once()
+                request = graph.review.call_args.args[0]
+                assert request["file_path"] == str(root / relative_file)
+        dummy_llm.get_chat_model.assert_not_called()
+    finally:
+        if blocked is not None:
+            blocked.chmod(0o700)
+        engine.close()
 
 
 def test_concurrent_review_selection_reuses_compiled_scopes(
@@ -159,8 +335,8 @@ def test_review_scope_preserves_unicode_and_literal_matching(
     try:
         (tmp_path / name).touch()
     except OSError as exc:
-        if exc.errno == errno.EILSEQ and "\udcff" in name:
-            pytest.skip("Filesystem does not support undecodable byte filenames")
+        if exc.errno in {errno.EILSEQ, errno.EPERM} and "\udcff" in name:
+            pytest.skip("Filesystem or sandbox rejects undecodable byte filenames")
         raise
     for filename in ("bracket[one].py", "bracketo.py", "ignored.py"):
         (tmp_path / filename).touch()
@@ -346,7 +522,7 @@ def test_review_patch_respects_metisignore_allowlist(
     reviewed = []
 
     class _DummyReviewGraph:
-        def review(self, req):
+        def review(self, req, *, collect_navigation_evidence=False):
             reviewed.append(req["relative_file"])
             return {
                 "file": req["relative_file"],

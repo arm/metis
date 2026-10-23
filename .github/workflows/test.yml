@@ -32,9 +32,18 @@ jobs:
         run: uv venv --python ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: uv pip install -e '.[test,qdrant]'
+        run: uv pip install -e '.[dev]'
+
+      - name: Download parser and tokenizer data
+        run: |
+          uv run --no-sync python - <<'PY'
+          import tiktoken
+          from tree_sitter_language_pack import download_all
+          download_all()
+          for name in ("cl100k_base", "o200k_base"):
+              tiktoken.get_encoding(name)
+          PY
 
       - name: Run pre-commit checks
         run: |
-          uv pip install pre-commit
           uv run --no-sync pre-commit run --all-files --show-diff-on-failure

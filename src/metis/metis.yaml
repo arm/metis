@@ -71,10 +71,6 @@ metis_engine:
             capabilities:
               - memory
               - navigation
-          reachability:
-            capabilities:
-              - memory
-              - navigation
           finding_dedup: {}
           result:
             formats:

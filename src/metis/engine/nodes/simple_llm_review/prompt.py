@@ -6,6 +6,9 @@ from typing import Annotated, Literal, get_args, get_origin
 
 from metis.engine.helpers import apply_custom_guidance
 from metis.engine.nodes.simple_llm_review.schema import ReviewIssueModel
+from metis.sarif.triage import TRIAGE_ANNOTATION_KEYS
+from metis.severity import SEVERITY_ALIASES
+from metis.severity import SEVERITY_TITLES
 
 logger = logging.getLogger("metis")
 
@@ -34,23 +37,17 @@ _REQUIRED_REVIEW_STR_FIELDS = tuple(
     if _is_string_field(field.annotation)
 )
 
-_SEVERITY_TITLES = {
-    "LOW": "Low",
-    "MED": "Medium",
-    "MEDIUM": "Medium",
-    "MID": "Medium",
-    "HIGH": "High",
-    "CRIT": "Critical",
-    "CRITICAL": "Critical",
-}
-
 
 def normalize_review_fields(item: dict) -> dict:
+    for key in TRIAGE_ANNOTATION_KEYS:
+        item.pop(key, None)
     if not item.get("cwe"):
         item["cwe"] = "CWE-Unknown"
     sev = item.get("severity")
     if isinstance(sev, str) and sev.strip():
-        item["severity"] = _SEVERITY_TITLES.get(sev.strip().upper(), sev.strip())
+        normalized = sev.strip().upper()
+        normalized = SEVERITY_ALIASES.get(normalized, normalized)
+        item["severity"] = SEVERITY_TITLES.get(normalized, sev.strip())
     return item
 
 

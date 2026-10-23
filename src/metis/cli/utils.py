@@ -2,27 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import hashlib
-import importlib.metadata
 import logging
 import os
 import re
 import warnings
-from datetime import datetime
 from pathlib import Path
 import sys
-from tempfile import NamedTemporaryFile
-from unicodedata import normalize
-from importlib.resources import files
-from uuid import uuid4
 
 from rich.console import Console
 from rich.errors import MarkupError
 from metis.runlog import RunLogConfig
 from metis.runlog import build_run_metadata
 from metis.runlog import open_runlog
-from metis import runlog
-from metis.json_io import write_json_atomic
 from rich.markup import escape
 from rich.progress import (
     Progress,
@@ -34,21 +25,20 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from .exporters import export_csv, export_html, export_sarif
-from metis.sarif.triage import apply_triage_annotations
+from .output import METIS_VERSION as METIS_VERSION
+from .output import REPORT_TEMPLATE as REPORT_TEMPLATE
+from .output import export_csv as export_csv
+from .output import export_html as export_html
+from .output import export_sarif as export_sarif
+from .output import graph_output_files as graph_output_files
+from .output import output_files_for_formats as output_files_for_formats
+from .output import output_format as output_format
+from .output import output_path_identity as output_path_identity
+from .output import save_output as save_output
 from metis.vector_store.retrievers import retriever_query_config
-
-try:
-    METIS_VERSION = importlib.metadata.version("metis")
-except importlib.metadata.PackageNotFoundError:
-    METIS_VERSION = "unknown"
-
 
 console = Console()
 logger = logging.getLogger("metis")
-REPORT_TEMPLATE = (
-    files("metis.cli").joinpath("report_template.html").read_text(encoding="utf-8")
-)
 
 try:
     from metis.vector_store.pgvector_store import PGVectorStoreImpl
@@ -305,143 +295,6 @@ def build_standard_progress(*, transient: bool):
 def count_index_items(engine):
     """Count total items to index via the indexing domain surface."""
     return engine.indexing.count_index_items()
-
-
-def output_format(output_file: str | Path) -> str:
-    suffix = Path(output_file).suffix.lower()
-    return suffix.removeprefix(".") if suffix in {".html", ".csv", ".sarif"} else "json"
-
-
-def output_path_identity(output_file: str | Path) -> Path:
-    """Compare destinations using their filesystem's case and Unicode rules."""
-    path = Path(output_file).resolve()
-    parent = path.parent
-    while not parent.exists():
-        parent = parent.parent
-    # Volumes on the same host can have different case rules. Probe the actual
-    # destination volume; the temporary file is removed before publication.
-    with NamedTemporaryFile(prefix=".metis-é-", dir=parent) as probe:
-        probe_path = Path(probe.name)
-        case_insensitive = probe_path.with_name(probe_path.name.swapcase()).exists()
-        normalizes_unicode = probe_path.with_name(
-            normalize("NFD", probe_path.name)
-        ).exists()
-    identity = str(path).casefold() if case_insensitive else str(path)
-    return Path(normalize("NFC", identity) if normalizes_unicode else identity)
-
-
-def output_files_for_formats(
-    output_files: list[str] | None,
-    formats: tuple[str, ...],
-    *,
-    command: str,
-    generated_output: bool = False,
-    reserved_paths: set[Path] | None = None,
-) -> list[str]:
-    configured = tuple(dict.fromkeys(formats))
-    provided = list(output_files or ())
-    if provided:
-        base = Path(provided[0])
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
-
-    selected = [] if generated_output else provided
-    selected_paths = {output_path_identity(path) for path in selected}
-    if len(selected_paths) != len(selected):
-        raise ValueError("Output paths must be unique")
-    reserved = {output_path_identity(path) for path in reserved_paths or set()}
-    if selected_paths & reserved:
-        raise ValueError("Output paths for graph stages must be distinct")
-    for path in selected:
-        format_name = output_format(path)
-        if format_name not in configured:
-            raise ValueError(f"Execution graph did not request {format_name} output")
-
-    selected_formats = {output_format(path) for path in selected}
-    fallback_base: Path | None = None
-    for format_name in configured:
-        if format_name in selected_formats:
-            continue
-        candidate = base.with_suffix(f".{format_name}")
-        identity = output_path_identity(candidate)
-        if identity in reserved:
-            if fallback_base is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fallback_base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
-            candidate = fallback_base.with_suffix(f".{format_name}")
-            identity = output_path_identity(candidate)
-        if identity in reserved or identity in selected_paths:
-            raise ValueError("Output paths for graph stages must be distinct")
-        selected.append(str(candidate))
-        selected_paths.add(identity)
-    return selected
-
-
-def _record_output_artifact(path: str | Path, format_name: str) -> None:
-    output_path = Path(path).resolve()
-    with output_path.open("rb") as handle:
-        digest = hashlib.file_digest(handle, "sha256").hexdigest()
-    runlog.event(
-        "artifact.written",
-        {
-            "kind": "output_file",
-            "format": format_name,
-            "path": str(output_path),
-            "bytes": output_path.stat().st_size,
-            "sha256": digest,
-        },
-    )
-
-
-def save_output(
-    output_files,
-    data,
-    quiet=False,
-    sarif_payload=None,
-):
-    if not output_files:
-        return
-
-    if isinstance(output_files, (str, Path)):
-        files = [output_files]
-    else:
-        files = list(output_files)
-    json_payload = (
-        apply_triage_annotations(data, sarif_payload)
-        if sarif_payload is not None
-        else data
-    )
-    sarif_payload_local = sarif_payload
-
-    for file_entry in files:
-        output_path = Path(file_entry)
-        format_name = output_format(output_path)
-
-        if format_name == "html":
-            report_path = export_html(
-                json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
-            )
-        elif format_name == "sarif":
-            report_path, sarif_payload_local = export_sarif(
-                data, output_path, sarif_payload_local
-            )
-        elif format_name == "csv":
-            report_path = export_csv(json_payload, output_path)
-        else:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            write_json_atomic(output_path, json_payload, indent=4)
-            _record_output_artifact(output_path, format_name)
-            print_console(
-                f"[blue]Results saved to {escape(str(output_path))}[/blue]", quiet
-            )
-            continue
-
-        print_console(
-            f"[blue]{format_name.upper()} report saved to {escape(str(report_path))}[/blue]",
-            quiet,
-        )
-        _record_output_artifact(report_path, format_name)
 
 
 def check_file_exists(file_path, quiet=False):

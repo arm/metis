@@ -5,8 +5,12 @@ from __future__ import annotations
 
 from glob import has_magic
 import json
-from pathlib import PurePosixPath
+import posixpath
+import re
 from typing import Any
+
+from pathspec.patterns.gitignore import GitIgnorePatternError
+from pathspec.patterns.gitignore.spec import GitIgnoreSpecPattern
 
 from metis.memory import MemoryService
 from metis import runlog
@@ -53,10 +57,25 @@ def _get_threat_model_context(
                 },
             }
         )
-    normalized_path = path.replace("\\", "/")
+    for source in service.iter_records(THREAT_MODEL_NAMESPACE):
+        if source.artifact_type != "threat_model_authoritative":
+            continue
+        if isinstance(source.body_json, dict) and source.body_json.get(
+            "distilled_claims"
+        ):
+            continue
+        records.append(
+            {
+                "summary": source.summary_text,
+                "metadata": {
+                    "authority": source.authority,
+                    "scope_clauses": [],
+                },
+            }
+        )
     for lesson in service.iter_records((*THREAT_MODEL_NAMESPACE, "history")):
         applies_to = lesson.metadata["applies_to"]
-        if _history_lesson_applies(applies_to, normalized_path):
+        if _scope_applies_to_path(applies_to, path):
             records.append(
                 {
                     "summary": lesson.summary_text,
@@ -153,13 +172,10 @@ def _clause_authorizes_automatic_filter(
         return False
 
     scopes = clause["applies_to"]
-    if "repository" in scopes:
+    if not scopes or "repository" in scopes:
         return False
 
-    normalized_path = path.replace("\\", "/")
-    if not normalized_path:
-        return False
-    return any(PurePosixPath(normalized_path).match(scope) for scope in scopes)
+    return _scope_applies_to_path(scopes, path)
 
 
 def _is_binding(clause: dict[str, Any]) -> bool:
@@ -175,16 +191,27 @@ def _is_global_exclusion(clause: dict[str, Any]) -> bool:
     )
 
 
-def _history_lesson_applies(scopes: list[str], path: str) -> bool:
+def _scope_applies_to_path(scopes: list[str], path: str) -> bool:
     if not scopes or "repository" in scopes:
         return True
     if not path:
         return False
+    normalized_path = posixpath.normpath(path.replace("\\", "/"))
+    if normalized_path == ".." or normalized_path.startswith(("../", "/")):
+        return False
     for scope in scopes:
-        normalized_scope = scope.replace("\\", "/").rstrip("/")
+        normalized_scope = scope.replace("\\", "/").removeprefix("./").rstrip("/")
         if has_magic(normalized_scope):
-            if PurePosixPath(path).match(normalized_scope):
+            try:
+                match = GitIgnoreSpecPattern(f"/{normalized_scope}").match_file(
+                    normalized_path
+                )
+            except (GitIgnorePatternError, re.error):
+                continue
+            if match is not None and not match.match.groupdict().get("ps_d"):
                 return True
-        elif path == normalized_scope or path.startswith(f"{normalized_scope}/"):
+        elif normalized_path == normalized_scope or normalized_path.startswith(
+            f"{normalized_scope}/"
+        ):
             return True
     return False

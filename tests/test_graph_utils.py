@@ -3,6 +3,7 @@
 
 import pytest
 
+from metis.configuration import load_plugin_config
 from metis.engine.nodes.simple_llm_review.prompt import (
     build_review_system_prompt,
     sanitize_review_payload,
@@ -30,19 +31,21 @@ def test_build_review_system_prompt_requires_placeholder():
 
 def test_build_review_system_prompt_replaces_placeholder():
     language_prompts = {
-        "security_review_file": "Intro [[REVIEW_SCHEMA_FIELDS]]",
+        "security_review_file": "Intro",
         "security_review_checks": "Checklist items.",
     }
     schema_section = '- "issue": description'
     prompt = build_review_system_prompt(
         language_prompts,
         "security_review_file",
-        report_prompt="Reporting instructions.",
+        report_prompt=load_plugin_config()["general_prompts"]["security_review_report"],
         custom_prompt_text=None,
         custom_guidance_precedence="",
         schema_prompt_section=schema_section,
     )
     assert schema_section in prompt
+    assert 'JSON object with only a "reviews" key' in prompt
+    assert _normalize_reviews(prompt.rsplit("return: ", 1)[1]) == []
 
 
 def test_sanitize_review_payload_fills_missing_fields():

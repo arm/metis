@@ -64,46 +64,29 @@ class _Node:
         start_byte=0,
         end_byte=0,
     ):
-        self._type = node_type
+        self.type = node_type
         self.text = text
-        self._start_position = _Point(line - 1, 0)
-        self._end_position = _Point(line - 1, 0)
-        self._start_byte = start_byte
-        self._end_byte = end_byte
-        self._children = children or []
+        self.start_point = _Point(line - 1, 0)
+        self.end_point = _Point(line - 1, 0)
+        self.start_byte = start_byte
+        self.end_byte = end_byte
+        self.children = children or []
         self._fields = fields or {}
-        self._parent = None
-        for child in self._children:
-            child._parent = self
+        self.parent = None
+        for child in self.children:
+            child.parent = self
         for child in self._fields.values():
-            child._parent = self
+            child.parent = self
 
-    def kind(self):
-        return self._type
-
-    def start_position(self):
-        return self._start_position
-
-    def end_position(self):
-        return self._end_position
-
-    def start_byte(self):
-        return self._start_byte
-
-    def end_byte(self):
-        return self._end_byte
-
+    @property
     def child_count(self):
-        return len(self._children)
+        return len(self.children)
 
     def child(self, index):
-        return self._children[index]
+        return self.children[index]
 
     def child_by_field_name(self, name):
         return self._fields.get(name)
-
-    def parent(self):
-        return self._parent
 
 
 def _codegraph_service(codebase_path, *, files=(), annotation_settings=None):

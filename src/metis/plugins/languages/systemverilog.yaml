@@ -41,17 +41,6 @@ prompts:
     - Each review must use ONLY the schema fields in [[REVIEW_SCHEMA_FIELDS]] (no extra keys).
     - The reasoning must explicitly identify externally controlled inputs and the trust boundary.
     - If no issues, return {\"reviews\": []}.
-  validation_review: |-
-    You will be given:
-    SNIPPET: The relevant SystemVerilog code snippet.
-
-    REVIEW: A list of potential security issues discovered.
-
-    Your task is to:
-    1. Validate each item against SNIPPET.
-    2. Remove false positives or issues already mitigated (e.g., deterministic reset, sticky locks, explicit privilege checks).
-    3. Keep only issues that definitely represent real security risks.
-    4. If no real issues remain, respond with an empty array: [].
   snippet_security_summary: |-
     Summarize the security implications of these SystemVerilog changes in one paragraph.
     Focus on CWE-root-cause patterns (secure defaults/reset, access control/debug, data lifetime/zeroization,
