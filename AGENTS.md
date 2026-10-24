@@ -44,6 +44,7 @@ built around a typed execution graph.
 | Built-in node or stage | [Built-in execution components](docs/contributing/adding-execution-component.md) |
 | Separately distributed node or stage | [External nodes and stages](docs/execution-graph.md#adding-external-nodes-and-stages) |
 | Execution YAML, ports, status, scheduling | [Execution graph](docs/execution-graph.md) |
+| Shared CodeGraph queries | `src/metis/engine/codegraph/queries.py` and [CodeGraph contracts](docs/execution-graph.md#codegraph-provider-contract) |
 | Capability | [Capabilities](docs/capabilities/README.md) and [adding a capability](docs/capabilities/adding-capability.md) |
 | Model-tool adapter or loop | `src/metis/engine/tools/`, `src/metis/engine/model_tool_runner.py`, `tests/test_model_tool_runner.py`, and the consuming capability's guide |
 | Language plugin | [Language plugins](docs/language-plugins.md); for CodeGraph support also read the [provider](docs/execution-graph.md#codegraph-provider-contract) and [semantics](docs/execution-graph.md#codegraph-semantics-contract) contracts |

@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from collections.abc import Callable
 
 from metis.engine.threat_context_retrieval import format_threat_model_context
+from metis.engine.stages.triage.models import TriageDecisionModel
 
 from .debug import _emit_debug
 from metis.engine.stages.triage.models import TriageState
@@ -48,6 +50,27 @@ def _build_user_prompt(state: TriageState) -> str:
 
 
 def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
+    decision, model_status = _triage_decision(state, invoke_decision=invoke_decision)
+    return {
+        **state,
+        "decision_status": decision.status,
+        "decision_reason": decision.reason,
+        "decision_evidence": list(getattr(decision, "evidence", []) or []),
+        "decision_resolution_chain": list(
+            getattr(decision, "resolution_chain", []) or []
+        ),
+        "decision_unresolved_hops": list(
+            getattr(decision, "unresolved_hops", []) or []
+        ),
+        "triage_model_status": model_status,
+    }
+
+
+def _triage_decision(
+    state: TriageState,
+    *,
+    invoke_decision: Callable[[str, str], TriageDecisionModel | None],
+) -> tuple[TriageDecisionModel, str | None]:
     system_prompt = state.get("triage_system_prompt", "")
     user_prompt = _build_user_prompt(state)
     transcript = state.get("evidence_pack", "") or ""
@@ -69,15 +92,14 @@ def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
     )
     decision = invoke_decision(system_prompt, decision_prompt)
     if decision is None:
-        reason = "Inconclusive because the triage model did not return a valid decision payload."
-        new_state: TriageState = state.copy()
-        new_state["decision_status"] = "inconclusive"
-        new_state["decision_reason"] = reason
-        new_state["decision_evidence"] = []
-        new_state["decision_resolution_chain"] = []
-        new_state["decision_unresolved_hops"] = ["TRIAGE_DECISION_PARSE_FAILED"]
-        new_state["triage_model_status"] = None
-        return new_state
+        return (
+            TriageDecisionModel(
+                status="inconclusive",
+                reason="Inconclusive because the triage model did not return a valid decision payload.",
+                unresolved_hops=["TRIAGE_DECISION_PARSE_FAILED"],
+            ),
+            None,
+        )
 
     _emit_debug(
         state,
@@ -86,15 +108,4 @@ def triage_node_llm(state: TriageState, *, invoke_decision) -> TriageState:
         decision_reason=decision.reason,
     )
 
-    new_state: TriageState = state.copy()
-    new_state["decision_status"] = decision.status
-    new_state["triage_model_status"] = decision.status
-    new_state["decision_reason"] = decision.reason
-    new_state["decision_evidence"] = list(getattr(decision, "evidence", []) or [])
-    new_state["decision_resolution_chain"] = list(
-        getattr(decision, "resolution_chain", []) or []
-    )
-    new_state["decision_unresolved_hops"] = list(
-        getattr(decision, "unresolved_hops", []) or []
-    )
-    return new_state
+    return decision, decision.status

@@ -186,6 +186,9 @@ Logical prompts and physical model calls are deliberately separate. Structured
 output fallback, retries, and model/tool rounds may cause more than one
 `llm.call` under one `prompt`.
 
+Triage step output and final state retain the `decision_*` fields. The internal
+typed `decision` is also recorded.
+
 ## Point events
 
 Metis currently emits these stable event names:

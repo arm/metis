@@ -4,11 +4,11 @@
 
 from functools import partial
 
+from metis.engine.codegraph.queries import _build_reverse_edges
 from metis.engine.nodes.codegraph.annotations import normalize_sink_type
 from metis.engine.nodes.reachability.options import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
 
 from .finding_paths import FindingPathAnnotator
-from .graph_utils import _build_reverse_edges
 from .graph_utils import _node_sort_key
 from .graph_utils import _same_file
 

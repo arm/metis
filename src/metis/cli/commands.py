@@ -4,12 +4,11 @@
 
 import functools
 from importlib.metadata import version as package_version
-import json
 from pathlib import Path
 from rich.markup import escape
 
 from metis.engine.execution import ExecutionResult
-from metis.json_io import json_object_from_pairs
+from metis.json_io import load_json_object_file
 from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
 from .output import save_graph_outputs
@@ -362,12 +361,11 @@ def run_triage(engine, findings_path, args, runtime: CommandRuntime):
     results = None
     if suffix == ".json":
         print_console("[cyan]Loading JSON findings...[/cyan]", args.quiet)
-        with Path(findings_path).open("r", encoding="utf-8") as source:
-            payload = json.load(source, object_pairs_hook=json_object_from_pairs)
-        if isinstance(payload, dict) and isinstance(payload.get("reviews"), list):
+        payload = load_json_object_file(findings_path)
+        if isinstance(payload.get("reviews"), list):
             results = payload
             sarif_payload = generate_sarif(results, read_source=False)
-        elif isinstance(payload, dict) and isinstance(payload.get("runs"), list):
+        elif isinstance(payload.get("runs"), list):
             sarif_payload = payload
         else:
             raise ValueError(

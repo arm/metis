@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING
 from metis.chat_model_options import merge_chat_model_kwargs
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
-from metis.engine.nodes.reachability.graph_utils import function_for_location
+from metis.engine.codegraph.queries import _build_reverse_edges
+from metis.engine.codegraph.queries import function_for_location
 from metis.engine.stages.triage.models import TriageRequest
 from metis.engine.tools.navigation import navigation_model_tools
 from metis.usage import UsageHooks
@@ -175,10 +176,8 @@ def _codegraph_context(
     if target is None:
         return ""
     callers = (
-        sorted(
-            node.unique_name
-            for node in graph.nodes.values()
-            if target.unique_name in node.resolved_calls
+        tuple(
+            dict.fromkeys(_build_reverse_edges(graph, str).get(target.unique_name, ()))
         )
         if callers_by_node is None
         else callers_by_node.get(target.unique_name, ())

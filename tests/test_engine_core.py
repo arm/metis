@@ -782,17 +782,25 @@ def test_execution_error_preserves_native_values_and_original_diagnostics(value)
             for value in ("src/", {"src/": False}, [1], [Path("src")], None)
         ],
         *[("metisignore_file", value) for value in (False, 1, [], {})],
+        ("max_token_length", 0),
+        ("doc_chunk_size", 0),
+        ("doc_chunk_overlap", -1),
+        ("doc_chunk_overlap", 1024),
+        ("triage_checkpoint_every", -1),
+        ("similarity_top_k", False),
     ],
 )
-def test_engine_rejects_invalid_path_settings(capability_settings, name, value):
+def test_engine_rejects_invalid_settings(capability_settings, name, value):
     with pytest.raises(ValueError, match=f"MetisEngine.{name}"):
         MetisEngine(
-            max_workers=1,
-            max_token_length=2048,
-            llama_query_model="inert",
-            similarity_top_k=3,
-            capability_settings=capability_settings,
-            **{name: value},
+            **{
+                "max_workers": 1,
+                "max_token_length": 2048,
+                "llama_query_model": "inert",
+                "similarity_top_k": 3,
+                "capability_settings": capability_settings,
+                name: value,
+            }
         )
 
 

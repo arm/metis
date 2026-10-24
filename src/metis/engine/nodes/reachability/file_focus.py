@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from dataclasses import field
 
 from metis.engine.codegraph import CodeGraph
+from metis.engine.codegraph.queries import _build_reverse_edges
 from metis.engine.nodes.reachability.options import DEFAULT_REACHABILITY_MAX_PATH_LENGTH
-
-from .graph_utils import _build_reverse_edges
 
 
 @dataclass

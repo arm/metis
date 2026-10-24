@@ -16,7 +16,7 @@ from metis.runlog.workflow import traced_step
 from metis.utils import parse_json_output
 
 from .nodes import triage_node_collect_evidence
-from .nodes import triage_node_llm
+from .llm import _triage_decision
 from .source_evidence import SourceEvidence
 
 logger = logging.getLogger("metis")
@@ -121,20 +121,18 @@ class TriageWorkflow:
             getattr(self.toolbox, "codebase_path", None),
             state.get("source_observations", []),
         )
-        result = triage_node_llm(
+        decision, model_status = _triage_decision(
             state,
             invoke_decision=partial(
                 self._invoke_triage_model, source_evidence=source_evidence
             ),
         )
-        decision = TriageDecisionModel(
-            status=result["decision_status"],
-            reason=result["decision_reason"],
-            evidence=result["decision_evidence"],
-            resolution_chain=result["decision_resolution_chain"],
-            unresolved_hops=result["decision_unresolved_hops"],
-        )
-        if result.get("triage_model_status") is None:
+        result: TriageState = {
+            **state,
+            "decision": decision,
+            "triage_model_status": model_status,
+        }
+        if model_status is None:
             errors = source_evidence.errors or ["TRIAGE_DECISION_PARSE_FAILED"]
         else:
             errors = source_evidence.validate(decision)
@@ -144,16 +142,21 @@ class TriageWorkflow:
             result["decision_source"] = "validation_failure" if errors else "model"
         result["decision_validation_errors"] = errors
         if errors:
-            result["decision_status"] = "inconclusive"
-            result["decision_reason"] += (
-                "\nTriage could not verify the decision: " + "; ".join(errors)
+            result["decision"] = TriageDecisionModel.model_validate(
+                {
+                    **decision.model_dump(),
+                    "status": "inconclusive",
+                    "reason": decision.reason
+                    + "\nTriage could not verify the decision: "
+                    + "; ".join(errors),
+                    "evidence": [],
+                    "unresolved_hops": list(
+                        dict.fromkeys([*decision.unresolved_hops, *errors])
+                    ),
+                }
             )
-            result["decision_evidence"] = []
-            result["decision_unresolved_hops"] = list(
-                dict.fromkeys([*result["decision_unresolved_hops"], *errors])
-            )
-        else:
-            result["decision_evidence"] = decision.evidence
+        for name, value in result["decision"].model_dump().items():
+            result[f"decision_{name}"] = value
         return result
 
     def triage(self, request: TriageRequest) -> dict:
@@ -208,16 +211,7 @@ class TriageWorkflow:
                     }
                 }
             )
-        try:
-            validated = TriageDecisionModel(
-                status=out.get("decision_status", ""),
-                reason=out.get("decision_reason", ""),
-                evidence=list(out.get("decision_evidence") or []),
-                resolution_chain=list(out.get("decision_resolution_chain") or []),
-                unresolved_hops=list(out.get("decision_unresolved_hops") or []),
-            )
-        except Exception as exc:
-            raise ValueError(f"Invalid triage decision from model: {exc}") from exc
+        validated = out["decision"]
 
         model_status = out.get("triage_model_status")
         validation_errors = list(out.get("decision_validation_errors") or [])

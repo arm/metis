@@ -228,20 +228,15 @@ def normalize_engine_config(
             _required_positive_int(
                 hnsw_kwargs, name, section="metis_engine.hnsw_kwargs"
             )
-    for name in ("max_token_length", "max_workers", "embed_dim", "doc_chunk_size"):
-        _required_positive_int(engine_cfg, name, section="metis_engine")
-    for name in ("max_active_nodes", "max_concurrent_executions"):
-        if engine_cfg[name] is None:
-            engine_cfg[name] = engine_cfg["max_workers"]
-        _required_positive_int(engine_cfg, name, section="metis_engine")
-    for name in ("doc_chunk_overlap", "triage_checkpoint_every", "llm_max_retries"):
-        _required_positive_int(engine_cfg, name, section="metis_engine", minimum=0)
-    if engine_cfg["doc_chunk_overlap"] >= engine_cfg["doc_chunk_size"]:
-        raise ValueError(
-            "metis_engine.doc_chunk_overlap must be less than doc_chunk_size"
+    engine_cfg.update(
+        normalize_shared_engine_settings(
+            engine_cfg, defaults=engine_defaults, section="metis_engine"
         )
-    for name in ("review_code_include_paths", "review_code_exclude_paths"):
-        _required_string_list(engine_cfg[name], section=f"metis_engine.{name}")
+    )
+    _required_positive_int(engine_cfg, "embed_dim", section="metis_engine")
+    _required_positive_int(
+        engine_cfg, "llm_max_retries", section="metis_engine", minimum=0
+    )
     metisignore_file = engine_cfg["metisignore_file"]
     if metisignore_file is not None and not isinstance(metisignore_file, str):
         raise ValueError("metis_engine.metisignore_file must be a string or null")
@@ -349,6 +344,32 @@ def normalize_engine_config(
     runtime["chat_model_kwargs"] = chat_model_kwargs
 
     return deepcopy(runtime)
+
+
+def normalize_shared_engine_settings(
+    values: Mapping[str, Any],
+    *,
+    defaults: Mapping[str, Any],
+    section: str,
+) -> dict[str, Any]:
+    settings = {**defaults, **values}
+    for name in ("max_workers", "max_token_length", "doc_chunk_size"):
+        _required_positive_int(settings, name, section=section)
+    for name in ("max_active_nodes", "max_concurrent_executions"):
+        if settings[name] is None:
+            settings[name] = settings["max_workers"]
+        _required_positive_int(settings, name, section=section)
+    for name in ("doc_chunk_overlap", "triage_checkpoint_every"):
+        _required_positive_int(settings, name, section=section, minimum=0)
+    if settings["doc_chunk_overlap"] >= settings["doc_chunk_size"]:
+        raise ValueError(
+            f"{section}.doc_chunk_overlap must be less than doc_chunk_size"
+        )
+    for name in ("review_code_include_paths", "review_code_exclude_paths"):
+        settings[name] = list(
+            _required_string_list(settings[name], section=f"{section}.{name}")
+        )
+    return settings
 
 
 def build_embedding_provider_config(

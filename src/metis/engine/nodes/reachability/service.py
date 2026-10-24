@@ -23,6 +23,7 @@ from .file_focus import FileFocusBuilder
 from .finding_preparer import participates_in_file
 from .finding_preparer import prepare_findings
 from .graph_utils import _copy_graph_nodes
+from .incremental_review import FrontierReviewOutcome
 from .incremental_review import IncrementalGraphReviewer
 from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
@@ -102,35 +103,22 @@ class ReachabilityService:
                 codegraph_failures=(f"codegraph.target_missing:{relative_target}",),
             )
         analysis_graph = _copy_graph_nodes(codegraph, focus.node_names)
-        outcome = self._frontier_reviewer.review(
+        outcome, prepared, raw_count = self._review_findings(
             analysis_graph,
+            codegraph=codegraph,
             jobs=jobs,
             options=options,
             memory_service=memory_service,
-            evidence_graph=codegraph,
             navigation=navigation,
             selected_node_ids=set(focus.target_nodes),
-        )
-        scoped_findings = self._filter_authoritative_scope(
-            outcome.findings,
-            memory_service,
-        )
-        all_findings = [
-            finding
-            for finding in scoped_findings
-            if participates_in_file(finding, relative_target, analysis_graph)
-        ]
-        prepared = prepare_findings(
-            all_findings,
-            analysis_graph,
-            max_path_length=options.max_path_length,
+            selected_files={relative_target},
             target_file=relative_target,
         )
         emit_progress(
             options.progress_callback,
             Progress.FILE_REVIEW_DONE,
             file=relative_target,
-            raw_findings=len(all_findings),
+            raw_findings=raw_count,
             findings=len(prepared),
             failed_nodes=len(outcome.failed_node_ids),
             planned_nodes=outcome.stats.planned_node_count,
@@ -205,32 +193,15 @@ class ReachabilityService:
                 )
                 or ("codegraph.scope_empty",),
             )
-        outcome = self._frontier_reviewer.review(
+        outcome, prepared, _ = self._review_findings(
             analysis_graph,
+            codegraph=codegraph,
             jobs=jobs,
             options=options,
             memory_service=memory_service,
-            evidence_graph=codegraph,
             navigation=navigation,
             selected_node_ids=selected_node_ids,
-        )
-        findings = self._filter_authoritative_scope(
-            outcome.findings,
-            memory_service,
-        )
-        if selected_files is not None:
-            findings = [
-                finding
-                for finding in findings
-                if any(
-                    participates_in_file(finding, selected_file, analysis_graph)
-                    for selected_file in selected_files
-                )
-            ]
-        prepared = prepare_findings(
-            findings,
-            analysis_graph,
-            max_path_length=options.max_path_length,
+            selected_files=selected_files,
         )
 
         emit_progress(
@@ -256,6 +227,46 @@ class ReachabilityService:
             ),
             review_failures=outcome.failures,
         )
+
+    def _review_findings(
+        self,
+        analysis_graph: CodeGraph,
+        *,
+        codegraph: CodeGraph,
+        jobs: NodeJobs,
+        options: ReachabilityReviewOptions,
+        memory_service,
+        navigation: NavigationCapability | None,
+        selected_node_ids: set[str] | None,
+        selected_files: set[str] | None,
+        target_file: str | None = None,
+    ) -> tuple[FrontierReviewOutcome, list[VulnerabilityFinding], int]:
+        outcome = self._frontier_reviewer.review(
+            analysis_graph,
+            jobs=jobs,
+            options=options,
+            memory_service=memory_service,
+            evidence_graph=codegraph,
+            navigation=navigation,
+            selected_node_ids=selected_node_ids,
+        )
+        findings = self._filter_authoritative_scope(outcome.findings, memory_service)
+        if selected_files is not None:
+            findings = [
+                finding
+                for finding in findings
+                if any(
+                    participates_in_file(finding, selected_file, analysis_graph)
+                    for selected_file in selected_files
+                )
+            ]
+        prepared = prepare_findings(
+            findings,
+            analysis_graph,
+            max_path_length=options.max_path_length,
+            target_file=target_file,
+        )
+        return outcome, prepared, len(findings)
 
     def _filter_authoritative_scope(
         self,
