@@ -17,7 +17,6 @@ from metis.engine.external_stages.schemas import ExternalStageCommandModel
 from metis.engine.external_stages.runner import ExternalStageProcessResult
 from metis.engine.external_stages.runner import ExternalStageRunner
 from metis.engine.external_stages.service import ExternalStageService
-from metis.sarif.validation import SarifLimits
 from metis.sarif.validation import load_metis_sarif_file
 from metis.sarif.writer import generate_sarif
 
@@ -299,7 +298,7 @@ def test_concurrent_external_requests_cannot_share_artifacts(tmp_path):
     runner.run_sync.assert_called_once()
 
 
-def _decision_service(tmp_path, data, limits):
+def _decision_service(tmp_path, data):
     runner = Mock()
 
     def run(stage, *, bindings):
@@ -311,47 +310,23 @@ def _decision_service(tmp_path, data, limits):
         codebase_path=str(tmp_path),
         config={"validation": {"inert": {"command": ["local-test", "{request_path}"]}}},
         runner=runner,
-        sarif_limits=limits,
     )
 
 
 @pytest.mark.parametrize(
-    ("data", "limits", "message"),
+    ("data", "message"),
     [
-        (b'{"decisions":[]}' + b" " * 100, {"max_bytes": 64}, "byte limit"),
-        (
-            json.dumps({"decisions": [{"reason": "x" * 65}]}).encode(),
-            {"max_string_bytes": 64},
-            "string limit",
-        ),
-        (
-            json.dumps(
-                {
-                    "decisions": [
-                        {
-                            "run_index": 0,
-                            "result_index": 0,
-                            "status": "invalid",
-                            "reason": "Checked",
-                        }
-                    ]
-                    * 2
-                }
-            ).encode(),
-            {"max_findings": 1},
-            "decision limit",
-        ),
-        (b'{"decisions":[{},{}]}', {"max_array_items": 1}, "array-item"),
-        (b'{"decisions":[{"reason":[[[[]]]]}]}', {"max_depth": 4}, "nesting"),
-        (b'{"decisions":[],"decisions":[]}', {}, "duplicate"),
+        (b'{"decisions":[],"decisions":[]}', "duplicate"),
+        (b'{"decisions":[],"extra":NaN}', "non-finite"),
+        (b'{"decisions":[{}]}', "run_index"),
     ],
 )
-def test_external_decision_ingestion_is_bounded_before_publication(
-    tmp_path, data, limits, message
+def test_external_decision_ingestion_validates_before_publication(
+    tmp_path, data, message
 ):
     input_path = tmp_path / "input.sarif"
     input_path.write_text('{"version":"2.1.0","runs":[]}', encoding="utf-8")
-    service = _decision_service(tmp_path, data, SarifLimits(**limits))
+    service = _decision_service(tmp_path, data)
     with pytest.raises(ValueError, match=message):
         service.run_validation(
             "inert", input_sarif=input_path, run_dir=tmp_path / "run"
@@ -359,13 +334,14 @@ def test_external_decision_ingestion_is_bounded_before_publication(
     assert not (tmp_path / "run" / "validated.sarif").exists()
 
 
-def test_external_annotations_cannot_publish_report_exceeding_byte_limit(tmp_path):
+def test_external_annotations_can_grow_reports_without_truncating_evidence(tmp_path):
     payload = generate_sarif(
         {"reviews": [{"file": "a.py", "reviews": [{"issue": "problem"}]}]}
     )
     input_data = json.dumps(payload, separators=(",", ":")).encode()
     input_path = tmp_path / "input.sarif"
     input_path.write_bytes(input_data)
+    reason = "Caf\u00e9 checked " * 10_000
     decisions = json.dumps(
         {
             "decisions": [
@@ -373,16 +349,18 @@ def test_external_annotations_cannot_publish_report_exceeding_byte_limit(tmp_pat
                     "run_index": 0,
                     "result_index": 0,
                     "status": "invalid",
-                    "reason": "Caf\u00e9 checked",
+                    "reason": reason,
                 }
             ]
         }
     ).encode()
-    limits = SarifLimits(max_bytes=len(input_data))
-    service = _decision_service(tmp_path, decisions, limits)
-    with pytest.raises(ValueError, match="byte limit"):
-        service.run_validation(
-            "inert", input_sarif=input_path, run_dir=tmp_path / "run"
-        )
-    assert not (tmp_path / "run" / "validated.sarif").exists()
+    service = _decision_service(tmp_path, decisions)
+    result = service.run_validation(
+        "inert", input_sarif=input_path, run_dir=tmp_path / "run"
+    )
+    published = json.loads(result.validated_sarif.read_text())
+    assert (
+        published["runs"][0]["results"][0]["properties"]["metisTriageReason"]
+        == reason.strip()
+    )
     assert input_path.read_bytes() == input_data

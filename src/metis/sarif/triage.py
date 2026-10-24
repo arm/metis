@@ -6,7 +6,6 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from urllib.parse import unquote
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
-from metis.json_io import json_object_from_pairs
+from metis.json_io import load_json_object_file
 from metis.json_io import write_json_atomic
 
 TriageDecisionSource = Literal[
@@ -74,10 +73,7 @@ class SarifFinding:
 
 
 def load_sarif_file(path: str | Path) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as f:
-        payload = json.load(f, object_pairs_hook=json_object_from_pairs)
-    if not isinstance(payload, dict):
-        raise ValueError("SARIF payload must be a JSON object")
+    payload = load_json_object_file(path)
     if not isinstance(payload.get("runs"), list):
         raise ValueError("Invalid SARIF payload: missing runs array")
     return payload

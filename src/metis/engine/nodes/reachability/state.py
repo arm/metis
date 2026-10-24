@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections import deque
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -18,6 +17,7 @@ from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import ControlCondition
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph.queries import _build_reverse_edges
 
 from .graph_utils import _node_sort_key
 
@@ -136,11 +136,11 @@ def augment_function_contracts(
         )
         for node_id, node in graph.nodes.items()
     }
-    callers: dict[str, set[str]] = defaultdict(set)
-    for node in graph.nodes.values():
-        for target_id in node.resolved_calls:
-            if target_id in graph.nodes:
-                callers[target_id].add(node.unique_name)
+    callers = {
+        target_id: set(node_ids)
+        for target_id, node_ids in _build_reverse_edges(graph, None).items()
+        if target_id in graph.nodes
+    }
     pending = deque(sorted(graph.nodes, key=lambda value: _node_sort_key(graph, value)))
     scheduled = set(pending)
     processed = 0

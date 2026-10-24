@@ -20,7 +20,10 @@ from metis.engine.execution import ExecutionStatus
 from metis.engine.stages.triage.models import TriageRun
 from metis.engine.stages.triage.service import TriageService
 from metis.generated_artifacts import generated_artifact_paths
+from metis.json_io import load_json_object_file
 from metis.sarif.models import SarifPayload
+from metis.sarif.triage import load_sarif_file
+from metis.sarif.validation import load_metis_sarif_file
 from metis.sarif.writer import generate_sarif
 
 
@@ -136,6 +139,34 @@ def test_save_output_replaces_json_only_after_serialization_succeeds(tmp_path, s
         )
 
     assert output_path.read_text(encoding="utf-8") == '{"original": true}'
+
+
+@pytest.mark.parametrize("kind", ["json", "sarif", "checkpoint"])
+def test_large_reports_and_checkpoints_round_trip(tmp_path, kind):
+    issues = [{"issue": "Finding", "line_number": index + 1} for index in range(16_001)]
+    issues[0]["code_snippet"] = "x" * 65_537
+    payload = generate_sarif(
+        {"reviews": [{"file": "source.py", "reviews": issues}]}, read_source=False
+    )
+    nested = {}
+    for _ in range(40):
+        nested = {"nested": nested}
+    payload["properties"] = nested
+    target = tmp_path / ("report.json" if kind == "json" else "report.sarif")
+    if kind == "checkpoint":
+        TriageService(triage_checkpoint_every=1).checkpoint_callback(str(target))(
+            payload, 1, 1
+        )
+    else:
+        save_output(target, payload, quiet=True, sarif_payload=payload)
+
+    restored = (
+        load_json_object_file(target) if kind == "json" else load_sarif_file(target)
+    )
+    assert target.stat().st_size > 25 * 1024 * 1024
+    assert restored == payload
+    if kind == "sarif":
+        assert load_metis_sarif_file(target) == payload
 
 
 @pytest.mark.parametrize("format_name", ["json", "sarif"])
@@ -513,6 +544,10 @@ def test_triage_accepts_explicit_format_and_reuses_json_export(tmp_path, input_f
     ("filename", "payload", "error", "message"),
     [
         ("input.json", '{"runs":{}}', ValueError, "Metis reviews array or a SARIF"),
+        *[
+            (filename, '{"runs":[],"extra":NaN}', ValueError, "non-finite")
+            for filename in ("input.json", "input.sarif")
+        ],
         (
             "input.json",
             '{"reviews":[{"file":"source.c","reviews":[{"issue":"Needs triage"}]}],'

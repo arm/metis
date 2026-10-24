@@ -13,10 +13,11 @@ from typing import cast
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
+from metis.configuration import _packaged_engine_config
 from metis.configuration import _required_positive_int
-from metis.configuration import _required_string_list
 from metis.configuration import load_execution_config
 from metis.configuration import load_plugin_config
+from metis.configuration import normalize_shared_engine_settings
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
 from metis.plugins.registry import LanguagePluginRegistry
@@ -112,17 +113,13 @@ class MetisEngine:
         if missing:
             raise ValueError(f"Missing required config: {', '.join(missing)}")
 
-        max_workers = _required_positive_int(
+        engine_defaults = _packaged_engine_config()
+        settings = normalize_shared_engine_settings(
             kwargs,
-            "max_workers",
+            defaults=engine_defaults,
             section="MetisEngine",
         )
-        for name in ("max_active_nodes", "max_concurrent_executions"):
-            if kwargs.get(name) is None:
-                kwargs[name] = max_workers
-            _required_positive_int(kwargs, name, section="MetisEngine")
-        for name in ("review_code_include_paths", "review_code_exclude_paths"):
-            _required_string_list(kwargs.get(name, []), section=f"MetisEngine.{name}")
+        max_workers = settings["max_workers"]
         metisignore_file = kwargs.get("metisignore_file")
         if metisignore_file is not None and not isinstance(
             metisignore_file, (str, Path)
@@ -130,9 +127,11 @@ class MetisEngine:
             raise ValueError(
                 "MetisEngine.metisignore_file must be a string, Path, or null"
             )
-        max_token_length = cast(int, kwargs["max_token_length"])
+        max_token_length = settings["max_token_length"]
         llama_query_model = cast(str, kwargs["llama_query_model"])
-        similarity_top_k = cast(int, kwargs["similarity_top_k"])
+        similarity_top_k = _required_positive_int(
+            kwargs, "similarity_top_k", section="MetisEngine"
+        )
         capability_settings = cast(
             CapabilityRuntimeSettings, kwargs["capability_settings"]
         )
@@ -141,14 +140,14 @@ class MetisEngine:
             kwargs.get("usage_runtime") or UsageRuntime(self.codebase_path),
         )
         chat_model_kwargs = dict(kwargs.get("chat_model_kwargs") or {})
-        triage_checkpoint_every = cast(int, kwargs.get("triage_checkpoint_every", 50))
+        triage_checkpoint_every = settings["triage_checkpoint_every"]
         self._triage_options = cast(
             TriageOptions, kwargs.get("triage_options") or TriageOptions()
         )
         memory_config = dict(kwargs.get("memory_config") or kwargs.get("memory") or {})
         execution_config_value = kwargs.get("execution_config")
         execution_config = ExecutionConfiguration.model_validate(
-            load_execution_config()
+            load_execution_config(engine_defaults["execution"])
             if execution_config_value is None
             else execution_config_value
         )
@@ -179,17 +178,17 @@ class MetisEngine:
             custom_prompt_text=kwargs.get("custom_prompt_text"),
             custom_guidance_precedence=custom_guidance_precedence,
             max_workers=max_workers,
-            max_active_nodes=kwargs["max_active_nodes"],
-            max_concurrent_executions=kwargs["max_concurrent_executions"],
+            max_active_nodes=settings["max_active_nodes"],
+            max_concurrent_executions=settings["max_concurrent_executions"],
             max_token_length=max_token_length,
             llama_query_model=llama_query_model,
             chat_model_kwargs=chat_model_kwargs,
             similarity_top_k=similarity_top_k,
-            doc_chunk_size=kwargs.get("doc_chunk_size", 1024),
-            doc_chunk_overlap=kwargs.get("doc_chunk_overlap", 200),
+            doc_chunk_size=settings["doc_chunk_size"],
+            doc_chunk_overlap=settings["doc_chunk_overlap"],
             metisignore_file=kwargs.get("metisignore_file") or ".metisignore",
-            review_code_include_paths=list(kwargs.get("review_code_include_paths", [])),
-            review_code_exclude_paths=list(kwargs.get("review_code_exclude_paths", [])),
+            review_code_include_paths=settings["review_code_include_paths"],
+            review_code_exclude_paths=settings["review_code_exclude_paths"],
             capability_settings=capability_settings,
             memory_config=memory_config,
             threat_model_config=dict(kwargs.get("threat_model_config") or {}),

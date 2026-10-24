@@ -8,6 +8,10 @@ preserving their structure, decisions, and evidence. Completed findings are skip
 unless `--include-triaged` is set. Invalid input fails before model calls or output
 replacement; source reads stay within the codebase.
 
+JSON/SARIF imports, exports, and checkpoints have no size, count, or
+nesting caps. JSON validation and atomic writes remain enforced. Available memory
+and parser limits still apply. External stages use the same uncapped file handling.
+
 `--output-file` selects destinations and formats; otherwise the result node's
 `filename` is used, falling back to updating the input file. Interactive checkpoints
 use the selected SARIF output, or the chosen output basename with a `.sarif` suffix.

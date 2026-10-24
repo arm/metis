@@ -77,6 +77,7 @@ class TriageState(TypedDict, total=False):
     triage_system_prompt: str
     triage_decision_prompt: str
     evidence_pack: str
+    decision: TriageDecisionModel
     decision_status: str
     decision_reason: str
     decision_evidence: list[str]

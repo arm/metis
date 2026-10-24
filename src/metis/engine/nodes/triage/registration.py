@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING
 
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph.queries import _build_reverse_edges
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
-from metis.engine.nodes.reachability.graph_utils import _build_reverse_edges
 from metis.engine.stages.triage.models import TriageRun
 
 if TYPE_CHECKING:

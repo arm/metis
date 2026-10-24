@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph.queries import function_for_location
 from metis.engine.execution.contracts import NodeJobs
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
@@ -53,7 +54,6 @@ from .domain_hints import format_domain_hints_for_prompt
 from .domain_hints import normalize_domain_hints
 from .finding_adapter import review_item_to_finding
 from .graph_utils import _node_sort_key
-from .graph_utils import function_for_location
 from .options import ReachabilityReviewOptions
 from .progress import ReachabilityProgress as Progress
 from .progress import emit_phase_progress

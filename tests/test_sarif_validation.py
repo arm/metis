@@ -9,7 +9,6 @@ from metis.engine.external_stages.service import (
     validate_metis_sarif as external_validate,
 )
 from metis.sarif.triage import apply_triage_result
-from metis.sarif.validation import SarifLimits
 from metis.sarif.validation import load_metis_sarif_file
 from metis.sarif.validation import parse_metis_sarif
 from metis.sarif.validation import save_metis_sarif_file
@@ -53,26 +52,6 @@ def _encoded(payload: dict) -> bytes:
 def test_external_stage_reexports_shared_validator_without_path_regression():
     assert external_validate is validate_metis_sarif
     validate_metis_sarif(_payload(path="/legacy/external-stage.c"))
-
-
-def test_parse_sarif_validates_exact_byte_limit():
-    data = _encoded(_payload())
-    limits = SarifLimits(max_bytes=len(data))
-
-    assert parse_metis_sarif(data, limits=limits)["version"] == "2.1.0"
-
-    with pytest.raises(ValueError, match="byte limit"):
-        parse_metis_sarif(data, limits=SarifLimits(max_bytes=len(data) - 1))
-
-
-def test_load_sarif_file_bounds_input_before_parsing(tmp_path):
-    path = tmp_path / "result.sarif"
-    data = _encoded(_payload())
-    path.write_bytes(data)
-
-    assert load_metis_sarif_file(path, limits=SarifLimits(max_bytes=len(data)))
-    with pytest.raises(ValueError, match="byte limit"):
-        load_metis_sarif_file(path, limits=SarifLimits(max_bytes=len(data) - 1))
 
 
 @pytest.mark.parametrize(
@@ -163,41 +142,6 @@ def test_validate_sarif_rejects_unknown_triage_decision_sources(value):
         validate_metis_sarif(payload)
 
 
-def test_validate_sarif_enforces_injected_structural_limits_at_boundary():
-    payload = _payload()
-
-    validate_metis_sarif(
-        payload,
-        limits=SarifLimits(
-            max_depth=10,
-            max_nodes=34,
-            max_mapping_keys=15,
-            max_string_bytes=16,
-            max_array_items=1,
-            max_findings=1,
-        ),
-    )
-
-    limits_and_messages = (
-        ({"max_depth": 9}, "nesting"),
-        ({"max_nodes": 33}, "constructed-node"),
-        ({"max_mapping_keys": 14}, "mapping-key"),
-        ({"max_string_bytes": 15}, "string limit"),
-    )
-    for override, message in limits_and_messages:
-        with pytest.raises(ValueError, match=message):
-            validate_metis_sarif(payload, limits=SarifLimits(**override))
-
-    two_results = _payload(_result(), _result("src/b.py"))
-    with pytest.raises(ValueError, match="array-item"):
-        validate_metis_sarif(
-            two_results,
-            limits=SarifLimits(max_array_items=1, max_findings=2),
-        )
-    with pytest.raises(ValueError, match="finding limit"):
-        validate_metis_sarif(two_results, limits=SarifLimits(max_findings=1))
-
-
 def test_validate_writer_output_with_shared_anchors_matches_json_roundtrip():
     anchor = {"file_path": "a.py", "start_line": 1, "end_line": 1}
     payload = generate_sarif(
@@ -214,13 +158,10 @@ def test_validate_writer_output_with_shared_anchors_matches_json_roundtrip():
     assert first["properties"]["anchor"] is second["properties"]["anchor"]
     validate_metis_sarif(payload)
     assert parse_metis_sarif(_encoded(payload)) == payload
-    result = _result()
-    with pytest.raises(ValueError, match="constructed-node"):
-        validate_metis_sarif(_payload(result, result), limits=SarifLimits(max_nodes=34))
 
 
 @pytest.mark.parametrize("container", [dict, list])
-def test_validate_sarif_rejects_cycles_with_bounded_traversal(container):
+def test_validate_sarif_rejects_cycles_without_size_limits(container):
     cycle = container()
     if isinstance(cycle, dict):
         cycle["self"] = cycle
@@ -228,8 +169,8 @@ def test_validate_sarif_rejects_cycles_with_bounded_traversal(container):
         cycle.append(cycle)
     payload = _payload()
     payload["extension"] = cycle
-    with pytest.raises(ValueError, match="recursive|nesting|constructed-node"):
-        validate_metis_sarif(payload, limits=SarifLimits(max_depth=12, max_nodes=100))
+    with pytest.raises(ValueError, match="recursive"):
+        validate_metis_sarif(payload)
 
 
 @pytest.mark.parametrize(
@@ -301,20 +242,14 @@ def test_validate_sarif_preserves_unknown_offset_sentinels():
     validate_metis_sarif(payload)
 
 
-def test_save_sarif_enforces_exact_utf8_size_and_preserves_previous_output(tmp_path):
+def test_save_sarif_preserves_utf8_and_previous_output_on_invalid_report(tmp_path):
     path = tmp_path / "result.sarif"
     payload = _payload()
     payload["runs"][0]["results"][0]["message"]["text"] = "Caf\u00e9 \U0001f40d"
     encoded = _encoded(payload)
-    limits = SarifLimits(max_bytes=len(encoded))
-    save_metis_sarif_file(path, payload, limits=limits)
+    save_metis_sarif_file(path, payload)
     assert path.read_bytes() == encoded
-    assert load_metis_sarif_file(path, limits=limits) == payload
-    with pytest.raises(ValueError, match="byte limit"):
-        save_metis_sarif_file(
-            path, payload, limits=SarifLimits(max_bytes=len(encoded) - 1)
-        )
-    assert path.read_bytes() == encoded
+    assert load_metis_sarif_file(path) == payload
     payload["runs"][0]["results"][0]["message"]["text"] = ""
     with pytest.raises(ValueError, match="message.text"):
         save_metis_sarif_file(path, payload)

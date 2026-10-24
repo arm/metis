@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from threading import Barrier
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -15,6 +16,7 @@ from metis.engine.capabilities.navigation import NavigationCapability
 from metis.engine.concurrency import _bind_cancellation
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.triage.workflow import TriageWorkflow
+from metis.engine.nodes.triage.workflow import triage_node_llm
 from metis.engine.nodes.triage.workflow.llm import _build_user_prompt
 from metis.engine.stages.triage.models import TriageDecisionModel
 from metis.runlog import RunLogConfig
@@ -121,6 +123,37 @@ def test_triage_schema_allows_inconclusive_with_unresolved_hops():
     assert decision.status == "inconclusive"
 
 
+@pytest.mark.parametrize("missing_decision", [False, True])
+@pytest.mark.parametrize("decision_factory", [TriageDecisionModel, SimpleNamespace])
+def test_triage_node_keeps_legacy_json_state(missing_decision, decision_factory):
+    decision = decision_factory(
+        status="invalid",
+        reason="Guarded access",
+        evidence=["a.c:2"],
+        resolution_chain=["guard -> access"],
+    )
+    state = {"finding_message": "Reported issue"}
+    result = triage_node_llm(
+        state, invoke_decision=lambda *_args: None if missing_decision else decision
+    )
+    assert json.loads(json.dumps(result)) == {
+        "finding_message": "Reported issue",
+        "decision_status": "inconclusive" if missing_decision else "invalid",
+        "decision_reason": (
+            "Inconclusive because the triage model did not return a valid decision payload."
+            if missing_decision
+            else "Guarded access"
+        ),
+        "decision_evidence": [] if missing_decision else ["a.c:2"],
+        "decision_resolution_chain": [] if missing_decision else ["guard -> access"],
+        "decision_unresolved_hops": ["TRIAGE_DECISION_PARSE_FAILED"]
+        if missing_decision
+        else [],
+        "triage_model_status": None if missing_decision else "invalid",
+    }
+    assert state == {"finding_message": "Reported issue"}
+
+
 def test_triage_schema_rejects_inconclusive_without_unresolved_hops():
     with pytest.raises(ValueError):
         TriageDecisionModel(
@@ -210,6 +243,13 @@ def test_triage_preserves_structured_verdict_regardless_of_prose(
         for record in records
         if record["record"] == "span.start" and record["kind"] == "step"
     ] == ["triage.collect_evidence", "triage.triage"]
+    final_state = next(
+        record["attributes"]["final_state"]
+        for record in records
+        if record["record"] == "span.end" and record["kind"] == "workflow"
+    )
+    assert final_state["decision_status"] == result["status"]
+    assert final_state["decision_evidence"] == result["evidence"]
 
 
 @pytest.mark.parametrize(
