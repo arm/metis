@@ -22,7 +22,11 @@ class _DummyEngine:
         self.usage_runtime = UsageRuntime(codebase_path)
         self.closed = False
         self.indexing = self
-        self.execution = SimpleNamespace(configuration=_kwargs["execution_config"])
+        configuration = _kwargs["execution_config"]
+        self.execution = SimpleNamespace(
+            configuration=configuration,
+            _stages=dict(configuration.stages.configured()),
+        )
 
     def usage_command(self, command_name, target=None, display_name=None):
         return self.usage_runtime.command(
@@ -85,7 +89,7 @@ class _DummyEngine:
             "sarif": {"version": "2.1.0", "runs": []},
         }
 
-    def execute_triage(self, payload, **_kwargs):
+    def execute_triage(self, _payload, **_kwargs):
         self.usage_runtime.collector.record(
             scope_id=current_scope(),
             operation=current_operation(),
@@ -94,8 +98,7 @@ class _DummyEngine:
             output_tokens=3,
             total_tokens=8,
         )
-        payload.setdefault("runs", [])
-        return {"formats": ("sarif", "json"), "sarif": payload}
+        return {"formats": ("sarif", "json"), "sarif": {"version": "2.1.0", "runs": []}}
 
     def close(self):
         self.closed = True

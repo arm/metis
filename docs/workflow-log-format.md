@@ -202,8 +202,15 @@ Metis currently emits these stable event names:
 - `model.round`: one response in a model/tool loop
 - `usage`: token usage for one physical model call
 - `decision`: deterministic or policy-driven decision
-- `artifact`: in-memory review, triage, or threat-model result
+- `artifact`: review, triage, or threat-model result, or a streamed report reference
 - `artifact.written`: output path, format, byte count, and SHA-256 digest
+
+File-backed review emits `review_findings` per chunk rather than one aggregate.
+File-backed result events contain `json_path` or `sarif_path` references instead
+of empty placeholder payloads. References to temporary reports are valid only
+during the run; the trace does not archive report files.
+Triage coordinates match exported SARIF. `artifact.written` describes that run's
+prepared bytes, not a concurrent replacement; hashing runs outside the write lock.
 
 Consumers must ignore unknown event names, span kinds, and attributes.
 

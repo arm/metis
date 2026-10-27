@@ -250,10 +250,11 @@ Canonical findings and SARIF share normalized, unique IDs for triage annotation 
 Its `formats` list declares
 the representations written for that execution. Every listed format is saved.
 Review publishes canonical `findings` for JSON, HTML, and CSV renderers and
-always publishes `sarif` in memory for downstream stages. It also republishes
+`sarif` for downstream stages. Built-in file execution passes the persisted
+report to Triage without loading the complete findings array. Review also republishes
 the initialized CodeGraph reference when one is provided.
 Omitting `sarif` from `formats` prevents a SARIF file from being written; it
-does not remove the in-memory SARIF contract.
+does not remove the SARIF contract of dictionary-returning APIs.
 
 The execution graph planner binds an omitted singular node input only when
 exactly one selected output is compatible. Collection inputs gather all
@@ -326,15 +327,19 @@ SARIF object as JSON.
 
 ### Review checkpoints and resume
 
-With review checkpoints enabled, the graph CLI saves completed stage outputs,
+With review checkpoints enabled, the graph CLI saves materialized stage outputs,
 status, and diagnostics to `.metis/checkpoints/graph.<run-id>.json` before the next
 stage. These snapshots do not automatically resume stages or replace reports.
 Failed writes are logged and preserve the previous snapshot.
+File-backed results are not included in these snapshots; streaming reports and
+JSONL journals are unaffected.
 
-Graph and post-review triage write `.checkpoint.sarif` beside the selected output.
-Disable this with `metis_engine.triage_checkpoint_every: 0`. To resume, supply the
-checkpoint contents as `metis_engine.execution.inputs.sarif` in triage-only YAML;
-completed findings are skipped unless `--include-triaged` is set.
+Graph and post-review triage continuously append completed decisions to a private
+journal. Periodic `.checkpoint.sarif` rewrites and `triage_checkpoint_every` have
+been removed. Complete reports are published at finalization; unfinished journals
+are not automatically resumed. To continue triage from a published report, supply it as
+`metis_engine.execution.inputs.sarif` in triage-only YAML; completed findings are
+skipped unless `--include-triaged` is set.
 
 Built-in review producers persist successful work items under the codebase's
 private Metis state directory. Review checkpoints are enabled by default in the
@@ -372,7 +377,10 @@ Short lowercase ASCII producer identifiers retain readable filenames. Other
 identifiers use an exact-name digest so case, Unicode normalization and long
 names cannot mix producer state. Ambiguous older filenames are not resumed.
 
-Disable review checkpoint reads and writes globally in the selected YAML:
+`review_checkpoints` controls producer answer-cache reads and writes and the CLI's
+stage snapshots. Reachability and non-streaming review graphs still use these
+caches to avoid repeating model work. It is not a streaming or journal setting.
+Disable this caching and stage snapshots globally in the selected YAML:
 
 ```yaml
 metis_engine:
@@ -466,6 +474,41 @@ results retain a zero exit code.
 
 On `ExecutionGraphError`, the CLI saves available outputs without replacing the
 original error; unavailable formats leave existing files untouched.
+
+### File-backed review and triage
+
+The engine owns one `StreamingOutput` per run and passes it through
+`NodeContext.output`. Built-in producers append completed records to its writers;
+downstream nodes consume the persisted records without accumulating findings.
+The configured nodes and execution plans are reused, not rebuilt for file output.
+The descriptor owns storage, final publication, and conversion for dictionary callers.
+
+The built-in simple review, deduplication, result, and triage nodes always use
+file-backed journals and snapshots. This includes the packaged
+Initialize–Review–Triage graph; Review's persisted report becomes Triage's input
+through the engine-owned scheduler. Graph ports, dictionary APIs, report
+fields/order, callbacks, and configured result formats stay unchanged.
+
+The CLI derives JSON, SARIF, HTML, and CSV outputs from the persisted report.
+Streaming uses the selected JSON/SARIF destinations where possible; intermediate
+reports needed for other formats stay in a temporary directory until export finishes.
+Installed external nodes retain their declared execution behavior. See
+[large JSON reports](triage-flow.md#large-json-reports) for triage.
+
+Review and triage share an adaptive journal writer: it writes the current backlog
+while producers refill the queue. Batches have no fixed record count and need no
+configuration. Streaming bypasses per-file answer caches; `review_checkpoints`
+does not disable its journals.
+
+`execute_review()` and `execute_graph()` return file references when supplied
+output destinations, and
+materialize their existing payload contract when no output destination is supplied.
+When `execute_graph()` receives only one destination, the other stage's report
+uses the same base path with a `.review.json` or `.triage.sarif` suffix, so every
+returned report remains readable after the run.
+JSON/SARIF CLI export uses file references throughout; HTML export and dictionary
+API callers still require memory proportional to the report. See
+[JSON I/O](json-io.md) for queues, atomic writes, and resource limits.
 
 ## Built-in implementation layout
 

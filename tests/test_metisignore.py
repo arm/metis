@@ -183,7 +183,17 @@ def test_directory_review_validates_scope(
         },
     )
     graph = engine._get_review_graph()
-    graph.review = Mock(return_value={"reviews": [{"issue": "Check source"}]})
+
+    def review(request, **kwargs):
+        result = {
+            "file": request["relative_file"],
+            "file_path": request["file_path"],
+            "reviews": [{"issue": "Check source"}],
+        }
+        kwargs.get("emit", lambda _value: None)(result)
+        return result
+
+    graph.review = Mock(side_effect=review)
     walk = Mock(wraps=os.walk)
     monkeypatch.setattr("metis.engine.repository.os.walk", walk)
     try:

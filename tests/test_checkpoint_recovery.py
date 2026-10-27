@@ -19,24 +19,36 @@ from metis.engine.execution import ExecutionDiagnostic
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
 from metis.engine.stages.review.models import ReviewCheckpointRecord
+from metis.engine.stages.review.storage import ReviewOutput
 from metis import generated_artifacts
 from metis.generated_artifacts import generated_artifact_paths
 from metis.version import __version__ as METIS_VERSION
 
 
-def test_generated_artifact_publications_preserve_concurrent_entries(tmp_path):
+@pytest.mark.parametrize("streaming", [False, True])
+def test_generated_artifact_publications_preserve_concurrent_entries(
+    tmp_path, streaming
+):
     barrier = Barrier(4)
 
     def publish(index):
         path = tmp_path / f"report-{index}.json"
-        barrier.wait(timeout=5)
-        cli_utils.save_output(path, {"reviews": []}, quiet=True, codebase_path=tmp_path)
+        if streaming:
+            with ReviewOutput(path, [], codebase_path=tmp_path) as output:
+                barrier.wait(timeout=5)
+                output.publish()
+        else:
+            barrier.wait(timeout=5)
+            cli_utils.save_output(
+                path, {"reviews": []}, quiet=True, codebase_path=tmp_path
+            )
         return path.resolve()
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         paths = set(executor.map(publish, range(4)))
 
     assert generated_artifact_paths(tmp_path) == paths
+    assert not list(tmp_path.glob(".metis/tmp-*"))
 
 
 def test_generated_artifact_publication_waits_for_registry_writer(
@@ -193,13 +205,30 @@ def test_generated_artifact_registry_failure_prevents_replacement(tmp_path, fail
         assert database.read_bytes() == before
 
 
+@pytest.mark.parametrize("field", ["json_path", "sarif_path"])
+def test_stage_checkpoint_skips_file_references(tmp_path, field):
+    report = tmp_path / "report.json"
+    report.write_text('{"reviews":[]}')
+    checkpoint = review_checkpoints.stage_checkpoint_callback(codebase_path=tmp_path)
+    checkpoint(ExecutionResult(ExecutionStatus.OK, {"review": {field: str(report)}}))
+    assert not list(tmp_path.glob(".metis/checkpoints/graph.*.json"))
+    assert report.read_text() == '{"reviews":[]}'
+
+
 def test_stage_checkpoint_preserves_previous_snapshot_on_invalid_output(
     tmp_path, caplog
 ):
     checkpoint = review_checkpoints.stage_checkpoint_callback(codebase_path=tmp_path)
     result = ExecutionResult(
         ExecutionStatus.INCONCLUSIVE,
-        {"review": {"findings": {"reviews": []}, "private": object()}},
+        {
+            "review": {
+                "findings": {"reviews": []},
+                "private": object(),
+                "json_path": "report.json",
+                "sarif_path": "report.sarif",
+            }
+        },
         (ExecutionDiagnostic("review.file_failed", "Failed file"),),
     )
     checkpoint(result)
@@ -208,7 +237,7 @@ def test_stage_checkpoint_preserves_previous_snapshot_on_invalid_output(
     payload = json.loads(before)
     assert payload["status"] == "inconclusive"
     assert payload["diagnostics"][0]["code"] == "review.file_failed"
-    assert "private" not in payload["outputs"]["review"]
+    assert payload["outputs"]["review"] == {"findings": {"reviews": []}}
 
     checkpoint(
         ExecutionResult(ExecutionStatus.OK, {"review": {"findings": float("nan")}})

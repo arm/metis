@@ -103,7 +103,7 @@ def test_cli_output_imports_preserve_legacy_aliases(order):
                 ).split()
                 for name in names:
                     assert getattr(utils, name) is getattr(output, name)
-                for name in ("entry", "commands", "triage_checkpoints"):
+                for name in ("entry", "commands"):
                     importlib.import_module(f"metis.cli.{name}")
                 assert output.graph_output_files(None, {}, quiet=True) == {
                     "review": [], "triage": []

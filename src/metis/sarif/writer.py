@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from uuid import uuid4
+from uuid import uuid5
 from copy import deepcopy
+from contextlib import contextmanager
 from urllib.parse import quote
 
+from metis.json_io import sorted_json_records
 from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.sarif.triage import METIS_URI_ENCODING_KEY
 from metis.sarif.triage import _apply_triage_properties
@@ -14,6 +17,114 @@ from metis.sarif.utils import anchor_fingerprint, create_fingerprint, read_file_
 DEFAULT_CONTEXT_LINES = 3
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+
+
+@contextmanager
+def normalize_finding_ids(
+    records, *, directory, check_cancelled=lambda: None, id_namespace=None
+):
+    """Normalize IDs on disk, preserving first originals over generated IDs.
+
+    A later original ID can displace a generated ID. An unchanged input and
+    supplied namespace produce the same repairs across checkpoints.
+    """
+    sorter = None
+
+    def sort(entries, key):
+        nonlocal sorter
+        previous = sorter
+        sorter = sorted_json_records(
+            entries, key=key, directory=directory, check_cancelled=check_cancelled
+        )
+        try:
+            return sorter.__enter__()
+        finally:
+            if previous is not None:
+                previous.__exit__(None, None, None)
+
+    try:
+        by_id = sort(
+            records,
+            key=lambda record: (
+                str(record.get("id") or "").strip(),
+                record["position"],
+            ),
+        )
+        repaired = False
+
+        def normalized():
+            nonlocal repaired
+            previous = None
+            for record in by_id:
+                original = str(record.get("id") or "").strip()
+                record["id"] = original
+                attempt = -1
+                if not original or original == previous:
+                    repaired = True
+                    attempt = 0
+                    record["id"] = (
+                        uuid5(id_namespace, str(record["position"]))
+                        if id_namespace is not None
+                        else uuid4()
+                    ).hex
+                previous = original
+                yield {"record": record, "attempt": attempt}
+
+        ordered = sort(normalized(), key=lambda entry: entry["record"]["position"])
+
+        def unique_positions(entries):
+            previous = None
+            for entry in entries:
+                position = entry["record"]["position"]
+                if position == previous:
+                    raise ValueError("Duplicate finding position")
+                previous = position
+                yield entry
+
+        ordered = unique_positions(ordered)
+
+        def repair_collisions():
+            nonlocal repaired
+            previous = None
+            for entry in by_id:
+                record = entry["record"]
+                original = record["id"]
+                if original == previous:
+                    repaired = True
+                    entry["attempt"] += 1
+                    record["id"] = (
+                        uuid5(
+                            id_namespace,
+                            f"{record['position']}:{entry['attempt']}",
+                        )
+                        if id_namespace is not None
+                        else uuid4()
+                    ).hex
+                previous = original
+                yield entry
+
+        collision_passes = 0
+        while repaired:
+            if collision_passes == 8:
+                raise ValueError("Finding ID collision limit exceeded")
+            collision_passes += 1
+            repaired = False
+            by_id = sort(
+                ordered,
+                key=lambda entry: (
+                    entry["record"]["id"],
+                    entry["attempt"] >= 0,
+                    entry["record"]["position"],
+                ),
+            )
+            ordered = sort(
+                repair_collisions(), key=lambda entry: entry["record"]["position"]
+            )
+        yield (entry["record"] for entry in ordered)
+    finally:
+        if sorter is not None:
+            sorter.__exit__(None, None, None)
+
 
 RULES = [
     {
@@ -115,10 +226,29 @@ def generate_sarif(
         ],
     }
 
-    run = sarif["runs"][0]
+    sarif["runs"][0]["results"] = list(
+        iter_sarif_results(
+            results.get("reviews", []), context_lines, read_source=read_source
+        )
+    )
+    return sarif
 
-    finding_ids: set[str] = set()
-    for review in results.get("reviews", []):
+
+def iter_sarif_results(
+    reviews,
+    context_lines=DEFAULT_CONTEXT_LINES,
+    *,
+    read_source: bool = True,
+    normalize_ids: bool = True,
+):
+    """Map review groups lazily, reading each group's source file once.
+
+    Disable ID normalization only when the caller already ensures globally unique,
+    nonempty, trimmed string IDs. That path retains no collection of finding IDs.
+    """
+
+    finding_ids: set[str] | None = set() if normalize_ids else None
+    for review in reviews:
         file_path = review.get("file_path")
         artifact_uri = review.get("file") or file_path or "<unknown>"
         lines = read_file_lines(file_path) if read_source and file_path else []
@@ -126,11 +256,22 @@ def generate_sarif(
         total_lines = len(lines) if source_available else 0
 
         for issue in review.get("reviews", []):
-            finding_id = str(issue.get("id") or "").strip()
-            if not finding_id or finding_id in finding_ids:
-                finding_id = uuid4().hex
-            issue["id"] = finding_id
-            finding_ids.add(finding_id)
+            if finding_ids is None:
+                finding_id = issue.get("id")
+                if (
+                    not isinstance(finding_id, str)
+                    or not finding_id
+                    or finding_id != finding_id.strip()
+                ):
+                    raise ValueError(
+                        "Pre-normalized finding IDs must be nonempty trimmed strings"
+                    )
+            else:
+                finding_id = str(issue.get("id") or "").strip()
+                if not finding_id or finding_id in finding_ids:
+                    finding_id = uuid4().hex
+                issue["id"] = finding_id
+                finding_ids.add(finding_id)
             text = issue.get("issue", "unspecified")
             anchor = (
                 issue.get("anchor") if isinstance(issue.get("anchor"), dict) else None
@@ -264,6 +405,4 @@ def generate_sarif(
             if properties:
                 result_entry["properties"] = properties
 
-            run["results"].append(result_entry)
-
-    return sarif
+            yield result_entry

@@ -4,6 +4,7 @@
 import hashlib
 import importlib.metadata
 from concurrent.futures import CancelledError
+from contextlib import nullcontext
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
@@ -16,6 +17,9 @@ from rich.markup import escape
 from metis import runlog
 from metis.generated_artifacts import generated_artifact_publication
 from metis.json_io import write_json_atomic
+from metis.json_io import JsonSnapshot
+from metis.json_io import load_json_object_file
+from metis.engine.stages.triage.storage import TriageStore
 from metis.sarif.triage import apply_triage_annotations
 
 from .exporters import export_csv
@@ -35,6 +39,31 @@ REPORT_TEMPLATE = (
 def output_format(output_file: str | Path) -> str:
     suffix = Path(output_file).suffix.lower()
     return suffix.removeprefix(".") if suffix in {".html", ".csv", ".sarif"} else "json"
+
+
+def streaming_output_files(
+    paths: dict[str, list[str]], directory: str | Path
+) -> dict[str, str]:
+    review_needs_json = any(
+        output_format(path) != "sarif"
+        for stage_paths in paths.values()
+        for path in stage_paths
+    )
+    destinations = {}
+    for stage, stage_paths in paths.items():
+        formats = (
+            ("json",) if stage == "review" and review_needs_json else ("json", "sarif")
+        )
+        destinations[stage] = next(
+            (
+                path
+                for format_name in formats
+                for path in stage_paths
+                if output_format(path) == format_name
+            ),
+            str(Path(directory) / f"{stage}.json"),
+        )
+    return destinations
 
 
 def output_path_identity(output_file: str | Path) -> Path:
@@ -131,9 +160,13 @@ def graph_output_files(
 
     review = outputs.get("review", {})
     triage_result = outputs.get("triage", {})
-    findings = review.get("findings")
+    findings = review.get("findings", review.get("json_path"))
     review_sarif = review.get("sarif")
-    triage_sarif = triage_result.get("sarif")
+    if review_sarif is None:
+        review_sarif = review.get("sarif_path", review.get("json_path"))
+    triage_sarif = triage_result.get(
+        "sarif", triage_result.get("sarif_path", triage_result.get("json_path"))
+    )
     review_formats = tuple(review.get("formats", ()))
     triage_formats = tuple(triage_result.get("formats", ()))
     if partial:
@@ -258,8 +291,12 @@ def save_graph_outputs(
             partial=partial or pending_error is not None,
             generated_bases=generated_bases,
         )
-        if command == "review" and findings is not None:
-            pretty_print_reviews(findings, quiet)
+        if command == "review":
+            display = findings
+            if display is None:
+                display = review.get("json_path", review.get("sarif_path"))
+            if display is not None:
+                pretty_print_reviews(display, quiet)
         for stage in ("review", "triage"):
             if not paths[stage]:
                 continue
@@ -273,6 +310,9 @@ def save_graph_outputs(
                 quiet,
                 sarif_payload=values.get("sarif"),
                 codebase_path=codebase_path,
+                sarif_path=values.get("sarif_path"),
+                json_path=values.get("json_path"),
+                read_source=not (stage == "triage" and "json_path" in values),
             )
     except CancelledError:
         raise
@@ -319,6 +359,9 @@ def save_output(
     sarif_payload=None,
     *,
     codebase_path: str | Path | None = None,
+    sarif_path: str | Path | None = None,
+    json_path: str | Path | None = None,
+    read_source: bool = True,
 ):
     if not output_files:
         return
@@ -335,31 +378,76 @@ def save_output(
         else data
     )
     sarif_payload_local = sarif_payload
+    source_path = json_path if json_path is not None else sarif_path
 
-    for file_entry in files:
-        output_path = Path(file_entry)
-        format_name = output_format(output_path)
+    snapshot = None
+    try:
+        for file_entry in files:
+            output_path = Path(file_entry)
+            format_name = output_format(output_path)
 
-        with generated_artifact_publication(codebase_path, output_path):
-            if format_name == "html":
-                report_path = export_html(
-                    json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
+            with (
+                generated_artifact_publication(codebase_path, output_path)
+                if source_path is None or format_name in {"html", "csv"}
+                else nullcontext()
+            ):
+                if source_path is not None:
+                    if format_name == "html":
+                        report_path = export_html(
+                            load_json_object_file(source_path),
+                            output_path,
+                            REPORT_TEMPLATE,
+                            METIS_VERSION,
+                        )
+                    elif format_name == "csv":
+                        report_path = export_csv(
+                            load_json_object_file(source_path), output_path
+                        )
+                    elif json_path is not None and format_name == "sarif":
+                        with TriageStore(
+                            json_path, codebase_path=codebase_path
+                        ) as store:
+                            store.publish(
+                                output_path,
+                                read_source=read_source,
+                            )
+                    elif Path(source_path).absolute() != output_path.absolute():
+                        if snapshot is None:
+                            snapshot = JsonSnapshot(source_path)
+                        snapshot.write(
+                            output_path,
+                            publication=generated_artifact_publication(
+                                codebase_path, output_path
+                            ),
+                        )
+                    else:
+                        with generated_artifact_publication(codebase_path, output_path):
+                            pass
+                    report_path = output_path
+                elif format_name == "html":
+                    report_path = export_html(
+                        json_payload, output_path, REPORT_TEMPLATE, METIS_VERSION
+                    )
+                elif format_name == "sarif":
+                    report_path, sarif_payload_local = export_sarif(
+                        data, output_path, sarif_payload_local
+                    )
+                elif format_name == "csv":
+                    report_path = export_csv(json_payload, output_path)
+                else:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_json_atomic(output_path, json_payload, indent=4)
+                    report_path = output_path
+                _record_output_artifact(report_path, format_name)
+                label = (
+                    "Results"
+                    if format_name == "json"
+                    else f"{format_name.upper()} report"
                 )
-            elif format_name == "sarif":
-                report_path, sarif_payload_local = export_sarif(
-                    data, output_path, sarif_payload_local
+                print_console(
+                    f"[blue]{label} saved to {escape(str(report_path))}[/blue]",
+                    quiet,
                 )
-            elif format_name == "csv":
-                report_path = export_csv(json_payload, output_path)
-            else:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                write_json_atomic(output_path, json_payload, indent=4)
-                report_path = output_path
-            _record_output_artifact(report_path, format_name)
-            label = (
-                "Results" if format_name == "json" else f"{format_name.upper()} report"
-            )
-            print_console(
-                f"[blue]{label} saved to {escape(str(report_path))}[/blue]",
-                quiet,
-            )
+    finally:
+        if snapshot is not None:
+            snapshot.close()

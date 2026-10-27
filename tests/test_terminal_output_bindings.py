@@ -47,7 +47,7 @@ def test_review_command_uses_result_filename_unless_cli_path_is_explicit(
         output_file=output_files,
         _metis_generated_output=generated,
     )
-    monkeypatch.setattr(commands, "_execute_review", lambda *_args: outputs)
+    monkeypatch.setattr(commands, "_execute_review", lambda *_args, **_kwargs: outputs)
     monkeypatch.setattr(cli_output, "save_output", lambda *_args, **_kwargs: None)
 
     commands.run_review_code(
@@ -58,7 +58,9 @@ def test_review_command_uses_result_filename_unless_cli_path_is_explicit(
 
 
 @pytest.mark.parametrize("suffix", (".sarif", ".json"))
-@pytest.mark.parametrize("output_files", (None, [], ["explicit.sarif"]))
+@pytest.mark.parametrize(
+    "output_files", (None, [], ["explicit.sarif"], ["explicit.json"])
+)
 def test_triage_command_uses_result_filename_unless_cli_path_is_explicit(
     monkeypatch, tmp_path, suffix, output_files
 ):
@@ -68,11 +70,20 @@ def test_triage_command_uses_result_filename_unless_cli_path_is_explicit(
     args = SimpleNamespace(quiet=True, output_file=output_files)
     saved = []
     engine = SimpleNamespace(
-        execute_triage=lambda _payload, **_kwargs: {
-            "filename": "configured",
-            "formats": ("sarif", "json"),
-            "sarif": sarif,
-        },
+        execution=SimpleNamespace(
+            _stages={
+                "triage": SimpleNamespace(
+                    nodes={
+                        "triage": SimpleNamespace(filename=None, formats=None),
+                        "result": SimpleNamespace(
+                            filename="configured", formats=("sarif", "json")
+                        ),
+                    },
+                    outputs=(),
+                ),
+            }
+        ),
+        execute_triage_file=lambda _source, _destination, **_kwargs: {"sarif": sarif},
     )
     monkeypatch.setattr(
         commands, "run_triage_action", lambda _args, *, action, **_kwargs: action()
@@ -86,7 +97,10 @@ def test_triage_command_uses_result_filename_unless_cli_path_is_explicit(
     )
 
     base = "explicit" if output_files else "configured"
-    assert saved == [f"{base}.sarif", f"{base}.json"]
+    expected = [f"{base}.sarif", f"{base}.json"]
+    if output_files == ["explicit.json"]:
+        expected.reverse()
+    assert saved == expected
 
 
 @pytest.mark.parametrize("stage_name", ("review", "triage", "initialize"))

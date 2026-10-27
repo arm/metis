@@ -8,20 +8,43 @@ preserving their structure, decisions, and evidence. Completed findings are skip
 unless `--include-triaged` is set. Invalid input fails before model calls or output
 replacement; source reads stay within the codebase.
 
-JSON/SARIF imports, exports, and checkpoints have no size, count, or
+JSON/SARIF imports and exports have no size, count, or
 nesting caps. JSON validation and atomic writes remain enforced. Available memory
 and parser limits still apply. External stages use the same uncapped file handling.
 
-`--output-file` selects destinations and formats; otherwise the result node's
-`filename` is used, falling back to updating the input file. Interactive checkpoints
-use the selected SARIF output, or the chosen output basename with a `.sarif` suffix.
-Without an output setting, SARIF is checkpointed in place and JSON uses a sibling
-`.sarif`. Graph runs and post-review `--triage` use a separate `.checkpoint.sarif`; see
-[checkpoints and resume](execution-graph.md#review-checkpoints-and-resume).
+## Large JSON reports
 
-Completed decisions are flushed on completion or cancellation. Checkpoint write
-failures are logged without stopping triage. Post-review triage failure or
-cancellation also preserves completed Review output.
+The built-in `triage` and `result` nodes always stream JSON/SARIF through the
+same persisted workflow, including when Triage follows Review in the packaged
+graph. HTML and CSV are derived from that persisted report at export time. The
+file API returns paths and counts rather than a whole-report dictionary:
+
+```python
+result = engine.execute_triage_file("findings.sarif", "triaged.sarif")
+print(result["sarif_path"], result["processed"], result["total"])
+```
+
+Metis review JSON written to JSON uses `json_path`. Unknown fields and existing
+annotations survive; whitespace may change. Reads use bounded batches of at least
+64 findings, growing to fit the node's worker limit. Each finding is a separate
+job; a batch finishes before the next is loaded.
+Models, grants, callbacks, and worker limits still apply. Prerequisite stages and
+external nodes do not run for the standalone file API; incompatible triage graphs
+are rejected before execution. Existing dictionary APIs stay unchanged; callbacks
+receive `SarifFinding` values with exported SARIF coordinates.
+
+Completed decisions are appended to the shared journal automatically. There are
+no periodic full-report rewrites or configurable checkpoint intervals.
+
+## Output
+
+`--output-file` selects destinations and formats; otherwise the result node's
+`filename` is used, falling back to updating the input file. No separate
+`.checkpoint.sarif` is produced. Remove `triage_checkpoint_every` from existing
+configuration files. Journal batching is automatic.
+
+Journal write failures propagate without replacing a prior readable report.
+Post-review triage failure or cancellation also preserves completed Review output.
 
 ## End-to-end flow
 1. Read SARIF findings.

@@ -3,8 +3,6 @@
 
 import logging
 import tempfile
-import json
-from concurrent.futures import CancelledError
 from dataclasses import replace
 from contextlib import closing
 from contextlib import nullcontext
@@ -17,7 +15,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 
 from metis.configuration import load_execution_config
-from metis.cli.review_checkpoints import stage_checkpoint_callback
 from metis.engine import MetisEngine
 from metis.engine import ExecutionGraphError
 from metis.engine.capabilities.engine import EngineCapabilities
@@ -27,10 +24,12 @@ from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import ExecutionResult
 from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.nodes.builtins import build_builtin_execution
+from metis.engine.nodes.builtins import streaming_stages
 from metis.engine.nodes.reachability.review import ReachabilityReviewService
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.engine.stages.configuration import ExecutionConfiguration
 from metis.engine.stages.review.models import ReviewCommand
+from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
@@ -38,6 +37,26 @@ from metis.engine.tools.index import index_model_tools
 from metis.exceptions import RetrieverInitError
 from metis.runtime_settings import CapabilityRuntimeSettings
 from metis.usage import UsageRuntime
+
+
+@pytest.mark.parametrize("binding", ["review.findings", "review.sarif", "triage.sarif"])
+def test_external_consumers_keep_materialized_stage_contracts(binding):
+    stages = {
+        "review": Mock(
+            nodes=dict.fromkeys(("simple_llm_review", "finding_dedup", "result")),
+            inputs={},
+            outputs={},
+        ),
+        "triage": Mock(
+            nodes=dict.fromkeys(("triage", "result")),
+            inputs={"sarif": "review.sarif"},
+            outputs={},
+        ),
+        "consumer": Mock(nodes={}, inputs={"findings": binding}, outputs={}),
+    }
+    assert streaming_stages(stages) == set()
+    assert streaming_stages(stages, "review") == {"review"}
+    assert streaming_stages(stages, "triage") == {"triage"}
 
 
 def _embedding_provider(code_embedding_model=None, docs_embedding_model=None):
@@ -53,15 +72,18 @@ def _execution_with_index() -> dict[str, object]:
     return execution
 
 
-@pytest.mark.parametrize("kind", ["default", "mapping", "validated", "invalid"])
+@pytest.mark.parametrize(
+    "kind",
+    ["default", "mapping", "validated", "invalid"],
+)
 def test_engine_execution_configuration_boundary(tmp_path, capability_settings, kind):
-    expected = ExecutionConfiguration.model_validate(load_execution_config())
+    raw = load_execution_config()
+    expected = ExecutionConfiguration.model_validate(raw)
     configuration = {
         "default": None,
-        "mapping": expected.model_dump(),
         "validated": expected,
         "invalid": {"stages": {}},
-    }[kind]
+    }.get(kind, expected.model_dump())
     original = deepcopy(configuration) if isinstance(configuration, dict) else None
     expectation = pytest.raises(ValueError) if kind == "invalid" else nullcontext()
     with (
@@ -366,63 +388,28 @@ def test_init_codebase_populates_memory_without_index(
     engine.close()
 
 
-def test_graph_saves_published_review_before_triage_cancellation(engine, monkeypatch):
-    run = ReviewRun(
-        ReviewStatus.INCONCLUSIVE,
-        StandardReviewResult.model_validate({"reviews": []}),
-    )
-    monkeypatch.setattr(
-        SimpleLlmReviewService, "run_review", lambda *_args, **_kwargs: run
-    )
-    checkpoint = stage_checkpoint_callback(codebase_path=engine.codebase_path)
-    snapshots = []
-
-    def publish(result):
-        snapshots.append(result)
-        checkpoint(result)
-
-    cancelled = CancelledError("triage cancelled")
-
-    def cancel(*_args, **_kwargs):
-        assert snapshots[-1].status is ExecutionStatus.INCONCLUSIVE
-        assert isinstance(snapshots[-1].outputs["review"]["sarif"], dict)
-        paths = list(Path(engine.codebase_path).glob(".metis/checkpoints/graph.*.json"))
-        assert len(paths) == 1
-        snapshot = json.loads(paths[0].read_text())
-        assert snapshot["outputs"]["review"]["sarif"]["runs"]
-        assert snapshot["status"] == "inconclusive"
-        assert snapshot["published_stages"] == ["initialize", "review"]
-        raise cancelled
-
-    monkeypatch.setattr(engine._triage_service, "triage_run", cancel)
-    with pytest.raises(CancelledError) as caught:
-        engine.execute_graph(callbacks={"stage_completed_callback": publish})
-
-    assert caught.value is cancelled
-
-
 @pytest.mark.parametrize("failure_code", ["review.file_failed", "review.dedup_failed"])
 def test_execute_review_raises_with_available_findings(
     engine, monkeypatch, failure_code
 ):
-    findings = StandardReviewResult.model_validate(
-        {"reviews": [{"file": "kept.c", "reviews": [{"issue": "Retained finding"}]}]}
-    )
-    result = ExecutionResult(
-        ExecutionStatus.INCONCLUSIVE,
-        {"review": {"findings": findings, "formats": ("json",)}},
-        (ExecutionDiagnostic(failure_code, "Model failed"),),
+    findings = {
+        "reviews": [{"file": "kept.c", "reviews": [{"issue": "Retained finding"}]}]
+    }
+    run = ReviewRun(
+        ReviewStatus.INCONCLUSIVE,
+        StandardReviewResult.model_validate(findings),
+        (ReviewDiagnostic(failure_code, "Model failed"),),
     )
     monkeypatch.setattr(
-        engine.execution, "execute_review", lambda *_args, **_kwargs: result
+        SimpleLlmReviewService, "run_review", lambda *_args, **_kwargs: run
     )
 
     with pytest.raises(ExecutionGraphError) as caught:
         engine.execute_review("code")
 
-    assert caught.value.result.outputs["review"]["findings"] == findings.model_dump(
-        mode="json"
-    )
+    saved = caught.value.result.outputs["review"]["findings"]["reviews"][0]
+    assert saved["file"] == "kept.c"
+    assert saved["reviews"][0]["issue"] == "Retained finding"
     assert caught.value.result.diagnostics[0].code == failure_code
 
 
@@ -512,7 +499,7 @@ def test_explicit_review_producers_run_independently(engine, monkeypatch):
         producer_version="test",
     )
     codegraphs.load.return_value = CodeGraph()
-    execution = build_builtin_execution(
+    builtins = build_builtin_execution(
         configuration,
         engine_config=engine._config,
         repository=engine.repository,
@@ -520,17 +507,17 @@ def test_explicit_review_producers_run_independently(engine, monkeypatch):
         codegraphs=codegraphs,
         reachability_settings={},
         triage_options=engine._triage_options,
-        triage_checkpoint_every=50,
         review_graph_factory=Mock(),
-    ).execution
+    )
+    engine.execution.close()
+    engine.execution = builtins.execution
 
-    result = execution.execute_review(ReviewCommand(mode="code"))
+    result = engine.execute_review("code")
 
-    assert result.status is ExecutionStatus.OK
     assert [
-        item.issue
-        for group in result.outputs["review"]["findings"].reviews
-        for item in group.reviews
+        item["issue"]
+        for group in result["findings"]["reviews"]
+        for item in group["reviews"]
     ] == ["simple", "reachable"]
 
 
@@ -786,7 +773,6 @@ def test_execution_error_preserves_native_values_and_original_diagnostics(value)
         ("doc_chunk_size", 0),
         ("doc_chunk_overlap", -1),
         ("doc_chunk_overlap", 1024),
-        ("triage_checkpoint_every", -1),
         ("similarity_top_k", False),
     ],
 )

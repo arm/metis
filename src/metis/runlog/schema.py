@@ -83,7 +83,7 @@ _EVENT_EXPLANATIONS = {
     "model.round": "One model response in the tool loop and the tool calls it requested.",
     "usage": "The token usage reported for this model-provider request.",
     "decision": "A policy, model, or deterministic adjudication decision made during the current operation.",
-    "artifact": "An in-memory review, triage, or threat-model result produced by Metis.",
+    "artifact": "A review, triage, or threat-model result or report reference produced by Metis.",
     "artifact.written": "An output file written by Metis, with its format, size, path, and digest.",
 }
 

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import partial
 from threading import Condition
@@ -17,6 +18,7 @@ from typing import cast
 
 from metis import runlog
 from metis.engine.concurrency import JobScheduler
+from metis.engine.concurrency import _bind_cancellation
 from metis.engine.concurrency import serialized_progress_callback
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.llm_runner import JsonPromptRunner
@@ -149,9 +151,13 @@ class ExecutionGraphService:
         command: ReviewCommand,
         *,
         callbacks: Mapping[str, object] | None = None,
+        output=None,
     ) -> ExecutionResult:
         return self._execute_target(
-            "review", callbacks=callbacks, initial_inputs={"request": command}
+            "review",
+            callbacks=callbacks,
+            initial_inputs={"request": command},
+            output=output,
         )
 
     def execute_triage(
@@ -161,6 +167,7 @@ class ExecutionGraphService:
         codegraph: CodeGraphReference | None = None,
         include_triaged: bool | None = None,
         callbacks: Mapping[str, object] | None = None,
+        output=None,
     ) -> ExecutionResult:
         return self._execute_target(
             "triage",
@@ -170,6 +177,7 @@ class ExecutionGraphService:
                 "codegraph": codegraph,
             },
             include_triaged=include_triaged,
+            output=output,
         )
 
     def execute_graph(
@@ -177,11 +185,13 @@ class ExecutionGraphService:
         *,
         include_triaged: bool | None = None,
         callbacks: Mapping[str, object] | None = None,
+        output=None,
     ) -> ExecutionResult:
         return self._execute_stages(
             self._stage_order,
             callbacks=callbacks,
             include_triaged=include_triaged,
+            output=output,
         )
 
     def _execute_target(
@@ -191,6 +201,7 @@ class ExecutionGraphService:
         callbacks: Mapping[str, object] | None,
         initial_inputs: Mapping[str, Any] | None = None,
         include_triaged: bool | None = None,
+        output=None,
     ) -> ExecutionResult:
         if target not in self._stages:
             return _unavailable_stage(target)
@@ -214,16 +225,11 @@ class ExecutionGraphService:
             callbacks=callbacks,
             include_triaged=include_triaged,
             overrides={target: initial_inputs or {}},
+            output=output,
         )
 
-    def _execute_stages(
-        self,
-        stage_order: tuple[StageName, ...],
-        *,
-        callbacks: Mapping[str, object] | None,
-        include_triaged: bool | None,
-        overrides: Mapping[StageName, Mapping[str, Any]] | None = None,
-    ) -> ExecutionResult:
+    @contextmanager
+    def _execution_scope(self, stage_order):
         cancellation = Event()
         with self._condition:
             self._check_reentry("start nested execution on")
@@ -239,10 +245,28 @@ class ExecutionGraphService:
             self._active_executions.add(cancellation)
         token = _active_services.set((*_active_services.get(), (self, cancellation)))
         try:
-            runlog.event(
-                "execution.topology",
-                {"stage_order": stage_order, "configuration": self.configuration},
-            )
+            with _bind_cancellation(cancellation.is_set):
+                runlog.event(
+                    "execution.topology",
+                    {"stage_order": stage_order, "configuration": self.configuration},
+                )
+                yield cancellation
+        finally:
+            _active_services.reset(token)
+            with self._condition:
+                self._active_executions.remove(cancellation)
+                self._condition.notify_all()
+
+    def _execute_stages(
+        self,
+        stage_order: tuple[StageName, ...],
+        *,
+        callbacks: Mapping[str, object] | None,
+        include_triaged: bool | None,
+        overrides: Mapping[StageName, Mapping[str, Any]] | None = None,
+        output=None,
+    ) -> ExecutionResult:
+        with self._execution_scope(stage_order) as cancellation:
             outputs: dict[str, Any] = {}
             diagnostics: list[ExecutionDiagnostic] = []
             status = ExecutionStatus.OK
@@ -256,6 +280,7 @@ class ExecutionGraphService:
                     initial_inputs=(overrides or {}).get(stage_name),
                     include_triaged=include_triaged,
                     cancellation=cancellation,
+                    output=output,
                 )
                 diagnostics.extend(result.diagnostics)
                 # Failed stages can still publish validated independent outputs.
@@ -279,12 +304,6 @@ class ExecutionGraphService:
                 raise CancelledError("Execution was cancelled")
             return ExecutionResult(status, outputs, tuple(diagnostics))
 
-        finally:
-            _active_services.reset(token)
-            with self._condition:
-                self._active_executions.remove(cancellation)
-                self._condition.notify_all()
-
     def _execute_configured_stage(
         self,
         stage_name: StageName,
@@ -294,6 +313,7 @@ class ExecutionGraphService:
         initial_inputs: Mapping[str, Any] | None = None,
         include_triaged: bool | None = None,
         cancellation: Event,
+        output=None,
     ) -> ExecutionResult:
         stage = self._stages[stage_name]
         overrides = initial_inputs or {}
@@ -332,6 +352,7 @@ class ExecutionGraphService:
         if stage_name == "triage":
             inputs["request"] = TriageRun.from_payload(
                 cast(SarifPayload, inputs["sarif"]),
+                output=output,
                 include_triaged=(
                     self._triage_options.include_triaged
                     if include_triaged is None
@@ -341,7 +362,12 @@ class ExecutionGraphService:
         run = run_stage(
             stage_name,
             self._plans[stage_name],
-            self._context(stage_name, callbacks=callbacks, cancellation=cancellation),
+            self._context(
+                stage_name,
+                callbacks=callbacks,
+                cancellation=cancellation,
+                output=output,
+            ),
             inputs,
             executor=self._node_executor,
         )
@@ -454,6 +480,7 @@ class ExecutionGraphService:
         *,
         callbacks: Mapping[str, object] | None = None,
         cancellation: Event,
+        output=None,
     ) -> NodeContext:
         llm_provider = self._engine_config.llm_provider
 
@@ -488,6 +515,7 @@ class ExecutionGraphService:
             ),
             callbacks=_node_callbacks(stage, callbacks),
             triage=self._triage_adjudicator,
+            output=output,
         )
 
 

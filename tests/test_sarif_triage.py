@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from concurrent.futures import CancelledError
+from dataclasses import replace
 import json
 from threading import Event
 from unittest.mock import Mock
@@ -12,10 +13,133 @@ from metis.engine import ExecutionGraphError
 from metis.engine.capabilities.navigation import NavigationCapability
 from metis.engine.execution import ExecutionStatus
 from metis.engine.stages.triage.models import TriageRun
+from metis.engine.stages.triage.storage import TriageStore
 from metis.sarif.models import SarifPayload
+from metis.sarif.triage import apply_triage_annotations
 from metis.sarif.triage import apply_triage_result
 from metis.sarif.triage import extract_findings
+from metis.sarif.triage import TRIAGE_ANNOTATION_KEYS
 from metis.sarif.writer import generate_sarif
+
+
+def test_triage_run_preserves_selected_and_unhandled_findings(engine, node_jobs):
+    findings = [
+        {"message": {"text": message}} for message in ("prior", "unhandled", "selected")
+    ]
+    payload = SarifPayload(version="2.1.0", runs=({"results": findings},))
+    original = TriageRun.from_payload(payload)
+    pending = replace(original, remaining=original.remaining[1:], processed=1)
+    classifier = Mock(side_effect=[None, {"status": "invalid", "reason": "Guarded"}])
+    result = engine._triage_service.triage_run(
+        pending, classifier=classifier, jobs=node_jobs.limit(1)
+    )
+    assert [call.args[0].message for call in classifier.call_args_list] == [
+        "unhandled",
+        "selected",
+    ]
+    assert result.processed == 2 and result.total == 3
+    assert result.remaining == (original.remaining[1],)
+    findings = result.sarif.runs[0]["results"]
+    assert "properties" not in findings[0]
+    assert "properties" not in findings[1]
+    assert findings[2]["properties"]["metisTriageStatus"] == "invalid"
+
+
+@pytest.mark.parametrize("source_format", ["review", "sarif"])
+def test_streaming_triage_conversion_matches_materialized_output(
+    tmp_path, source_format
+):
+    issues = [
+        {
+            "id": f"stable-{index}",
+            "issue": "Finding",
+            "metisTriaged": index == 0,
+            "metisTriageStatus": None,
+            "metisTriageReason": 123,
+            "metisTriageTimestamp": False,
+            "custom": {"keep": [None, True, "value"]},
+        }
+        for index in range(3)
+    ]
+    payload = (
+        {"reviews": [{"file": "source.py", "reviews": issues}]}
+        if source_format == "review"
+        else {
+            "version": "2.1.0",
+            "runs": [{"results": [{"properties": issue} for issue in issues]}],
+            "reviews": [],
+        }
+    )
+    source = tmp_path / ("input.json" if source_format == "review" else "input.sarif")
+    source.write_text(
+        json.dumps(payload)[:-1]
+        + ',"number":1e-9223372036854775807,"integer":'
+        + str(2**100)
+        + "}"
+    )
+    original = source.read_bytes()
+    expected = json.loads(original)
+    expected_sarif = (
+        generate_sarif(expected, read_source=False)
+        if source_format == "review"
+        else expected
+    )
+    apply_triage_result(
+        expected_sarif, run_index=0, result_index=1, status="valid", reason="Checked"
+    )
+    annotation = {
+        key: value
+        for key, value in expected_sarif["runs"][0]["results"][1]["properties"].items()
+        if key in TRIAGE_ANNOTATION_KEYS
+    }
+    if source_format == "review":
+        apply_triage_annotations(expected, expected_sarif)
+    target, companion = tmp_path / "output.json", tmp_path / "output.sarif"
+    with TriageStore(source, destination=target) as store:
+        assert store.is_review == (source_format == "review") and store.count() == 2
+        store.annotate(next(store.findings()), annotation)
+        for path, report in ((target, expected), (companion, expected_sarif)):
+            store.publish(path)
+            assert json.loads(path.read_text()) == report
+    for path, report in ((target, expected), (companion, expected_sarif)):
+        assert json.loads(path.read_text()) == report
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "message"),
+    [
+        ("input.json", '{"runs":{}}', "Metis reviews array or a SARIF"),
+        *[
+            (filename, '{"runs":[],"extra":NaN}', "non-finite")
+            for filename in ("input.json", "input.sarif")
+        ],
+        (
+            "input.json",
+            '{"reviews":[{"file":"source.c","reviews":[{"issue":"Needs triage"}]}],'
+            '"reviews":[]}',
+            "duplicate mapping key",
+        ),
+        (
+            "input.sarif",
+            '{"version":"2.1.0","runs":[{"results":'
+            '[{"message":{"text":"Needs triage"}}],"results":[]}]}',
+            "duplicate mapping key",
+        ),
+        (
+            "input.json",
+            '{"reviews":[{"file":"source.c","reviews":[{"issue":"Needs triage",'
+            '"metisTriaged":"false"}]}]}',
+            "metisTriaged must be a boolean",
+        ),
+    ],
+)
+def test_triage_store_rejects_invalid_input(tmp_path, filename, payload, message):
+    source = tmp_path / filename
+    source.write_text(payload)
+
+    with pytest.raises(ValueError, match=message), TriageStore(source):
+        pass
 
 
 def test_extract_findings_reads_result_fields():
@@ -289,7 +413,14 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch, decision_s
     )
     engine.execution._jobs = engine.execution._scheduler.limit(1)
 
-    out = engine.execute_triage(payload)["sarif"]
+    checkpoints = []
+    out = engine.execute_triage(
+        payload,
+        checkpoint_callback=lambda report, processed, total: checkpoints.append(
+            (report, processed, total)
+        ),
+    )["sarif"]
+    assert checkpoints == [(out, 1, 1)]
     props = out["runs"][0]["results"][0]["properties"]
 
     assert props["metisEvidenceRequirements"] == ["local_context", "use_site"]
@@ -308,96 +439,9 @@ def test_triage_payload_writes_evidence_metadata(engine, monkeypatch, decision_s
     }
 
 
-def test_execute_triage_writes_checkpoints_at_configured_cadence(
-    engine, monkeypatch, tmp_path
-):
-    payload = {
-        "version": "2.1.0",
-        "runs": [
-            {
-                "results": [
-                    {"message": {"text": letter}, "ruleId": f"R{index}"}
-                    for index, letter in enumerate("ABCDE", start=1)
-                ]
-            }
-        ],
-    }
-
-    class _DummyWorkflow:
-        def triage(self, _request):
-            return {"status": "valid", "reason": "confirmed"}
-
-    writes = []
-
-    def save_checkpoint(_path, checkpoint_payload):
-        writes.append(
-            sum(
-                result.get("properties", {}).get("metisTriaged") is True
-                for result in checkpoint_payload["runs"][0]["results"]
-            )
-        )
-
-    monkeypatch.setattr(
-        engine._triage_classifier,
-        "_workflow",
-        lambda _navigation, _rounds, _model=None: _DummyWorkflow(),
-    )
-    monkeypatch.setattr(
-        "metis.engine.stages.triage.service.save_sarif_file",
-        save_checkpoint,
-    )
-    engine.execution._jobs = engine.execution._scheduler.limit(1)
-    engine._triage_service.triage_checkpoint_every = 2
-
-    result = engine.execute_triage(
-        payload,
-        checkpoint_path=str(tmp_path / "checkpoint.sarif"),
-    )
-
-    assert writes == [2, 4, 5]
-    assert all(
-        finding["properties"]["metisTriaged"] is True
-        for finding in result["sarif"]["runs"][0]["results"]
-    )
-
-
-@pytest.mark.parametrize("completed", [0, 1])
-def test_triage_cancellation_flushes_completed_findings_below_cadence(
-    engine, monkeypatch, tmp_path, completed
-):
-    payload = {
-        "version": "2.1.0",
-        "runs": [
-            {"results": [{"message": {"text": text}} for text in ("A", "B", "C")]}
-        ],
-    }
-    workflow = Mock()
-    workflow.triage.side_effect = [
-        *[{"status": "valid", "reason": "confirmed"}] * completed,
-        CancelledError("worker cancellation"),
-    ]
-    monkeypatch.setattr(
-        engine._triage_classifier,
-        "_workflow",
-        lambda _navigation, _rounds, _model=None: workflow,
-    )
-    engine.execution._jobs = engine.execution._scheduler.limit(1)
-    engine._triage_service.triage_checkpoint_every = 50
-    target = tmp_path / "checkpoint.sarif"
-
-    with pytest.raises(CancelledError, match="worker cancellation"):
-        engine.execute_triage(payload, checkpoint_path=str(target))
-
-    assert target.exists() is bool(completed)
-    if completed:
-        saved = json.loads(target.read_text())
-        assert len(extract_findings(saved)) == 3 - completed
-        assert saved["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
-
-
 @pytest.mark.parametrize("checkpoint_cancels", [False, True])
 def test_triage_cancellation_collects_completed_outcomes_before_final_checkpoint(
-    engine, node_jobs, tmp_path, checkpoint_cancels
+    engine, node_jobs, checkpoint_cancels
 ):
     payload = {
         "version": "2.1.0",
@@ -423,11 +467,8 @@ def test_triage_cancellation_collects_completed_outcomes_before_final_checkpoint
         finished.set()
         return {"status": "valid", "reason": "confirmed"}
 
-    target = tmp_path / "checkpoint.sarif"
-    checkpoint = engine._triage_service.checkpoint_callback(
-        str(target), checkpoint_every=50
-    )
     checkpoint_calls = []
+    snapshots = []
 
     def save_snapshot(payload, processed, total):
         assert finished.is_set()
@@ -438,7 +479,7 @@ def test_triage_cancellation_collects_completed_outcomes_before_final_checkpoint
         checkpoint_calls.append((processed, total))
         if checkpoint_cancels:
             raise CancelledError("checkpoint cancellation")
-        checkpoint(payload, processed, total)
+        snapshots.append(json.loads(json.dumps(payload)))
 
     with pytest.raises(CancelledError) as raised:
         engine._triage_service.triage_run(
@@ -451,27 +492,24 @@ def test_triage_cancellation_collects_completed_outcomes_before_final_checkpoint
     assert raised.value is original_error
     assert sorted(calls) == ["A", "B"]
     assert checkpoint_calls == [(1, 1)]
-    assert target.exists() is not checkpoint_cancels
+    assert bool(snapshots) is not checkpoint_cancels
     if not checkpoint_cancels:
-        saved = json.loads(target.read_text())
+        saved = snapshots[0]
         assert len(extract_findings(saved)) == 2
         assert saved["runs"][0]["results"][0]["properties"]["metisTriaged"] is True
 
 
 @pytest.mark.parametrize("cancel_from", ["done", "error", "checkpoint"])
 def test_triage_callback_cancellation_preserves_first_completed_finding(
-    engine, node_jobs, tmp_path, cancel_from
+    engine, node_jobs, cancel_from
 ):
     payload = {
         "version": "2.1.0",
         "runs": [{"results": [{"message": {"text": text}} for text in ("A", "B")]}],
     }
     run = TriageRun.from_payload(SarifPayload.model_validate(payload))
-    target = tmp_path / "checkpoint.sarif"
-    checkpoint = engine._triage_service.checkpoint_callback(
-        str(target), checkpoint_every=50
-    )
     completed_snapshots = []
+    snapshots = []
 
     def progress(event):
         if event["event"] == cancel_from:
@@ -481,7 +519,7 @@ def test_triage_callback_cancellation_preserves_first_completed_finding(
         if cancel_from == "checkpoint" and processed < total:
             raise CancelledError("callback cancellation")
         completed_snapshots.append((processed, total))
-        checkpoint(payload, processed, total)
+        snapshots.append(json.loads(json.dumps(payload)))
 
     classifier = Mock(
         side_effect=RuntimeError("provider failed") if cancel_from == "error" else None,
@@ -499,7 +537,7 @@ def test_triage_callback_cancellation_preserves_first_completed_finding(
 
     assert completed_snapshots == [(1, 1)]
     assert classifier.call_count == 1
-    saved = json.loads(target.read_text())["runs"][0]["results"]
+    saved = snapshots[0]["runs"][0]["results"]
     assert saved[0]["properties"]["metisTriaged"] is (cancel_from != "error")
     assert saved[0]["properties"]["metisTriageStatus"] == (
         "inconclusive" if cancel_from == "error" else "valid"

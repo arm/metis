@@ -659,12 +659,15 @@ def test_model_tool_loop_records_tool_span(tmp_path):
 
 def test_engine_api_preserves_command_parentage(tmp_path):
     engine = object.__new__(MetisEngine)
+    engine.codebase_path = str(tmp_path)
     engine.execution = SimpleNamespace(
+        _stage_order=(),
+        _stages={},
         execute_graph=lambda **_kwargs: ExecutionResult(
             ExecutionStatus.OK,
             {"review": {"value": "done"}},
             (),
-        )
+        ),
     )
 
     with runlog.open_runlog(_exact_config(tmp_path)) as session:

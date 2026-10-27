@@ -39,7 +39,6 @@ def openai_cli(tmp_path, monkeypatch):
     config["metis_engine"].update(
         max_workers=1,
         llm_max_retries=2,
-        triage_checkpoint_every=1,
         review_checkpoints=False,
     )
     config["metis_engine"]["execution"]["inputs"]["review_request"] = {
@@ -55,7 +54,7 @@ def openai_cli(tmp_path, monkeypatch):
         lambda text, model=None: len(text),
     )
 
-    def run(responses, *, exit_code=0):
+    def run(responses, *, exit_code=0, arguments=()):
         requests = []
         pending = list(responses)
 
@@ -131,6 +130,7 @@ def openai_cli(tmp_path, monkeypatch):
                     "report.sarif",
                     "report.html",
                     "report.csv",
+                    *arguments,
                 ],
             )
             actual_exit = 0
@@ -328,7 +328,7 @@ def test_combined_cli_refreshes_and_reuses_repository_context(
     expected_claim = claim["statement"] if document_present else None
     request_batches = [(requests[len(setup) :], expected_claim)]
     sarif = assert_reports(root, source, triaged=True)
-    assert json.loads((root / "report.checkpoint.sarif").read_text()) == sarif
+    assert not (root / "report.checkpoint.sarif").exists()
     rows = memory_rows(root)
     assert rows
     records = [json.loads(row[2]) for row in rows]
@@ -432,7 +432,7 @@ def test_combined_cli_refreshes_and_reuses_repository_context(
 
 
 @pytest.mark.parametrize("max_rounds", [1, 3])
-def test_checkpoint_limit_does_not_override_yaml_tool_rounds(
+def test_streaming_review_preserves_yaml_tool_rounds_across_runs(
     openai_cli, monkeypatch, max_rounds
 ):
     root, source, config, run = openai_cli
@@ -456,11 +456,13 @@ def test_checkpoint_limit_does_not_override_yaml_tool_rounds(
     assert len(requests) == max_rounds + 2
     assert requests[max_rounds]["tool_choice"] == "none"
     assert_reports(root, source, triaged=False)
-    resumed = run([dedup] if max_rounds == 1 else responses)
-    assert len(resumed) == (1 if max_rounds == 1 else len(requests))
+    repeated = run(responses)
+    assert len(repeated) == len(requests)
+    assert repeated[max_rounds]["tool_choice"] == "none"
+    assert_reports(root, source, triaged=False)
 
 
-def test_review_only_then_external_triage_replays_checkpoint(openai_cli):
+def test_review_only_then_external_triage_reuses_completed_report(openai_cli):
     root, source, config, run = openai_cli
     graph = config["metis_engine"]["execution"]
     source = source.rename(root / f"~{source.name}")
@@ -520,17 +522,18 @@ def test_review_only_then_external_triage_replays_checkpoint(openai_cli):
     assert not extract_findings(saved)
     assert len(extract_findings(original)) == 2
     assert not (root / ".metis/codegraph.sqlite3").exists()
-    checkpoint = json.loads((root / "report.checkpoint.sarif").read_text())
-    assert checkpoint == saved
-    graph["inputs"]["sarif"] = checkpoint
+    assert not (root / "report.checkpoint.sarif").exists()
+    graph["inputs"]["sarif"] = saved
     run([])
-    assert json.loads((root / "report.json").read_text()) == checkpoint
+    assert json.loads((root / "report.json").read_text()) == saved
 
 
 @pytest.mark.parametrize(
     "failure", ["review", "dedup", "authentication", "triage", "distillation"]
 )
-def test_cli_failures_preserve_outputs_and_recover_from_checkpoint(openai_cli, failure):
+def test_cli_failures_preserve_outputs_and_recover_from_partial_report(
+    openai_cli, failure
+):
     root, source, config, run = openai_cli
     graph = config["metis_engine"]["execution"]
     initialize = graph["stages"].pop("initialize")
@@ -596,8 +599,10 @@ def test_cli_failures_preserve_outputs_and_recover_from_checkpoint(openai_cli, f
         triage["inputs"] = {"sarif": "$inputs.sarif"}
         graph.update(inputs={"sarif": original}, stages={"triage": triage})
         run([triage_response(source, 1), unauthorized], exit_code=1)
-        partial = json.loads((root / "report.checkpoint.sarif").read_text())
-        assert partial == json.loads((root / "report.sarif").read_text())
+        partial = json.loads((root / "report.sarif").read_text())
+        assert (root / "report.checkpoint.sarif").read_bytes() == previous[
+            root / "report.checkpoint.sarif"
+        ]
         assert partial == json.loads((root / "report.json").read_text())
         completed, failed = partial["runs"][0]["results"]
         assert completed["properties"]["metisTriaged"] is True

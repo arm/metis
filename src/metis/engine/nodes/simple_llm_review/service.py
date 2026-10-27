@@ -9,9 +9,11 @@ from collections.abc import Callable
 from codecs import escape_decode
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from threading import Event
+from threading import Lock
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -86,11 +88,23 @@ class SimpleLlmReviewService:
         navigation: NavigationCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
+        emit=None,
+        on_summary=None,
+        summary_input=None,
+        begin_patch_entry=None,
+        files: tuple[str, ...] | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
             graph_kwargs = {"navigation": navigation} if navigation is not None else {}
             review_graph = self._review_graph_factory(index, model, **graph_kwargs)
             failures: list[ReviewFileFailure] = []
+            emitted = False
+
+            def emit_group(group):
+                nonlocal emitted
+                emit(group)
+                emitted = True
+
             result = PatchReviewResult.model_validate(
                 self.review_patch(
                     command.target,
@@ -99,15 +113,24 @@ class SimpleLlmReviewService:
                     review_graph=review_graph,
                     checkpoint_session=checkpoint_session,
                     failures=failures,
+                    emit=emit_group if emit is not None else None,
+                    on_summary=on_summary,
+                    summary_input=summary_input,
+                    **(
+                        {"begin_patch_entry": begin_patch_entry}
+                        if begin_patch_entry is not None
+                        else {}
+                    ),
                 )
             )
+            has_result = bool(result.reviews) or emitted
             return ReviewRun(
                 status=(
-                    ReviewStatus.INCONCLUSIVE if result.reviews else ReviewStatus.FAILED
+                    ReviewStatus.INCONCLUSIVE if has_result else ReviewStatus.FAILED
                 )
                 if failures
                 else ReviewStatus.SUCCEEDED,
-                result=result if result.reviews or not failures else None,
+                result=result if has_result or not failures else None,
                 diagnostics=tuple(
                     ReviewDiagnostic(
                         code=REVIEW_FILE_FAILED,
@@ -117,7 +140,8 @@ class SimpleLlmReviewService:
                 ),
             )
 
-        files = select_review_targets(self._repository, command)
+        if files is None:
+            files = select_review_targets(self._repository, command)
         emit_progress(
             progress_callback,
             "review_files_start",
@@ -132,6 +156,7 @@ class SimpleLlmReviewService:
             navigation=navigation,
             progress_callback=progress_callback,
             checkpoint_session=checkpoint_session,
+            emit=emit,
         )
 
     def run_files(
@@ -145,6 +170,7 @@ class SimpleLlmReviewService:
         navigation: NavigationCapability | None = None,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
+        emit=None,
     ) -> ReviewRun:
         graph_kwargs = {"navigation": navigation} if navigation is not None else {}
         return self._run_traditional_review(
@@ -154,6 +180,7 @@ class SimpleLlmReviewService:
             memory_service=memory_service,
             review_graph=self._review_graph_factory(index, model, **graph_kwargs),
             checkpoint_session=checkpoint_session,
+            emit=emit,
         )
 
     def _run_traditional_review(
@@ -165,6 +192,7 @@ class SimpleLlmReviewService:
         memory_service: MemoryService | None,
         review_graph: Any,
         checkpoint_session: ReviewCheckpointSession | None,
+        emit=None,
     ) -> ReviewRun:
         outcome = self.execute_standard_review_with_outcome(
             files,
@@ -173,6 +201,7 @@ class SimpleLlmReviewService:
             memory_service=memory_service,
             review_graph=review_graph,
             checkpoint_session=checkpoint_session,
+            emit=emit,
         )
         diagnostics = tuple(
             ReviewDiagnostic(
@@ -202,6 +231,7 @@ class SimpleLlmReviewService:
         memory_service: MemoryService | None = None,
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
+        emit=None,
     ) -> TraditionalReviewOutcome:
         review_graph = review_graph or self._review_graph_factory(None, None)
         selected_files: list[str] = list(files)
@@ -254,37 +284,57 @@ class SimpleLlmReviewService:
                     resumed=completed_files,
                 )
 
+        resumed_files = completed_files
+
         def report_completion(_path: str, completed: int, _total: int) -> None:
             emit_progress(
                 progress_callback,
                 "review_result",
-                completed=completed_files + completed,
+                completed=resumed_files + completed,
                 total=len(selected_files),
-                resumed=completed_files,
+                resumed=resumed_files,
             )
 
-        for path, result, error in self._review_files(
-            remaining_files,
-            lambda path: self._review_file_standard(
-                path,
-                memory_service=memory_service,
-                review_graph=review_graph,
-                checkpoint_session=checkpoint_session,
-                load_checkpoint=not loaded_checkpoints,
-            ),
-            jobs,
-            on_complete=report_completion,
-        ):
-            if error is not None:
-                logger.error(f"Error reviewing file {path}: {error}")
-                failures_by_path[path] = ReviewFileFailure(
-                    path=str(path),
-                    message=str(error),
-                )
+        review_file = partial(
+            self._review_file_standard,
+            memory_service=memory_service,
+            review_graph=review_graph,
+            checkpoint_session=checkpoint_session,
+            load_checkpoint=not loaded_checkpoints,
+            emit=emit,
+        )
+        result_lock = Lock()
+
+        def review(path):
+            nonlocal completed_files
+            try:
+                result = self._review_file_task(review_file, path)
+            except CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(f"Error reviewing file {path}: {exc}")
+                with result_lock:
+                    failures_by_path[path] = ReviewFileFailure(
+                        path=str(path), message=str(exc)
+                    )
+                if isinstance(exc, ModelProviderConfigurationError):
+                    raise
             else:
-                completed_files += 1
-                if result:
-                    reviews_by_path[path] = result
+                with result_lock:
+                    completed_files += 1
+                    if result:
+                        reviews_by_path[path] = result
+
+        try:
+            jobs.with_cancellation(Event()).run(
+                remaining_files,
+                review,
+                label=None,
+                result_key=str,
+                on_complete=report_completion,
+            )
+        except ModelProviderConfigurationError:
+            pass
         return TraditionalReviewOutcome(
             result={
                 "reviews": [
@@ -310,6 +360,7 @@ class SimpleLlmReviewService:
         checkpoint_session: ReviewCheckpointSession | None = None,
         cache_only: bool = False,
         load_checkpoint: bool = True,
+        emit=None,
     ) -> dict[str, Any] | None:
         source_path = resolve_path_within_root(
             self._config.codebase_path, file_path, preserve_aliases=True
@@ -374,12 +425,15 @@ class SimpleLlmReviewService:
 
         if source_view is None:
             result = graph.review(
-                req, collect_navigation_evidence=checkpoint_key is not None
+                req,
+                collect_navigation_evidence=checkpoint_key is not None,
+                **({"emit": emit} if emit is not None else {}),
             )
         else:
             result = graph.review(
                 req,
                 collect_navigation_evidence=checkpoint_key is not None,
+                **({"emit": emit} if emit is not None else {}),
                 source_map=SourceMap(
                     relative_path,
                     snippet,
@@ -395,6 +449,9 @@ class SimpleLlmReviewService:
                 relative_path=relative_path,
                 file_path=file_path,
             )
+            if emit is not None and group.reviews:
+                emit(result)
+                result = None
         if (
             checkpoint_key is not None
             and checkpoint_session is not None
@@ -410,7 +467,7 @@ class SimpleLlmReviewService:
                     "navigation_evidence": navigation_evidence,
                 },
             )
-        return result
+        return result if emit is None else None
 
     def _review_file_task(self, review_fn, path):
         with runlog.span(
@@ -423,40 +480,6 @@ class SimpleLlmReviewService:
             task_span.end(attributes={"result": result})
             return result
 
-    def _review_files(
-        self,
-        files,
-        review_fn,
-        jobs: NodeJobs,
-        *,
-        on_complete: Callable[[Any, int, int], None] | None = None,
-    ):
-        completed = []
-
-        def review(path):
-            try:
-                result = path, self._review_file_task(review_fn, path), None
-            except CancelledError:
-                raise
-            except ModelProviderConfigurationError as exc:
-                completed.append((path, None, exc))
-                raise
-            except Exception as exc:
-                result = path, None, exc
-            completed.append(result)
-            return result
-
-        try:
-            return jobs.with_cancellation(Event()).run(
-                files,
-                review,
-                label=None,
-                result_key=str,
-                on_complete=on_complete,
-            )
-        except ModelProviderConfigurationError:
-            return completed
-
     def review_patch(
         self,
         patch_file,
@@ -466,6 +489,10 @@ class SimpleLlmReviewService:
         review_graph: Any | None = None,
         checkpoint_session: ReviewCheckpointSession | None = None,
         failures: list[ReviewFileFailure] | None = None,
+        emit=None,
+        on_summary=None,
+        summary_input=None,
+        begin_patch_entry=None,
     ):
         patch_text = Path(patch_file).read_text(encoding="utf-8")
         diff = unidiff.PatchSet.from_string(patch_text)
@@ -476,7 +503,7 @@ class SimpleLlmReviewService:
         overall_summaries = []
         metisignore_spec = self._repository.load_metisignore()
         graph = review_graph or self._review_graph_factory(None, model)
-        for file_diff in diff:
+        for entry_index, file_diff in enumerate(diff):
             if file_diff.is_removed_file or file_diff.is_binary_file:
                 continue
             patch_path = file_diff.path
@@ -513,6 +540,8 @@ class SimpleLlmReviewService:
                     raise
                 failures.append(ReviewFileFailure(patch_path, str(exc)))
                 continue
+            if begin_patch_entry is not None:
+                begin_patch_entry(entry_index, abs_path)
             threat_model_context = get_threat_model_context(
                 memory_service,
                 path=relative_path,
@@ -567,7 +596,9 @@ class SimpleLlmReviewService:
                 checkpoint_group: ReviewGroup | None = None
                 try:
                     review_dict = graph.review(
-                        req, collect_navigation_evidence=checkpoint_key is not None
+                        req,
+                        collect_navigation_evidence=checkpoint_key is not None,
+                        **({"emit": emit} if emit is not None else {}),
                     )
                     navigation_evidence = (
                         review_dict.get("navigation_evidence") if review_dict else None
@@ -590,8 +621,12 @@ class SimpleLlmReviewService:
                     continue
                 if review_dict:
                     issues = "\n".join(
-                        issue.get("issue", "")
-                        for issue in review_dict.get("reviews", [])
+                        summary_input(abs_path)
+                        if summary_input is not None
+                        else (
+                            issue.get("issue", "")
+                            for issue in review_dict.get("reviews", [])
+                        )
                     )
                     if issues.strip():
                         summary_prompt = language_prompts["snippet_security_summary"]
@@ -630,9 +665,15 @@ class SimpleLlmReviewService:
                     )
 
             if review_dict:
-                file_reviews.append(review_dict)
+                if emit is None:
+                    file_reviews.append(review_dict)
+                elif not review_dict["reviews"]:
+                    emit(review_dict)
             if changes_summary:
-                overall_summaries.append(changes_summary)
+                if emit is None or on_summary is None:
+                    overall_summaries.append(changes_summary)
+                if on_summary is not None:
+                    on_summary(changes_summary)
         overall_changes = "\n\n".join(overall_summaries)
         return {"reviews": file_reviews, "overall_changes": overall_changes}
 

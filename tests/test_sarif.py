@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from metis.sarif.writer import generate_sarif
+from metis.sarif.writer import iter_sarif_results
 from metis.sarif.utils import read_file_lines, create_fingerprint
 from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.sarif.triage import extract_findings
+from metis.json_io import load_json_object_file
 
 
 def test_read_file_lines(tmp_path):
@@ -137,13 +139,21 @@ def test_review_finding_id_survives_serialization_and_sarif() -> None:
 
 
 @pytest.mark.parametrize("finding_id", ["duplicate", " duplicate "])
-def test_generate_sarif_repairs_duplicate_finding_ids(finding_id) -> None:
+@pytest.mark.parametrize("separate_groups", [False, True])
+def test_generate_sarif_repairs_duplicate_finding_ids(
+    finding_id, separate_groups
+) -> None:
     issues = [
         {"id": finding_id, "issue": "First"},
         {"id": finding_id, "issue": "Second"},
     ]
 
-    sarif = generate_sarif({"reviews": [{"file": "example.c", "reviews": issues}]})
+    groups = (
+        [{"file": "example.c", "reviews": [issue]} for issue in issues]
+        if separate_groups
+        else [{"file": "example.c", "reviews": issues}]
+    )
+    sarif = generate_sarif({"reviews": groups})
 
     finding_ids = [issue["id"] for issue in issues]
     sarif_ids = [
@@ -152,6 +162,58 @@ def test_generate_sarif_repairs_duplicate_finding_ids(finding_id) -> None:
     ]
     assert len(set(finding_ids)) == 2
     assert sarif_ids == finding_ids
+
+
+@pytest.mark.parametrize("finding_id", [None, "", " padded ", 7])
+def test_iter_sarif_results_validates_pre_normalized_ids(finding_id):
+    reviews = [{"reviews": [{"id": finding_id, "issue": "Example"}]}]
+    with pytest.raises(ValueError, match="nonempty trimmed strings"):
+        list(iter_sarif_results(reviews, normalize_ids=False))
+
+
+def test_review_publication_preserves_ids_and_journal(tmp_path):
+    from metis.engine.stages.review.storage import ReviewOutput
+
+    group = {
+        "file": "example.py",
+        "file_path": str(tmp_path / "example.py"),
+        "reviews": [
+            {"id": finding_id, "issue": str(index)}
+            for index, finding_id in enumerate((" duplicate ", "duplicate", " "))
+        ],
+    }
+    target = tmp_path / "caf\u00e9.json"
+    with ReviewOutput(target, [group["file_path"]]) as output:
+        output.append(group)
+        output.publish()
+        first = load_json_object_file(target)
+        claimed_ids = []
+        for index in range(2):
+            repaired_id = first["reviews"][0]["reviews"][1]["id"]
+            claimed_ids.append(repaired_id)
+            output.append(
+                {
+                    **group,
+                    "reviews": [{"id": repaired_id, "issue": f"Claim {index}"}],
+                }
+            )
+            output.publish()
+            first = load_json_object_file(target)
+            ids = [finding["id"] for finding in first["reviews"][0]["reviews"]]
+            assert ids[0] == "duplicate"
+            assert ids[3:] == claimed_ids
+            assert len(set(ids)) == len(ids) == 4 + index
+        output.publish()
+        assert load_json_object_file(target) == first
+        directory = output.directory
+        original = {path.name: path.read_bytes() for path in directory.iterdir()}
+        records = list(output.records(output.path))
+        with pytest.raises(ValueError, match="Duplicate finding position"):
+            output.publish([*records, *records])
+        assert load_json_object_file(target) == first
+        assert {
+            path.name: path.read_bytes() for path in directory.iterdir()
+        } == original
 
 
 def test_reachability_finding_id_survives_review_and_sarif(tmp_path: Path) -> None:

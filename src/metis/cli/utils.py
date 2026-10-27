@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import warnings
+from itertools import chain
+from itertools import groupby
 from pathlib import Path
 import sys
 
@@ -36,6 +38,8 @@ from .output import output_format as output_format
 from .output import output_path_identity as output_path_identity
 from .output import save_output as save_output
 from metis.vector_store.retrievers import retriever_query_config
+from metis.json_io import JsonSnapshot
+from metis.sarif.triage import _to_finding
 
 console = Console()
 logger = logging.getLogger("metis")
@@ -311,17 +315,70 @@ def check_dir_exists(dir_path, quiet=False):
     return True
 
 
+def _file_review_groups(snapshot, sarif):
+    if sarif:
+
+        def records():
+            for path, result in snapshot.items(("runs", None, "results", None)):
+                finding = _to_finding(
+                    path[1], path[3], result, source_tool="Metis", is_metis_source=True
+                )
+                properties = result.get("properties") or {}
+                yield (
+                    (path[1], finding.file_path),
+                    {
+                        **properties,
+                        "issue": finding.message,
+                        "code_snippet": finding.snippet,
+                        "line_number": properties.get(
+                            "reportedLineNumber", finding.line
+                        ),
+                    },
+                )
+
+        for (_run, file_path), entries in groupby(records(), key=lambda item: item[0]):
+            yield {"file": file_path, "reviews": (item[1] for item in entries)}
+        return
+
+    grouped = groupby(
+        snapshot.items(("reviews", None, "reviews", None)),
+        key=lambda item: item[0][1],
+    )
+    current = next(grouped, None)
+    for path, name in snapshot.items(("reviews", None, "file")):
+        if current is not None and current[0] == path[1]:
+            yield {"file": name, "reviews": (item[1] for item in current[1])}
+            current = next(grouped, None)
+        else:
+            yield {"file": name, "reviews": ()}
+
+
 def pretty_print_reviews(results, quiet=False):
-    if not results or not results.get("reviews"):
+    if quiet:
+        return
+    if isinstance(results, str | Path):
+        with JsonSnapshot(results) as snapshot:
+            pretty_print_reviews(
+                {
+                    "reviews": _file_review_groups(
+                        snapshot, Path(results).suffix.lower() == ".sarif"
+                    )
+                }
+            )
+        return
+    groups = iter((results.get("reviews") or ()) if results else ())
+    first = next(groups, None)
+    if first is None:
         print_console("[bold green]No security issues found![/bold green]", quiet)
         return
 
-    for file_review in results.get("reviews", []):
+    for file_review in chain((first,), groups):
         file = file_review.get("file", "UNKNOWN FILE")
-        reviews = file_review.get("reviews", [])
-        if reviews:
+        reviews = iter(file_review.get("reviews") or ())
+        first_review = next(reviews, None)
+        if first_review is not None:
             print_console(f"\n[bold blue]File: {escape(file)}[/bold blue]", quiet)
-            for idx, r in enumerate(reviews, 1):
+            for idx, r in enumerate(chain((first_review,), reviews), 1):
                 print_console(
                     f" [yellow]Identified issue {idx}:[/yellow] [bold]{escape(r.get('issue', '-'))}[/bold]",
                     quiet,

@@ -236,6 +236,7 @@ def test_runtime_loads_review_checkpoint_setting(tmp_path, monkeypatch, enabled)
     runtime = load_runtime_config(config_path)
 
     assert runtime["review_checkpoints_enabled"] is enabled
+    assert "triage_checkpoint_every" not in runtime
 
 
 def test_load_runtime_config_accepts_chat_provider_without_embeddings(
@@ -808,10 +809,6 @@ def test_runtime_rejects_non_mapping_document(tmp_path, content):
             "doc_chunk_overlap must be less",
         ),
         (
-            "metis_engine: {triage_checkpoint_every: -1}",
-            "triage_checkpoint_every must be a non-negative integer",
-        ),
-        (
             "metis_engine: {review_checkpoints: []}",
             "review_checkpoints must be a boolean",
         ),
@@ -930,7 +927,6 @@ metis_engine:
   execution: {stages: {}}
   threat_model: {source_patterns: []}
   codegraph: {source_functions: []}
-  triage_checkpoint_every: 0
   llm_max_retries: 0
 """,
         )
@@ -945,7 +941,7 @@ metis_engine:
     assert changed["execution_config"] == {"stages": {}}
     assert changed["threat_model_config"]["source_patterns"] == []
     assert changed["codegraph_config"] == {"source_functions": []}
-    assert changed["triage_checkpoint_every"] == changed["llm_max_retries"] == 0
+    assert changed["llm_max_retries"] == 0
 
     empty = load_runtime_config(
         _write_config(

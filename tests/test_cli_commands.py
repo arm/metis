@@ -60,6 +60,16 @@ class _Progress:
         return f"snapshot-{self.renderables}"
 
 
+def _execution(*, review_formats=("json",), triage_formats=("sarif",)):
+    stages = {}
+    for stage, formats in (("review", review_formats), ("triage", triage_formats)):
+        nodes = {"result": SimpleNamespace(formats=formats, filename=None)}
+        if stage == "triage":
+            nodes["triage"] = SimpleNamespace(formats=None, filename=None)
+        stages[stage] = SimpleNamespace(nodes=nodes, outputs=())
+    return SimpleNamespace(_stages=stages)
+
+
 def test_review_progress_retains_rows_and_resume_position() -> None:
     progress = _Progress()
     reporter = ReviewCodeProgressReporter(progress)
@@ -193,7 +203,7 @@ def test_review_progress_marks_inconclusive_nodes_yellow() -> None:
     )
 
 
-def test_verbose_direct_review_keeps_final_progress_rows(monkeypatch) -> None:
+def test_verbose_direct_review_keeps_final_progress_rows(monkeypatch, tmp_path) -> None:
     transient_values: list[bool] = []
     progress = _Progress()
 
@@ -201,7 +211,10 @@ def test_verbose_direct_review_keeps_final_progress_rows(monkeypatch) -> None:
         transient_values.append(transient)
         return nullcontext(progress)
 
-    engine = SimpleNamespace(execute_review=lambda *_args, **_kwargs: {"done": True})
+    engine = SimpleNamespace(
+        execution=_execution(),
+        execute_review=lambda *_args, **_kwargs: {"done": True},
+    )
     args = SimpleNamespace(output_file=None, quiet=False)
     monkeypatch.setattr(commands, "build_standard_progress", build_progress)
 
@@ -211,6 +224,7 @@ def test_verbose_direct_review_keeps_final_progress_rows(monkeypatch) -> None:
         None,
         args,
         "Reviewing...",
+        export_directory=tmp_path,
     ) == {"done": True}
     assert transient_values == [False]
 
@@ -224,6 +238,7 @@ def test_direct_review_honors_disabled_checkpoints(monkeypatch, tmp_path) -> Non
 
     engine = SimpleNamespace(
         codebase_path=str(tmp_path),
+        execution=_execution(),
         execute_review=execute_review,
     )
     args = SimpleNamespace(
@@ -246,6 +261,7 @@ def test_direct_review_honors_disabled_checkpoints(monkeypatch, tmp_path) -> Non
         None,
         args,
         "Reviewing...",
+        export_directory=tmp_path,
     ) == {"done": True}
     assert "review_checkpoint_callback" not in captured
     assert "review_resume_callback" not in captured
@@ -380,6 +396,7 @@ def test_review_commands_route_through_graph(
 
     class _Engine:
         codebase_path = str(tmp_path)
+        execution = _execution(review_formats=("sarif", "json", "html", "csv"))
 
         def execute_review(self, mode, **kwargs):
             calls.append((mode, kwargs))
@@ -673,11 +690,17 @@ def test_run_index_verbose_uses_indexing_domain_surface(monkeypatch):
     assert calls == ["count", "prepare", "finalize"]
 
 
-def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
+@pytest.mark.parametrize("result_node", ["result", "external_result"])
+@pytest.mark.parametrize("triage_node", ["result", "external_result"])
+def test_run_review_code_triggers_triage_when_global_flag_enabled(
+    monkeypatch, result_node, triage_node
+):
     calls = []
     codegraph = object()
 
     class _Engine:
+        execution = _execution(review_formats=("sarif", "json", "html", "csv"))
+
         def execute_review(self, mode, **kwargs):
             calls.append((mode, kwargs))
             return {
@@ -688,6 +711,7 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
             }
 
         def execute_triage(self, payload, **kwargs):
+            assert payload == {"version": "2.1.0", "runs": []}
             calls.append(
                 (
                     "triage",
@@ -698,6 +722,10 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
             return {"formats": ("sarif",), "sarif": payload}
 
     engine = _Engine()
+    nodes = engine.execution._stages["review"].nodes
+    nodes[result_node] = nodes.pop("result")
+    nodes = engine.execution._stages["triage"].nodes
+    nodes[triage_node] = nodes.pop("result")
     args = SimpleNamespace(
         verbose=False,
         quiet=True,
@@ -727,6 +755,9 @@ def test_run_review_code_triggers_triage_when_global_flag_enabled(monkeypatch):
     commands.run_review_code(engine, args, runtime)
 
     assert calls[0][0] == "code"
+    assert ("output_path" in calls[0][1]) == (
+        result_node == "result" and triage_node == "result"
+    )
     assert calls[0][1]["target"] is None
     assert callable(calls[0][1]["callbacks"]["diagnostic_callback"])
     assert calls[1] == ("triage", None, codegraph)
@@ -736,6 +767,8 @@ def test_review_command_honors_explicit_format_in_addition_to_graph_formats(
     monkeypatch,
 ):
     class _Engine:
+        execution = _execution(review_formats=("sarif",))
+
         def execute_review(self, _mode, **_kwargs):
             return {
                 "formats": ("sarif",),
@@ -768,6 +801,7 @@ def test_review_command_honors_explicit_format_in_addition_to_graph_formats(
     ("failure", "save_failure"),
     [
         (RuntimeError, None),
+        (KeyboardInterrupt, None),
         (CancelledError, None),
         (CancelledError, OSError),
         (RuntimeError, OSError),
@@ -781,6 +815,8 @@ def test_run_review_code_preserves_review_output_when_triage_fails(
     saved = []
 
     class _Engine:
+        execution = _execution(review_formats=("sarif", "json", "html", "csv"))
+
         def execute_review(self, _mode, **_kwargs):
             return {
                 "formats": ("sarif", "json", "html", "csv"),
@@ -833,17 +869,26 @@ def test_run_review_code_preserves_review_output_when_triage_fails(
 
 
 @pytest.mark.parametrize(
-    ("failed_stage", "missing_output"),
-    [("triage", None), ("review", None), ("review", "findings"), ("review", "sarif")],
+    ("failed_stage", "missing_output", "empty"),
+    [
+        ("triage", None, False),
+        ("review", None, False),
+        ("review", "findings", False),
+        ("review", "sarif", False),
+        ("review", "sarif", True),
+    ],
 )
+@pytest.mark.parametrize("interrupted", [False, True])
 def test_review_command_exports_available_outputs_before_raising(
-    tmp_path, failed_stage, missing_output
+    tmp_path, failed_stage, missing_output, empty, interrupted
 ):
     results = {
         "reviews": [
             {"file": "source.c", "reviews": [{"id": "stable", "issue": "Finding"}]}
         ]
     }
+    if empty:
+        results = {}
     original = generate_sarif(results)
     partial = deepcopy(original)
     outputs = {"sarif": partial}
@@ -867,8 +912,14 @@ def test_review_command_exports_available_outputs_before_raising(
         )
     )
 
+    if interrupted:
+        partial_result = error.result
+        error = KeyboardInterrupt("interrupted")
+        error.result = partial_result
+
     class Engine:
         codebase_path = str(tmp_path)
+        execution = _execution(review_formats=("json",))
 
         def execute_review(self, _mode, **_kwargs):
             if failed_stage == "review":
@@ -884,9 +935,11 @@ def test_review_command_exports_available_outputs_before_raising(
     output.write_text("previous findings")
     sarif_output.write_text("previous SARIF")
     args = SimpleNamespace(
-        quiet=True, triage=True, output_file=[str(output), str(sarif_output)]
+        quiet=True,
+        triage=True,
+        output_file=[str(output), str(sarif_output)],
     )
-    with pytest.raises(ExecutionGraphError) as raised:
+    with pytest.raises(type(error)) as raised:
         commands.run_review_code(
             Engine(), args, CommandRuntime(command="review_code", command_args=[])
         )
@@ -902,31 +955,10 @@ def test_review_command_exports_available_outputs_before_raising(
         assert sarif_output.read_text() == "previous SARIF"
     else:
         assert json.loads(sarif_output.read_text()) == partial
-    assert "metisTriaged" not in original["runs"][0]["results"][0]["properties"]
-
-
-def test_post_review_disabled_checkpoints_allow_checkpoint_named_output(tmp_path):
-    sarif = {"version": "2.1.0", "runs": []}
-
-    class Engine:
-        def execute_review(self, _mode, **_kwargs):
-            return {"formats": ("sarif",), "findings": {"reviews": []}, "sarif": sarif}
-
-        def execute_triage(self, payload, **kwargs):
-            assert kwargs["checkpoint_path"] is None
-            return {"formats": ("sarif",), "sarif": payload}
-
-    outputs = [
-        str(tmp_path / "report.sarif"),
-        str(tmp_path / "report.checkpoint.sarif"),
-    ]
-    args = SimpleNamespace(
-        quiet=True, triage=True, output_file=outputs, _triage_checkpoint_every=0
+    assert all(
+        "metisTriaged" not in finding["properties"]
+        for finding in original["runs"][0]["results"]
     )
-    commands.run_review_code(
-        Engine(), args, CommandRuntime(command="review_code", command_args=[])
-    )
-    assert all(json.loads(Path(path).read_text()) == sarif for path in outputs)
 
 
 @pytest.mark.parametrize(

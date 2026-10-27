@@ -4,21 +4,23 @@
 
 import json
 from collections import defaultdict
-from collections.abc import Callable
+from contextlib import closing
+from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import batched
+from itertools import groupby
 from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from metis.engine.execution.contracts import NodeJobs
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.stages.review.models import ReviewFinding
 from metis.engine.stages.review.models import ReviewGroup
-from metis.engine.stages.review.models import StandardReviewResult
 from metis.utils import safe_int
-
-PacketFits = Callable[[list[dict[str, object]]], bool]
+from metis.json_io import JsonJournal
+from metis.json_io import sorted_json_records
 
 
 class DuplicateGroup(BaseModel):
@@ -42,201 +44,173 @@ class ReviewCandidate:
     finding: ReviewFinding
 
 
-def consolidate_result(
-    result: StandardReviewResult,
-    *,
-    adjudicator: Callable[[list[dict[str, object]]], DeduplicationDecision | None]
-    | None,
-    packet_fits: PacketFits,
-    progress_callback: Callable[[dict[str, object]], None] | None,
-    jobs: NodeJobs,
-) -> StandardReviewResult:
-    original_candidates = [
-        ReviewCandidate(group, finding)
-        for group in result.reviews
-        for finding in group.reviews
-    ]
-    candidates = _unique_candidates(original_candidates)
-    adjudicated = _apply_final_adjudication(
-        candidates,
-        adjudicator,
-        packet_fits=packet_fits,
-        progress_callback=progress_callback,
-        jobs=jobs,
+def _identity(record):
+    return json.dumps(
+        [
+            record["group"],
+            {key: value for key, value in record["finding"].items() if key != "id"},
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
     )
-    kept = adjudicated if adjudicated is not None else candidates
-    if len(kept) == len(original_candidates):
-        return result
-
-    kept_ids = {id(candidate.finding) for candidate in kept}
-    groups: list[ReviewGroup] = []
-    for group in result.reviews:
-        reviews = [finding for finding in group.reviews if id(finding) in kept_ids]
-        if reviews:
-            group_data = group.model_dump(mode="python")
-            group_data["reviews"] = [item.model_dump(mode="python") for item in reviews]
-            groups.append(ReviewGroup.model_validate(group_data))
-    return result.model_copy(update={"reviews": groups})
 
 
-def _unique_candidates(candidates: list[ReviewCandidate]) -> list[ReviewCandidate]:
-    unique: list[ReviewCandidate] = []
-    seen: set[tuple[str, str]] = set()
-    for candidate in candidates:
-        group = candidate.group.model_dump(mode="json", exclude={"reviews"})
-        finding = candidate.finding.model_dump(mode="json", exclude={"id"})
-        identity = (
-            json.dumps(group, sort_keys=True, separators=(",", ":")),
-            json.dumps(finding, sort_keys=True, separators=(",", ":")),
-        )
-        if identity not in seen:
-            seen.add(identity)
-            unique.append(candidate)
-    return unique
-
-
-def _apply_final_adjudication(
-    candidates: list[ReviewCandidate],
-    adjudicator,
+@contextmanager
+def consolidate_records(
+    records,
     *,
+    directory,
+    adjudicator,
     packet_fits,
+    jobs,
+    workers,
     progress_callback=None,
-    jobs: NodeJobs,
 ):
-    if not callable(adjudicator) or not candidates:
-        return None
-    if len(candidates) < 2:
-        return candidates
+    def unique_records():
+        with sorted_json_records(
+            records,
+            key=lambda record: (_identity(record), record["position"]),
+            directory=directory,
+            check_cancelled=_cancellation_checkpoint,
+        ) as ordered:
+            previous = None
+            for record in ordered:
+                identity = _identity(record)
+                if identity != previous:
+                    yield record
+                    previous = identity
 
-    payloads = [
-        _finding_adjudication_payload(index, candidate)
-        for index, candidate in enumerate(candidates)
-    ]
-    merged = _UnionFind(len(candidates))
-    representative_preferences = []
-    saw_valid_decision = False
-
-    if packet_fits is None:
-        return None
-    initial_batches = _adjudication_batches(payloads, packet_fits=packet_fits)
-    if _run_adjudication_batches(
-        initial_batches,
-        adjudicator,
-        merged,
-        representative_preferences,
-        progress_callback=progress_callback,
-        phase="candidate",
-        jobs=jobs,
+    current = directory / "candidates.jsonl"
+    with (
+        sorted_json_records(
+            unique_records(),
+            key=lambda record: record["position"],
+            directory=directory,
+            check_cancelled=_cancellation_checkpoint,
+        ) as ordered,
+        JsonJournal(current) as candidates,
     ):
-        saw_valid_decision = True
+        for index, record in enumerate(ordered):
+            candidates.append({**record, "index": index})
 
-    representative_payloads = [
-        payloads[index]
-        for index in _representative_indexes(
-            merged,
-            representative_preferences,
+    if candidates.count < 2 or not callable(adjudicator) or packet_fits is None:
+        with closing(JsonJournal.records(current)) as kept:
+            yield kept
+        return
+
+    def payload(record):
+        return _finding_adjudication_payload(
+            record["index"],
+            ReviewCandidate(
+                ReviewGroup.model_validate(record["group"]),
+                ReviewFinding.model_validate(record["finding"]),
+            ),
         )
-    ]
-    if len(representative_payloads) > 1 and not packet_fits(payloads):
-        representative_batches = _adjudication_batches(
-            representative_payloads,
-            packet_fits=packet_fits,
-            scope="file",
-        )
-        if _run_adjudication_batches(
-            representative_batches,
-            adjudicator,
-            merged,
-            representative_preferences,
-            progress_callback=progress_callback,
-            phase="representative",
-            jobs=jobs,
+
+    def keep(batches, phase):
+        def decide(batch):
+            if len(batch) < 2:
+                return batch
+            descriptions = [payload(record) for record in batch]
+            if not packet_fits(descriptions):
+                return batch
+            indexes = {record["index"] for record in batch}
+            merged = _UnionFind(indexes)
+            preferences = []
+            _merge_decision_groups(
+                merged, preferences, adjudicator(descriptions), indexes
+            )
+            representatives = set(_representative_indexes(merged, preferences))
+            return [record for record in batch if record["index"] in representatives]
+
+        completed = 0
+        if progress_callback:
+            progress_callback({"phase": phase, "completed": completed})
+        for window in batched(batches, workers):
+            for survivors in jobs.run(
+                window,
+                decide,
+                label=None,
+                result_key=lambda batch: tuple(batch[0]["position"]),
+            ):
+                completed += 1
+                if progress_callback:
+                    progress_callback({"phase": phase, "completed": completed})
+                yield from survivors
+        if progress_callback:
+            progress_callback(
+                {"phase": phase, "completed": completed, "total": completed}
+            )
+
+    def whole_packet(entries):
+        batch = []
+        descriptions = []
+        next_check = 1
+        for record in entries:
+            _cancellation_checkpoint()
+            batch.append(record)
+            descriptions.append(payload(record))
+            if len(batch) == next_check:
+                if not packet_fits(descriptions):
+                    return None
+                next_check *= 2
+        if descriptions and not packet_fits(descriptions):
+            return None
+        return batch
+
+    for scope, phase in (("function", "candidate"), ("file", "representative")):
+        with (
+            closing(JsonJournal.records(current))
+            if scope == "function"
+            else sorted_json_records(
+                JsonJournal.records(current),
+                key=lambda record: record["index"],
+                directory=directory,
+                check_cancelled=_cancellation_checkpoint,
+            )
+        ) as ordered:
+            batch = whole_packet(ordered)
+        if batch is not None:
+            kept = list(keep((batch,), phase))
+            yield (record for record in kept)
+            return
+        output_path = directory / f"dedup-{scope}.jsonl"
+        with (
+            sorted_json_records(
+                JsonJournal.records(current),
+                key=lambda record: _payload_sort_key(payload(record)),
+                directory=directory,
+                check_cancelled=_cancellation_checkpoint,
+            ) as ordered,
+            JsonJournal(output_path) as output,
         ):
-            saw_valid_decision = True
 
-    if not saw_valid_decision:
-        return None
+            def batches():
+                for _scope, entries in groupby(
+                    ordered,
+                    key=lambda record: _payload_scope_key(payload(record), scope),
+                ):
+                    batch = []
+                    descriptions = []
+                    for record in entries:
+                        _cancellation_checkpoint()
+                        description = payload(record)
+                        proposed_descriptions = [*descriptions, description]
+                        if batch and not packet_fits(proposed_descriptions):
+                            yield batch
+                            batch = [record]
+                            descriptions = [description]
+                        else:
+                            batch.append(record)
+                            descriptions = proposed_descriptions
+                    if batch:
+                        yield batch
 
-    keep_indexes = set(_representative_indexes(merged, representative_preferences))
-    return [
-        candidate for index, candidate in enumerate(candidates) if index in keep_indexes
-    ]
-
-
-def _run_adjudication_batches(
-    batches,
-    adjudicator,
-    merged,
-    representative_preferences,
-    *,
-    progress_callback=None,
-    phase="candidate",
-    jobs: NodeJobs,
-):
-    if not batches:
-        return False
-
-    total = len(batches)
-    if progress_callback:
-        progress_callback({"phase": phase, "completed": 0, "total": total})
-    batch_results = jobs.run(
-        list(enumerate(batches)),
-        lambda item: (item[0], adjudicator(item[1])),
-        label="Final review deduplication",
-        result_key=lambda item: f"{phase}:{item[0]}",
-        on_complete=lambda _job, completed, total: (
-            progress_callback({"phase": phase, "completed": completed, "total": total})
-            if progress_callback
-            else None
-        ),
-    )
-    saw_valid_decision = False
-    for batch_index, decision in sorted(batch_results, key=lambda item: item[0]):
-        if _merge_decision_groups(
-            merged,
-            representative_preferences,
-            decision,
-            {payload["index"] for payload in batches[batch_index]},
-        ):
-            saw_valid_decision = True
-    return saw_valid_decision
-
-
-def _adjudication_batches(
-    payloads,
-    *,
-    packet_fits,
-    scope="function",
-):
-    if len(payloads) < 2:
-        return []
-    if packet_fits(payloads):
-        return [payloads]
-    batches = []
-    by_scope = defaultdict(list)
-    for payload in sorted(payloads, key=_payload_sort_key):
-        by_scope[_payload_scope_key(payload, scope)].append(payload)
-    for scope_payloads in by_scope.values():
-        if len(scope_payloads) < 2:
-            continue
-        batches.extend(_chunk_payloads(scope_payloads, packet_fits))
-    return batches
-
-
-def _chunk_payloads(payloads, packet_fits):
-    chunks = []
-    current = []
-    for payload in payloads:
-        candidate = [*current, payload]
-        if current and not packet_fits(candidate):
-            if len(current) > 1:
-                chunks.append(current)
-            current = [payload]
-        else:
-            current = candidate
-    if len(current) > 1 and packet_fits(current):
-        chunks.append(current)
-    return chunks
+            for record in keep(batches(), phase):
+                output.append(record)
+        current = output_path
+    with closing(JsonJournal.records(current)) as kept:
+        yield kept
 
 
 def _payload_scope_key(payload, scope):
@@ -286,8 +260,7 @@ def _merge_decision_groups(
     batch_indexes: set[int],
 ):
     if decision is None:
-        return False
-    accepted = False
+        return
     for group in decision.groups:
         members = list(dict.fromkeys(group.member_indexes))
         representative = group.representative_index
@@ -300,13 +273,11 @@ def _merge_decision_groups(
         representative_preferences.append(representative)
         for member in members:
             merged.union(representative, member)
-        accepted = True
-    return accepted
 
 
 class _UnionFind:
-    def __init__(self, size):
-        self._parent = list(range(size))
+    def __init__(self, indexes):
+        self._parent = {index: index for index in indexes}
 
     def find(self, item):
         parent = self._parent[item]
@@ -322,7 +293,7 @@ class _UnionFind:
 
     def groups(self):
         grouped = defaultdict(list)
-        for index in range(len(self._parent)):
+        for index in self._parent:
             grouped[self.find(index)].append(index)
         return grouped
 
@@ -332,7 +303,7 @@ def _finding_adjudication_payload(
     candidate: ReviewCandidate,
 ) -> dict[str, object]:
     finding = candidate.finding.model_dump(mode="python")
-    group = candidate.group.model_dump(mode="python")
+    group = candidate.group.model_dump(mode="python", exclude={"reviews"})
     return {
         "index": index,
         "description": str(finding.get("issue") or ""),

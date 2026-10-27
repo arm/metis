@@ -36,7 +36,17 @@ class TriageRun:
         payload: SarifPayload,
         *,
         include_triaged: bool = False,
+        output=None,
     ) -> "TriageRun":
+        store = (
+            output.open_triage(payload, include_triaged) if output is not None else None
+        )
+        if store is not None:
+            return cls(
+                SarifPayload(version="2.1.0", runs=()),
+                (),
+                store.count(include_triaged=include_triaged),
+            )
         findings = extract_findings(
             payload.model_dump(mode="json", by_alias=True),
             include_triaged=include_triaged,

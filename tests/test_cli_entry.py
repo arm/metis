@@ -21,6 +21,13 @@ from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
 
 
+def _execution(configuration):
+    return SimpleNamespace(
+        configuration=configuration,
+        _stages={name: stage for name, stage in configuration.stages.configured()},
+    )
+
+
 def test_execute_command_allows_interactive_triage_command_with_global_triage_flag(
     monkeypatch,
 ):
@@ -139,8 +146,9 @@ def test_interactive_loop_parses_quoted_paths_and_recovers_from_bad_quotes(monke
 
 @pytest.mark.parametrize("verbose", [False, True])
 @pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("configured", [False, True])
 def test_execute_graph_forwards_progress_and_finishes_reporter(
-    monkeypatch, verbose, failure
+    monkeypatch, tmp_path, verbose, failure, configured
 ):
     progress = object()
     reporter = Mock()
@@ -158,6 +166,10 @@ def test_execute_graph_forwards_progress_and_finishes_reporter(
     def execute_graph(**kwargs):
         assert kwargs["callbacks"] is callbacks
         assert kwargs["include_triaged"] is None
+        assert kwargs["output_path"] == str(tmp_path / "review.json")
+        assert kwargs["triage_output_path"] == str(
+            tmp_path / ("decisions.json" if configured else "triage.json")
+        )
         callback = callbacks.get("progress_callback")
         assert callback is (reporter if verbose else None)
         if callback is not None:
@@ -167,13 +179,37 @@ def test_execute_graph_forwards_progress_and_finishes_reporter(
             raise RuntimeError("graph failed")
         return result
 
-    engine = SimpleNamespace(execute_graph=execute_graph)
-    args = SimpleNamespace(verbose=verbose, include_triaged=False)
+    nodes = {
+        "result": SimpleNamespace(formats=("sarif",), filename=str(tmp_path / "chosen"))
+    }
+    stages = {"review": SimpleNamespace(nodes=nodes)} if configured else {}
+    if configured:
+        stages["triage"] = SimpleNamespace(
+            nodes={
+                "result": SimpleNamespace(
+                    formats=("json",), filename=str(tmp_path / "decisions")
+                )
+            }
+        )
+    engine = SimpleNamespace(
+        execution=SimpleNamespace(_stages=stages),
+        execute_graph=execute_graph,
+    )
+    args = SimpleNamespace(
+        verbose=verbose, quiet=True, include_triaged=False, output_file=None
+    )
     if failure:
         with pytest.raises(RuntimeError, match="graph failed"):
-            entry._execute_graph_with_progress(engine, args, callbacks)
+            entry._execute_graph_with_progress(
+                engine, args, callbacks, export_directory=tmp_path
+            )
     else:
-        assert entry._execute_graph_with_progress(engine, args, callbacks) is result
+        assert (
+            entry._execute_graph_with_progress(
+                engine, args, callbacks, export_directory=tmp_path
+            )
+            is result
+        )
 
     if verbose:
         build_progress.assert_called_once_with(transient=True)
@@ -280,7 +316,13 @@ def test_graph_outputs_are_projected_for_each_export_format(monkeypatch):
             findings,
             True,
         ),
-        {"sarif_payload": triage_sarif, "codebase_path": "repository"},
+        {
+            "sarif_payload": triage_sarif,
+            "codebase_path": "repository",
+            "sarif_path": None,
+            "json_path": None,
+            "read_source": True,
+        },
     )
 
 
@@ -391,17 +433,17 @@ def test_default_graph_failure_exits_cleanly(monkeypatch, save_failure, failure)
 
     engine = SimpleNamespace(
         execute_graph=execute_graph,
-        execution=SimpleNamespace(
-            configuration=entry.ExecutionConfiguration.model_validate(
-                entry.load_execution_config()
-            )
+        execution=_execution(
+            entry.ExecutionConfiguration.model_validate(entry.load_execution_config())
         ),
     )
     monkeypatch.setattr(sys, "argv", ["metis"])
     monkeypatch.setattr(
         entry,
         "load_runtime_config",
-        lambda **_kwargs: {"review_checkpoints_enabled": False},
+        lambda **_kwargs: {
+            "review_checkpoints_enabled": False,
+        },
     )
     monkeypatch.setattr(entry, "build_engine", lambda *_args: (engine, None))
     monkeypatch.setattr(entry, "determine_output_file", lambda *_args: None)
@@ -590,16 +632,15 @@ def test_graph_cli_plans_and_projects_from_engine_configuration(
     runtime = {
         "execution_config": stale,
         "review_checkpoints_enabled": False,
-        "triage_checkpoint_every": 1,
     }
     original = deepcopy(runtime)
 
     def execute_graph(*, callbacks, **_kwargs):
-        callbacks["checkpoint_callback"](sarif, 1, 1)
+        assert "checkpoint_callback" not in callbacks
         return ExecutionResult(ExecutionStatus.OK, outputs)
 
     engine = SimpleNamespace(
-        execution=SimpleNamespace(configuration=configuration),
+        execution=_execution(configuration),
         execute_graph=execute_graph,
         close=Mock(),
     )
@@ -616,7 +657,7 @@ def test_graph_cli_plans_and_projects_from_engine_configuration(
         findings if triage_from_review else sarif
     )
     assert json.loads((tmp_path / "triage.sarif").read_text()) == sarif
-    assert json.loads((tmp_path / "triage.checkpoint.sarif").read_text()) == sarif
+    assert not (tmp_path / "triage.checkpoint.sarif").exists()
     assert not list(tmp_path.glob("stale*"))
     engine.close.assert_called_once_with()
 

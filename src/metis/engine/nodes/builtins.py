@@ -52,7 +52,6 @@ def build_builtin_execution(
     codegraphs: CodeGraphService,
     reachability_settings: dict[str, object],
     triage_options: TriageOptions,
-    triage_checkpoint_every: int,
     review_graph_factory: Callable[..., ReviewGraph],
 ) -> BuiltinExecution:
     selected_nodes = configuration.selected_nodes()
@@ -116,11 +115,7 @@ def build_builtin_execution(
         registrations.append(reachability_node.create_node(reachability_review))
 
     triage_service = (
-        TriageService(
-            triage_checkpoint_every=triage_checkpoint_every,
-        )
-        if configuration.stages.triage is not None
-        else None
+        TriageService() if configuration.stages.triage is not None else None
     )
     triage_classifier = None
     try:
@@ -164,3 +159,39 @@ def build_builtin_execution(
                 exc.add_note(f"Triage classifier cleanup also failed: {cleanup_error}")
         raise
     return BuiltinExecution(execution, triage_service, triage_classifier)
+
+
+def streaming_stages(stages, target=None):
+    supported = set()
+    for name, nodes in (
+        ("review", {"simple_llm_review", "finding_dedup", "result"}),
+        ("triage", {"triage", "result"}),
+    ):
+        stage = stages.get(name)
+        if stage is not None and set(stage.nodes) == nodes and not stage.outputs:
+            supported.add(name)
+    if target is not None:
+        return supported.intersection({target})
+    if any(
+        binding.startswith("triage.")
+        for stage in stages.values()
+        for binding in stage.inputs.values()
+    ):
+        return set()
+    if "review" not in stages:
+        return supported
+    if "review" not in supported:
+        return set()
+    if "triage" in stages and (
+        "triage" not in supported
+        or stages["triage"].inputs.get("sarif") != "review.sarif"
+    ):
+        return set()
+    if any(
+        binding.startswith("review.")
+        and (name != "triage" or binding != "review.sarif")
+        for name, stage in stages.items()
+        for binding in stage.inputs.values()
+    ):
+        return set()
+    return supported

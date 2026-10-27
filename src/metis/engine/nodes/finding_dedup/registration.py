@@ -6,8 +6,13 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import CancelledError
+from contextlib import closing
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
+from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.execution.contracts import ExecutionStatus
@@ -24,10 +29,12 @@ from metis.engine.stages.review.models import PatchReviewResult
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
+from metis.engine.stages.review.storage import ReviewOutput
+from metis.json_io import load_json_object_file
 from metis.usage import usage_operation
 
 from .core import DeduplicationDecision
-from .core import consolidate_result
+from .core import consolidate_records
 
 logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = get_engine_prompts("finding_dedup", required=("system",))["system"]
@@ -45,29 +52,7 @@ def _parse_decision(raw: object) -> DeduplicationDecision | None:
     return None
 
 
-def execute(invocation: NodeInvocation) -> NodeResult:
-    reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
-    combined = combine_review_runs(reviews)
-    result = combined.result
-    if result is None or isinstance(result, PatchReviewResult):
-        return NodeResult({"review": FinalReviewRun(combined)})
-    assert isinstance(result, StandardReviewResult)
-    candidate_count = sum(len(group.reviews) for group in result.reviews)
-    progress = invocation.context.callbacks.progress
-    if progress is not None:
-        progress(
-            {
-                "event": "findings_finalization_start",
-                "candidates": candidate_count,
-            }
-        )
-
-    def report_progress(payload: dict[str, object]) -> None:
-        if progress is not None:
-            progress({"event": "findings_finalization_progress", **payload})
-
-    diagnostics: list[ExecutionDiagnostic] = []
-
+def adjudication(context, diagnostics):
     def adjudicate(
         candidates: list[dict[str, object]],
     ) -> DeduplicationDecision | None:
@@ -75,7 +60,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
             return None
         with usage_operation("finding_dedup"):
             request = JsonPromptRequest(
-                model=invocation.context.runtime.model,
+                model=context.runtime.model,
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=USER_PROMPT,
                 variables={
@@ -88,10 +73,10 @@ def execute(invocation: NodeInvocation) -> NodeResult:
                 batch_size=len(candidates),
                 invalid_message="expected duplicate groups JSON",
                 final_keep_message="keeping this batch unchanged",
-                chat_model_kwargs=dict(invocation.context.runtime.chat_model_kwargs),
+                chat_model_kwargs=dict(context.runtime.chat_model_kwargs),
             )
             try:
-                decision = invocation.context.prompts.invoke(request)
+                decision = context.prompts.invoke(request)
                 if decision is None:
                     raise ValueError("Finding deduplication returned no valid response")
                 return decision
@@ -114,28 +99,83 @@ def execute(invocation: NodeInvocation) -> NodeResult:
     def packet_fits(candidates: list[dict[str, object]]) -> bool:
         candidate_json = json.dumps(candidates, separators=(",", ":"))
         request_tokens = rendered_prompt_token_count(
-            invocation.context.runtime.token_counter,
+            context.runtime.token_counter,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=USER_PROMPT,
             variables={"candidate_findings": candidate_json},
         )
-        schema_tokens = invocation.context.runtime.token_counter(schema_json)
-        return (
-            request_tokens + schema_tokens
-            <= invocation.context.runtime.max_token_length
+        schema_tokens = context.runtime.token_counter(schema_json)
+        return request_tokens + schema_tokens <= context.runtime.max_token_length
+
+    return adjudicate, packet_fits
+
+
+def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
+    if output is None and invocation.context.output is not None:
+        output = invocation.context.output.review
+    if output is None:
+        reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
+        combined = combine_review_runs(reviews)
+        if combined.result is None or isinstance(combined.result, PatchReviewResult):
+            return NodeResult({"review": FinalReviewRun(combined)})
+        with TemporaryDirectory(prefix="metis-dedup-") as directory:
+            with ReviewOutput(Path(directory) / "review.json", ()) as output:
+                finalized = execute(invocation, output=output)
+                review = finalized.outputs["review"].review
+                findings = StandardReviewResult.model_validate(
+                    load_json_object_file(output.target)
+                )
+                return replace(
+                    finalized,
+                    outputs={
+                        "review": FinalReviewRun(replace(review, result=findings))
+                    },
+                )
+    reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
+    combined = combine_review_runs(reviews)
+    result = combined.result
+    if result is not None:
+        for group in result.reviews:
+            output.append(group)
+        if isinstance(result, PatchReviewResult) and result.overall_changes:
+            output.add_summary(result.overall_changes)
+    if result is None or isinstance(result, PatchReviewResult):
+        if result is not None:
+            output.publish(check_cancelled=_cancellation_checkpoint)
+        return NodeResult({"review": FinalReviewRun(combined)})
+    assert isinstance(result, StandardReviewResult)
+    output.flush()
+    candidate_count = output.count
+    context = invocation.context
+    progress = context.report_progress
+    if progress is not None:
+        progress(
+            {"event": "findings_finalization_start", "candidates": candidate_count}
         )
 
-    deduped = consolidate_result(
-        result,
+    def report_progress(payload: dict[str, object]) -> None:
+        if progress is not None:
+            progress({"event": "findings_finalization_progress", **payload})
+
+    diagnostics: list[ExecutionDiagnostic] = []
+    adjudicate, packet_fits = adjudication(context, diagnostics)
+    with consolidate_records(
+        output.records(output.path),
+        directory=output.directory,
         adjudicator=adjudicate,
         packet_fits=packet_fits,
+        jobs=context.jobs,
+        workers=context.runtime.max_workers,
         progress_callback=report_progress,
-        jobs=invocation.context.jobs,
-    )
-    if diagnostics:
-        deduped = result
+    ) as consolidated:
+        with closing(
+            output.records(output.path) if diagnostics else consolidated
+        ) as records:
+            kept_count = output.publish(
+                records, check_cancelled=_cancellation_checkpoint
+            )
+    deduped = result
     if progress is not None:
-        kept_count = sum(len(group.reviews) for group in deduped.reviews)
         progress(
             {
                 "event": "findings_finalization_done",
