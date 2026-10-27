@@ -19,14 +19,14 @@ def header_node_languages(node: Any, source: bytes) -> frozenset[str]:
     comparisons. Only a definitely inactive branch excludes a language.
     """
     languages = {"c", "cpp"}
-    start = int(node.start_byte())
-    parent = node.parent()
+    start = int(node.start_byte)
+    parent = node.parent
     while parent is not None and languages:
         kind = _node_kind(parent)
         if kind in {"preproc_ifdef", "preproc_if", "preproc_elif"}:
             alternative = _node_child_by_field_name(parent, "alternative")
             in_alternative = alternative is not None and start >= int(
-                alternative.start_byte()
+                alternative.start_byte
             )
             languages = {
                 language
@@ -34,7 +34,7 @@ def header_node_languages(node: Any, source: bytes) -> frozenset[str]:
                 if (value := _guard_value(parent, source, language)) is None
                 or bool(value) != in_alternative
             }
-        parent = parent.parent()
+        parent = parent.parent
     return frozenset(languages)
 
 
@@ -52,28 +52,26 @@ def header_source_for_language(
             continue
         if value:
             if alternative is not None:
-                spans.append(
-                    (int(alternative.start_byte()), int(alternative.end_byte()))
-                )
+                spans.append((int(alternative.start_byte), int(alternative.end_byte)))
             continue
         condition = _node_child_by_field_name(node, "condition") or (
             _node_child_by_field_name(node, "name")
         )
         if condition is None:
             continue
-        newline = source.find(b"\n", int(condition.end_byte()))
+        newline = source.find(b"\n", int(condition.end_byte))
         if newline < 0:
             continue
         end = (
-            int(alternative.start_byte())
+            int(alternative.start_byte)
             if alternative is not None
             else next(
                 (
-                    int(child.start_byte())
+                    int(child.start_byte)
                     for child in _node_children(node)
                     if _node_kind(child) == "#endif"
                 ),
-                int(node.end_byte()),
+                int(node.end_byte),
             )
         )
         spans.append((newline + 1, end))

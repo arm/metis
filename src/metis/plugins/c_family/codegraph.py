@@ -287,13 +287,13 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             for reference in construct.references
         }
         global_reference_languages = {
-            (int(node.start_byte()), int(node.end_byte())): (
+            (int(node.start_byte), int(node.end_byte)): (
                 header_node_languages(node, source)
                 & ({"c", "cpp"} if c_parsed is not None else {language})
             )
             for node in root_nodes
             if is_header
-            and (int(node.start_byte()), int(node.end_byte())) in reference_spans
+            and (int(node.start_byte), int(node.end_byte)) in reference_spans
         }
         public_declarations = self._collect_public_function_declarations(
             root,
@@ -333,17 +333,17 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         visibility = None
         if self._has_file_role(rel_path, "header"):
             visibility = {
-                int(node.start_byte()): header_node_languages(node, parsed.parse_source)
+                int(node.start_byte): header_node_languages(node, parsed.parse_source)
                 for node in nodes
                 if _node_kind(node) in {"function_definition", "method_definition"}
             }
             nodes = tuple(
                 node
                 for node in nodes
-                if language in visibility.get(int(node.start_byte()), {language})
+                if language in visibility.get(int(node.start_byte), {language})
             )
         functions = self._collect_functions(
-            parsed.tree.root_node(),
+            parsed.tree.root_node,
             parsed.parse_source,
             rel_path,
             language,
@@ -373,14 +373,14 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     ) -> list[ParsedFunction]:
         # Exact spans and C++ scope prevent C error recovery from promoting a
         # method or namespace member to a C function. Keep the original C IDs.
-        cpp_nodes = tuple(self._iter_nodes(cpp_parsed.tree.root_node()))
+        cpp_nodes = tuple(self._iter_nodes(cpp_parsed.tree.root_node))
         c_source = header_source_for_language(cpp_nodes, c_parsed.parse_source, "c")
         if c_source != c_parsed.parse_source:
             c_parsed = self._runtimes["c"].parse_file(
                 codebase_path, rel_path, source=c_source
             )
         shared_spans = {
-            (int(node.start_byte()), int(node.end_byte()))
+            (int(node.start_byte), int(node.end_byte))
             for node in cpp_nodes
             if _node_kind(node) == "function_definition"
             and (syntax := self._function_syntax(node, cpp_parsed.parse_source))
@@ -390,10 +390,10 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         }
         c_nodes = tuple(
             node
-            for node in self._iter_nodes(c_parsed.tree.root_node())
+            for node in self._iter_nodes(c_parsed.tree.root_node)
             if _node_kind(node) == "function_definition"
-            and not node.has_error()
-            and (int(node.start_byte()), int(node.end_byte())) in shared_spans
+            and not node.has_error
+            and (int(node.start_byte), int(node.end_byte)) in shared_spans
         )
         c_functions = self._file_functions(c_parsed, rel_path, "c", c_nodes)
         # Keep both contexts, including wrappers whose callees have different
@@ -1040,9 +1040,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         Keep the C result if recovery fails, with a partial-output warning even
         when the C grammar accepts the syntax of C++-guarded code.
         """
-        if not c_parsed.diagnostic_tree.root_node().has_error() and not any(
+        if not c_parsed.diagnostic_tree.root_node.has_error and not any(
             len(header_node_languages(node, c_parsed.parse_source)) == 1
-            for node in self._iter_nodes(c_parsed.tree.root_node())
+            for node in self._iter_nodes(c_parsed.tree.root_node)
         ):
             return "c", c_parsed, ""
         warning = "C++ header recovery failed; extracted facts may be incomplete"
@@ -1055,7 +1055,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             raise
         except Exception:
             return "c", c_parsed, warning
-        if cpp_parsed.diagnostic_tree.root_node().has_error():
+        if cpp_parsed.diagnostic_tree.root_node.has_error:
             return "c", c_parsed, warning
         return "cpp", cpp_parsed, ""
 

@@ -237,8 +237,14 @@ class _CountingGraphNodes(dict):
         return super().get(name, default)
 
 
-def test_codegraph_service_uses_installed_parser_runtime(tmp_path):
-    source = tmp_path / "main.c"
+@pytest.mark.parametrize(
+    ("filename", "symbol_suffix"),
+    [("main.c", ""), ("main.cpp", "()"), ("main.h", ""), ("main.hpp", "()")],
+)
+def test_codegraph_service_uses_installed_parser_runtime(
+    tmp_path, filename, symbol_suffix
+):
+    source = tmp_path / filename
     source.write_text(
         "void foo(void) {}\nint main(void) { foo(); return 0; }\n",
         encoding="utf-8",
@@ -250,7 +256,9 @@ def test_codegraph_service_uses_installed_parser_runtime(tmp_path):
     done = [event for event in events if event["event"] == "codegraph_done"]
     assert done and not done[0]["errors"]
     assert graph.node_count() == 2
-    assert graph.get_node("main.c::main").resolved_calls == ["main.c::foo"]
+    assert graph.get_node(f"{filename}::main{symbol_suffix}").resolved_calls == [
+        f"{filename}::foo{symbol_suffix}"
+    ]
 
 
 def test_c_family_provider_reports_partial_parse_without_dropping_file(tmp_path):
