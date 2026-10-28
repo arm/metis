@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -42,23 +43,11 @@ def _build_file_grouped_node_chunks(
         by_file[function.file_path].append(function)
 
     chunks: list[tuple[list[FunctionNode], str]] = []
-    current_nodes: list[FunctionNode] = []
-    current_node_names: set[str] = set()
-    current_parts: list[str] = []
-
-    def flush_current() -> None:
-        nonlocal current_nodes, current_node_names, current_parts
-        if current_parts:
-            chunks.append((list(current_nodes), "\n\n".join(current_parts)))
-            current_nodes = []
-            current_node_names = set()
-            current_parts = []
-
     for file_path in sorted(by_file):
-        flush_current()
         source_map = _source_map(codebase_path, file_path, source_for_path)
         if source_map is None:
             continue
+        parts: list[tuple[FunctionNode, str]] = []
         for function in by_file[file_path]:
             body = source_map.numbered_slice(
                 function.line_number,
@@ -76,13 +65,32 @@ def _build_file_grouped_node_chunks(
                 max_tokens,
                 token_counter,
             ):
-                combined = "\n\n".join((*current_parts, body_part))
-                if current_parts and token_counter(combined) > max_tokens:
-                    flush_current()
+                parts.append((function, body_part))
+
+        texts = [text for _function, text in parts]
+        start = 0
+        while start < len(parts):
+            end = start + 1
+            # Grow geometrically, then locate the same greedy chunk boundary.
+            while end < len(parts):
+                stop = min(len(parts), start + 2 * (end - start))
+                if token_counter("\n\n".join(texts[start:stop])) > max_tokens:
+                    end += bisect_right(
+                        range(end + 1, stop),
+                        max_tokens,
+                        key=lambda index: token_counter(
+                            "\n\n".join(texts[start:index])
+                        ),
+                    )
+                    break
+                end = stop
+            current_nodes: list[FunctionNode] = []
+            current_node_names: set[str] = set()
+            for function, _text in parts[start:end]:
                 if function.unique_name not in current_node_names:
                     current_nodes.append(function)
                     current_node_names.add(function.unique_name)
-                current_parts.append(body_part)
+            chunks.append((current_nodes, "\n\n".join(texts[start:end])))
+            start = end
 
-    flush_current()
     return chunks
