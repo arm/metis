@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 
 from metis.engine.codegraph import CallKind
 from metis.engine.codegraph import CallSite
@@ -37,6 +38,7 @@ class ParsedFunction:
     calls: tuple[CFamilyCallSite, ...]
     value_bindings: tuple[ValueBinding, ...]
     macro_function_mask: _MacroFunctionMask | None = None
+    visible_languages: frozenset[str] | None = None
 
 
 def _visible_value_binding(
@@ -61,7 +63,7 @@ def _resolve_calls(
     graph: CodeGraph,
     functions: list[ParsedFunction],
     declarations: list[CFamilyFunctionSyntax],
-    global_languages: dict[str, str],
+    global_reference_languages: dict[tuple[str, int, int], frozenset[str]],
     global_scopes: dict[str, tuple[str, ...]],
     value_declarations: dict[tuple[str, str], list[int]],
 ) -> None:
@@ -69,7 +71,7 @@ def _resolve_calls(
     definitions_by_qualified_name: dict[str, list[ParsedFunction]] = {}
     c_definitions_by_file: dict[tuple[str, str], list[ParsedFunction]] = {}
     external_c_definitions: dict[str, list[ParsedFunction]] = {}
-    for function in functions:
+    for function in _with_c_linkage(functions, declarations):
         definitions_by_name.setdefault(function.node.name, []).append(function)
         if function.node.language == "c":
             c_definitions_by_file.setdefault(
@@ -203,13 +205,22 @@ def _resolve_calls(
                 tuple(
                     dict.fromkeys(
                         candidate.node.unique_name
+                        for language in sorted(
+                            global_reference_languages[
+                                (
+                                    construct.file_path,
+                                    reference.start_byte,
+                                    reference.end_byte,
+                                )
+                            ]
+                        )
                         for candidate in _reference_candidates(
                             reference,
                             definitions_by_name,
                             definitions_by_qualified_name,
                             value_declarations,
                             file_path=construct.file_path,
-                            language=global_languages[construct.unique_name],
+                            language=language,
                             lexical_scope=global_scopes[construct.unique_name],
                             value_bindings=(),
                         )
@@ -225,6 +236,41 @@ def _resolve_calls(
                     continue
                 target.is_public_entrypoint = True
                 target.entrypoint_reason = GLOBAL_INITIALIZER_ENTRYPOINT_REASON
+
+
+def _with_c_linkage(
+    functions: list[ParsedFunction], declarations: list[CFamilyFunctionSyntax]
+) -> list[ParsedFunction]:
+    c_linkage_names = {
+        declaration.qualified_name
+        for declaration in declarations
+        if declaration.has_external_c_linkage
+    }
+    if not c_linkage_names:
+        return functions
+    cpp_definitions = {
+        (function.node.file_path, function.node.start_byte, function.node.end_byte)
+        for function in functions
+        if function.node.language == "cpp"
+    }
+    # C linkage exposes exported C definitions to C++ callers. When both parses
+    # describe the same definition, retain its existing C++ body context instead.
+    return [
+        replace(function, visible_languages=frozenset({"c", "cpp"}))
+        if (
+            function.node.language == "c"
+            and not function.node.has_internal_linkage
+            and function.syntax.qualified_name in c_linkage_names
+            and (
+                function.node.file_path,
+                function.node.start_byte,
+                function.node.end_byte,
+            )
+            not in cpp_definitions
+        )
+        else function
+        for function in functions
+    ]
 
 
 def _pointer_targets_for_call(
@@ -299,7 +345,11 @@ def _reference_candidates(
     candidates = [
         candidate
         for candidate in candidates
-        if candidate.node.language == language
+        if (
+            language in candidate.visible_languages
+            if candidate.visible_languages is not None
+            else candidate.node.language == language
+        )
         and (
             not candidate.node.has_internal_linkage
             or candidate.node.file_path == file_path
@@ -416,8 +466,11 @@ def _call_candidates(
     candidates = [
         candidate
         for candidate in candidates
-        if not candidate.node.has_internal_linkage
-        or candidate.node.file_path == caller.node.file_path
+        if (candidate.visible_languages is None or "cpp" in candidate.visible_languages)
+        and (
+            not candidate.node.has_internal_linkage
+            or candidate.node.file_path == caller.node.file_path
+        )
     ]
     if not call.qualified_name:
         candidates = _visible_anonymous_namespace_candidates(

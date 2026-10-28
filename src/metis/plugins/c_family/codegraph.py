@@ -33,6 +33,7 @@ from .ast import CFamilyAstMixin
 from .ast import CFamilyFunctionSyntax
 from .ast import _declarator_name_node
 from .ast import _expression_children
+from .ast import _has_c_language_linkage
 from .ast import _lexical_scope
 from .ast import _normalized_syntax
 from .linking import ParsedFunction
@@ -43,9 +44,12 @@ from .rules import CONTROL_CALLS
 from .rules import LOCK_CALLS
 from .rules import UNLOCK_CALLS
 from .rules import normalize_lock_expression
+from .runtime import ParsedUnit
 from .runtime import TreeSitterRuntime
 from .runtime import _MacroFunctionDefinition
 from .runtime import _MacroFunctionMask
+from .visibility import header_node_languages
+from .visibility import header_source_for_language
 
 ValueDeclarationKind = Literal["function", "function_pointer", "unnamed", "value"]
 
@@ -57,6 +61,9 @@ class ParsedFileGraph:
     declarations: list[CFamilyFunctionSyntax] = field(default_factory=list)
     globals: list[GlobalConstruct] = field(default_factory=list)
     global_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    global_reference_languages: dict[tuple[int, int], frozenset[str]] = field(
+        default_factory=dict
+    )
     value_declarations: dict[tuple[str, str], list[int]] = field(default_factory=dict)
     public_declarations: dict[str, list[str]] = field(default_factory=dict)
     macro_function_definitions: tuple[_MacroFunctionDefinition, ...] = ()
@@ -82,7 +89,7 @@ class CFamilyCodeGraphProvider:
         graph: CodeGraph = CodeGraph()
         functions: list[ParsedFunction] = []
         declarations: list[CFamilyFunctionSyntax] = []
-        global_languages: dict[str, str] = {}
+        global_reference_languages: dict[tuple[str, int, int], frozenset[str]] = {}
         global_scopes: dict[str, tuple[str, ...]] = {}
         value_declarations: dict[tuple[str, str], list[int]] = {}
         diagnostics: list[CodeGraphDiagnostic] = []
@@ -107,7 +114,13 @@ class CFamilyCodeGraphProvider:
                         file_graph.add_node(function.node)
                     for global_construct in parsed.globals:
                         file_graph.add_global(global_construct)
-                        global_languages[global_construct.unique_name] = parsed.language
+                        for reference in global_construct.references:
+                            span = (reference.start_byte, reference.end_byte)
+                            global_reference_languages[
+                                (global_construct.file_path, *span)
+                            ] = parsed.global_reference_languages.get(
+                                span, frozenset({parsed.language})
+                            )
                         global_scopes[global_construct.unique_name] = (
                             parsed.global_scopes[global_construct.unique_name]
                         )
@@ -155,7 +168,7 @@ class CFamilyCodeGraphProvider:
             graph,
             functions,
             declarations,
-            global_languages,
+            global_reference_languages,
             global_scopes,
             value_declarations,
         )
@@ -178,6 +191,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
 
     def parse_file(self, *, codebase_path: str, file_path: str) -> ParsedFileGraph:
         rel_path = self._rel_path(file_path, codebase_path)
+        is_header = self._has_file_role(rel_path, "header")
+        c_parsed = None
+        recovery_warning = ""
         language = self._language_for_file(rel_path)
         runtime = self._runtimes.get(language)
         if runtime is None:
@@ -197,6 +213,14 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                 else None
             )
             parsed = runtime.parse_file(codebase_path, rel_path, source=source)
+            if language == "c" and is_header:
+                c_parsed = parsed
+                language, parsed, recovery_warning = self._reparse_header_as_cpp(
+                    codebase_path,
+                    rel_path,
+                    source,
+                    parsed,
+                )
         except CancelledError:
             raise
         except Exception as exc:
@@ -229,16 +253,22 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     partial_output=True,
                 )
             )
-        functions = self._collect_functions(
-            root,
-            source,
-            rel_path,
-            language,
-            root_nodes=root_nodes,
-            macro_masks_by_body={
-                mask.body_start: mask for mask in parsed.macro_function_masks
-            },
-        )
+        elif recovery_warning:
+            diagnostics.append(
+                CodeGraphDiagnostic(
+                    file_path=rel_path,
+                    message=recovery_warning,
+                    severity="warning",
+                    code="codegraph.partial_parse",
+                    phase="parse",
+                    partial_output=True,
+                )
+            )
+        functions = self._file_functions(parsed, rel_path, language, root_nodes)
+        if language == "cpp" and c_parsed is not None:
+            functions = self._restore_c_functions(
+                c_parsed, parsed, codebase_path, rel_path, functions
+            )
         declarations = (
             self._collect_function_declarations(root, source, root_nodes=root_nodes)
             if language == "cpp"
@@ -252,6 +282,20 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             function_ids=function_ids,
             root_nodes=root_nodes,
         )
+        reference_spans = {
+            (reference.start_byte, reference.end_byte)
+            for construct in global_constructs
+            for reference in construct.references
+        }
+        global_reference_languages = {
+            (int(node.start_byte), int(node.end_byte)): (
+                header_node_languages(node, source)
+                & ({"c", "cpp"} if c_parsed is not None else {language})
+            )
+            for node in root_nodes
+            if is_header
+            and (int(node.start_byte), int(node.end_byte)) in reference_spans
+        }
         public_declarations = self._collect_public_function_declarations(
             root,
             source,
@@ -269,11 +313,96 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             declarations=declarations,
             globals=global_constructs,
             global_scopes=global_scopes,
+            global_reference_languages=global_reference_languages,
             value_declarations=value_declarations,
             public_declarations=public_declarations,
-            macro_function_definitions=parsed.macro_function_definitions,
+            macro_function_definitions=(
+                c_parsed.macro_function_definitions
+                if c_parsed is not None
+                else parsed.macro_function_definitions
+            ),
             diagnostics=diagnostics,
         )
+
+    def _file_functions(
+        self,
+        parsed: ParsedUnit,
+        rel_path: str,
+        language: str,
+        nodes: tuple[Any, ...],
+    ) -> list[ParsedFunction]:
+        visibility = None
+        if self._has_file_role(rel_path, "header"):
+            visibility = {
+                int(node.start_byte): header_node_languages(node, parsed.parse_source)
+                for node in nodes
+                if _node_kind(node) in {"function_definition", "method_definition"}
+            }
+            nodes = tuple(
+                node
+                for node in nodes
+                if language in visibility.get(int(node.start_byte), {language})
+            )
+        functions = self._collect_functions(
+            parsed.tree.root_node,
+            parsed.parse_source,
+            rel_path,
+            language,
+            root_nodes=nodes,
+            macro_masks_by_body={
+                mask.body_start: mask for mask in parsed.macro_function_masks
+            },
+        )
+        if visibility is None:
+            return functions
+        return [
+            replace(
+                function,
+                visible_languages=visibility[function.node.start_byte]
+                - ({"c"} if language == "cpp" else set()),
+            )
+            for function in functions
+        ]
+
+    def _restore_c_functions(
+        self,
+        c_parsed: ParsedUnit,
+        cpp_parsed: ParsedUnit,
+        codebase_path: str,
+        rel_path: str,
+        functions: list[ParsedFunction],
+    ) -> list[ParsedFunction]:
+        # Exact spans and C++ scope prevent C error recovery from promoting a
+        # method or namespace member to a C function. Keep the original C IDs.
+        cpp_nodes = tuple(self._iter_nodes(cpp_parsed.tree.root_node))
+        c_source = header_source_for_language(cpp_nodes, c_parsed.parse_source, "c")
+        if c_source != c_parsed.parse_source:
+            c_parsed = self._runtimes["c"].parse_file(
+                codebase_path, rel_path, source=c_source
+            )
+        shared_spans = {
+            (int(node.start_byte), int(node.end_byte))
+            for node in cpp_nodes
+            if _node_kind(node) == "function_definition"
+            and (syntax := self._function_syntax(node, cpp_parsed.parse_source))
+            is not None
+            and not syntax.lexical_scope
+            and "c" in header_node_languages(node, cpp_parsed.parse_source)
+        }
+        c_nodes = tuple(
+            node
+            for node in self._iter_nodes(c_parsed.tree.root_node)
+            if _node_kind(node) == "function_definition"
+            and not node.has_error
+            and (int(node.start_byte), int(node.end_byte)) in shared_spans
+        )
+        c_functions = self._file_functions(c_parsed, rel_path, "c", c_nodes)
+        # Keep both contexts, including wrappers whose callees have different
+        # language-dependent bodies. C callers retain their original IDs.
+        return [
+            replace(function, visible_languages=frozenset({"c"}))
+            for function in c_functions
+        ] + functions
 
     def _collect_functions(
         self,
@@ -287,8 +416,9 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     ) -> list[ParsedFunction]:
         functions: list[ParsedFunction] = []
         seen: set[str] = set()
+        is_header = self._has_file_role(rel_path, "header")
 
-        nodes = root_nodes or tuple(self._iter_nodes(root))
+        nodes = root_nodes if root_nodes is not None else tuple(self._iter_nodes(root))
         for node in nodes:
             if _node_kind(node) not in {"function_definition", "method_definition"}:
                 continue
@@ -319,7 +449,11 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             if unique in seen:
                 continue
             seen.add(unique)
-            scope_nodes = tuple(self._iter_nodes(node))
+            scope_nodes = tuple(
+                child
+                for child in self._iter_nodes(node)
+                if not is_header or language in header_node_languages(child, source)
+            )
             call_sites = tuple(
                 self._collect_calls_in_scope(
                     node,
@@ -429,8 +563,16 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             if _node_kind(node) not in {"declaration", "field_declaration"}:
                 continue
             syntax = self._function_syntax(node, source)
-            if syntax is not None:
-                declarations.append(syntax)
+            if syntax is not None and "cpp" in header_node_languages(node, source):
+                declarations.append(
+                    replace(
+                        syntax,
+                        has_external_c_linkage=(
+                            _has_c_language_linkage(node, source)
+                            and not self._has_internal_linkage(node, source)
+                        ),
+                    )
+                )
         return declarations
 
     def _collect_lock_events(
@@ -708,7 +850,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     ]:
         globals_: list[GlobalConstruct] = []
         global_scopes: dict[str, tuple[str, ...]] = {}
-        seen: set[str] = set()
+        seen: dict[str, GlobalConstruct] = {}
 
         for node in root_nodes or self._iter_nodes(root):
             if _node_kind(node) != "init_declarator":
@@ -743,7 +885,6 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             if function_ids is not None and unique in function_ids:
                 continue
             if unique not in seen:
-                seen.add(unique)
                 global_scopes[unique] = lexical_scope
                 globals_.append(
                     GlobalConstruct(
@@ -755,6 +896,13 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                         referenced_functions=refs,
                         references=references,
                     )
+                )
+                seen[unique] = globals_[-1]
+            else:
+                construct = seen[unique]
+                construct.references.extend(references)
+                construct.referenced_functions = list(
+                    dict.fromkeys((*construct.referenced_functions, *refs))
                 )
         return globals_, global_scopes
 
@@ -888,6 +1036,37 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
         if language in self._runtimes:
             return language
         return "c"
+
+    def _reparse_header_as_cpp(
+        self,
+        codebase_path: str,
+        rel_path: str,
+        source: bytes | None,
+        c_parsed: ParsedUnit,
+    ) -> tuple[str, ParsedUnit, str]:
+        """Recover C++ syntax and language-dependent header facts.
+
+        Keep the C result if recovery fails, with a partial-output warning even
+        when the C grammar accepts the syntax of C++-guarded code.
+        """
+        if not c_parsed.diagnostic_tree.root_node.has_error and not any(
+            len(header_node_languages(node, c_parsed.parse_source)) == 1
+            for node in self._iter_nodes(c_parsed.tree.root_node)
+        ):
+            return "c", c_parsed, ""
+        warning = "C++ header recovery failed; extracted facts may be incomplete"
+        cpp_runtime = self._runtimes["cpp"]
+        if not cpp_runtime.is_available:
+            return "c", c_parsed, warning
+        try:
+            cpp_parsed = cpp_runtime.parse_file(codebase_path, rel_path, source=source)
+        except CancelledError:
+            raise
+        except Exception:
+            return "c", c_parsed, warning
+        if cpp_parsed.diagnostic_tree.root_node.has_error:
+            return "c", c_parsed, warning
+        return "cpp", cpp_parsed, ""
 
     def _has_file_role(self, path: str, role: str) -> bool:
         return self._context.has_language_file_role(path, role)

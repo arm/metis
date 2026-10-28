@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
@@ -89,10 +90,12 @@ class _Node:
         return self._fields.get(name)
 
 
-def _codegraph_service(codebase_path, *, files=(), annotation_settings=None):
+def _codegraph_service(
+    codebase_path, *, files=(), annotation_settings=None, source_for_path=None
+):
     plugin = ConfigBackedLanguagePlugin(plugin_config={"plugins": {}}, name="c")
     repository = SimpleNamespace(
-        analysis_source_for_path=lambda _path: None,
+        analysis_source_for_path=source_for_path or (lambda _path: None),
         profiled_source_fingerprint=None,
         get_code_files=lambda **_kwargs: list(files),
         is_code_file_selected=lambda path, **_kwargs: (
@@ -234,8 +237,14 @@ class _CountingGraphNodes(dict):
         return super().get(name, default)
 
 
-def test_codegraph_service_uses_installed_parser_runtime(tmp_path):
-    source = tmp_path / "main.c"
+@pytest.mark.parametrize(
+    ("filename", "symbol_suffix"),
+    [("main.c", ""), ("main.cpp", "()"), ("main.h", ""), ("main.hpp", "()")],
+)
+def test_codegraph_service_uses_installed_parser_runtime(
+    tmp_path, filename, symbol_suffix
+):
+    source = tmp_path / filename
     source.write_text(
         "void foo(void) {}\nint main(void) { foo(); return 0; }\n",
         encoding="utf-8",
@@ -247,7 +256,9 @@ def test_codegraph_service_uses_installed_parser_runtime(tmp_path):
     done = [event for event in events if event["event"] == "codegraph_done"]
     assert done and not done[0]["errors"]
     assert graph.node_count() == 2
-    assert graph.get_node("main.c::main").resolved_calls == ["main.c::foo"]
+    assert graph.get_node(f"{filename}::main{symbol_suffix}").resolved_calls == [
+        f"{filename}::foo{symbol_suffix}"
+    ]
 
 
 def test_c_family_provider_reports_partial_parse_without_dropping_file(tmp_path):
@@ -274,6 +285,494 @@ def test_c_family_provider_reports_partial_parse_without_dropping_file(tmp_path)
     assert diagnostic.partial_output is True
     assert diagnostic.line == 2
     assert source.read_bytes()[diagnostic.start_byte : diagnostic.end_byte]
+
+
+_CPP_HEADER = (
+    "#pragma once\n"
+    "namespace demo {\n"
+    "inline int clamp_port(int port) { return port < 0 ? 0 : port; }\n"
+    "class Server {\n"
+    " public:\n"
+    "  explicit Server(int port) : port_(clamp_port(port)) {}\n"
+    "  int port() const { return port_; }\n"
+    " private:\n"
+    "  int port_;\n"
+    "};\n"
+    "}  // namespace demo\n"
+)
+
+
+def _build_c_family_graph(tmp_path, *names):
+    paths = tuple(str(tmp_path / name) for name in names)
+    service = _codegraph_service(str(tmp_path), files=paths)
+    return service._providers["c_family"].build_graph(
+        codebase_path=str(tmp_path),
+        files=paths,
+    )
+
+
+def _graph_symbols(result):
+    return {key.split("::", 1)[1] for key in result.graph.nodes}
+
+
+def test_c_family_provider_parses_cpp_header_with_cpp_grammar(tmp_path):
+    (tmp_path / "widget.h").write_text(_CPP_HEADER, encoding="utf-8")
+    (tmp_path / "widget.hpp").write_text(_CPP_HEADER, encoding="utf-8")
+
+    header = _build_c_family_graph(tmp_path, "widget.h")
+    reference = _build_c_family_graph(tmp_path, "widget.hpp")
+
+    assert len(_graph_symbols(reference)) >= 3
+    assert _graph_symbols(header) == _graph_symbols(reference)
+    assert header.graph.edge_count() == reference.graph.edge_count() > 0
+    assert header.diagnostics == ()
+    assert header.failed_files == ()
+
+
+def test_c_family_provider_keeps_c_grammar_for_valid_c_header(tmp_path):
+    (tmp_path / "plain.h").write_text(
+        "static inline int add(int a, int b) { return a + b; }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "plain.h")
+
+    assert result.graph.get_node("plain.h::add") is not None
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize("extension", (".h", ".hpp"))
+@pytest.mark.parametrize(
+    "condition",
+    ("ENABLED(FEATURE)", "!ENABLED(FEATURE)", "ENABLED(FEATURE) && 1", "'a'"),
+)
+def test_header_keeps_functions_under_unknown_macro_conditions(
+    tmp_path, extension, condition
+):
+    name = f"shared{extension}"
+    (tmp_path / name).write_text(
+        "#define ENABLED(feature) 1\n"
+        f"#if {condition}\n"
+        "int guarded(void) { return 1; }\n"
+        "#else\n"
+        "int alternative(void) { return 0; }\n"
+        "#endif\n"
+        "int plain(void) { return 2; }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, name)
+
+    assert result.failed_files == ()
+    assert result.diagnostics == ()
+    signature = "()" if extension == ".hpp" else ""
+    for function in ("guarded", "alternative", "plain"):
+        assert result.graph.get_node(f"{name}::{function}{signature}") is not None
+
+
+@pytest.mark.parametrize(
+    ("declaration", "storage", "resolves"),
+    (
+        ('extern "C" int api(void);', "", True),
+        ('extern "C" { int api(void); }', "", True),
+        ('extern "C++" { extern "C" int api(void); }', "", True),
+        ("int api(void);", "", False),
+        ('extern "C++" int api(void);', "", False),
+        ('extern "C" { extern "C++" int api(void); }', "", False),
+        ('extern "C" { static int api(void); }', "", False),
+        ('extern "C" { struct Widget { int api(void); }; }', "", False),
+        ('#if 0\nextern "C" int api(void);\n#endif', "", False),
+        ('extern "C" int api(void);', "static ", False),
+    ),
+)
+def test_shared_header_respects_c_linkage(tmp_path, declaration, storage, resolves):
+    (tmp_path / "shared.h").write_text(
+        "#ifdef __cplusplus\n"
+        f"{declaration}\n"
+        "#else\n"
+        f"{storage}int api(void) {{ return 1; }}\n"
+        "int c_only(void) { return 2; }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.c").write_text(
+        '#include "shared.h"\nint c_entry(void) { return api(); }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "client.cpp").write_text(
+        '#include "shared.h"\n'
+        "int cpp_entry() { return api(); }\n"
+        "int cpp_indirect() { int (*fp)(void) = &api; return fp(); }\n"
+        "int (*cpp_callback)(void) = &api;\n"
+        "int invalid_entry() { return c_only(); }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c", "client.cpp")
+    graph = result.graph
+
+    assert result.failed_files == ()
+    assert result.diagnostics == ()
+    assert graph.get_node("shared.h::api").language == "c"
+    assert graph.get_node("main.c::c_entry").resolved_calls == (
+        [] if storage else ["shared.h::api"]
+    )
+    targets = ["shared.h::api"] if resolves else []
+    direct = graph.get_node("client.cpp::cpp_entry()")
+    indirect = graph.get_node("client.cpp::cpp_indirect()")
+    assert direct.resolved_calls == targets
+    assert graph.unresolved_calls_for(direct) == ([] if resolves else ["api"])
+    assert indirect.resolved_calls == targets
+    references = [ref.target_ids for ref in indirect.references if ref.symbol == "api"]
+    assert references == [tuple(targets)]
+    callback = graph.globals["client.cpp::cpp_callback"]
+    assert callback.references[0].target_ids == tuple(targets)
+    assert graph.get_node("client.cpp::invalid_entry()").resolved_calls == []
+
+
+@pytest.mark.parametrize(
+    "guard",
+    (
+        "#ifdef __cplusplus",
+        "#if defined(__cplusplus)",
+        "#if defined __cplusplus",
+        "#if __cplusplus",
+        "#if !(!defined(__cplusplus))",
+        "#if defined(__cplusplus) || 0",
+        "#if defined(__cplusplus) && 1",
+        "#if defined(__cplusplus) == 1",
+        "#if (__cplusplus)",
+        "#if 0\n#elif defined(__cplusplus)",
+    ),
+)
+def test_shared_header_preserves_c_and_cpp_callers(tmp_path, guard):
+    (tmp_path / "shared.h").write_text(
+        "int shared(void) { return 7; }\n"
+        f"{guard}\n"
+        "class Widget { public: int value() { return shared(); } };\n"
+        "int cpp_only(void) { return shared(); }\n"
+        "#else\n"
+        "int c_only(void) { return shared(); }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    for name in ("main.c", "client.cpp"):
+        (tmp_path / name).write_text(
+            '#include "shared.h"\n'
+            "int entry(void) { return shared() + cpp_only() + c_only(); }\n"
+            "int indirect(void) { int (*fp)(void) = &shared; return fp(); }\n",
+            encoding="utf-8",
+        )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c", "client.cpp")
+    graph = result.graph
+    c_caller = graph.get_node("main.c::entry")
+    cpp_caller = graph.get_node("client.cpp::entry()")
+
+    assert graph.get_node("shared.h::shared").language == "c"
+    assert set(c_caller.resolved_calls) == {"shared.h::shared", "shared.h::c_only"}
+    assert graph.unresolved_calls_for(c_caller) == ["cpp_only"]
+    assert set(cpp_caller.resolved_calls) == {
+        "shared.h::shared()",
+        "shared.h::cpp_only()",
+    }
+    assert graph.unresolved_calls_for(cpp_caller) == ["c_only"]
+    for name, target in (
+        ("shared.h::Widget::value()", "shared.h::shared()"),
+        ("main.c::indirect", "shared.h::shared"),
+        ("client.cpp::indirect()", "shared.h::shared()"),
+    ):
+        assert graph.get_node(name).resolved_calls == [target]
+    assert result.diagnostics == ()
+    assert result.failed_files == ()
+
+
+@pytest.mark.parametrize(
+    "guard",
+    (
+        "#ifndef __cplusplus",
+        "#if !defined(__cplusplus)",
+        "#if defined(__cplusplus) == 0",
+    ),
+)
+def test_shared_header_preserves_alternative_definitions(tmp_path, guard):
+    (tmp_path / "shared.h").write_text(
+        f"{guard}\n"
+        "int selected(void) { return 1; }\n"
+        "#else\n"
+        "class Widget { public: int value() { return 0; } };\n"
+        "int selected(void) { return 2; }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    for name in ("main.c", "client.cpp"):
+        (tmp_path / name).write_text(
+            '#include "shared.h"\nint entry(void) { return selected(); }\n',
+            encoding="utf-8",
+        )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c", "client.cpp")
+
+    assert result.graph.get_node("main.c::entry").resolved_calls == [
+        "shared.h::selected"
+    ]
+    assert result.graph.get_node("client.cpp::entry()").resolved_calls == [
+        "shared.h::selected()"
+    ]
+    assert result.diagnostics == ()
+
+
+def test_shared_header_excludes_nested_cpp_version_guard_from_c(tmp_path):
+    (tmp_path / "shared.h").write_text(
+        "int shared(void) { return 1; }\n"
+        "#ifdef FEATURE\n"
+        "#if defined(__cplusplus) && __cplusplus >= 201103L\n"
+        "class Widget { public: int value() { return 0; } };\n"
+        "int cpp_only(void) { return 2; }\n"
+        "#endif\n"
+        "int maybe_shared(void) { return 3; }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.c").write_text(
+        '#include "shared.h"\n'
+        "int entry(void) { return shared() + maybe_shared() + cpp_only(); }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c")
+    caller = result.graph.get_node("main.c::entry")
+
+    assert set(caller.resolved_calls) == {
+        "shared.h::shared",
+        "shared.h::maybe_shared",
+    }
+    assert result.graph.unresolved_calls_for(caller) == ["cpp_only"]
+    assert result.graph.get_node("shared.h::cpp_only()") is not None
+
+
+def test_c_header_with_only_cpp_visible_functions_recovers_cpp_definitions(tmp_path):
+    (tmp_path / "shared.h").write_text(
+        "#ifdef __cplusplus\nint cpp_only(void) { return 1; }\n#endif\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "shared.h")
+
+    assert result.graph.get_node("shared.h::cpp_only") is None
+    assert result.graph.get_node("shared.h::cpp_only()").language == "cpp"
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize("guard", ("#ifdef __cplusplus", "#if defined(__cplusplus)"))
+@pytest.mark.parametrize("cpp_syntax", (False, True))
+@pytest.mark.parametrize("c_linkage", (False, True))
+def test_shared_header_keeps_language_specific_function_bodies(
+    tmp_path, guard, cpp_syntax, c_linkage
+):
+    cpp_guard = "if constexpr (true) " if cpp_syntax else ""
+    declaration = (
+        'extern "C" { int shared(void); int wrapper(void); }' if c_linkage else ""
+    )
+    (tmp_path / "shared.h").write_text(
+        f"{guard}\n"
+        f"{declaration}\n"
+        "int cpp_only(void) { return 2; }\n"
+        "#else\n"
+        "int c_only(void) { return 3; }\n"
+        "#endif\n"
+        "int shared(void) {\n"
+        f"{guard}\n"
+        "    int (*fp)(void) = cpp_only;\n"
+        f"    {cpp_guard}return fp() + cpp_only();\n"
+        "#else\n"
+        "    int (*fp)(void) = c_only;\n"
+        "    return fp() + c_only();\n"
+        "#endif\n"
+        "}\n"
+        "int wrapper(void) { return shared(); }\n",
+        encoding="utf-8",
+    )
+    for name in ("main.c", "client.cpp"):
+        (tmp_path / name).write_text(
+            '#include "shared.h"\nint entry(void) { return wrapper(); }\n',
+            encoding="utf-8",
+        )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c", "client.cpp")
+    graph = result.graph
+
+    for caller, suffix, target in (
+        ("main.c::entry", "", "c_only"),
+        ("client.cpp::entry()", "()", "cpp_only()"),
+    ):
+        assert graph.get_node(caller).resolved_calls == [f"shared.h::wrapper{suffix}"]
+        assert graph.get_node(f"shared.h::wrapper{suffix}").resolved_calls == [
+            f"shared.h::shared{suffix}"
+        ]
+        shared = graph.get_node(f"shared.h::shared{suffix}")
+        assert shared.resolved_calls == [f"shared.h::{target}"]
+        assert len(shared.call_sites) == 2
+        assert all(
+            call.target_ids == (f"shared.h::{target}",) for call in shared.call_sites
+        )
+        assert [reference.target_ids for reference in shared.references] == [
+            (f"shared.h::{target}",)
+        ]
+        assert len(shared.assignments) == 1
+        assert len(shared.returns) == 1
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize("same_global_name", (False, True))
+def test_shared_header_keeps_global_callback_entrypoints(tmp_path, same_global_name):
+    cpp_global = "callback" if same_global_name else "cpp_callback"
+    (tmp_path / "shared.h").write_text(
+        "#ifdef __cplusplus\n"
+        "class Widget { public: int value() { return 1; } };\n"
+        "static int cpp_target(void) { return 2; }\n"
+        f"int (*{cpp_global})(void) = cpp_target;\n"
+        "#else\n"
+        "static int c_target(void) { return 3; }\n"
+        "int (*callback)(void) = c_target;\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "shared.h")
+    graph = result.graph
+
+    references = {
+        reference.symbol: reference.target_ids
+        for construct in graph.globals.values()
+        for reference in construct.references
+    }
+    assert references == {
+        "c_target": ("shared.h::c_target",),
+        "cpp_target": ("shared.h::cpp_target()",),
+    }
+    assert graph.get_node("shared.h::c_target").is_public_entrypoint
+    assert graph.get_node("shared.h::cpp_target()").is_public_entrypoint
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize("failure", ("exception", "unavailable", "invalid"))
+def test_header_reports_failed_recovery_with_clean_c_syntax(tmp_path, failure):
+    path = tmp_path / "shared.h"
+    path.write_text(
+        "int shared(void) { return 1; }\n"
+        "#ifdef __cplusplus\nint cpp_only(void) { return 2; }\n#endif\n",
+        encoding="utf-8",
+    )
+    provider = _codegraph_service(str(tmp_path))._providers["c_family"]
+    runtime = provider._extractor._runtimes["cpp"]
+    if failure == "exception":
+        runtime.parse_file = Mock(side_effect=RuntimeError("parser failed"))
+    elif failure == "unavailable":
+        runtime._available = False
+    else:
+        invalid = runtime.parse_file(str(tmp_path), path.name, source=b"void broken( {")
+        runtime.parse_file = Mock(return_value=invalid)
+
+    result = provider.build_graph(codebase_path=str(tmp_path), files=(str(path),))
+
+    assert result.graph.get_node("shared.h::shared") is not None
+    assert result.graph.get_node("shared.h::cpp_only") is None
+    assert result.processed_files == (str(path),)
+    assert result.failed_files == ()
+    assert len(result.diagnostics) == 1
+    diagnostic = result.diagnostics[0]
+    assert diagnostic.code == "codegraph.partial_parse"
+    assert diagnostic.severity == "warning"
+    assert diagnostic.partial_output
+    assert "C++" in diagnostic.message
+
+
+@pytest.mark.parametrize("failure", (RuntimeError, CancelledError))
+def test_header_fallback_preserves_parse_failure_and_cancellation(tmp_path, failure):
+    path = tmp_path / "shared.h"
+    path.write_text("int shared(void) { return 1; }\n" + _CPP_HEADER, encoding="utf-8")
+    provider = _codegraph_service(str(tmp_path))._providers["c_family"]
+    provider._extractor._runtimes["cpp"].parse_file = Mock(side_effect=failure)
+
+    if failure is CancelledError:
+        with pytest.raises(CancelledError):
+            provider.build_graph(codebase_path=str(tmp_path), files=(str(path),))
+    else:
+        result = provider.build_graph(codebase_path=str(tmp_path), files=(str(path),))
+        assert result.graph.get_node("shared.h::shared") is not None
+        assert [d.code for d in result.diagnostics] == ["codegraph.partial_parse"]
+
+
+@pytest.mark.parametrize(
+    "profiled", (b"", b"int shared(void) { return 1; }\n", _CPP_HEADER.encode())
+)
+def test_header_fallback_uses_profiled_source(tmp_path, profiled):
+    path = tmp_path / "shared.h"
+    path.write_text("this is invalid source on disk", encoding="utf-8")
+    service = _codegraph_service(
+        str(tmp_path), files=(str(path),), source_for_path=lambda _path: profiled
+    )
+
+    result = service._providers["c_family"].build_graph(
+        codebase_path=str(tmp_path), files=(str(path),)
+    )
+
+    if profiled == _CPP_HEADER.encode():
+        assert any(
+            node.name == "port" and node.language == "cpp"
+            for node in result.graph.nodes.values()
+        )
+    elif profiled:
+        assert result.graph.get_node("shared.h::shared") is not None
+    else:
+        assert result.graph.nodes == {}
+    assert result.diagnostics == ()
+    assert result.failed_files == ()
+
+
+def test_c_family_provider_keeps_partial_parse_warning_for_invalid_header(tmp_path):
+    (tmp_path / "broken.h").write_text(
+        "void valid(void) {}\nvoid broken( {\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "broken.h")
+
+    assert result.graph.get_node("broken.h::valid") is not None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "codegraph.partial_parse"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "codes", "function"),
+    (
+        (
+            "platform.h",
+            "#define DRAM_BASE 0x80000000\n#define DRAM_SIZE 0x4000000",
+            [],
+            None,
+        ),
+        ("main.c", "int main(void) { return 0; }", [], "main.c::main"),
+        (
+            "broken.c",
+            "void valid(void) {}\nvoid broken( {",
+            ["codegraph.partial_parse"],
+            "broken.c::valid",
+        ),
+    ),
+)
+def test_c_family_provider_accepts_source_without_final_newline(
+    tmp_path, name, text, codes, function
+):
+    (tmp_path / name).write_text(text, encoding="utf-8")
+
+    result = _build_c_family_graph(tmp_path, name)
+
+    assert [diagnostic.code for diagnostic in result.diagnostics] == codes
+    if function is not None:
+        assert result.graph.get_node(function) is not None
 
 
 def test_c_codegraph_recovers_generic_macro_wrapped_function_definitions(tmp_path):
