@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from concurrent.futures import CancelledError
+from contextlib import closing
+from tempfile import TemporaryDirectory
+from itertools import batched
 import logging
 from pathlib import Path
-import sqlite3
 from typing import cast
 
 from metis.engine.stages.triage.models import TriageRun
@@ -17,12 +18,11 @@ from metis.engine.threat_context_retrieval import get_threat_model_context
 from metis.engine.threat_context_retrieval import threat_model_scope_policy
 from metis.engine.threat_context_retrieval import threat_model_triage_override
 from metis.sarif.models import SarifPayload
-from metis.sarif.triage import (
-    apply_triage_result,
-    save_sarif_file,
-)
+from metis.json_io import load_json_object_file
+from metis.json_io import write_json_atomic
+from .storage import TriageStore
+from metis.sarif.triage import apply_triage_result
 from metis.sarif.utils import create_fingerprint
-from metis.generated_artifacts import generated_artifact_publication
 from metis import runlog
 from metis.utils import resolve_path_within_root
 
@@ -34,13 +34,6 @@ logger = logging.getLogger("metis")
 
 
 class TriageService:
-    def __init__(
-        self,
-        *,
-        triage_checkpoint_every: int,
-    ) -> None:
-        self.triage_checkpoint_every = triage_checkpoint_every
-
     def _invoke_callback(self, callback, *args, **kwargs) -> None:
         if not callable(callback):
             return
@@ -54,6 +47,8 @@ class TriageService:
     def _emit_triage_progress(
         self, progress_callback, total: int, event: str, **kwargs
     ):
+        if "finding" in kwargs:
+            kwargs["finding"] = TriageStore.public_finding(kwargs["finding"])
         self._invoke_callback(
             progress_callback, {"event": event, "total": total, **kwargs}
         )
@@ -66,6 +61,7 @@ class TriageService:
         debug_callback,
         memory_service: MemoryService | None,
     ) -> TriageDecision | None:
+        finding = TriageStore.public_finding(finding)
         fingerprint = create_fingerprint(
             finding.file_path, finding.line, finding.rule_id
         )
@@ -164,11 +160,12 @@ class TriageService:
             )
             return decision
 
-    def _record_triage_success(self, triaged_payload: dict, finding, decision: dict):
-        apply_triage_result(
+    def _record_triage_success(
+        self, triaged_payload: TriageStore, finding, decision: dict
+    ):
+        self._annotate(
             triaged_payload,
-            run_index=finding.run_index,
-            result_index=finding.result_index,
+            finding,
             status=decision["status"],
             reason=decision["reason"],
             metadata={
@@ -187,17 +184,16 @@ class TriageService:
             },
         )
 
-    def _record_triage_failure(self, triaged_payload: dict, finding, exc):
+    def _record_triage_failure(self, triaged_payload: TriageStore, finding, exc):
         logger.warning(
             "Marking triage inconclusive for run=%s result=%s due to failure: %s",
             finding.run_index,
             finding.result_index,
             exc,
         )
-        apply_triage_result(
+        self._annotate(
             triaged_payload,
-            run_index=finding.run_index,
-            result_index=finding.result_index,
+            finding,
             status="inconclusive",
             reason=f"Triage failed before a decision could be produced: {exc}",
             metadata={
@@ -209,10 +205,21 @@ class TriageService:
             },
         )
 
+    @staticmethod
+    def _annotate(payload, finding, **annotation) -> None:
+        result = {}
+        apply_triage_result(
+            {"runs": [{"results": [result]}]},
+            run_index=0,
+            result_index=0,
+            **annotation,
+        )
+        payload.annotate(finding, result["properties"])
+
     def _handle_finding_result(
         self,
         *,
-        triaged_payload: dict,
+        triaged_payload: TriageStore,
         finding,
         total: int,
         idx: int,
@@ -225,7 +232,6 @@ class TriageService:
         if decision is None and error is None:
             return processed, False
         if error is not None:
-            self._record_triage_failure(triaged_payload, finding, error)
             self._emit_triage_progress(
                 progress_callback,
                 total,
@@ -235,7 +241,6 @@ class TriageService:
                 error=str(error),
             )
         else:
-            self._record_triage_success(triaged_payload, finding, decision or {})
             self._emit_triage_progress(
                 progress_callback,
                 total,
@@ -253,7 +258,7 @@ class TriageService:
         self,
         *,
         findings,
-        triaged_payload: dict,
+        triaged_payload: TriageStore,
         total: int,
         progress_callback,
         debug_callback,
@@ -262,9 +267,11 @@ class TriageService:
         jobs: NodeJobs,
         memory_service: MemoryService | None,
         processed: int,
+        flush_partial: bool = True,
+        start_index: int = 1,
     ) -> tuple[int, set[tuple[int, int]]]:
         handled: set[tuple[int, int]] = set()
-        scheduled = list(enumerate(findings, start=1))
+        scheduled = list(enumerate(findings, start=start_index))
         outcomes: dict[int, tuple] = {}
         progress_base = processed
 
@@ -289,8 +296,11 @@ class TriageService:
                 raise
             except Exception as exc:
                 outcome = idx, finding, None, exc
+            if outcome[3] is not None:
+                self._record_triage_failure(triaged_payload, finding, outcome[3])
+            elif outcome[2] is not None:
+                self._record_triage_success(triaged_payload, finding, outcome[2])
             outcomes[idx] = outcome
-            return outcome
 
         def report_completion(item, completed: int, _scheduled_total: int) -> None:
             nonlocal processed
@@ -348,8 +358,10 @@ class TriageService:
                     )
                     if was_handled:
                         handled.add((finding.run_index, finding.result_index))
-                if processed > progress_base and (
-                    processed < total or failure is not None
+                if (
+                    flush_partial
+                    and processed > progress_base
+                    and (failure is not None or processed < total)
                 ):
                     self._invoke_callback(
                         checkpoint_callback, triaged_payload, processed, processed
@@ -362,6 +374,56 @@ class TriageService:
                     checkpoint_error,
                 )
         return processed, handled
+
+    def triage_file(
+        self,
+        store: TriageStore,
+        *,
+        classifier: TriageClassifier,
+        jobs: NodeJobs,
+        workers: int,
+        include_triaged: bool = False,
+        memory_service: MemoryService | None = None,
+        progress_callback=None,
+        debug_callback=None,
+        checkpoint_callback=None,
+    ) -> int:
+        total = store.count(include_triaged=include_triaged)
+        processed = 0
+        offset = 0
+        failure = None
+        try:
+            with closing(store.findings(include_triaged=include_triaged)) as remaining:
+                for findings in batched(remaining, max(64, workers)):
+                    processed, _handled = self._triage_findings_parallel(
+                        findings=findings,
+                        triaged_payload=store,
+                        total=total,
+                        classifier=classifier,
+                        jobs=jobs,
+                        memory_service=memory_service,
+                        progress_callback=progress_callback,
+                        debug_callback=debug_callback,
+                        checkpoint_callback=checkpoint_callback,
+                        processed=processed,
+                        flush_partial=False,
+                        start_index=offset + 1,
+                    )
+                    offset += len(findings)
+                    del findings
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            if store.processed and (failure is not None or store.processed < total):
+                try:
+                    self._invoke_callback(
+                        checkpoint_callback, store, store.processed, store.processed
+                    )
+                except BaseException:
+                    if failure is None:
+                        raise
+        return processed
 
     def triage_run(
         self,
@@ -376,60 +438,47 @@ class TriageService:
     ) -> TriageRun:
         if not run.remaining:
             return run
+        with TemporaryDirectory(prefix="metis-triage-run-") as directory:
+            source = Path(directory) / "source.sarif"
+            destination = Path(directory) / "triage.sarif"
+            write_json_atomic(
+                source,
+                run.sarif.model_dump(mode="json", by_alias=True),
+                indent=4,
+            )
+            with TriageStore(source, destination=destination) as store:
+                callback = checkpoint_callback
+                if callable(callback):
 
-        triaged_payload = run.sarif.model_dump(mode="json", by_alias=True)
-        processed, handled = self._triage_findings_parallel(
-            findings=run.remaining,
-            triaged_payload=triaged_payload,
-            total=run.total,
-            progress_callback=progress_callback,
-            debug_callback=debug_callback,
-            checkpoint_callback=checkpoint_callback,
-            classifier=classifier,
-            jobs=jobs,
-            memory_service=memory_service,
-            processed=run.processed,
-        )
-        remaining = tuple(
-            finding
-            for finding in run.remaining
-            if (finding.run_index, finding.result_index) not in handled
-        )
-        return TriageRun(
-            sarif=SarifPayload.model_validate(triaged_payload),
-            remaining=remaining,
-            total=run.total,
-            processed=processed,
-        )
+                    def materialized_checkpoint(
+                        current: TriageStore, processed: int, total: int
+                    ) -> None:
+                        current.publish(destination)
+                        callback(load_json_object_file(destination), processed, total)
 
-    def checkpoint_callback(
-        self,
-        target_path: str,
-        *,
-        checkpoint_every: int | None = None,
-        codebase_path: str | None = None,
-    ) -> Callable[[dict, int, int], None]:
-        every = checkpoint_every
-        if every is None:
-            every = self.triage_checkpoint_every
-        try:
-            every = int(every)
-        except (TypeError, ValueError):
-            every = 0
-        if every < 1:
-            every = 0
-
-        def checkpoint(triaged_payload: dict, processed: int, total: int) -> None:
-            if every <= 0 or processed <= 0:
-                return
-            if processed < total and processed % every != 0:
-                return
-            try:
-                with generated_artifact_publication(codebase_path, target_path):
-                    save_sarif_file(target_path, triaged_payload)
-            except (OSError, TypeError, ValueError, sqlite3.Error) as exc:
-                logger.error(
-                    "Unable to save triage checkpoint %s: %s", target_path, exc
+                else:
+                    materialized_checkpoint = None
+                processed, handled = self._triage_findings_parallel(
+                    findings=run.remaining,
+                    triaged_payload=store,
+                    total=run.total,
+                    classifier=classifier,
+                    jobs=jobs,
+                    memory_service=memory_service,
+                    progress_callback=progress_callback,
+                    debug_callback=debug_callback,
+                    checkpoint_callback=materialized_checkpoint,
+                    processed=run.processed,
                 )
-
-        return checkpoint
+                remaining = tuple(
+                    finding
+                    for finding in run.remaining
+                    if (finding.run_index, finding.result_index) not in handled
+                )
+                store.publish(destination)
+            return TriageRun(
+                sarif=SarifPayload.model_validate(load_json_object_file(destination)),
+                remaining=remaining,
+                total=run.total,
+                processed=processed,
+            )

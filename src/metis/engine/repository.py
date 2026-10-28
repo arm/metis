@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from threading import Lock
 
 import pathspec
@@ -244,9 +245,21 @@ class EngineRepository:
             )
             if not os.path.isdir(base_path):
                 raise NotADirectoryError(f"Review directory not found: {base_path}")
+        relative_base = (
+            Path(base_path)
+            .resolve()
+            .relative_to(Path(self._config.codebase_path).resolve())
+        )
+        if any(part.casefold() == ".metis" for part in relative_base.parts):
+            return []
         metisignore_spec = self.load_metisignore()
         file_list = []
-        for root, _, files in os.walk(base_path, onerror=self.handle_discovery_error):
+        for root, directories, files in os.walk(
+            base_path, onerror=self.handle_discovery_error
+        ):
+            directories[:] = [
+                name for name in directories if name.casefold() != ".metis"
+            ]
             for file in files:
                 full_path = os.path.join(root, file)
                 if not self.is_code_file_selected(

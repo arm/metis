@@ -142,7 +142,7 @@ def test_path_scoped_policy_does_not_apply_to_other_files(tmp_path):
         tmp_path, [{**matching, "applies_to": ["src/public_api"]}]
     )
     classifier = Mock(return_value={"status": "valid", "reason": "Reviewed finding"})
-    decision = TriageService(triage_checkpoint_every=1)._triage_one_finding(
+    decision = TriageService()._triage_one_finding(
         finding, classifier=classifier, debug_callback=None, memory_service=memory
     )
     assert decision is classifier.return_value
@@ -246,7 +246,7 @@ def test_triage_uri_paths_share_confined_threat_context(tmp_path, uri_kind):
     )
     classifier = Mock(return_value={"status": "valid", "reason": "Reviewed finding"})
     debug_callback = Mock()
-    service = TriageService(triage_checkpoint_every=1)
+    service = TriageService()
     decision = service._triage_one_finding(
         finding,
         classifier=classifier,

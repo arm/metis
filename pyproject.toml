@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
   "chromadb>=1.5.9",
+  "ijson>=3.4,<4",
   "langchain==1.4.7",
   "langchain-core==1.7.0",
   "langchain-openai==1.7.2",

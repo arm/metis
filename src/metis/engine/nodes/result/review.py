@@ -20,19 +20,18 @@ from metis.sarif.writer import generate_sarif
 
 def execute(invocation: NodeInvocation) -> NodeResult:
     finalized = cast(FinalReviewRun, invocation.inputs["review"])
-    codegraph = cast(CodeGraphReference | None, invocation.inputs["codegraph"])
     combined = finalized.review
     if combined.result is None:
         raise ValueError("Review produced no result")
+    codegraph = cast(CodeGraphReference | None, invocation.inputs["codegraph"])
     findings = combined.result
     payload = findings.model_dump(mode="python")
     sarif = SarifPayload.model_validate(generate_sarif(payload))
-    findings = type(findings).model_validate(payload)
     result = NodeResult(
         {
             "formats": invocation.formats or (),
             "filename": invocation.filename,
-            "findings": findings,
+            "findings": type(findings).model_validate(payload),
             "sarif": sarif,
             "codegraph": codegraph,
         },
@@ -42,12 +41,15 @@ def execute(invocation: NodeInvocation) -> NodeResult:
             else ExecutionStatus.OK
         ),
     )
+    stream = invocation.context.output
     runlog.event(
         "artifact",
         {
             "kind": "review_result",
             "formats": invocation.formats or (),
-            "payload": result.outputs,
+            "payload": stream.reference("review")
+            if stream is not None and stream.review is not None
+            else result.outputs,
         },
     )
     return result

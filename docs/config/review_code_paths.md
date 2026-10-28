@@ -24,6 +24,8 @@ Codebase roots and directory targets must exist; empty directories are valid.
 Targets resolve from the codebase root and cannot escape it through symlinks or
 `..`. These checks apply to CLI, YAML, and direct engine calls. Discovery and read
 errors fail the review rather than producing a clean result.
+Discovery skips `.metis` directories case-insensitively, including explicit
+targets. Filters cannot re-include them.
 Prefix literal names beginning with `~` with `./` to avoid home-directory expansion.
 
 ---

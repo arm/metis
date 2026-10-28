@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import threading
 from collections import UserString
 from collections.abc import Mapping
@@ -39,7 +40,10 @@ from metis.engine.execution.runner import run_stage
 from metis.engine.nodes.codegraph import registration as codegraph_node
 from metis.engine.nodes.finding_dedup import registration as finding_dedup_node
 from metis.engine.nodes.finding_dedup.core import DeduplicationDecision
-from metis.engine.nodes.finding_dedup.core import consolidate_result
+from metis.engine.nodes.finding_dedup.core import DuplicateGroup
+from metis.engine.nodes.finding_dedup.core import ReviewCandidate
+from metis.engine.nodes.finding_dedup.core import _finding_adjudication_payload
+from metis.engine.nodes.finding_dedup.core import consolidate_records
 from metis.engine.nodes.index import registration as index_node
 from metis.engine.nodes.reachability import review as reachability_review_node
 from metis.engine.nodes.result import review as review_results_node
@@ -49,6 +53,7 @@ from metis.engine.nodes.threat_model import registration as threat_model_node
 from metis.engine.nodes.triage import registration as triage_node
 from metis.engine.stages.configuration import ExecutionConfiguration
 from metis.engine.stages.review.models import ReviewRun
+from metis.engine.stages.review.storage import ReviewOutput
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.service import ExecutionGraphService
@@ -238,7 +243,15 @@ def test_profiled_codegraph_infers_required_profile_dependency() -> None:
         service.close()
 
 
-def test_finding_dedup_combines_producers_before_result() -> None:
+def test_finding_dedup_combines_producers_before_result(monkeypatch) -> None:
+    publications = []
+    publish = ReviewOutput.publish
+
+    def record_publication(output, *args, **kwargs):
+        publications.append(output.target)
+        return publish(output, *args, **kwargs)
+
+    monkeypatch.setattr(ReviewOutput, "publish", record_publication)
     prompt_runner = Mock()
     prompt_runner.invoke.side_effect = lambda request: request.parse(
         {
@@ -296,6 +309,7 @@ def test_finding_dedup_combines_producers_before_result() -> None:
     assert [
         finding.issue for group in finalized.result.reviews for finding in group.reviews
     ] == ["Unchecked length reaches copy"]
+    assert len(publications) == 1
 
 
 def test_finding_dedup_fails_open_when_batch_exceeds_global_limit() -> None:
@@ -355,7 +369,9 @@ def test_finding_dedup_keeps_candidates_when_model_finds_no_duplicates() -> None
     assert result.diagnostics == ()
 
 
-def test_finding_dedup_cancellation_propagates() -> None:
+def test_finding_dedup_cancellation_propagates(monkeypatch) -> None:
+    publish = Mock()
+    monkeypatch.setattr(ReviewOutput, "publish", publish)
     service, _calls = _service(
         review_run=_findings_run({"issue": "First report"}, {"issue": "Second report"})
     )
@@ -365,6 +381,7 @@ def test_finding_dedup_cancellation_propagates() -> None:
             service.execute_graph()
     finally:
         service.close()
+    publish.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -379,7 +396,7 @@ def test_finding_dedup_cancellation_propagates() -> None:
         ([0, 0], 0),
     ],
 )
-def test_finding_dedup_rejects_invalid_batch_groups(members, representative) -> None:
+def test_finding_dedup_rejects_invalid_batch_groups(tmp_path, members, representative):
     original = StandardReviewResult.model_validate(
         {
             "reviews": [
@@ -414,16 +431,28 @@ def test_finding_dedup_rejects_invalid_batch_groups(members, representative) -> 
             }
         )
 
-    result = consolidate_result(
-        original,
+    records = [
+        {
+            "position": [group_index, 0, finding_index],
+            "group": group.model_dump(mode="json", exclude={"reviews"}),
+            "finding": finding.model_dump(mode="json"),
+        }
+        for group_index, group in enumerate(original.reviews)
+        for finding_index, finding in enumerate(group.reviews)
+    ]
+    with consolidate_records(
+        iter(records),
+        directory=tmp_path,
+        workers=2,
         adjudicator=adjudicate,
         packet_fits=lambda packet: len(packet) <= 3,
-        progress_callback=None,
         jobs=_Jobs(),
-    )
+    ) as kept:
+        assert [record["finding"] for record in kept] == [
+            record["finding"] for record in records
+        ]
 
     assert packets == [[0, 1, 2], [0, 1, 2]]
-    assert result == original
 
 
 def test_finding_dedup_removes_exact_duplicates_without_model() -> None:
@@ -446,6 +475,71 @@ def test_finding_dedup_removes_exact_duplicates_without_model() -> None:
     finalized = result.outputs["review"].review
     assert sum(len(group.reviews) for group in finalized.result.reviews) == 1
     prompt_runner.invoke.assert_not_called()
+
+
+@pytest.mark.parametrize("boundary", ["global_indexes", "candidate_order"])
+def test_finding_dedup_preserves_token_boundary_parity(tmp_path, node_jobs, boundary):
+    files = (
+        ("b", "b", "a", "a", "d", "d", "c", "c")
+        if boundary == "candidate_order"
+        else tuple(f"{min(index, 10):02}" for index in range(16))
+    )
+    original = _findings_run(
+        *(
+            dict(id=str(index), issue=f"issue{index:02}", primary_file=f"{file}.py")
+            for index, file in enumerate(files)
+        )
+    ).result
+    group = original.reviews[0]
+    if boundary == "global_indexes":
+        group.reviews.insert(1, group.reviews[0].model_copy(update={"id": "duplicate"}))
+    payloads = [
+        _finding_adjudication_payload(index, ReviewCandidate(group, finding))
+        for index, finding in enumerate(group.reviews[-6:-3])
+    ]
+    limit = len(json.dumps(payloads))
+
+    def packet_fits(packet):
+        indexes = [item["index"] for item in packet]
+        if boundary == "global_indexes":
+            return len(json.dumps(packet)) <= limit
+        return len(indexes) + (indexes != sorted(indexes)) <= 4
+
+    def adjudicate(packet):
+        indexes = [item["index"] for item in packet]
+        if boundary == "global_indexes":
+            indexes = [12, 13] if {12, 13} <= set(indexes) else []
+        return DeduplicationDecision(
+            groups=[
+                DuplicateGroup(
+                    member_indexes=indexes,
+                    representative_index=min(indexes),
+                    relationship="duplicate",
+                )
+            ]
+            if indexes
+            else []
+        )
+
+    options = dict(adjudicator=adjudicate, packet_fits=packet_fits, jobs=node_jobs)
+    records = (
+        dict(
+            position=[0, 0, index],
+            group={"file": "src/example.c"},
+            finding=finding.model_dump(mode="json"),
+        )
+        for index, finding in reversed(list(enumerate(group.reviews)))
+    )
+    with consolidate_records(records, directory=tmp_path, workers=2, **options) as kept:
+        streamed = {record["finding"]["id"] for record in kept}
+    assert not (tmp_path / "unique.jsonl").exists()
+    assert not list(tmp_path.glob("sort-*"))
+    expected = (
+        {"0"}
+        if boundary == "candidate_order"
+        else {str(index) for index in range(16)} - {"13"}
+    )
+    assert streamed == expected
 
 
 def _node_context() -> NodeContext:

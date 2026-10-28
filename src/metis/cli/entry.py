@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import shlex
+from tempfile import TemporaryDirectory
 from typing import Any
 from typing import cast
 from uuid import uuid4
@@ -43,8 +44,9 @@ from .command_runtime import CommandRuntime
 from .review_checkpoints import review_checkpoint_callbacks
 from .review_checkpoints import stage_checkpoint_callback
 from .review_progress import ExecutionGraphProgressReporter
-from .triage_checkpoints import triage_checkpoint_callbacks
+from .output import graph_output_files
 from .output import save_graph_outputs
+from .output import streaming_output_files
 from .utils import (
     configure_logger,
     PG_SUPPORTED,
@@ -70,8 +72,41 @@ def _execute_graph_with_progress(
     engine: Any,
     args: argparse.Namespace,
     callbacks: dict[str, object],
+    *,
+    export_directory,
+    generated_bases=None,
 ) -> ExecutionResult:
     kwargs = {"include_triaged": True if args.include_triaged else None}
+    output_files = args.output_file
+    stages = engine.execution._stages
+    planned = {}
+    for name in ("review", "triage"):
+        stage = stages.get(name)
+        if stage is None or "result" not in stage.nodes:
+            continue
+        node = stage.nodes["result"]
+        planned[name] = {
+            "formats": node.formats or (),
+            "filename": node.filename,
+            "sarif": {},
+            **({"findings": {}} if name == "review" else {}),
+        }
+    paths = (
+        graph_output_files(
+            output_files,
+            planned,
+            args.quiet,
+            generated_output=bool(getattr(args, "_metis_generated_output", False)),
+            generated_bases=generated_bases,
+        )
+        if planned
+        else {"review": [], "triage": []}
+    )
+    destinations = streaming_output_files(paths, export_directory)
+    kwargs.update(
+        output_path=destinations["review"],
+        triage_output_path=destinations["triage"],
+    )
     if not args.verbose:
         return engine.execute_graph(callbacks=callbacks, **kwargs)
 
@@ -457,7 +492,6 @@ def _run_cli(args):
             args._review_checkpoints_enabled = runtime.get(
                 "review_checkpoints_enabled", True
             )
-            args._triage_checkpoint_every = runtime.get("triage_checkpoint_every", 50)
             engine, vector_backend = build_engine(args, runtime)
             if not args.interactive:
                 execution = engine.execution.configuration
@@ -466,11 +500,14 @@ def _run_cli(args):
                     triage_stage is not None
                     and triage_stage.inputs.get("sarif") == "review.sarif"
                 )
-                with runlog.span(
-                    "command",
-                    "execution_graph",
-                    {"include_triaged": bool(args.include_triaged)},
-                ) as command_span:
+                with (
+                    TemporaryDirectory(prefix="metis-export-") as export_directory,
+                    runlog.span(
+                        "command",
+                        "execution_graph",
+                        {"include_triaged": bool(args.include_triaged)},
+                    ) as command_span,
+                ):
                     generated_bases: dict[str, str] = {}
                     try:
                         determine_output_file("graph", args, [])
@@ -495,25 +532,14 @@ def _run_cli(args):
                                 ),
                             )
                         )
-                        callbacks.update(
-                            triage_checkpoint_callbacks(
-                                output_files=args.output_file or [],
-                                generated_output=bool(
-                                    getattr(args, "_metis_generated_output", False)
-                                ),
-                                execution=execution.model_dump(),
-                                checkpoint_every=runtime.get(
-                                    "triage_checkpoint_every", 0
-                                ),
-                                quiet=args.quiet,
-                                generated_bases=generated_bases,
-                                codebase_path=args.codebase_path,
-                            )
-                        )
                         pending_error = None
                         try:
                             result = _execute_graph_with_progress(
-                                engine, args, callbacks
+                                engine,
+                                args,
+                                callbacks,
+                                export_directory=export_directory,
+                                generated_bases=generated_bases,
                             )
                         except CancelledError:
                             raise

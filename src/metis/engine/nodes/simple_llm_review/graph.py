@@ -431,6 +431,7 @@ class ReviewGraph:
         *,
         source_map: SourceMap | None = None,
         collect_navigation_evidence: bool = False,
+        emit=None,
     ):
         file_path = request["file_path"]
         snippet = request["snippet"]
@@ -511,6 +512,17 @@ class ReviewGraph:
         chunks = deque(self._chunks(snippet))
         accumulated: list[dict] = []
         app = self._build_app(language_prompts, default_prompt_key, build_prompt)
+
+        def log_findings(group):
+            runlog.event(
+                "artifact",
+                {
+                    "kind": "review_findings",
+                    "file_path": group["file"],
+                    "payload": group,
+                },
+            )
+
         while chunks:
             chunk, chunk_start = chunks.popleft()
             chunk_end = chunk_start + len(source_lines(chunk)) - 1
@@ -557,7 +569,18 @@ class ReviewGraph:
                 navigation_evidence = out["navigation_evidence"]
                 base_state["navigation_evidence"] = navigation_evidence
             if chunk_reviews:
-                accumulated.extend(chunk_reviews)
+                if emit is None:
+                    accumulated.extend(chunk_reviews)
+                else:
+                    group = {
+                        "file": relative_file or file_path,
+                        "file_path": file_path,
+                        "reviews": [
+                            normalize_review_fields(review) for review in chunk_reviews
+                        ],
+                    }
+                    emit(group)
+                    log_findings(group)
 
         file_display = relative_file if relative_file else file_path
         result: dict[str, Any] = {
@@ -567,12 +590,6 @@ class ReviewGraph:
         }
         if navigation_evidence is not None:
             result["navigation_evidence"] = navigation_evidence
-        runlog.event(
-            "artifact",
-            {
-                "kind": "review_findings",
-                "file_path": file_display,
-                "payload": result,
-            },
-        )
+        if emit is None:
+            log_findings(result)
         return result

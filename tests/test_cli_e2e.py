@@ -172,7 +172,7 @@ def test_config_only_triage_validates_findings_before_publication(
     assert not any(item.get("kind") == "prompt" for item in trace)
     if error:
         assert completed.returncode == 1, completed.stdout + completed.stderr
-        assert error in completed.stdout
+        assert error in " ".join(completed.stdout.split())
         assert "Execution graph complete" not in completed.stdout
         assert output.read_text() == "previous report"
         assert not output.with_suffix(".sarif").exists()
@@ -386,8 +386,8 @@ def test_config_cli_keeps_literal_tilde_root_state_local(tmp_path, root_name):
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert list(home_directory.iterdir()) == [sentinel]
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
-    assert list((root / ".metis/checkpoints").glob("graph.*.json"))
-    reports = set((root / "reports").iterdir())
+    assert not list((root / ".metis/checkpoints").glob("graph.*.json"))
+    reports = {path for path in (root / "reports").iterdir() if path.is_file()}
     assert {path.name for path in reports} == {
         "review.json",
         "review.sarif",

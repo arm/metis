@@ -46,6 +46,7 @@ from metis.engine.llm_runner import JsonPromptRequest
 from metis.utils import count_tokens
 
 if TYPE_CHECKING:
+    from metis.engine.stages.output import StreamingOutput
     from metis.engine.source import ProfiledSourceArtifact
     from metis.engine.stages.triage.contracts import TriageAdjudicator
 
@@ -487,6 +488,7 @@ class NodeContext:
     runtime: NodeRuntime
     callbacks: NodeCallbacks
     triage: TriageAdjudicator | None = None
+    output: StreamingOutput | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

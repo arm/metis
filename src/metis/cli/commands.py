@@ -3,18 +3,22 @@
 
 
 import functools
+from contextlib import nullcontext
 from importlib.metadata import version as package_version
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from rich.markup import escape
 
 from metis.engine.execution import ExecutionResult
+from metis.engine.nodes.builtins import streaming_stages
 from metis.json_io import load_json_object_file
 from metis.runtime_settings import TriageOptions
 from .command_runtime import CommandRuntime
 from .output import save_graph_outputs
-from .output import output_files_for_formats
+from .output import graph_output_files
 from .output import output_format
 from .output import save_output
+from .output import streaming_output_files
 from .review_checkpoints import review_checkpoint_callbacks
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
@@ -23,7 +27,6 @@ from metis.sarif.writer import generate_sarif
 from metis.sarif.triage import load_sarif_file
 from metis.usage import usage_operation
 from .triage_cli import run_triage_action
-from .triage_checkpoints import triage_checkpoint_path
 from .utils import (
     check_file_exists,
     build_standard_progress,
@@ -132,59 +135,75 @@ def run_review_code(engine, args, runtime: CommandRuntime):
 
 
 def _run_review_command(engine, mode, target, args, spinner_text):
-    pending_error = None
-    try:
-        outputs = _execute_review(engine, mode, target, args, spinner_text)
-    except BaseException as execution_error:
-        partial = getattr(execution_error, "result", None)
-        outputs = (
-            partial.outputs.get("review")
-            if isinstance(partial, ExecutionResult)
-            else None
-        )
-        if outputs is None or (
-            outputs.get("findings") is None and outputs.get("sarif") is None
-        ):
-            raise
-        pending_error = execution_error
-    outputs = dict(outputs)
-    sarif_output = outputs.get("sarif")
-    formats = tuple(outputs.get("formats", ()))
-    if pending_error is None and getattr(args, "triage", False):
+    with TemporaryDirectory(prefix="metis-review-") as export_directory:
+        pending_error = None
         try:
-            triage = _triage_review_output(
+            outputs = _execute_review(
                 engine,
-                sarif_output,
-                outputs.get("codegraph"),
+                mode,
+                target,
                 args,
-                filename=outputs.get("filename"),
-                formats=formats,
-                mode=mode,
+                spinner_text,
+                export_directory=export_directory,
             )
-        except BaseException as triage_error:
-            pending_error = triage_error
-            partial = getattr(triage_error, "result", None)
-            triage = (
-                partial.outputs.get("triage", {})
+        except BaseException as execution_error:
+            partial = getattr(execution_error, "result", None)
+            outputs = (
+                partial.outputs.get("review")
                 if isinstance(partial, ExecutionResult)
-                else {}
+                else None
             )
-        if triage.get("sarif") is not None:
-            sarif_output = triage["sarif"]
-            formats = tuple(dict.fromkeys((*formats, *triage.get("formats", ()))))
-    outputs.update(formats=formats, sarif=sarif_output)
-    args.output_file = save_graph_outputs(
-        args.output_file,
-        {"review": outputs},
-        args.quiet,
-        generated_output=bool(getattr(args, "_metis_generated_output", False)),
-        codebase_path=getattr(engine, "codebase_path", None),
-        pending_error=pending_error,
-        command="review",
-    )["review"]
+            if outputs is None or not any(
+                outputs.get(name) is not None
+                for name in ("findings", "sarif", "json_path", "sarif_path")
+            ):
+                raise
+            pending_error = execution_error
+        outputs = dict(outputs)
+        sarif_output = outputs.get("sarif")
+        formats = tuple(outputs.get("formats", ()))
+        if pending_error is None and getattr(args, "triage", False):
+            try:
+                triage = _triage_review_output(engine, outputs, args)
+            except BaseException as triage_error:
+                pending_error = triage_error
+                partial = getattr(triage_error, "result", None)
+                triage = (
+                    partial.outputs.get("triage", {})
+                    if isinstance(partial, ExecutionResult)
+                    else {}
+                )
+            if triage:
+                sarif_output = triage.get("sarif", sarif_output)
+                formats = tuple(dict.fromkeys((*formats, *triage.get("formats", ()))))
+                outputs.update(
+                    {
+                        name: value
+                        for name, value in triage.items()
+                        if name in {"json_path", "sarif_path"}
+                    }
+                )
+        outputs.update(formats=formats, sarif=sarif_output)
+        args.output_file = save_graph_outputs(
+            args.output_file,
+            {"review": outputs},
+            args.quiet,
+            generated_output=bool(getattr(args, "_metis_generated_output", False)),
+            codebase_path=getattr(engine, "codebase_path", None),
+            pending_error=pending_error,
+            command="review",
+        )["review"]
 
 
-def _execute_review(engine, mode, target, args, spinner_text):
+def _execute_review(
+    engine,
+    mode,
+    target,
+    args,
+    spinner_text,
+    *,
+    export_directory,
+):
     callbacks = {
         "diagnostic_callback": lambda diagnostic: print_execution_diagnostic(
             diagnostic,
@@ -201,6 +220,43 @@ def _execute_review(engine, mode, target, args, spinner_text):
         "target": target,
         "callbacks": callbacks,
     }
+    result_node = engine.execution._stages["review"].nodes.get("result")
+    if result_node is not None and (
+        not getattr(args, "triage", False)
+        or "triage" in streaming_stages(engine.execution._stages, "triage")
+    ):
+        result_formats = (
+            result_node.formats
+            or tuple(
+                dict.fromkeys(output_format(path) for path in args.output_file or ())
+            )
+            or ("json",)
+        )
+        generated = (
+            bool(getattr(args, "_metis_generated_output", False))
+            or not args.output_file
+        )
+        filename = result_node.filename
+        if generated and filename is None and args.output_file:
+            filename = args.output_file[0]
+        paths = graph_output_files(
+            args.output_file,
+            {
+                "review": {
+                    "formats": result_formats,
+                    "filename": filename,
+                    "findings": {},
+                    "sarif": {},
+                }
+            },
+            args.quiet,
+            generated_output=generated,
+        )["review"]
+        args.output_file = paths
+        args._metis_generated_output = False
+        kwargs["output_path"] = streaming_output_files(
+            {"review": paths}, export_directory
+        )["review"]
     if mode not in {"code", "dir"} or args.quiet:
         return with_spinner(
             spinner_text,
@@ -214,57 +270,26 @@ def _execute_review(engine, mode, target, args, spinner_text):
         reporter = ReviewCodeProgressReporter(progress)
         try:
             callbacks["progress_callback"] = reporter
-            return engine.execute_review(
-                mode,
-                target=target,
-                callbacks=callbacks,
-            )
+            return engine.execute_review(mode, **kwargs)
         finally:
             reporter.finish()
 
 
-def _triage_review_output(
-    engine, sarif_payload, codegraph, args, *, filename, formats, mode
-):
+def _triage_review_output(engine, outputs, args):
     options = _triage_options(args)
-    generated_output = (
-        bool(getattr(args, "_metis_generated_output", False)) or not args.output_file
+    source_path = outputs.get("json_path") or outputs.get("sarif_path")
+    action = (
+        functools.partial(engine.execute_triage_file, source_path, source_path)
+        if source_path is not None
+        else functools.partial(engine.execute_triage, outputs.get("sarif"))
     )
-    selected = (
-        [filename] if generated_output and filename is not None else args.output_file
-    )
-    if not selected:
-        selected = output_files_for_formats(
-            None, ("sarif",), command=f"review_{mode}", generated_output=True
-        )
-        args.output_file = selected
-        args._metis_generated_output = True
-    explicit_formats = (
-        () if generated_output else tuple(output_format(path) for path in selected)
-    )
-    paths = output_files_for_formats(
-        selected,
-        tuple(dict.fromkeys((*formats, *explicit_formats))),
-        command=f"review_{mode}",
-        generated_output=generated_output,
-    )
-    checkpoint_path = (
-        triage_checkpoint_path(paths or selected, reserved_paths=paths)
-        if getattr(args, "_triage_checkpoint_every", 50) > 0
-        else None
-    )
-
     with usage_operation("triage"):
         return run_triage_action(
             args,
             action=functools.partial(
-                engine.execute_triage,
-                sarif_payload,
-                codegraph=codegraph,
+                action,
+                codegraph=outputs.get("codegraph"),
                 options=options,
-                checkpoint_path=str(checkpoint_path)
-                if checkpoint_path is not None
-                else None,
             ),
             spinner_text="Triaging findings...",
         )
@@ -358,85 +383,111 @@ def run_triage(engine, findings_path, args, runtime: CommandRuntime):
     if not Path(findings_path).is_file():
         raise FileNotFoundError(f"File not found: {findings_path}")
     suffix = Path(findings_path).suffix.lower()
-    results = None
-    if suffix == ".json":
-        print_console("[cyan]Loading JSON findings...[/cyan]", args.quiet)
-        payload = load_json_object_file(findings_path)
-        if isinstance(payload.get("reviews"), list):
-            results = payload
-            sarif_payload = generate_sarif(results, read_source=False)
-        elif isinstance(payload.get("runs"), list):
-            sarif_payload = payload
-        else:
-            raise ValueError(
-                "JSON input must contain a Metis reviews array or a SARIF runs array."
-            )
-    elif suffix == ".sarif":
-        print_console("[cyan]Loading SARIF findings...[/cyan]", args.quiet)
-        sarif_payload = load_sarif_file(findings_path)
-    else:
+    if suffix not in {".json", ".sarif"}:
         raise ValueError("Only .sarif and .json input files are supported.")
-    options = _triage_options(args)
-    requested_outputs = list(args.output_file or ())
-    configured_filename = None
-    configured_formats = ()
-    execution = getattr(engine, "execution", None)
-    if not requested_outputs and execution is not None:
-        stage = execution.configuration.stages.triage
-        if stage is not None:
-            for node in stage.nodes.values():
-                if node.filename is not None:
-                    configured_filename = node.filename
-                    configured_formats = node.formats or ()
-                    requested_outputs = [configured_filename]
-                    break
-    checkpoint_path = next(
-        (path for path in requested_outputs if Path(path).suffix.lower() == ".sarif"),
-        str(Path(requested_outputs[0]).with_suffix(".sarif"))
-        if requested_outputs
-        else str(Path(findings_path).with_suffix(".sarif"))
-        if suffix == ".json"
-        else findings_path,
+    stage = engine.execution._stages.get("triage")
+    nodes = stage.nodes if stage is not None else {}
+    result_node = next(
+        (node for node in nodes.values() if node.filename is not None),
+        nodes.get("result"),
     )
-
-    pending_error = None
-    try:
-        triage = run_triage_action(
-            args,
-            action=functools.partial(
-                engine.execute_triage,
-                sarif_payload,
-                options=options,
-                checkpoint_path=checkpoint_path,
-            ),
-            spinner_text="Triaging findings...",
+    filename = getattr(result_node, "filename", None)
+    formats = tuple(getattr(result_node, "formats", None) or ())
+    streaming = "triage" in streaming_stages(engine.execution._stages, "triage")
+    if not formats and args.output_file:
+        formats = tuple(dict.fromkeys(output_format(path) for path in args.output_file))
+    if streaming and not formats and filename is None:
+        formats = ("sarif",)
+    paths = (
+        graph_output_files(
+            args.output_file or ([findings_path] if filename is None else None),
+            {
+                "triage": {
+                    "formats": formats,
+                    "filename": filename,
+                    "sarif_path": findings_path,
+                }
+            },
+            args.quiet,
+            generated_output=not args.output_file and filename is not None,
+        )["triage"]
+        if streaming
+        else []
+    )
+    destination = next(
+        (
+            path
+            for path in paths
+            if output_format(path)
+            in ({"json"} if suffix == ".json" else {"json", "sarif"})
+        ),
+        None,
+    )
+    temporary = (
+        TemporaryDirectory(prefix="metis-triage-")
+        if streaming and destination is None
+        else nullcontext()
+    )
+    with temporary as directory:
+        if directory is not None:
+            destination = Path(directory) / "triage.json"
+        results = None
+        if streaming:
+            action = functools.partial(
+                engine.execute_triage_file, findings_path, destination
+            )
+        else:
+            if suffix == ".json":
+                payload = load_json_object_file(findings_path)
+                if isinstance(payload.get("reviews"), list):
+                    results = payload
+                    payload = generate_sarif(results, read_source=False)
+                elif not isinstance(payload.get("runs"), list):
+                    raise ValueError(
+                        "JSON input must contain a Metis reviews array or a SARIF runs array."
+                    )
+            else:
+                payload = load_sarif_file(findings_path)
+            action = functools.partial(engine.execute_triage, payload)
+        pending_error = None
+        try:
+            triage = run_triage_action(
+                args,
+                action=functools.partial(
+                    action,
+                    options=_triage_options(args),
+                ),
+                spinner_text="Triaging findings...",
+            )
+        except BaseException as exc:
+            partial = getattr(exc, "result", None)
+            if not isinstance(partial, ExecutionResult):
+                raise
+            triage = partial.outputs.get("triage", {})
+            if not any(
+                triage.get(name) is not None
+                for name in ("sarif", "json_path", "sarif_path")
+            ):
+                raise
+            pending_error = exc
+        filename = triage.get("filename") or filename
+        selected_outputs = paths if streaming else args.output_file
+        if not selected_outputs and filename is None:
+            selected_outputs = [findings_path]
+        save_graph_outputs(
+            selected_outputs,
+            {
+                "triage": {
+                    **triage,
+                    "findings": results,
+                    "formats": triage.get("formats", formats),
+                    "filename": filename,
+                }
+            },
+            args.quiet,
+            generated_output=not selected_outputs,
+            codebase_path=getattr(engine, "codebase_path", None),
+            pending_error=pending_error,
+            command="triage",
         )
-    except BaseException as exc:
-        partial = getattr(exc, "result", None)
-        if not isinstance(partial, ExecutionResult):
-            raise
-        triage = partial.outputs.get("triage", {})
-        if triage.get("sarif") is None:
-            raise
-        pending_error = exc
-    selected_outputs = args.output_file
-    filename = triage.get("filename") or configured_filename
-    if not selected_outputs and filename is None:
-        selected_outputs = [findings_path]
-    save_graph_outputs(
-        selected_outputs,
-        {
-            "triage": {
-                **triage,
-                "findings": results,
-                "filename": filename,
-                "formats": triage.get("formats", configured_formats),
-            }
-        },
-        args.quiet,
-        generated_output=not selected_outputs,
-        codebase_path=getattr(engine, "codebase_path", None),
-        pending_error=pending_error,
-        command="triage",
-    )
     print_console("[green]Triage complete.[/green]", args.quiet)

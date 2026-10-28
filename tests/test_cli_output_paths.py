@@ -7,6 +7,32 @@ import pytest
 
 from metis.cli.utils import output_files_for_formats
 from metis.cli.utils import save_output
+from metis.generated_artifacts import generated_artifact_paths
+
+
+@pytest.mark.parametrize("format_name", ["html", "csv"])
+@pytest.mark.parametrize("source_kind", ["json", "sarif"])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_file_backed_exports_register_only_successful_replacements(
+    tmp_path, format_name, source_kind, invalid
+):
+    source = tmp_path / f"input.{source_kind}"
+    payload = (
+        '{"reviews":[]}' if source_kind == "json" else '{"version":"2.1.0","runs":[]}'
+    )
+    source.write_text("invalid" if invalid else payload)
+    target = tmp_path / f"report.{format_name}"
+    target.write_text("previous report")
+    options = {f"{source_kind}_path": source, "codebase_path": tmp_path, "quiet": True}
+    if invalid:
+        with pytest.raises(ValueError):
+            save_output(target, None, **options)
+        assert target.read_text() == "previous report"
+        assert generated_artifact_paths(tmp_path) == frozenset()
+    else:
+        save_output(target, None, **options)
+        assert target.read_text() != "previous report"
+        assert generated_artifact_paths(tmp_path) == frozenset({target.resolve()})
 
 
 def test_companion_outputs_preserve_dotted_basename(tmp_path: Path):

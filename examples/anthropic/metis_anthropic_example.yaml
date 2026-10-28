@@ -26,7 +26,6 @@ metis_engine:
 
   max_token_length: 250000
   max_workers: 5
-  triage_checkpoint_every: 50
   embed_dim: 3072
   hnsw_kwargs:
     hnsw_m: 16

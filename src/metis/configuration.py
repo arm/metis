@@ -303,7 +303,6 @@ def normalize_engine_config(
         "embed_dim",
         "doc_chunk_size",
         "doc_chunk_overlap",
-        "triage_checkpoint_every",
     ):
         runtime[name] = engine_cfg[name]
     runtime["review_checkpoints_enabled"] = review_checkpoints_enabled
@@ -359,8 +358,7 @@ def normalize_shared_engine_settings(
         if settings[name] is None:
             settings[name] = settings["max_workers"]
         _required_positive_int(settings, name, section=section)
-    for name in ("doc_chunk_overlap", "triage_checkpoint_every"):
-        _required_positive_int(settings, name, section=section, minimum=0)
+    _required_positive_int(settings, "doc_chunk_overlap", section=section, minimum=0)
     if settings["doc_chunk_overlap"] >= settings["doc_chunk_size"]:
         raise ValueError(
             f"{section}.doc_chunk_overlap must be less than doc_chunk_size"

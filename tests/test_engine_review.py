@@ -440,6 +440,9 @@ def test_patch_review_uses_simple_llm_review(engine):
         review_graph=engine._get_review_graph(),
         checkpoint_session=None,
         failures=[],
+        emit=None,
+        on_summary=None,
+        summary_input=None,
     )
 
 

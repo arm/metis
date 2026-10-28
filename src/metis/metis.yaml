@@ -4,7 +4,6 @@ metis_engine:
   # Null inherits max_workers. Both limits apply across one engine.
   max_active_nodes: null
   max_concurrent_executions: null
-  triage_checkpoint_every: 50
   review_checkpoints: true
   llm_max_retries: 5
   embed_dim: 3072

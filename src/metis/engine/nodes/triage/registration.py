@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 from typing import cast
 from typing import TYPE_CHECKING
@@ -20,12 +21,11 @@ from metis.engine.stages.triage.models import TriageRun
 if TYPE_CHECKING:
     from .service import TriageClassifierService
     from metis.engine.capabilities.navigation import NavigationCapability
+    from metis.engine.stages.triage.service import TriageService
     from metis.memory import MemoryService
 
 
-def create_node(
-    classifier_service: TriageClassifierService,
-) -> NodeRegistration:
+def create_node(classifier_service: TriageClassifierService) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
         adjudicator = invocation.context.triage
         if adjudicator is None:
@@ -44,9 +44,17 @@ def create_node(
             else None
         )
         run = cast(TriageRun, invocation.inputs["request"])
+        stream = invocation.context.output
+        store = stream.triage if stream is not None else None
+        include_triaged = stream.include_triaged if store is not None else False
+        remaining = (
+            store.count(include_triaged=include_triaged)
+            if store is not None
+            else len(run.remaining)
+        )
         codegraph_file_nodes: dict[str, list[FunctionNode]] | None = None
         codegraph_callers: dict[str, tuple[str, ...]] | None = None
-        if codegraph is not None and run.remaining:
+        if codegraph is not None and remaining:
             codegraph_file_nodes = {}
             for node in codegraph.nodes.values():
                 codegraph_file_nodes.setdefault(node.file_path, []).append(node)
@@ -54,13 +62,12 @@ def create_node(
                 name: tuple(dict.fromkeys(callers))
                 for name, callers in _build_reverse_edges(codegraph, str).items()
             }
-        triaged = adjudicator.triage_run(
-            run,
-            jobs=invocation.context.jobs,
-            classifier=partial(
+        options = {
+            "jobs": invocation.context.jobs,
+            "classifier": partial(
                 classifier_service.classify,
                 navigation=navigation,
-                codegraph=codegraph,
+                codegraph=codegraph if remaining else None,
                 unavailable_files=(
                     reference.failed_files if reference is not None else ()
                 ),
@@ -71,11 +78,25 @@ def create_node(
                 codegraph_file_nodes=codegraph_file_nodes,
                 codegraph_callers=codegraph_callers,
             ),
-            memory_service=memory,
-            progress_callback=invocation.context.callbacks.progress,
-            debug_callback=invocation.context.callbacks.debug,
-            checkpoint_callback=invocation.context.callbacks.checkpoint,
-        )
+            "memory_service": memory,
+            "progress_callback": invocation.context.callbacks.progress,
+            "debug_callback": invocation.context.callbacks.debug,
+            "checkpoint_callback": invocation.context.callbacks.checkpoint,
+        }
+        if store is None:
+            triaged = adjudicator.triage_run(run, **options)
+        else:
+            processed = cast("TriageService", adjudicator).triage_file(
+                store,
+                workers=invocation.context.runtime.max_workers,
+                include_triaged=include_triaged,
+                **options,
+            )
+            triaged = replace(
+                run,
+                total=remaining,
+                processed=processed,
+            )
         return NodeResult({"run": triaged})
 
     return NodeRegistration(

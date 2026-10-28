@@ -605,7 +605,10 @@ def test_recursive_navigation_stays_inside_codebase(tmp_path, native_grep):
 
 
 @pytest.mark.parametrize("native", [False, True])
-@pytest.mark.parametrize("state_name", [".metis", ".METIS", "relocated", "case_alias"])
+@pytest.mark.parametrize(
+    "state_name",
+    [".metis", ".METIS", "relocated", "case_alias"],
+)
 def test_navigation_excludes_metis_state(tmp_path, native, state_name):
     state_paths = {"relocated": "storage/cache", "case_alias": "Storage/Cache"}
     state = tmp_path / state_paths.get(state_name, state_name)
