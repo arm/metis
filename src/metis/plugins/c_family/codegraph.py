@@ -33,6 +33,7 @@ from .ast import CFamilyAstMixin
 from .ast import CFamilyFunctionSyntax
 from .ast import _declarator_name_node
 from .ast import _expression_children
+from .ast import _has_c_language_linkage
 from .ast import _lexical_scope
 from .ast import _normalized_syntax
 from .linking import ParsedFunction
@@ -562,8 +563,16 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             if _node_kind(node) not in {"declaration", "field_declaration"}:
                 continue
             syntax = self._function_syntax(node, source)
-            if syntax is not None:
-                declarations.append(syntax)
+            if syntax is not None and "cpp" in header_node_languages(node, source):
+                declarations.append(
+                    replace(
+                        syntax,
+                        has_external_c_linkage=(
+                            _has_c_language_linkage(node, source)
+                            and not self._has_internal_linkage(node, source)
+                        ),
+                    )
+                )
         return declarations
 
     def _collect_lock_events(

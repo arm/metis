@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 
 from metis.engine.codegraph import CallKind
 from metis.engine.codegraph import CallSite
@@ -70,7 +71,7 @@ def _resolve_calls(
     definitions_by_qualified_name: dict[str, list[ParsedFunction]] = {}
     c_definitions_by_file: dict[tuple[str, str], list[ParsedFunction]] = {}
     external_c_definitions: dict[str, list[ParsedFunction]] = {}
-    for function in functions:
+    for function in _with_c_linkage(functions, declarations):
         definitions_by_name.setdefault(function.node.name, []).append(function)
         if function.node.language == "c":
             c_definitions_by_file.setdefault(
@@ -235,6 +236,41 @@ def _resolve_calls(
                     continue
                 target.is_public_entrypoint = True
                 target.entrypoint_reason = GLOBAL_INITIALIZER_ENTRYPOINT_REASON
+
+
+def _with_c_linkage(
+    functions: list[ParsedFunction], declarations: list[CFamilyFunctionSyntax]
+) -> list[ParsedFunction]:
+    c_linkage_names = {
+        declaration.qualified_name
+        for declaration in declarations
+        if declaration.has_external_c_linkage
+    }
+    if not c_linkage_names:
+        return functions
+    cpp_definitions = {
+        (function.node.file_path, function.node.start_byte, function.node.end_byte)
+        for function in functions
+        if function.node.language == "cpp"
+    }
+    # C linkage exposes exported C definitions to C++ callers. When both parses
+    # describe the same definition, retain its existing C++ body context instead.
+    return [
+        replace(function, visible_languages=frozenset({"c", "cpp"}))
+        if (
+            function.node.language == "c"
+            and not function.node.has_internal_linkage
+            and function.syntax.qualified_name in c_linkage_names
+            and (
+                function.node.file_path,
+                function.node.start_byte,
+                function.node.end_byte,
+            )
+            not in cpp_definitions
+        )
+        else function
+        for function in functions
+    ]
 
 
 def _pointer_targets_for_call(

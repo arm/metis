@@ -63,6 +63,7 @@ class CFamilyFunctionSyntax:
     parameters: tuple[FunctionParameter, ...]
     minimum_argument_count: int
     maximum_argument_count: int | None
+    has_external_c_linkage: bool = False
 
 
 class CFamilyAstMixin:
@@ -409,6 +410,19 @@ def _callable_name(node: Any, source: bytes) -> str:
             return _normalized_syntax(_node_text(current, source))
         break
     return _identifier_from_node(node, source)
+
+
+def _has_c_language_linkage(node: Any, source: bytes) -> bool:
+    parent = node.parent
+    while parent is not None:
+        kind = _node_kind(parent)
+        if kind in {"class_specifier", "struct_specifier", "union_specifier"}:
+            return False
+        if kind == "linkage_specification":
+            value = _node_child_by_field_name(parent, "value")
+            return value is not None and _node_text(value, source) == '"C"'
+        parent = parent.parent
+    return False
 
 
 def _lexical_scope(node: Any, source: bytes) -> tuple[str, ...]:

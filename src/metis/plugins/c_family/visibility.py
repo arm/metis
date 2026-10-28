@@ -133,7 +133,12 @@ def _condition_value(
             if len(children) == 1
             else None
         )
-    operator = _node_text(_node_child_by_field_name(node, "operator"), source)
+    if kind not in {"unary_expression", "binary_expression"}:
+        return None
+    operator_node = _node_child_by_field_name(node, "operator")
+    if operator_node is None:
+        return None
+    operator = _node_text(operator_node, source)
     if kind == "unary_expression" and operator == "!":
         value = _condition_value(
             _node_child_by_field_name(node, "argument"),

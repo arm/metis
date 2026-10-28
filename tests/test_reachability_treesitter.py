@@ -341,6 +341,95 @@ def test_c_family_provider_keeps_c_grammar_for_valid_c_header(tmp_path):
     assert result.diagnostics == ()
 
 
+@pytest.mark.parametrize("extension", (".h", ".hpp"))
+@pytest.mark.parametrize(
+    "condition",
+    ("ENABLED(FEATURE)", "!ENABLED(FEATURE)", "ENABLED(FEATURE) && 1", "'a'"),
+)
+def test_header_keeps_functions_under_unknown_macro_conditions(
+    tmp_path, extension, condition
+):
+    name = f"shared{extension}"
+    (tmp_path / name).write_text(
+        "#define ENABLED(feature) 1\n"
+        f"#if {condition}\n"
+        "int guarded(void) { return 1; }\n"
+        "#else\n"
+        "int alternative(void) { return 0; }\n"
+        "#endif\n"
+        "int plain(void) { return 2; }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, name)
+
+    assert result.failed_files == ()
+    assert result.diagnostics == ()
+    signature = "()" if extension == ".hpp" else ""
+    for function in ("guarded", "alternative", "plain"):
+        assert result.graph.get_node(f"{name}::{function}{signature}") is not None
+
+
+@pytest.mark.parametrize(
+    ("declaration", "storage", "resolves"),
+    (
+        ('extern "C" int api(void);', "", True),
+        ('extern "C" { int api(void); }', "", True),
+        ('extern "C++" { extern "C" int api(void); }', "", True),
+        ("int api(void);", "", False),
+        ('extern "C++" int api(void);', "", False),
+        ('extern "C" { extern "C++" int api(void); }', "", False),
+        ('extern "C" { static int api(void); }', "", False),
+        ('extern "C" { struct Widget { int api(void); }; }', "", False),
+        ('#if 0\nextern "C" int api(void);\n#endif', "", False),
+        ('extern "C" int api(void);', "static ", False),
+    ),
+)
+def test_shared_header_respects_c_linkage(tmp_path, declaration, storage, resolves):
+    (tmp_path / "shared.h").write_text(
+        "#ifdef __cplusplus\n"
+        f"{declaration}\n"
+        "#else\n"
+        f"{storage}int api(void) {{ return 1; }}\n"
+        "int c_only(void) { return 2; }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.c").write_text(
+        '#include "shared.h"\nint c_entry(void) { return api(); }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "client.cpp").write_text(
+        '#include "shared.h"\n'
+        "int cpp_entry() { return api(); }\n"
+        "int cpp_indirect() { int (*fp)(void) = &api; return fp(); }\n"
+        "int (*cpp_callback)(void) = &api;\n"
+        "int invalid_entry() { return c_only(); }\n",
+        encoding="utf-8",
+    )
+
+    result = _build_c_family_graph(tmp_path, "shared.h", "main.c", "client.cpp")
+    graph = result.graph
+
+    assert result.failed_files == ()
+    assert result.diagnostics == ()
+    assert graph.get_node("shared.h::api").language == "c"
+    assert graph.get_node("main.c::c_entry").resolved_calls == (
+        [] if storage else ["shared.h::api"]
+    )
+    targets = ["shared.h::api"] if resolves else []
+    direct = graph.get_node("client.cpp::cpp_entry()")
+    indirect = graph.get_node("client.cpp::cpp_indirect()")
+    assert direct.resolved_calls == targets
+    assert graph.unresolved_calls_for(direct) == ([] if resolves else ["api"])
+    assert indirect.resolved_calls == targets
+    references = [ref.target_ids for ref in indirect.references if ref.symbol == "api"]
+    assert references == [tuple(targets)]
+    callback = graph.globals["client.cpp::cpp_callback"]
+    assert callback.references[0].target_ids == tuple(targets)
+    assert graph.get_node("client.cpp::invalid_entry()").resolved_calls == []
+
+
 @pytest.mark.parametrize(
     "guard",
     (
@@ -477,12 +566,17 @@ def test_c_header_with_only_cpp_visible_functions_recovers_cpp_definitions(tmp_p
 
 @pytest.mark.parametrize("guard", ("#ifdef __cplusplus", "#if defined(__cplusplus)"))
 @pytest.mark.parametrize("cpp_syntax", (False, True))
+@pytest.mark.parametrize("c_linkage", (False, True))
 def test_shared_header_keeps_language_specific_function_bodies(
-    tmp_path, guard, cpp_syntax
+    tmp_path, guard, cpp_syntax, c_linkage
 ):
     cpp_guard = "if constexpr (true) " if cpp_syntax else ""
+    declaration = (
+        'extern "C" { int shared(void); int wrapper(void); }' if c_linkage else ""
+    )
     (tmp_path / "shared.h").write_text(
         f"{guard}\n"
+        f"{declaration}\n"
         "int cpp_only(void) { return 2; }\n"
         "#else\n"
         "int c_only(void) { return 3; }\n"
