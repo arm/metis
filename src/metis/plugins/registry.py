@@ -12,6 +12,7 @@ from concurrent.futures import CancelledError
 from dataclasses import dataclass, field, fields
 from importlib import metadata
 from importlib.resources import files
+from pathlib import PurePath
 from threading import RLock
 from typing import Any
 
@@ -387,20 +388,28 @@ class LanguagePluginRegistry:
 
     def get_manifest_for_path(self, path: str) -> LanguagePluginManifest | None:
         path_text = str(path or "")
-        extension = ""
-        if "." in path_text:
-            extension = "." + path_text.rsplit(".", 1)[1].lower()
+        if not path_text:
+            return None
+        name = PurePath(path_text).name.lower()
+        extension = "." + name.rsplit(".", 1)[1] if "." in name else ""
         manifest = self.get_manifest_for_extension(extension)
         if manifest is not None:
             return manifest
-        name = path_text.rsplit("/", 1)[-1].lower()
         matches = [
             manifest
             for manifest in self._manifests()
             for pattern in manifest.filename_patterns
             if _matches_suffix_pattern(name, pattern)
         ]
-        return _select_manifest(matches)
+        manifest = _select_manifest(matches)
+        if manifest is not None:
+            return manifest
+        docs_extensions = self._plugin_config.get("docs", {}).get(
+            "supported_extensions", []
+        )
+        if extension in {str(ext).lower() for ext in docs_extensions}:
+            return None
+        return self.get_manifest("default")
 
     def get_plugin(self, name: str):
         handle = self._handle_for_name(name)
@@ -429,7 +438,9 @@ class LanguagePluginRegistry:
 
     def language_name_for_path(self, path: str) -> str | None:
         manifest = self.get_manifest_for_path(path)
-        return manifest.name if manifest is not None else None
+        if manifest is None or manifest.name == "default":
+            return None
+        return manifest.name
 
     def codegraph_registration_for_path(self, path: str) -> str | None:
         manifest = self.get_manifest_for_path(path)

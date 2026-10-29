@@ -5,6 +5,11 @@ docs:
   - .txt
   - .pdf
   - .rst
+  - .markdown
+  - .mdown
+  - .mkdn
+  - .adoc
+  - .asciidoc
 general_prompts:
   custom_guidance_precedence: |-
     Instruction precedence: When 'Custom Guidance' conflicts with any default

@@ -286,6 +286,26 @@ def test_startup_plugin_config_excludes_language_prompt_configs():
     assert set(plugin_config) == {"docs", "general_prompts"}
 
 
+def test_default_language_plugin_only_handles_unregistered_paths():
+    registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
+    plugin = registry.get_plugin("default")
+    assert plugin is not None
+    for path in ("src/example.r", "src/example.b", "bin/extensionless"):
+        assert registry.get_plugin_for_path(path) is plugin
+        assert registry.language_name_for_path(path) is None
+    assert registry.get_plugin_for_path(".git/config") is plugin
+    assert registry.get_plugin_for_path(".metisignore") is plugin
+    assert registry.codegraph_registration_for_path("src/example.r") is None
+    assert registry.language_name_for_path("src/example.cpp") == "cpp"
+    assert registry.language_name_for_path("rtl/example.sv.vp") == "systemverilog"
+
+
+@pytest.mark.parametrize("path", ["", "README.md", "notes.TXT"])
+def test_default_language_plugin_excludes_docs(path):
+    registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
+    assert registry.get_plugin_for_path(path) is None
+
+
 def test_registry_loads_required_prompt_keys_for_supported_languages():
     registry = registry_module.LanguagePluginRegistry.from_config(load_plugin_config())
 
@@ -309,6 +329,7 @@ def test_registry_loads_required_prompt_keys_for_supported_languages():
         "c",
         "cpp",
         "csharp",
+        "default",
         "go",
         "ipynb",
         "java",

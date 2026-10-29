@@ -102,6 +102,32 @@ def test_simple_llm_review_processes_the_selected_scope(engine):
     assert service.execute_standard_review_with_outcome.call_args.args == (files,)
 
 
+def test_default_language_review_uses_navigation(engine):
+    source = Path(engine.codebase_path) / "main.r"
+    source.write_text("guard()\n", encoding="utf-8")
+    (source.parent / "guard.txt").write_text("guard evidence\n", encoding="utf-8")
+    navigation = engine.capabilities["navigation"]
+    graph = engine._get_review_graph(navigation=navigation)
+    graph.max_token_length = 20_000
+
+    def respond(request):
+        tool = next(tool for tool in request.model_tools if tool.name == "sed")
+        assert "guard evidence" in tool.invoke(
+            {"path": "guard.txt", "start_line": 1, "end_line": 1}
+        )
+        return [{"issue": "Check guard", "code_snippet": "guard()"}]
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    run = _simple_llm_review(engine).run_review(
+        ReviewCommand(mode="file", target=str(source)),
+        jobs=engine.execution._jobs,
+        navigation=navigation,
+    )
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result.reviews[0].file == "main.r"
+    graph._prompt_runner.invoke.assert_called_once()
+
+
 @pytest.mark.parametrize("failure", ["first", "second", "cancelled"])
 def test_simple_review_stops_scheduling_and_retains_completed_results(
     tmp_path, dummy_llm, capability_settings, failure
