@@ -15,6 +15,7 @@ import metis.engine.capabilities.indexing as indexing_service_mod
 from metis.engine import MetisEngine
 from metis.engine import ExecutionGraphError
 from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
+from metis.generated_artifacts import generated_artifact_publication
 
 
 def _build_engine(
@@ -72,6 +73,34 @@ def test_direct_code_file_selection_respects_metisignore(
 
     assert engine.repository.is_code_file_selected("keep.py") is True
     assert engine.repository.is_code_file_selected("drop.py") is False
+
+
+def test_default_language_discovery_preserves_review_boundaries(
+    tmp_path, dummy_backend, dummy_llm, capability_settings
+):
+    for name in ("keep.r", "excluded.r", "ignored.b", "README.md"):
+        (tmp_path / name).touch()
+    (tmp_path / ".metisignore").write_text(
+        "ignored.b\n.metisignore\n", encoding="utf-8"
+    )
+    report = tmp_path / "review.json"
+    with generated_artifact_publication(tmp_path, report):
+        report.write_text('{"reviews": []}', encoding="utf-8")
+
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        capability_settings,
+        review_code_exclude_paths=["excluded.r"],
+    )
+    try:
+        assert {
+            Path(path).name
+            for path in engine.repository.get_code_files(include_suffixed_sources=True)
+        } == {"keep.r"}
+    finally:
+        engine.close()
 
 
 @pytest.mark.parametrize("root_path", ["missing", "file", "missing/..", "file/.."])
@@ -402,7 +431,7 @@ def test_perl_files_follow_repository_review_selection_rules(
         for path in engine.repository.get_code_files(include_suffixed_sources=True)
     )
 
-    assert files == ["src/app.psgi", "src/keep.pl"]
+    assert files == ["src/app.psgi", "src/keep.pl", "src/legacy.cgi"]
 
 
 def test_concurrent_metisignore_load_waits_for_initialized_spec(

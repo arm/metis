@@ -67,13 +67,27 @@ Use `filename_patterns` when the language marker appears before another suffix:
 - `top.v.pp` matches `.v.*`
 - `defs.vh.generated` matches `.vh.*`
 
-Keep exact extensions and filename patterns separate. A discoverable manifest
-needs at least one entry across those matching fields. `source_extensions` and
-`header_extensions` add file-role metadata; they do not replace `extensions`
-for matching.
-Metis tries exact final-extension matches before filename patterns. Within the
-applicable group, higher `priority` wins and equal-priority cross-language
-matches are ambiguous.
+Keep exact extensions and filename patterns separate. Manifests need at least
+one matching entry; the built-in `default` fallback is exempt. `source_extensions`
+and `header_extensions` add file-role metadata, not matching rules.
+Metis matches basename extensions, including registered dotfiles, before filename
+patterns. Higher `priority` wins within each group; cross-language ties are ambiguous.
+
+Extension lookups stay explicit. Path lookups also support filename patterns and
+the `default` fallback.
+
+## Default language
+
+Unmatched files, including extensionless files, use `default` for file and patch
+review. It provides generic security prompts and navigation, without
+grammar, indexing, or CodeGraph support. Grant `navigation` to custom review nodes.
+
+Review discovery respects `.metisignore` and review path filters. It excludes
+configured documentation, `.metis/` under the codebase root, and unchanged
+registered reports. Input must be UTF-8. Use `.metisignore` for other exclusions,
+including binaries and version-control metadata.
+
+Override the plugin through `language_plugins.default`, like other built-ins.
 
 ## Language YAML
 

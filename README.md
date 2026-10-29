@@ -57,6 +57,7 @@ Metis includes support for the following languages:
 | PHP | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | AArch64 Assembly | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | Jupyter Notebook | Language-plugin simple LLM review | Navigation-assisted LLM | Python Tree-sitter code splitting |
+| Other languages | Default-plugin simple LLM review with navigation | Navigation-assisted LLM | UTF-8 text; no indexing or CodeGraph |
 
 For the current review graph and SARIF triage flow, see
 [docs/execution-graph.md](docs/execution-graph.md) and

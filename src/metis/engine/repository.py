@@ -11,6 +11,7 @@ from threading import Lock
 import pathspec
 from llama_index.core.node_parser import SentenceSplitter
 
+from metis.generated_artifacts import generated_artifact_paths
 from metis.utils import resolve_path_within_root
 
 from .runtime import EngineConfig
@@ -253,6 +254,7 @@ class EngineRepository:
         if any(part.casefold() == ".metis" for part in relative_base.parts):
             return []
         metisignore_spec = self.load_metisignore()
+        generated_paths = generated_artifact_paths(self._config.codebase_path)
         file_list = []
         for root, directories, files in os.walk(
             base_path, onerror=self.handle_discovery_error
@@ -262,6 +264,8 @@ class EngineRepository:
             ]
             for file in files:
                 full_path = os.path.join(root, file)
+                if generated_paths and Path(full_path).resolve() in generated_paths:
+                    continue
                 if not self.is_code_file_selected(
                     full_path,
                     include_suffixed_sources=include_suffixed_sources,
@@ -294,7 +298,13 @@ class EngineRepository:
         if not os.path.isfile(full_path):
             return False
         if include_suffixed_sources:
-            if self.get_language_name_for_path(full_path) is None:
+            registry = self._config.language_registry
+            match = (
+                registry.get_manifest_for_path(full_path)
+                if registry is not None
+                else self.get_language_name_for_path(full_path)
+            )
+            if match is None:
                 return False
         elif (
             os.path.splitext(full_path)[1].lower()

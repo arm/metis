@@ -1,0 +1,3 @@
+name: default
+implementation: metis.plugins.default_plugin:DefaultLanguagePlugin
+config_resource: languages/default.yaml
