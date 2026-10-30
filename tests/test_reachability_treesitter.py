@@ -5,7 +5,11 @@ from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
+import os
 from pathlib import Path
+import subprocess
+import sys
+from textwrap import dedent
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -235,6 +239,65 @@ class _CountingGraphNodes(dict):
     def get(self, name, default=None):
         self.node_lookups += 1
         return super().get(name, default)
+
+
+@pytest.mark.parametrize("language", ("c", "cpp"))
+def test_c_family_codegraph_preserves_large_line_numbers_without_native_crash(language):
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "faulthandler",
+            "-c",
+            dedent(
+                """
+                from concurrent.futures import ThreadPoolExecutor
+                import sys
+
+                from metis.engine.codegraph import CodeGraphProviderContext
+                from metis.engine.source.source_map import SourceMap
+                from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
+
+                language = sys.argv[1]
+                path = f"driver.{language}"
+                source = b"int target(int a) { return a; }\\n" + b"".join(
+                    b"int f%d(int a) { if (a > %d) return a * 2; return target(a); }\\n"
+                    % (index, index)
+                    for index in range(1000)
+                )
+                context = CodeGraphProviderContext(
+                    get_language_name_for_path=lambda path: language,
+                    has_language_file_role=lambda path, role: role == "source",
+                    source_for_path=lambda path: source,
+                )
+                provider = CFamilyCodeGraphProvider(context)
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    result = executor.submit(
+                        provider.build_graph, codebase_path=".", files=(path,)
+                    ).result()
+                assert result.failed_files == (), result.diagnostics
+                assert result.diagnostics == ()
+                assert result.processed_files == (path,)
+                assert len(result.graph.nodes) == 1001
+                suffix = "(int)" if language == "cpp" else ""
+                for index in range(1000):
+                    node = result.graph.get_node(f"{path}::f{index}{suffix}")
+                    assert (node.line_number, node.end_line) == (index + 2, index + 2)
+                    assert node.resolved_calls == [f"{path}::target{suffix}"]
+                source_map = SourceMap.for_bytes(path, source)
+                assert source_map.find_function_span(name="f999") == (1001, 1001)
+                """
+            ),
+            language,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize(
