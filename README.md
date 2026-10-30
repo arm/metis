@@ -223,7 +223,7 @@ Configuration covers:
 
 - **LLM provider:** chat model and provider connection settings
 - **Embedding provider:** models and connection settings used by Index
-- **Engine behavior:** max workers and max token length
+- **Engine behavior:** max workers, max token length, and per-node concurrency
 - **Query behavior:** model overrides, token limit, temperature, and similarity top-k
 - **Review checkpoints:** project-local resume storage, enabled by default;
   see [checkpoints and resume](docs/execution-graph.md#review-checkpoints-and-resume).

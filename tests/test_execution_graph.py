@@ -619,6 +619,30 @@ def test_node_max_concurrency_caps_runtime_limit(
     assert context.jobs.limits == [expected]
 
 
+@pytest.mark.parametrize(("configured", "expected"), ((None, 2), (1, 1), (8, 2)))
+def test_codegraph_node_forwards_its_scoped_worker_limit(configured, expected):
+    service = Mock()
+    service.materialize.return_value = CodeGraphReference(
+        revision=1, fingerprint="test", producer_version="test"
+    )
+    definition = {} if configured is None else {"max_concurrency": configured}
+    stage = StageConfiguration.model_validate(
+        {
+            "outputs": {"codegraph": "codegraph.codegraph"},
+            "nodes": {"codegraph": definition},
+        }
+    )
+    context = replace(
+        _node_context(), runtime=NodeRuntime("test", 2, 1000, {}, jobs=_Jobs())
+    )
+    registration = codegraph_node.create_node(service)
+    result = run_stage("initialize", _compile((registration,), stage), context, {})
+    assert result.status is ExecutionStatus.OK
+    assert service.materialize.call_args.kwargs["max_workers"] == expected
+    assert service.materialize.call_args.kwargs["jobs"] is context.jobs
+    assert context.jobs.limits == [expected]
+
+
 def test_node_model_overrides_runtime_and_token_counter() -> None:
     received: list[tuple[str, int]] = []
     registration = NodeRegistration(

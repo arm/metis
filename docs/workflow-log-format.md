@@ -36,13 +36,14 @@ metadata = build_run_metadata(
     codebase_path="/path/to/repository",
 )
 
-with open_runlog(config, metadata=metadata) as session:
-    engine = MetisEngine(
-        codebase_path="/path/to/repository",
-        runlog=session,
-        # normal engine configuration follows
-    )
-    result = engine.execute_graph()
+if __name__ == "__main__":
+    with open_runlog(config, metadata=metadata) as session:
+        engine = MetisEngine(
+            codebase_path="/path/to/repository",
+            runlog=session,
+            # normal engine configuration follows
+        )
+        result = engine.execute_graph()
 ```
 
 A session can contain multiple command or execution spans. Context is

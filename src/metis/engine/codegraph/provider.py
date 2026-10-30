@@ -7,8 +7,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 from typing import Protocol
+from typing import TYPE_CHECKING
 
 from .models import CodeGraph
+
+if TYPE_CHECKING:
+    from metis.engine.execution.contracts import NodeJobs
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,7 @@ class CodeGraphProviderContext:
     get_language_name_for_path: Callable[[str], str | None]
     has_language_file_role: Callable[[str, str], bool]
     source_for_path: Callable[[str], bytes | None] | None = None
+    get_jobs: Callable[[], tuple[NodeJobs, int] | None] | None = None
 
 
 CodeGraphProviderFactory = Callable[

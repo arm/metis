@@ -1069,6 +1069,8 @@ and `CodeGraphProviderContext` language/file-role lookups plus optional
 `source_for_path(path)`. When that callback returns bytes, including `b""`, parse
 those profiled bytes; read the filesystem only when it is absent or returns
 `None`.
+Optional `get_jobs()` returns `(NodeJobs, effective_max_concurrency)` for the
+current build, or `None` without a bound scope. Do not retain the job handle.
 They must use globally unique symbol IDs, resolve their internal calls, and
 return nodes only for requested files. Metis validates each provider result and
 the composed graph.
