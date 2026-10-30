@@ -13,6 +13,84 @@
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 
 
+## [2.0.0](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v2.0.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** Remove SarifLimits and the limits/sarif_limits arguments. Integrations must omit these arguments; external stages remain supported.
+
+### Features
+
+* **codegraph:** build profiled graphs during initialization ([#319](https://github.com/arm/metis/issues/319)) ([a0d01a3](https://github.com/arm/metis/commit/a0d01a315f410f403516cb5fa93fa81a95f9713c))
+* **codegraph:** reduce review input tokens ([#300](https://github.com/arm/metis/issues/300)) ([a26dfda](https://github.com/arm/metis/commit/a26dfda48ebba493d4f34fe164470decbdcb3458))
+* **codegraph:** strengthen deterministic reachability review ([#296](https://github.com/arm/metis/issues/296)) ([c7c2735](https://github.com/arm/metis/commit/c7c27359413c940cf3f0c23a73654952f228869a))
+* **engine:** add execution node foundation ([#285](https://github.com/arm/metis/issues/285)) ([c2bfb29](https://github.com/arm/metis/commit/c2bfb29769812b093e769283113d9c41bc550519))
+* **engine:** improve scan execution, progress, and recovery ([#309](https://github.com/arm/metis/issues/309)) ([eaa5c71](https://github.com/arm/metis/commit/eaa5c712eb631be7525d47efda4e88f315714911))
+* **execution:** modularize execution graph ([#290](https://github.com/arm/metis/issues/290)) ([cafa73f](https://github.com/arm/metis/commit/cafa73feacd892be62044e7c008a2e92d0fc5b75))
+* **execution:** support per-node LLM models ([#310](https://github.com/arm/metis/issues/310)) ([6cb0085](https://github.com/arm/metis/commit/6cb0085c8ede8e383052275819b11929c935e97f))
+* **memory:** add advisory git-history context ([#283](https://github.com/arm/metis/issues/283)) ([5925e4d](https://github.com/arm/metis/commit/5925e4dafd5473ee092d96840f298e2bf3242324))
+* **memory:** apply threat-model context to review and triage ([#282](https://github.com/arm/metis/issues/282)) ([6153ea0](https://github.com/arm/metis/commit/6153ea0beb2301be6ccd92f8bb683fcd9e7abfd1))
+* **memory:** initialize threat-model repository memory ([#281](https://github.com/arm/metis/issues/281)) ([49d6f5a](https://github.com/arm/metis/commit/49d6f5a6730a9df118c3b9f341e8f32668b4df8c))
+* **output:** stream JSON and SARIF reports ([#371](https://github.com/arm/metis/issues/371)) ([548f989](https://github.com/arm/metis/commit/548f989073a749586b0ecba4deb8c078aae4b98f))
+* **plugins:** add AArch64 assembly .hs extension ([#266](https://github.com/arm/metis/issues/266)) ([e5320d7](https://github.com/arm/metis/commit/e5320d77ea02db3e9a078c24f4e67b25f0948640))
+* **plugins:** add generic language fallback ([#373](https://github.com/arm/metis/issues/373)) ([c93bc8f](https://github.com/arm/metis/commit/c93bc8f0960246233be0b7a145a6a00db2bf3a3d))
+* **plugins:** add Perl language support ([#318](https://github.com/arm/metis/issues/318)) ([dee5432](https://github.com/arm/metis/commit/dee54326f3696518f6b94164fdede578537253cb))
+* **prompts:** externalize engine prompt resources ([#284](https://github.com/arm/metis/issues/284)) ([4d52b9d](https://github.com/arm/metis/commit/4d52b9da17decb25e0a61ce9a9dfb8eb6108adf9))
+* Qdrant Vector Search ([#291](https://github.com/arm/metis/issues/291)) ([933ca31](https://github.com/arm/metis/commit/933ca312ecf2bc03ef5f24cc192e5f5a00332e03))
+* **review:** improve C/C++ discovery with scoped navigation ([#333](https://github.com/arm/metis/issues/333)) ([ed49e6f](https://github.com/arm/metis/commit/ed49e6f5fe4d7525eebfc9cdcedf325d39661d65))
+* **runlog:** add explainable workflow tracing for CLI and engine runs ([#292](https://github.com/arm/metis/issues/292)) ([ea6b4ed](https://github.com/arm/metis/commit/ea6b4edc5cdd0af4f17c2a0e8a55834c4376434c))
+* **stages:** support external execution stages ([3d94992](https://github.com/arm/metis/commit/3d9499271b415d9818b80b7415d54a2c51397a4b))
+
+
+### Bug Fixes
+
+* Fix:  ([403e1e1](https://github.com/arm/metis/commit/403e1e1cd49da7b8462522c295eebe17267dc7fa))
+* **c-family:** avoid tree-sitter native crashes ([#375](https://github.com/arm/metis/issues/375)) ([6a24aef](https://github.com/arm/metis/commit/6a24aef91ab9a1564a450b665c5036c5cdf65f0e))
+* **c-family:** preserve language context in shared headers ([#363](https://github.com/arm/metis/issues/363)) ([db5fed4](https://github.com/arm/metis/commit/db5fed4886b2b970e80ecf7afcb58a64286e9aa0))
+* **checkpoints:** preserve review checkpoint on transient write errors ([#312](https://github.com/arm/metis/issues/312)) ([e0d8dea](https://github.com/arm/metis/commit/e0d8deaaad5abef5e3219ced373713ec5cd43fc7))
+* **checkpoints:** skip unparseable rows instead of discarding all ([#313](https://github.com/arm/metis/issues/313)) ([4263238](https://github.com/arm/metis/commit/4263238fdd8bffc26b89c2080e8287ed8f1fe556))
+* **codegraph:** distinguish warnings in progress summaries ([#348](https://github.com/arm/metis/issues/348)) ([169344a](https://github.com/arm/metis/commit/169344a3b1dc71499cf7428b7485da68297c4a73))
+* **config:** require explicit configuration files ([#350](https://github.com/arm/metis/issues/350)) ([a9f9bdb](https://github.com/arm/metis/commit/a9f9bdbc9b0ee5c511e32c526fdbdd33719d0ace))
+* **core:** harden indexing, execution and persistence ([#320](https://github.com/arm/metis/issues/320)) ([bb9f12d](https://github.com/arm/metis/commit/bb9f12d1652083522c83af5eacc8132c623636ae))
+* **core:** stabilize YAML configuration and execution contracts ([#322](https://github.com/arm/metis/issues/322)) ([4742297](https://github.com/arm/metis/commit/4742297194c1b77e9405e1d7a683aac2ff59f569))
+* **engine:** honor cancellation and avoid repeated graph work ([#360](https://github.com/arm/metis/issues/360)) ([6b9de1d](https://github.com/arm/metis/commit/6b9de1d37ef48971ae4c23d4008fa6ba8450adc4))
+* **engine:** serialize review graph lazy initialization ([#314](https://github.com/arm/metis/issues/314)) ([ad7c127](https://github.com/arm/metis/commit/ad7c127e975091c33137864e6e910aea3be81414))
+* **index:** normalize NUL content before embedding and storage ([#347](https://github.com/arm/metis/issues/347)) ([a3ef217](https://github.com/arm/metis/commit/a3ef21735e6a09be3e6315e645ac924074f3a704))
+* keep llama.cpp embedding inputs as text ([#317](https://github.com/arm/metis/issues/317)) ([fa46783](https://github.com/arm/metis/commit/fa46783f54c5d9d771ce7471ea9243e0657893e1)), closes [#247](https://github.com/arm/metis/issues/247)
+* **openai:** astra provider dependencies ([#334](https://github.com/arm/metis/issues/334)) ([9eff201](https://github.com/arm/metis/commit/9eff201e6abaeb0056be3849c66b839b30314eb6))
+* **openai:** omit temperature for all gpt-6 models ([#339](https://github.com/arm/metis/issues/339)) ([9d43a66](https://github.com/arm/metis/commit/9d43a66192fd9794f0ac2c3e5acf8bbfe1728ad2))
+* **plugins:** restore Solidity manifest ([#301](https://github.com/arm/metis/issues/301)) ([36d495c](https://github.com/arm/metis/commit/36d495c6ba99c521193a3e1571091245e2598199))
+* **postgres:** initialize vector stores before concurrent queries ([#335](https://github.com/arm/metis/issues/335)) ([193fe52](https://github.com/arm/metis/commit/193fe52594bd16fe1f0730b2ac719a146d632dd7))
+* **reachability:** bound finding annotation resource use ([#331](https://github.com/arm/metis/issues/331)) ([2ab4595](https://github.com/arm/metis/commit/2ab45959d4723ef1ddae43f3fbdd8ca0e79d53bc))
+* **review:** confine source reads to the codebase ([#364](https://github.com/arm/metis/issues/364)) ([aede7b9](https://github.com/arm/metis/commit/aede7b9d1614f93baea0d90c35e7af011f5a3fe4))
+* **review:** reject token-limited and missing model output ([#359](https://github.com/arm/metis/issues/359)) ([81d92ea](https://github.com/arm/metis/commit/81d92eae2a9e0e0868cf43faa37fd34adbc836d6))
+* **review:** treat tokenizer markers as ordinary text ([#328](https://github.com/arm/metis/issues/328)) ([70bcd4b](https://github.com/arm/metis/commit/70bcd4b46c35567db396a059d10c88f60bd28cc9))
+* **sarif:** bound and validate external-stage reports ([#325](https://github.com/arm/metis/issues/325)) ([15271e1](https://github.com/arm/metis/commit/15271e19636c3564c57c53f111d4fa89cced4587))
+* **triage:** checkpoint per finding during parallel classification ([#311](https://github.com/arm/metis/issues/311)) ([985ad22](https://github.com/arm/metis/commit/985ad22acd62014e6d5bb496f3f5429486dafd6e))
+* **triage:** simplify decisions and verify source evidence ([#365](https://github.com/arm/metis/issues/365)) ([a081692](https://github.com/arm/metis/commit/a081692e0c6ba868c074a3d97aa9af87f52f87f1))
+* **triage:** stop repeated tool retries ([#297](https://github.com/arm/metis/issues/297)) ([eb74b70](https://github.com/arm/metis/commit/eb74b704ca004e883f0823f99cd25dde98fad292))
+* **workflows:** improve reliability and reporting ([#366](https://github.com/arm/metis/issues/366)) ([afa24fc](https://github.com/arm/metis/commit/afa24fc9120533859cf853a76c99e8e7cfdf46e3))
+
+
+### Performance Improvements
+
+* **codegraph:** parallelize parsing within node worker limits ([#376](https://github.com/arm/metis/issues/376)) ([ad4be78](https://github.com/arm/metis/commit/ad4be78bd2fce099959691cc5b95717f676f35d0))
+* **codegraph:** speed up graph merging and C call resolution ([#357](https://github.com/arm/metis/issues/357)) ([8bdfac0](https://github.com/arm/metis/commit/8bdfac04c1eda5ed6eb84be40744887d80ebdcee))
+* **engine:** reuse review analysis and deduplication schemas ([#361](https://github.com/arm/metis/issues/361)) ([848f743](https://github.com/arm/metis/commit/848f7436b5eee156f5347d8152f26ca0fab0d710))
+* **reachability:** avoid repeated source chunk tokenization ([#372](https://github.com/arm/metis/issues/372)) ([e647084](https://github.com/arm/metis/commit/e647084e754e61f76375fbefbc22758ae90d928b))
+* **repository:** reuse compiled review scope patterns ([#349](https://github.com/arm/metis/issues/349)) ([ccd351b](https://github.com/arm/metis/commit/ccd351bbef9a9a95257260180c742391ccae017f))
+
+
+### Documentation
+
+* **agents:** add contributor guidance ([#323](https://github.com/arm/metis/issues/323)) ([541f94b](https://github.com/arm/metis/commit/541f94b3409b04a2248286594494a30a29dadc20))
+
+
+### Code Refactoring
+
+* **engine:** simplify validation and review workflows ([#367](https://github.com/arm/metis/issues/367)) ([d864563](https://github.com/arm/metis/commit/d864563eb8c2022fdc67d175a4ae2a77a0115f3c))
+
 ## [1.5.0](https://github.com/arm/metis/compare/metis-v1.4.0...metis-v1.5.0) (2026-07-02)
 
 
