@@ -32,7 +32,7 @@ dependencies = [
   "pydantic>=2.14.1",
   "pyyaml>=6.0.3",
   "rich>=15.0.0",
-  "tree-sitter==0.26.0",
+  "tree-sitter==0.25.2",
   "tree-sitter-language-pack==1.22.1",
   "unidiff>=1.0.1",
 ]
