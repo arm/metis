@@ -50,6 +50,7 @@ from .runtime import _MacroFunctionDefinition
 from .runtime import _MacroFunctionMask
 from .visibility import header_node_languages
 from .visibility import header_source_for_language
+from .parallel import parse_files_in_parallel
 
 ValueDeclarationKind = Literal["function", "function_pointer", "unnamed", "value"]
 
@@ -77,6 +78,7 @@ class CFamilyCodeGraphProvider:
     )
 
     def __init__(self, context: CodeGraphProviderContext) -> None:
+        self._context = context
         self._extractor = CFamilyTreeSitterExtractor(context)
 
     def build_graph(
@@ -97,15 +99,21 @@ class CFamilyCodeGraphProvider:
         processed_files: list[str] = []
         failed_files: list[str] = []
         selected_files = tuple(sorted(str(file) for file in files))
+        parsed_files = parse_files_in_parallel(
+            codebase_path, selected_files, self._context
+        )
         total = len(selected_files)
         for completed, file_path in enumerate(selected_files, start=1):
             parsed = ParsedFileGraph()
             error_messages: tuple[str, ...] = ()
             try:
-                parsed = self._extractor.parse_file(
-                    codebase_path=codebase_path,
-                    file_path=file_path,
-                )
+                if parsed_files is None:
+                    parsed = self._extractor.parse_file(
+                        codebase_path=codebase_path,
+                        file_path=file_path,
+                    )
+                else:
+                    parsed = parsed_files.pop(file_path)
                 diagnostics.extend(parsed.diagnostics)
                 error_messages = tuple(parsed.errors)
                 if not error_messages:

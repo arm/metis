@@ -12,6 +12,7 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from concurrent.futures import CancelledError
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -22,6 +23,8 @@ from metis.engine.codegraph import CodeGraphProviderContext
 from metis.engine.codegraph import CodeGraphProviderFactory
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.codegraph import CodeGraphResult
+from metis.engine.concurrency import _cancellation_checkpoint
+from metis.engine.concurrency import _validate_worker_limit
 from metis.version import __version__ as METIS_VERSION
 
 from .annotations import CodeGraphConfiguration
@@ -36,6 +39,7 @@ from .store import SQLiteCodeGraphStore
 from .store import _DIAGNOSTIC
 
 if TYPE_CHECKING:
+    from metis.engine.execution.contracts import NodeJobs
     from metis.engine.repository import EngineRepository
     from metis.engine.runtime import EngineConfig
 
@@ -56,10 +60,14 @@ class CodeGraphService:
     ) -> None:
         self._config = config
         self._repository = repository
+        self._build_jobs: ContextVar[tuple[NodeJobs, int] | None] = ContextVar(
+            "metis_codegraph_jobs", default=None
+        )
         self._provider_context = CodeGraphProviderContext(
             get_language_name_for_path=repository.get_language_name_for_path,
             has_language_file_role=repository.has_language_file_role,
             source_for_path=repository.analysis_source_for_path,
+            get_jobs=self._build_jobs.get,
         )
         self._provider_factories = {
             normalize_provider_name(name): factory
@@ -81,19 +89,29 @@ class CodeGraphService:
         *,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
         diagnostic_callback: Callable[[CodeGraphDiagnostic], None] | None = None,
+        jobs: NodeJobs | None = None,
+        max_workers: int = 1,
     ) -> CodeGraphReference:
+        _validate_worker_limit(max_workers, "max_workers")
+        _cancellation_checkpoint()
         with self._materialize_condition:
             while self._materialize_active:
+                _cancellation_checkpoint()
                 generation = self._materialize_generation
-                self._materialize_condition.wait_for(
-                    lambda: self._materialize_generation > generation
+                advanced = self._materialize_condition.wait_for(
+                    lambda: self._materialize_generation > generation,
+                    timeout=0.1,
                 )
+                _cancellation_checkpoint()
+                if not advanced:
+                    continue
                 completed = self._last_materialization
                 if completed is not None:
                     _replay_diagnostics(completed, diagnostic_callback)
                     return completed
             self._materialize_active = True
         completed = None
+        token = self._build_jobs.set((jobs, max_workers) if jobs is not None else None)
         try:
             completed = self._materialize(
                 progress_callback=progress_callback,
@@ -101,6 +119,7 @@ class CodeGraphService:
             )
             return completed
         finally:
+            self._build_jobs.reset(token)
             self._finish_materialization(completed)
 
     def _finish_materialization(

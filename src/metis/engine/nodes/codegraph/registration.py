@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from typing import cast
+from dataclasses import replace
+from functools import partial
 
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import EmptyNodeConfiguration
@@ -12,8 +14,12 @@ from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.source import ProfiledSourceReference
 
+from .service import CodeGraphService
 
-def execute(invocation: NodeInvocation) -> NodeResult:
+
+def execute(
+    invocation: NodeInvocation, *, service: CodeGraphService | None = None
+) -> NodeResult:
     profiled = cast(
         ProfiledSourceReference | None, invocation.inputs.get("profiled_source")
     )
@@ -25,9 +31,16 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         raise RuntimeError(
             "CodeGraph source profile does not match the installed profile"
         )
-    reference = invocation.context.codegraphs.materialize(
-        progress_callback=invocation.context.report_progress,
-    )
+    if service is None:
+        reference = invocation.context.codegraphs.materialize(
+            progress_callback=invocation.context.report_progress,
+        )
+    else:
+        reference = service.materialize(
+            progress_callback=invocation.context.report_progress,
+            jobs=invocation.context.jobs,
+            max_workers=invocation.context.runtime.max_workers,
+        )
     if profiled is not None and any(
         invocation.context.repository.source_profile_applies_to_path(path)
         for path in reference.failed_files
@@ -45,3 +58,7 @@ registration = NodeRegistration(
     execute=execute,
     required_when_bound=frozenset({"profiled_source"}),
 )
+
+
+def create_node(service: CodeGraphService) -> NodeRegistration:
+    return replace(registration, execute=partial(execute, service=service))

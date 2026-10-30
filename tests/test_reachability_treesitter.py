@@ -5,11 +5,15 @@ from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
+from multiprocessing import get_context
 import os
 from pathlib import Path
 import subprocess
+import signal
 import sys
 from textwrap import dedent
+from threading import Event
+from threading import get_ident
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,6 +30,7 @@ from metis.engine.codegraph import FunctionParameter
 from metis.engine.codegraph import GlobalConstruct
 from metis.engine.codegraph import SymbolReference
 from metis.engine.codegraph import ValueAssignment
+from metis.engine.concurrency import JobScheduler
 from metis.engine.nodes.codegraph import CodeGraphConfiguration
 from metis.engine.nodes.codegraph import CodeGraphSemanticsCatalog
 from metis.engine.nodes.codegraph import CodeGraphService
@@ -49,6 +54,7 @@ from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
 from metis.plugins.c_family.codegraph import CFamilyTreeSitterExtractor
 from metis.plugins.c_family.runtime import TreeSitterRuntime
 from metis.plugins.c_family.semantics import CFamilyCodeGraphSemantics
+from metis.plugins.c_family import parallel as parallel_parser
 
 
 class _Point:
@@ -2314,3 +2320,196 @@ def test_finding_annotation_preserves_equal_or_longer_existing_path(existing_pat
 
     assert annotated is finding
     assert annotated.path == existing_path
+
+
+@pytest.mark.parametrize("workers", (1, 2, 4))
+def test_parallel_parser_preserves_serial_facts_and_profiled_bytes(tmp_path, workers):
+    sources = {
+        "a/entry.c": "void target(void); void entry(void) { target(); }\n",
+        "b/target.c": "void target(void) {}\n",
+        "c/profile.c": "void raw_only(void) {}\n",
+        "d/empty.c": "void hidden(void) {}\n",
+        "e/broken.c": "void valid(void) {}\nvoid broken( {\n",
+    }
+    for name, text in sources.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    files = tuple(str(tmp_path / name) for name in sources)
+    provided = {
+        str(
+            tmp_path / "c/profile.c"
+        ): b"//\xff\nvoid target(void); void canonical(void) { target(); }\n",
+        str(tmp_path / "d/empty.c"): b"",
+    }
+    caller_thread = get_ident()
+
+    def source_for_path(path):
+        assert get_ident() == caller_thread
+        return provided.get(path)
+
+    context = _codegraph_service(
+        str(tmp_path), source_for_path=source_for_path
+    )._provider_context
+    serial = CFamilyCodeGraphProvider(context).build_graph(
+        codebase_path=str(tmp_path), files=files
+    )
+    scheduler = JobScheduler(2)
+    try:
+        context = replace(context, get_jobs=lambda: (scheduler.limit(2), workers))
+        result = CFamilyCodeGraphProvider(context).build_graph(
+            codebase_path=str(tmp_path), files=files
+        )
+    finally:
+        scheduler.close()
+    assert result.failed_files == serial.failed_files == ()
+    assert result.processed_files == serial.processed_files
+    assert result.diagnostics == serial.diagnostics
+    assert graph_fingerprint(result.graph) == graph_fingerprint(serial.graph)
+    assert result.graph.nodes["a/entry.c::entry"].resolved_calls == [
+        "b/target.c::target"
+    ]
+    assert result.graph.nodes["c/profile.c::canonical"].resolved_calls == [
+        "b/target.c::target"
+    ]
+    assert "d/empty.c::hidden" not in result.graph.nodes
+
+
+@pytest.mark.parametrize("cancelled", (False, True))
+def test_parser_pool_is_stopped_on_timeout_or_cancel(tmp_path, monkeypatch, cancelled):
+    started = []
+    pool, pending, stop_pool = Mock(), Mock(), Mock()
+    pending.ready.return_value = False
+
+    def submit(*args):
+        started.append(True)
+        return pending
+
+    def check():
+        if cancelled and started:
+            raise CancelledError()
+
+    pool.apply_async.side_effect = submit
+    monkeypatch.setattr(parallel_parser, "_BATCH_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(parallel_parser, "_cancellation_checkpoint", check)
+    files = (str(tmp_path / "input.c"),)
+    entries = ((files[0], "input.c", "c", frozenset({"source"}), None),)
+    if cancelled:
+        with pytest.raises(CancelledError):
+            parallel_parser._parse_batch(
+                entries,
+                codebase_path=str(tmp_path),
+                pool=pool,
+                stop_pool=stop_pool,
+                pool_closed=Event(),
+            )
+    else:
+        result = parallel_parser._parse_batch(
+            entries,
+            codebase_path=str(tmp_path),
+            pool=pool,
+            stop_pool=stop_pool,
+            pool_closed=Event(),
+        )
+        assert "TimeoutError" in result[files[0]].errors[0]
+    stop_pool.assert_called_once_with()
+
+
+def test_parser_pool_rejects_wrong_file_results(tmp_path):
+    pool, stop_pool = Mock(), Mock()
+    pool.apply_async.return_value.ready.return_value = True
+    pool.apply_async.return_value.get.return_value = {"unexpected.c": object()}
+    path = str(tmp_path / "input.c")
+    result = parallel_parser._parse_batch(
+        ((path, "input.c", "c", frozenset({"source"}), None),),
+        codebase_path=str(tmp_path),
+        pool=pool,
+        stop_pool=stop_pool,
+        pool_closed=Event(),
+    )
+    assert set(result) == {path}
+    assert "invalid file results" in result[path].errors[0]
+    stop_pool.assert_called_once_with()
+
+
+def test_parallel_parser_balances_zero_size_folders(tmp_path, monkeypatch):
+    files = []
+    for folder in ("a", "b"):
+        path = tmp_path / folder / "empty.c"
+        path.parent.mkdir()
+        path.touch()
+        files.append(str(path))
+    scheduler = JobScheduler(2)
+    jobs = scheduler.limit(2)
+    original_run = jobs.run
+    scheduled = []
+
+    def run(batches, worker, **kwargs):
+        scheduled.extend(batches)
+        return original_run(batches, worker, **kwargs)
+
+    monkeypatch.setattr(jobs, "run", run)
+    context = replace(
+        _codegraph_service(str(tmp_path))._provider_context,
+        get_jobs=lambda: (jobs, 2),
+    )
+    try:
+        result = CFamilyCodeGraphProvider(context).build_graph(
+            codebase_path=str(tmp_path), files=tuple(files)
+        )
+    finally:
+        scheduler.close()
+    assert sorted(len(batch) for batch in scheduled) == [1, 1]
+    assert result.processed_files == tuple(files)
+    assert result.failed_files == ()
+
+
+def test_parser_workers_leave_interrupts_to_parent_and_reset_termination():
+    previous = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    pool = None
+    try:
+        pool = get_context("spawn").Pool(
+            processes=1, initializer=parallel_parser._init_worker
+        )
+        assert (
+            pool.apply_async(signal.getsignal, (signal.SIGINT,)).get(timeout=10)
+            == signal.SIG_IGN
+        )
+        assert (
+            pool.apply_async(signal.getsignal, (signal.SIGTERM,)).get(timeout=10)
+            == signal.SIG_DFL
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if pool is not None:
+            pool.close()
+            pool.join()
+
+
+def test_codegraph_waiter_does_not_return_previous_revision(tmp_path, monkeypatch):
+    source = tmp_path / "input.c"
+    source.write_text("void previous(void) {}\n")
+    service = _codegraph_service(str(tmp_path), files=(str(source),))
+    previous = service.materialize()
+    source.write_text("void current(void) {}\n")
+    provider = service._providers["c_family"]
+    original = provider.build_graph
+    started, release = Event(), Event()
+
+    def build(**kwargs):
+        started.set()
+        assert release.wait(5)
+        return original(**kwargs)
+
+    monkeypatch.setattr(provider, "build_graph", build)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        building = executor.submit(service.materialize)
+        assert started.wait(5)
+        waiting = executor.submit(service.materialize)
+        try:
+            with pytest.raises(TimeoutError):
+                waiting.result(timeout=0.25)
+        finally:
+            release.set()
+        assert waiting.result(timeout=5) == building.result(timeout=5)
+        assert building.result().revision > previous.revision

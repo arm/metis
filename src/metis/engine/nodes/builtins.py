@@ -57,7 +57,7 @@ def build_builtin_execution(
     selected_nodes = configuration.selected_nodes()
     static_registrations = (
         index_node.registration,
-        codegraph_node.registration,
+        codegraph_node.create_node(codegraphs),
         finding_dedup_node,
         review_result_node.registration,
         triage_result_node.registration,
