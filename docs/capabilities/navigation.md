@@ -53,10 +53,14 @@ Execution boundaries:
 - Navigation returns original source. Retrieved text does not establish that a
   branch is active in the selected compilation profile.
 - Tool use retains the configured round limit and conversation history.
-  For OpenAI-compatible chat models, the final response after that limit retains
-  the tool definitions with `tool_choice: none` to preserve prompt-cache reuse
-  without allowing further tool calls. Other adapters retain their existing
-  tool-free final response.
+  Requests with an output schema finalize directly after the tool-round limit,
+  without generating an intermediate plain-text answer. Other requests retain
+  their final answer; OpenAI-compatible models keep the tool definitions with
+  `tool_choice: none` to preserve prompt-cache reuse. Schema requests make a
+  LangChain structured-output call, even when the model chose not to call any
+  navigation tool. The final request uses the original task and untrusted tool
+  evidence. Retries reuse the completed tool phase, including when it produced
+  no evidence. Both phases must fit the configured input budget.
   Discovery sizes source chunks using their rendered prompts and actual line
   numbers, and checks inputs against `max_token_length`. Input overflow during
   simple review fails without retrying the same request; no navigation headroom

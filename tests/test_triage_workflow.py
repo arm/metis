@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda
 
 from metis.engine.capabilities.navigation import NavigationCapability
 from metis.engine.concurrency import _bind_cancellation
@@ -75,6 +76,21 @@ class _FakeChat:
     def bind_tools(self, tools):
         self.bound_tools = list(tools)
         return self.bound_chat
+
+    def with_structured_output(self, response_model, **_kwargs):
+        return RunnableLambda(
+            lambda _prompt: {
+                "raw": AIMessage(content=""),
+                "parsed": response_model(
+                    status="valid",
+                    reason="Observed input reaches the cited line.",
+                    evidence=["a.py:10"],
+                    resolution_chain=["reported finding -> a.py:10"],
+                    unresolved_hops=[],
+                ),
+                "parsing_error": None,
+            }
+        )
 
 
 class _FakeProvider:

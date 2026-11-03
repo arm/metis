@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from concurrent.futures import CancelledError
 from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -49,6 +50,11 @@ class ModelOutputLimitError(ModelResponseIncompleteError):
 def require_completed_model_response(
     response: object, *, tool_evidence: tuple[str, ...] = ()
 ) -> None:
+    if not isinstance(response, BaseMessage):
+        raise ModelResponseIncompleteError(
+            "model response did not include a raw message",
+            tool_evidence=tool_evidence,
+        )
     if _response_reached_output_limit(response):
         raise ModelOutputLimitError(
             "model response reached its output token limit",
@@ -103,6 +109,7 @@ def _response_reached_output_limit(response: object) -> bool:
             if isinstance(value, str) and value.strip().lower() in {
                 "length",
                 "max_tokens",
+                "model_context_window_exceeded",
             }:
                 return True
     return False
@@ -180,6 +187,7 @@ def invoke_model_with_tools(
     max_input_tokens: int | None = None,
     on_tool_result: Callable[[str, dict[str, Any], str], None] | None = None,
     on_tool_error: Callable[[], None] | None = None,
+    generate_final_response: bool = True,
 ) -> tuple[str, tuple[str, ...]]:
     _cancellation_checkpoint()
     with runlog.span(
@@ -306,6 +314,11 @@ def invoke_model_with_tools(
                         status=status,
                     )
                 )
+        if not generate_final_response:
+            loop_span.end(attributes={"rounds": max_tool_rounds})
+            _cancellation_checkpoint()
+            _observe_tool_results(observations, on_tool_result)
+            return "", tuple(evidence)
         require_model_input_budget(messages, token_counter, max_input_tokens)
         _cancellation_checkpoint()
         # Preserve the cached prefix without permitting another tool round.

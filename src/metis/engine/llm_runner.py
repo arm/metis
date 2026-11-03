@@ -82,11 +82,13 @@ def _json_chat_prompt(
     user_prompt: str,
     model_tools: tuple[Any, ...] = (),
     tool_evidence: tuple[str, ...] = (),
+    *,
+    tools_available: bool = True,
 ) -> ChatPromptTemplate:
     rendered_system_prompt = model_tool_system_prompt(
         system_prompt,
         model_tools,
-        tools_available=not tool_evidence,
+        tools_available=tools_available and not tool_evidence,
     )
     messages: list[Any] = [
         SystemMessage(content=rendered_system_prompt),
@@ -156,6 +158,7 @@ class JsonPromptRunner:
         confirmed_output_limit = False
         incomplete_response: ModelResponseIncompleteError | None = None
         tool_evidence: tuple[str, ...] = ()
+        tools_complete = False
         configured_retries = getattr(self._llm_provider, "max_retries", None)
         max_transport_retries = (
             max(0, configured_retries)
@@ -218,33 +221,51 @@ class JsonPromptRunner:
                     _cancellation_checkpoint()
                     chat = self._llm_provider.get_chat_model(**params)
                     _cancellation_checkpoint()
-                    active_tools = request.model_tools if not tool_evidence else ()
-                    if tool_evidence:
+                    active_tools = (
+                        request.model_tools
+                        if not tool_evidence and not tools_complete
+                        else ()
+                    )
+                    if active_tools:
+                        assert max_tool_rounds is not None
+                        response_text, tool_evidence = invoke_model_with_tools(
+                            chat,
+                            prompt,
+                            request.variables,
+                            active_tools,
+                            max_tool_rounds=max_tool_rounds,
+                            token_counter=token_counter,
+                            max_input_tokens=request.max_input_tokens,
+                            on_tool_result=request.on_tool_result,
+                            on_tool_error=request.on_tool_error,
+                            generate_final_response=request.response_model is None,
+                        )
+                        _cancellation_checkpoint()
+                        tools_complete = request.response_model is not None
+                    if request.response_model is not None or not active_tools:
                         prompt = _json_chat_prompt(
                             request.system_prompt,
                             request.user_prompt,
                             request.model_tools,
                             tool_evidence,
+                            tools_available=not tools_complete,
                         )
-                    if request.max_input_tokens is not None:
                         require_model_input_budget(
                             prompt.invoke(request.variables).to_messages(),
                             token_counter,
                             request.max_input_tokens,
                         )
-                    used_structured_output = False
-                    structured_output = getattr(chat, "with_structured_output", None)
-                    if (
-                        not active_tools
-                        and request.response_model is not None
-                        and callable(structured_output)
-                    ):
-                        used_structured_output = True
-                        structured_model = structured_output(
-                            request.response_model,
-                            method="function_calling",
-                            include_raw=True,
-                        )
+                    if request.response_model is not None:
+                        try:
+                            structured_model = chat.with_structured_output(
+                                request.response_model,
+                                method="function_calling",
+                                include_raw=True,
+                            )
+                        except (AttributeError, NotImplementedError) as exc:
+                            raise ModelProviderConfigurationError(
+                                "The chat model must support LangChain structured output"
+                            ) from exc
                         _cancellation_checkpoint()
                         structured_result = (prompt | structured_model).invoke(
                             request.variables
@@ -277,23 +298,8 @@ class JsonPromptRunner:
                             attempt_failure = (
                                 f"structured validation failed: {parsing_error}"
                             )
-                    if parsed is None and not used_structured_output:
-                        if active_tools:
-                            assert max_tool_rounds is not None
-                            response_text, observed_evidence = invoke_model_with_tools(
-                                chat,
-                                prompt,
-                                request.variables,
-                                active_tools,
-                                max_tool_rounds=max_tool_rounds,
-                                token_counter=token_counter,
-                                max_input_tokens=request.max_input_tokens,
-                                on_tool_result=request.on_tool_result,
-                                on_tool_error=request.on_tool_error,
-                            )
-                            _cancellation_checkpoint()
-                            tool_evidence = observed_evidence
-                        else:
+                    else:
+                        if not active_tools:
                             _cancellation_checkpoint()
                             response = (prompt | chat).invoke(request.variables)
                             _cancellation_checkpoint()
@@ -335,6 +341,7 @@ class JsonPromptRunner:
                         exc,
                         (
                             ModelToolConfigurationError,
+                            ModelProviderConfigurationError,
                             ModelInputLimitError,
                             ModelToolResultError,
                         ),
