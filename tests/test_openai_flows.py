@@ -172,7 +172,7 @@ def review_response(source):
 
 
 def triage_response(source, line):
-    return None, {
+    decision = {
         "status": "valid",
         "reason": "The inspected access has no length guard.",
         "evidence": [f"{source.name}:{line}-{line}"],
@@ -181,6 +181,7 @@ def triage_response(source, line):
         ],
         "unresolved_hops": [],
     }
+    return [(None, decision), ("TriageDecisionModel", decision)]
 
 
 def memory_rows(root):
@@ -316,13 +317,12 @@ def test_combined_cli_refreshes_and_reuses_repository_context(
                 timeout=30,
             )
     reviews = review_response(source)
-    for finding in reviews["reviews"]:
-        finding["id"] = " duplicate "
     decisions = [
         (None, reviews),
+        ("ReviewResponseModel", reviews),
         ("DeduplicationDecision", {"groups": []}),
-        triage_response(source, 1),
-        triage_response(source, 2),
+        *triage_response(source, 1),
+        *triage_response(source, 2),
     ]
     requests = run([*setup, *decisions])
     expected_claim = claim["statement"] if document_present else None
@@ -414,7 +414,7 @@ def test_combined_cli_refreshes_and_reuses_repository_context(
                 for message in request["input"]
                 if message["role"] == "user"
             )
-            for request in (requests[0], *requests[-2:])
+            for request in (requests[0], requests[-3], requests[-1])
         ]
         if expected_claim is not None:
             for prompt in prompts:
@@ -449,16 +449,22 @@ def test_streaming_review_preserves_yaml_tool_rounds_across_runs(
     dedup = ("DeduplicationDecision", {"groups": []})
     responses = [
         *[("cat", {"path": source.name})] * max_rounds,
-        (None, review_response(source)),
+        ("ReviewResponseModel", review_response(source)),
         dedup,
     ]
     requests = run(responses)
     assert len(requests) == max_rounds + 2
-    assert requests[max_rounds]["tool_choice"] == "none"
+    assert requests[max_rounds]["tool_choice"] == {
+        "type": "function",
+        "name": "ReviewResponseModel",
+    }
     assert_reports(root, source, triaged=False)
     repeated = run(responses)
     assert len(repeated) == len(requests)
-    assert repeated[max_rounds]["tool_choice"] == "none"
+    assert repeated[max_rounds]["tool_choice"] == {
+        "type": "function",
+        "name": "ReviewResponseModel",
+    }
     assert_reports(root, source, triaged=False)
 
 
@@ -487,7 +493,7 @@ def test_review_only_then_external_triage_reuses_completed_report(openai_cli):
         result["properties"] = {"severity": severity, "externalFinding": "preserved"}
     triage["inputs"] = {"sarif": "$inputs.sarif"}
     graph.update(inputs={"sarif": original}, stages={"triage": triage})
-    requests = run([triage_response(source, 1), triage_response(source, 2)])
+    requests = run([*triage_response(source, 1), *triage_response(source, 2)])
     assert all(
         "[CODEGRAPH_CONTEXT]" not in json.dumps(request["input"])
         for request in requests
@@ -598,7 +604,7 @@ def test_cli_failures_preserve_outputs_and_recover_from_partial_report(
         original = json.loads((root / "report.sarif").read_text())
         triage["inputs"] = {"sarif": "$inputs.sarif"}
         graph.update(inputs={"sarif": original}, stages={"triage": triage})
-        run([triage_response(source, 1), unauthorized], exit_code=1)
+        run([*triage_response(source, 1), unauthorized], exit_code=1)
         partial = json.loads((root / "report.sarif").read_text())
         assert (root / "report.checkpoint.sarif").read_bytes() == previous[
             root / "report.checkpoint.sarif"
@@ -611,7 +617,7 @@ def test_cli_failures_preserve_outputs_and_recover_from_partial_report(
         assert failed["properties"]["metisTriageDecisionSource"] == "execution_failure"
         assert len(extract_findings(partial)) == 1
         graph["inputs"]["sarif"] = partial
-        run([triage_response(source, 2)])
+        run(triage_response(source, 2))
         recovered = json.loads((root / "report.sarif").read_text())
         assert recovered["runs"][0]["results"][0] == completed
         assert not extract_findings(recovered)

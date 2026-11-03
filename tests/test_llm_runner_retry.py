@@ -80,7 +80,7 @@ class _StructuredProvider:
     def __init__(
         self,
         responses: list[object],
-        raw_responses: list[AIMessage] | None = None,
+        raw_responses: list[object] | None = None,
     ) -> None:
         self.raw_calls = 0
         self.structured_calls = 0
@@ -175,7 +175,11 @@ class _ToolCapableChat:
         def respond(prompt_value: Any) -> dict[str, object | None]:
             self._provider.structured_messages = prompt_value.to_messages()
             return {
-                "raw": AIMessage(content=""),
+                "raw": self._provider.structured_raw[
+                    min(
+                        self._provider.calls - 1, len(self._provider.structured_raw) - 1
+                    )
+                ],
                 "parsed": _Decision(status="inconclusive"),
                 "parsing_error": None,
             }
@@ -189,6 +193,7 @@ class _ToolFallbackProvider:
         self.bind_calls = 0
         self.final_calls = 0
         self.final_response = final_response or AIMessage(content="not-json")
+        self.structured_raw = [AIMessage(content="")]
         self.tool_chat = _ToolChat()
         self.structured_messages = []
 
@@ -296,6 +301,9 @@ def test_oversized_input_fails_without_invoking_or_retrying_model(monkeypatch):
 @pytest.mark.parametrize("parse_error", [None, ValueError("invalid decision")])
 def test_tool_round_limit_retries_with_evidence_without_repeating_tools(parse_error):
     provider = _ToolFallbackProvider()
+    provider.final_response = AIMessage(
+        content="unused draft", response_metadata={"finish_reason": "length"}
+    )
     tool = _EvidenceTool()
     observer = Mock()
 
@@ -325,14 +333,14 @@ def test_tool_round_limit_retries_with_evidence_without_repeating_tools(parse_er
 
     result = JsonPromptRunner(
         provider,
-        max_attempts=2,
+        max_attempts=1,
         retry_backoff_seconds=0,
     ).invoke(request)
 
     assert result == _Decision(status="inconclusive")
-    assert provider.calls == 2
+    assert provider.calls == 1
     assert provider.bind_calls == 1
-    assert provider.final_calls == 1
+    assert provider.final_calls == 0
     assert provider.tool_chat.calls == 1
     assert tool.calls == 1
     system_message = provider.structured_messages[0].content
@@ -382,12 +390,14 @@ def test_tool_observer_failure_does_not_retry(error):
 
 
 def test_output_limited_tool_final_retries_with_saved_evidence():
-    provider = _ToolFallbackProvider(
+    provider = _ToolFallbackProvider()
+    provider.structured_raw = [
         AIMessage(
             content='{"status": "valid"}',
             response_metadata={"finish_reason": "length"},
-        )
-    )
+        ),
+        AIMessage(content=""),
+    ]
     tool = _EvidenceTool()
     on_output_limit = Mock()
 
@@ -425,7 +435,7 @@ def test_output_limited_fallback_retains_evidence_for_next_retry(
 
     def get_chat_model(**params):
         chat = original_get_chat_model(**params)
-        if provider.calls == 1:
+        if provider.calls == 1 and not structured:
             return chat
 
         def respond(prompt):
@@ -433,7 +443,7 @@ def test_output_limited_fallback_retains_evidence_for_next_retry(
             response = AIMessage(
                 content='{"status":"valid"}',
                 response_metadata={"finish_reason": "length"}
-                if provider.calls == 2
+                if len(messages) == 1
                 else {},
             )
             if structured:
@@ -446,7 +456,8 @@ def test_output_limited_fallback_retains_evidence_for_next_retry(
 
         runnable = RunnableLambda(respond)
         if structured:
-            runnable.with_structured_output = lambda *_args, **_kwargs: runnable
+            chat.with_structured_output = lambda *_args, **_kwargs: runnable
+            return chat
         return runnable
 
     monkeypatch.setattr(provider, "get_chat_model", get_chat_model)
@@ -521,6 +532,12 @@ def test_structured_validation_retry_does_not_fall_back_to_unstructured_text():
     assert result == {"ok": True}
     assert provider.structured_calls == 2
     assert provider.raw_calls == 0
+    for raw in (None, {"response_metadata": {"finish_reason": "length"}}):
+        malformed = _StructuredProvider([{"ok": True}], [raw])
+        with pytest.raises(ModelResponseIncompleteError, match="raw message"):
+            JsonPromptRunner(malformed, retry_backoff_seconds=0).invoke(request)
+        assert malformed.structured_calls == 2
+        assert malformed.raw_calls == 0
 
 
 @pytest.mark.parametrize(
@@ -578,6 +595,19 @@ def test_structured_output_limit_cannot_be_normalized_to_success(payload):
 
     assert provider.structured_calls == 2
     assert provider.raw_calls == 0
+    for key in ("finish_reason", "stop_reason", "stopReason"):
+        provider = _StructuredProvider(
+            [payload],
+            [
+                AIMessage(
+                    content="",
+                    response_metadata={key: "model_context_window_exceeded"},
+                )
+            ],
+        )
+        with pytest.raises(ModelOutputLimitError):
+            JsonPromptRunner(provider, retry_backoff_seconds=0).invoke(request)
+        assert provider.structured_calls == 2
 
 
 @pytest.mark.parametrize("retry", [False, True])
@@ -665,7 +695,9 @@ def test_missing_review_retries_then_marks_file_review_failed(engine, structured
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         "review.file_failed"
     ]
-    assert (provider.structured_calls if structured else provider.calls) == 2
+    assert (provider.structured_calls if structured else provider.calls) == (
+        2 if structured else 0
+    )
 
 
 @pytest.mark.parametrize(

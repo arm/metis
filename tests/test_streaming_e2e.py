@@ -59,8 +59,8 @@ def test_cli_review_and_triage_stream_sarif(openai_cli, monkeypatch, interactive
         [
             ("ReviewResponseModel", review_response(source)),
             ("DeduplicationDecision", {"groups": []}),
-            triage_response(source, 1),
-            triage_response(source, 2),
+            *triage_response(source, 1),
+            *triage_response(source, 2),
         ],
         arguments=("--quiet", "--interactive", "--triage")
         if interactive
