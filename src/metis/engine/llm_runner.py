@@ -13,17 +13,20 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from metis.chat_model_options import merge_chat_model_kwargs
-from metis.engine.model_tool_runner import (
-    ModelToolConfigurationError,
-    invoke_model_with_tools,
-    model_tool_system_prompt,
-    require_max_tool_rounds,
-)
-from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelInputLimitError
-from metis.engine.model_tool_runner import _response_reached_output_limit
+from metis.engine.model_tool_runner import ModelOutputLimitError
+from metis.engine.model_tool_runner import ModelResponseIncompleteError
+from metis.engine.model_tool_runner import ModelToolConfigurationError
+from metis.engine.model_tool_runner import invoke_model_with_tools
 from metis.engine.model_tool_runner import model_messages_token_count
+from metis.engine.model_tool_runner import model_tool_system_prompt
+from metis.engine.model_tool_runner import require_completed_model_response
+from metis.engine.model_tool_runner import require_max_tool_rounds
 from metis.engine.model_tool_runner import require_model_input_budget
+
+
+class ModelProviderConfigurationError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +70,13 @@ def _json_chat_prompt(
     user_prompt: str,
     model_tools: tuple[Any, ...] = (),
     tool_evidence: tuple[str, ...] = (),
+    *,
+    tools_available: bool = True,
 ) -> ChatPromptTemplate:
     rendered_system_prompt = model_tool_system_prompt(
         system_prompt,
         model_tools,
-        tools_available=not tool_evidence,
+        tools_available=tools_available and not tool_evidence,
     )
     messages: list[Any] = [
         SystemMessage(content=rendered_system_prompt),
@@ -107,7 +112,9 @@ class JsonPromptRunner:
     def invoke(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
         output_limit_error = None
+        incomplete_response = None
         tool_evidence: tuple[str, ...] = ()
+        tools_complete = False
         token_counter = (
             self._llm_provider.count_tokens
             if request.max_input_tokens is not None
@@ -117,6 +124,9 @@ class JsonPromptRunner:
             require_max_tool_rounds(request.max_tool_rounds)
             if request.model_tools
             else None
+        )
+        prompt = _json_chat_prompt(
+            request.system_prompt, request.user_prompt, request.model_tools
         )
         for attempt in range(self._max_attempts):
             try:
@@ -136,65 +146,74 @@ class JsonPromptRunner:
                 if request.temperature is not None:
                     params["temperature"] = request.temperature
                 chat = self._llm_provider.get_chat_model(**params)
-                active_tools = request.model_tools if not tool_evidence else ()
-                prompt = _json_chat_prompt(
-                    request.system_prompt,
-                    request.user_prompt,
-                    request.model_tools,
-                    tool_evidence,
+                active_tools = (
+                    request.model_tools
+                    if not tool_evidence and not tools_complete
+                    else ()
                 )
-                require_model_input_budget(
-                    prompt.invoke(request.variables).to_messages(),
-                    token_counter,
-                    request.max_input_tokens,
-                )
-                parsed = None
-                structured_output = getattr(chat, "with_structured_output", None)
-                if (
-                    not active_tools
-                    and request.response_model is not None
-                    and callable(structured_output)
-                ):
-                    structured_result = (
-                        prompt
-                        | structured_output(
+                if active_tools:
+                    assert max_tool_rounds is not None
+                    response_text, tool_evidence = invoke_model_with_tools(
+                        chat,
+                        prompt,
+                        request.variables,
+                        active_tools,
+                        max_tool_rounds=max_tool_rounds,
+                        token_counter=token_counter,
+                        max_input_tokens=request.max_input_tokens,
+                        generate_final_response=request.response_model is None,
+                    )
+                    tools_complete = request.response_model is not None
+                if request.response_model is not None or not active_tools:
+                    prompt = _json_chat_prompt(
+                        request.system_prompt,
+                        request.user_prompt,
+                        request.model_tools,
+                        tool_evidence,
+                        tools_available=not tools_complete,
+                    )
+                    require_model_input_budget(
+                        prompt.invoke(request.variables).to_messages(),
+                        token_counter,
+                        request.max_input_tokens,
+                    )
+                if request.response_model is not None:
+                    try:
+                        structured_model = chat.with_structured_output(
                             request.response_model,
                             method="function_calling",
                             include_raw=True,
                         )
-                    ).invoke(request.variables)
-                    if _response_reached_output_limit(structured_result.get("raw")):
-                        raise ModelOutputLimitError(
-                            "model response reached its output token limit"
+                    except (AttributeError, NotImplementedError) as exc:
+                        raise ModelProviderConfigurationError(
+                            "The chat model must support LangChain structured output"
+                        ) from exc
+                    structured_result = (prompt | structured_model).invoke(
+                        request.variables
+                    )
+                    if not isinstance(structured_result, dict):
+                        raise TypeError(
+                            "Structured model response did not include raw output"
                         )
-                    if structured_result.get("parsing_error") is not None:
+                    parsing_error = structured_result.get("parsing_error")
+                    if isinstance(parsing_error, CancelledError):
+                        raise parsing_error
+                    require_completed_model_response(
+                        structured_result.get("raw"), tool_evidence=tool_evidence
+                    )
+                    if parsing_error is not None:
                         raise ValueError(
-                            f"structured validation failed: {structured_result['parsing_error']}"
+                            f"structured validation failed: {parsing_error}"
                         )
                     parsed = request.parse(structured_result.get("parsed"))
                 else:
-                    if active_tools:
-                        assert max_tool_rounds is not None
-                        response_text, observed_evidence = invoke_model_with_tools(
-                            chat,
-                            prompt,
-                            request.variables,
-                            active_tools,
-                            max_tool_rounds=max_tool_rounds,
-                            token_counter=token_counter,
-                            max_input_tokens=request.max_input_tokens,
-                        )
-                        parsed = request.parse(response_text)
-                        if parsed is None:
-                            tool_evidence = observed_evidence
-                    else:
+                    if not active_tools:
                         response = (prompt | chat).invoke(request.variables)
-                        if _response_reached_output_limit(response):
-                            raise ModelOutputLimitError(
-                                "model response reached its output token limit"
-                            )
+                        require_completed_model_response(
+                            response, tool_evidence=tool_evidence
+                        )
                         response_text = StrOutputParser().invoke(response)
-                        parsed = request.parse(response_text)
+                    parsed = request.parse(response_text)
                 if parsed is not None:
                     return parsed
                 last_failure = request.invalid_message
@@ -204,8 +223,19 @@ class JsonPromptRunner:
                 output_limit_error = exc
                 tool_evidence = exc.tool_evidence
                 last_failure = str(exc)
+            except ModelResponseIncompleteError as exc:
+                incomplete_response = exc
+                tool_evidence = exc.tool_evidence
+                last_failure = str(exc)
             except Exception as exc:
-                if isinstance(exc, (ModelToolConfigurationError, ModelInputLimitError)):
+                if isinstance(
+                    exc,
+                    (
+                        ModelToolConfigurationError,
+                        ModelProviderConfigurationError,
+                        ModelInputLimitError,
+                    ),
+                ):
                     raise
                 last_failure = str(exc)
             if attempt < self._max_attempts - 1:
@@ -224,6 +254,8 @@ class JsonPromptRunner:
                 f"{request.label} reached the model output token limit "
                 f"after {self._max_attempts} attempts"
             ) from output_limit_error
+        if incomplete_response is not None:
+            raise incomplete_response
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
             request.label,

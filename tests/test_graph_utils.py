@@ -3,13 +3,12 @@
 
 import pytest
 
-from metis.engine.graphs.utils import (
-    build_review_system_prompt,
-    sanitize_review_payload,
-)
-from metis.engine.graphs.review import review_node_llm
+from metis.configuration import load_plugin_config
 from metis.engine.graphs.review import _normalize_reviews
+from metis.engine.graphs.review import review_node_llm
 from metis.engine.graphs.schemas import ReviewResponseModel
+from metis.engine.graphs.utils import build_review_system_prompt
+from metis.engine.graphs.utils import sanitize_review_payload
 
 
 def test_build_review_system_prompt_requires_placeholder():
@@ -38,12 +37,14 @@ def test_build_review_system_prompt_replaces_placeholder():
     prompt = build_review_system_prompt(
         language_prompts,
         "security_review_file",
-        report_prompt="Reporting instructions.",
+        report_prompt=load_plugin_config()["general_prompts"]["security_review_report"],
         custom_prompt_text=None,
         custom_guidance_precedence="",
         schema_prompt_section=schema_section,
     )
     assert schema_section in prompt
+    assert 'JSON object with only a "reviews" key' in prompt
+    assert _normalize_reviews(prompt.rsplit("return: ", 1)[1]) == []
 
 
 def test_sanitize_review_payload_fills_missing_fields():

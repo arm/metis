@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import CancelledError
 from dataclasses import replace
 from typing import Any
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.engine.model_tool_runner import ModelOutputLimitError
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import ModelResponseIncompleteError
 
 
 class _CountingProvider:
@@ -89,7 +91,11 @@ class _ToolCapableChat:
         def respond(prompt_value: Any) -> dict[str, Any]:
             self._provider.structured_messages = prompt_value.to_messages()
             return {
-                "raw": AIMessage(content='{"status": "inconclusive"}'),
+                "raw": self._provider.structured_raw[
+                    min(
+                        self._provider.calls - 1, len(self._provider.structured_raw) - 1
+                    )
+                ],
                 "parsed": _Decision(status="inconclusive"),
                 "parsing_error": None,
             }
@@ -105,6 +111,7 @@ class _ToolFallbackProvider:
         self.tool_chat = _ToolChat()
         self.structured_messages = []
         self.final_response = AIMessage(content="not-json")
+        self.structured_raw = [AIMessage(content="")]
 
     def get_chat_model(self, **_params: Any) -> _ToolCapableChat:
         self.calls += 1
@@ -161,6 +168,9 @@ def test_zero_backoff_skips_sleep(monkeypatch):
 
 def test_tool_round_limit_retries_with_evidence_without_repeating_tools():
     provider = _ToolFallbackProvider()
+    provider.final_response = AIMessage(
+        content="unused draft", response_metadata={"finish_reason": "length"}
+    )
     tool = _EvidenceTool()
     request = JsonPromptRequest(
         model="test-model",
@@ -180,14 +190,14 @@ def test_tool_round_limit_retries_with_evidence_without_repeating_tools():
 
     result = JsonPromptRunner(
         provider,
-        max_attempts=2,
+        max_attempts=1,
         retry_backoff_seconds=0,
     ).invoke(request)
 
     assert result == _Decision(status="inconclusive")
-    assert provider.calls == 2
+    assert provider.calls == 1
     assert provider.bind_calls == 1
-    assert provider.final_calls == 1
+    assert provider.final_calls == 0
     assert provider.tool_chat.calls == 1
     assert tool.calls == 1
     system_message = provider.structured_messages[0].content
@@ -209,6 +219,7 @@ def test_parseable_output_is_accepted_only_when_completed(structured, limited):
         response_metadata={"finish_reason": "length" if limited else "stop"},
     )
     provider = _CountingProvider(response)
+    parsing_error = None
     if structured:
 
         def get_chat_model(**_params):
@@ -222,7 +233,7 @@ def test_parseable_output_is_accepted_only_when_completed(structured, limited):
                     return {
                         "raw": response,
                         "parsed": _Decision(status="ok"),
-                        "parsing_error": None,
+                        "parsing_error": parsing_error,
                     }
 
                 return RunnableLambda(respond)
@@ -246,13 +257,43 @@ def test_parseable_output_is_accepted_only_when_completed(structured, limited):
     else:
         assert runner.invoke(request) == _Decision(status="ok")
         assert provider.calls == 1
+    if structured:
+        for response in (
+            None,
+            {"response_metadata": {"finish_reason": "length"}},
+            AIMessage(
+                content='{"status": "ok"}',
+                response_metadata={
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "content_filter"},
+                },
+            ),
+            AIMessage(content="", additional_kwargs={"refusal": "refused"}),
+        ):
+            calls = provider.calls
+            with pytest.raises(ModelResponseIncompleteError):
+                runner.invoke(request)
+            assert provider.calls == calls + 2
+        for key in ("finish_reason", "stop_reason", "stopReason"):
+            response = AIMessage(
+                content='{"status": "ok"}',
+                response_metadata={key: "model_context_window_exceeded"},
+            )
+            with pytest.raises(ModelOutputLimitError):
+                runner.invoke(request)
+        response = None
+        parsing_error = CancelledError()
+        with pytest.raises(CancelledError) as cancelled:
+            runner.invoke(request)
+        assert cancelled.value is parsing_error
 
 
 def test_truncated_final_tool_response_reuses_completed_evidence():
     provider = _ToolFallbackProvider()
-    provider.final_response = AIMessage(
-        content='{"status": "ok"}', response_metadata={"finish_reason": "length"}
-    )
+    provider.structured_raw = [
+        AIMessage(content="", response_metadata={"finish_reason": "length"}),
+        AIMessage(content=""),
+    ]
     tool = _EvidenceTool()
     request = replace(
         _request(logging.getLogger("metis.test.truncated-tool")),
@@ -265,6 +306,7 @@ def test_truncated_final_tool_response_reuses_completed_evidence():
         request
     ) == _Decision(status="inconclusive")
     assert tool.calls == 1
+    assert provider.calls == 2
     assert "src/main.c:7" in provider.structured_messages[-1].content
 
 

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from concurrent.futures import CancelledError
 from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -24,10 +25,58 @@ class ModelInputLimitError(ValueError):
     """Raised when the rendered conversation exceeds its input budget."""
 
 
-class ModelOutputLimitError(RuntimeError):
+class ModelResponseIncompleteError(RuntimeError):
     def __init__(self, message: str, *, tool_evidence: tuple[str, ...] = ()):
         super().__init__(message)
         self.tool_evidence = tool_evidence
+
+
+class ModelOutputLimitError(ModelResponseIncompleteError):
+    pass
+
+
+def require_completed_model_response(
+    response: object, *, tool_evidence: tuple[str, ...] = ()
+) -> None:
+    if not isinstance(response, BaseMessage):
+        raise ModelResponseIncompleteError(
+            "model response did not include a raw message",
+            tool_evidence=tool_evidence,
+        )
+    if _response_reached_output_limit(response):
+        raise ModelOutputLimitError(
+            "model response reached its output token limit",
+            tool_evidence=tool_evidence,
+        )
+    if getattr(response, "invalid_tool_calls", None):
+        raise ModelResponseIncompleteError(
+            "model response contained invalid tool calls",
+            tool_evidence=tool_evidence,
+        )
+    for attribute in ("response_metadata", "additional_kwargs"):
+        metadata = getattr(response, attribute, None)
+        if not isinstance(metadata, dict):
+            continue
+        status = str(metadata.get("status", "")).strip().lower()
+        if status in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+            raise ModelResponseIncompleteError(
+                f"model response did not complete: {status}",
+                tool_evidence=tool_evidence,
+            )
+        if metadata.get("refusal") or any(
+            str(metadata.get(key, "")).strip().lower() == "content_filter"
+            for key in ("finish_reason", "stop_reason", "stopReason")
+        ):
+            raise ModelResponseIncompleteError(
+                "model response was refused or filtered", tool_evidence=tool_evidence
+            )
+    content = getattr(response, "content", None)
+    if isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "refusal" for block in content
+    ):
+        raise ModelResponseIncompleteError(
+            "model response was refused", tool_evidence=tool_evidence
+        )
 
 
 def _response_reached_output_limit(response: object) -> bool:
@@ -48,6 +97,7 @@ def _response_reached_output_limit(response: object) -> bool:
             if isinstance(value, str) and value.strip().lower() in {
                 "length",
                 "max_tokens",
+                "model_context_window_exceeded",
             }:
                 return True
     return False
@@ -123,6 +173,7 @@ def invoke_model_with_tools(
     max_tool_rounds: int,
     token_counter: Callable[[str], int] | None = None,
     max_input_tokens: int | None = None,
+    generate_final_response: bool = True,
 ) -> tuple[str, tuple[str, ...]]:
     bind_tools = getattr(chat, "bind_tools", None)
     if not callable(bind_tools):
@@ -137,11 +188,7 @@ def invoke_model_with_tools(
     for _ in range(max_tool_rounds):
         require_model_input_budget(messages, token_counter, max_input_tokens)
         last_response = tool_chat.invoke(messages)
-        if _response_reached_output_limit(last_response):
-            raise ModelOutputLimitError(
-                "model response reached its output token limit",
-                tool_evidence=tuple(evidence),
-            )
+        require_completed_model_response(last_response, tool_evidence=tuple(evidence))
         tool_calls = list(getattr(last_response, "tool_calls", None) or [])
         if not tool_calls:
             return _message_content_text(last_response), tuple(evidence)
@@ -186,17 +233,15 @@ def invoke_model_with_tools(
                     status=status,
                 )
             )
+    if not generate_final_response:
+        return "", tuple(evidence)
     require_model_input_budget(messages, token_counter, max_input_tokens)
     last_response = (
         tool_chat.invoke(messages, tool_choice="none")
         if isinstance(chat, BaseChatOpenAI)
         else chat.invoke(messages)
     )
-    if _response_reached_output_limit(last_response):
-        raise ModelOutputLimitError(
-            "model response reached its output token limit",
-            tool_evidence=tuple(evidence),
-        )
+    require_completed_model_response(last_response, tool_evidence=tuple(evidence))
     return _message_content_text(last_response), tuple(evidence)
 
 

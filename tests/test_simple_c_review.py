@@ -61,7 +61,20 @@ class _ReviewProvider:
             self.tools = [tool.name for tool in tools]
             return chat
 
+        def with_structured_output(response_model, **_kwargs):
+            def structured(messages):
+                response = respond(messages)
+                parsed = error = None
+                try:
+                    parsed = response_model.model_validate_json(response.content)
+                except ValueError as exc:
+                    error = exc
+                return {"raw": response, "parsed": parsed, "parsing_error": error}
+
+            return RunnableLambda(structured)
+
         chat.bind_tools = bind_tools
+        chat.with_structured_output = with_structured_output
         return chat
 
 
@@ -96,7 +109,7 @@ def test_c_review_uses_simple_prompt_and_real_navigation(c_engine):
     result = engine.review.review_file(str(source))
     assert result["reviews"] == []
     assert provider.tools == ["grep", "find_name", "cat", "sed"]
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 3
     assert (
         "Review security failures in the assigned FILE" in provider.calls[0][0].content
     )
@@ -124,7 +137,9 @@ def test_c_review_failure_does_not_become_success(c_engine, monkeypatch, failure
     provider.response = failure
     with pytest.raises((RuntimeError, ModelOutputLimitError)):
         engine.review.review_file(str(source))
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == (
+        3 if isinstance(failure, AIMessage) and failure.content == "not-json" else 2
+    )
 
 
 def test_bulk_review_propagates_failure_after_draining(c_engine, monkeypatch):
