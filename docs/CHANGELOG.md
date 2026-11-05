@@ -13,6 +13,18 @@
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 
 
+## [2.1.0](https://github.com/arm/metis/compare/metis-v2.0.0...metis-v2.1.0) (2026-11-05)
+
+
+### Features
+
+* **review:** improve state and resource discovery guidance ([#380](https://github.com/arm/metis/issues/380)) ([a607518](https://github.com/arm/metis/commit/a607518cf3baf35d5078e3eef826cc806a11fb78))
+
+
+### Bug Fixes
+
+* **llm:** enforce structured final responses after tool use ([#378](https://github.com/arm/metis/issues/378)) ([2a2fc0d](https://github.com/arm/metis/commit/2a2fc0d82e5a7ae6d7acbbd1b3cf0db66e8bf00a))
+
 ## [2.0.0](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v2.0.0) (2026-10-30)
 
 
