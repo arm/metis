@@ -36,9 +36,10 @@ class ReviewIssueModel(BaseModel):
     confidence: confloat(ge=0.0, le=1.0) = Field(
         description="""A float between 0 and 1 indicating your confidence in the finding.
                        Scoring guidelines:
-                       1.0-0.9: Confirmed, trivial to exploit.
-                       0.89-0.8: Strong evidence pointing to known vulnerability pattern.
-                       0.79-0.7: Pattern appears exploitable but required specific preconditions. Limited evidence.
+                       Confidence measures evidence strength, not ease of exploitation or severity.
+                       1.0-0.9: A concrete causal chain and its preconditions are supported by source evidence.
+                       0.89-0.8: Strong evidence with explicitly stated remaining assumptions.
+                       0.79-0.7: A plausible mechanism with limited supporting evidence.
                        <0.69: Speculative issue, not enough information."""
     )
     cwe: constr(pattern=_CWE_PATTERN) = Field(
