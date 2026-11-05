@@ -17,6 +17,17 @@ general_prompts:
     certain issue classes, omit them from analysis and do not report them unless
     directly necessary to explain another issue.
   security_review_report: |-
+    Review state and resource invariants across connected operations, as well as local unsafe operations.
+    For state made visible to other code, establish what makes it valid, who owns it, and how long it may be used.
+    Follow creation, publication, mutation, invalidation, cleanup, and subsequent use across relevant files.
+    Examine error returns, exceptions, cancellation, callbacks, partial initialization, and reuse when the source supports them.
+    Distinguish an interruption of a function or operation from termination of the whole process. Determine what execution and state survive.
+    Respect the language's actual ownership and cleanup guarantees; do not assume either that cleanup runs or that it is skipped.
+    A guard, reset, or release appearing in search results is not sufficient evidence of safety. Inspect its enclosing branches,
+    its ordering relative to the dangerous operation, and the paths that bypass it.
+    Resolve concrete missing links with navigation. Establish a feasible sequence, violated invariant, and affected consumer,
+    or the source-backed defense that rules it out. Missing context establishes neither a vulnerability nor safety.
+
     3. How to Report
         - Return a JSON object with only a "reviews" key containing an array
           of all identified security issues.
