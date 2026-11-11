@@ -378,3 +378,18 @@ def test_split_snippet_default_counter():
     text = "a\nb\nc\nd\n"
     chunks = split_snippet(text, max_tokens=1)
     assert "".join(c for c, _ in chunks) == text
+
+
+def test_tiktoken_token_count_falls_back_when_registry_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(_model: str | None) -> None:
+        raise ValueError("Unknown encoding cl100k_base")
+
+    monkeypatch.setattr("metis.utils._tiktoken_encoding_for", unavailable)
+    text = "hello world"
+
+    assert tiktoken_token_count(text, "gpt-4") == heuristic_token_count(
+        text,
+        model="gpt-4",
+    )

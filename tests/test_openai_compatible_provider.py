@@ -127,3 +127,23 @@ def test_embedding_provider_builds_separate_code_and_docs_models() -> None:
     assert code_client.openai_api_base == "https://example.test/v1"
     assert code_client.default_headers == {"X-Test-Header": "test"}
     assert code_client.dimensions == 1536
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_timeout"),
+    [
+        ({}, 600.0),
+        ({"timeout": 12.0}, 12.0),
+        ({"request_timeout": 12.0}, 12.0),
+    ],
+)
+def test_chat_model_uses_finite_timeout_with_runtime_override(
+    options: dict[str, float], expected_timeout: float
+) -> None:
+    provider = OpenAICompatibleChatProvider(_chat_config())
+
+    llm = provider.get_chat_model(**options)
+
+    assert llm.request_timeout == expected_timeout
+    assert llm.root_client.timeout == expected_timeout
+    assert llm.root_async_client.timeout == expected_timeout

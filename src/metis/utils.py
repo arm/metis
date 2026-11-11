@@ -90,7 +90,11 @@ def anthropic_token_count(text: str) -> int:
 
 def tiktoken_token_count(text: str, model: str | None = None) -> int:
     """Count arbitrary text, treating special-token spellings as ordinary text."""
-    return len(_tiktoken_encoding_for(model).encode_ordinary(text))
+    try:
+        encoding = _tiktoken_encoding_for(model)
+    except ValueError:
+        return heuristic_token_count(text, model=model)
+    return len(encoding.encode_ordinary(text))
 
 
 def count_tokens(text: str, model: str | None = None) -> int:

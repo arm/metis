@@ -57,8 +57,6 @@ class SourceMap:
         self.text = text
         self.lines: list[str] = text.splitlines()
         self.line_offsets: list[int] = self._compute_line_offsets(text)
-        self._tree: Any | None = None
-        self._tree_attempted = False
         # (start_line, end_line, name) for each top-level function
         self._functions: list[tuple[int, int, str]] | None = None
 
@@ -404,10 +402,12 @@ class SourceMap:
         return self._functions
 
     def _spans_from_tree(self) -> list[tuple[int, int, str]]:
-        tree = self._ensure_tree()
-        if tree is None:
+        language = _TS_LANGUAGE_BY_EXT.get(os.path.splitext(self.rel_path)[1].lower())
+        if language is None:
             return []
         try:
+            from tree_sitter_language_pack import get_parser
+
             from metis.engine.reachability.c_family_nodes import (
                 _identifier_from_node,
                 _node_child_by_field_name,
@@ -416,7 +416,11 @@ class SourceMap:
                 _node_kind,
                 _node_line,
             )
+
+            tree = get_parser(language).parse(self.text)
         except Exception:
+            return []
+        if tree is None:
             return []
 
         source = self.text.encode("utf-8")
@@ -457,22 +461,6 @@ class SourceMap:
             end_line = self.byte_to_line(i - 1)
             out.append((start_line, end_line, name))
         return out
-
-    def _ensure_tree(self) -> Any | None:
-        if self._tree is not None or self._tree_attempted:
-            return self._tree
-        self._tree_attempted = True
-        ext = os.path.splitext(self.rel_path)[1].lower()
-        lang = _TS_LANGUAGE_BY_EXT.get(ext)
-        if not lang:
-            return None
-        try:
-            from tree_sitter_language_pack import get_parser
-
-            self._tree = get_parser(lang).parse(self.text)
-        except Exception:
-            self._tree = None
-        return self._tree
 
 
 class SourceRepository:

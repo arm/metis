@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from threading import Lock
 
 import pathspec
 from llama_index.core.node_parser import SentenceSplitter
@@ -28,6 +29,11 @@ class EngineRepository:
         self._state = state
         self._metisignore_loaded = False
         self._metisignore_spec: pathspec.GitIgnoreSpec | None = None
+        self._metisignore_lock = Lock()
+        self._review_path_specs: dict[
+            str, tuple[tuple[str, ...], pathspec.GitIgnoreSpec]
+        ] = {}
+        self._review_path_lock = Lock()
 
     def get_plugin_for_extension(self, extension):
         registry = self._config.language_registry
@@ -135,20 +141,23 @@ class EngineRepository:
     def load_metisignore(self) -> pathspec.GitIgnoreSpec | None:
         if self._metisignore_loaded:
             return self._metisignore_spec
-        self._metisignore_loaded = True
-
-        metisignore_path = self.resolve_metisignore_path()
-        try:
-            if not metisignore_path:
-                logger.debug("No MetisIgnore file provided")
-                return None
-            with open(metisignore_path, "r") as f:
-                self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(f)
-                logger.info(f"MetisIgnore file loaded: {metisignore_path}")
+        with self._metisignore_lock:
+            if self._metisignore_loaded:
+                return self._metisignore_spec
+            metisignore_path = self.resolve_metisignore_path()
+            try:
+                if not metisignore_path:
+                    logger.debug("No MetisIgnore file provided")
+                else:
+                    with open(metisignore_path, "r") as metisignore_file:
+                        self._metisignore_spec = pathspec.GitIgnoreSpec.from_lines(
+                            metisignore_file, backend="simple"
+                        )
+                    logger.info(f"MetisIgnore file loaded: {metisignore_path}")
+            except FileNotFoundError:
+                logger.debug(f"MetisIgnore file not loaded {metisignore_path}")
+            self._metisignore_loaded = True
             return self._metisignore_spec
-        except FileNotFoundError:
-            logger.debug(f"MetisIgnore file not loaded {metisignore_path}")
-            return None
 
     def get_code_files(
         self, *, include_suffixed_sources: bool = False, dir_path: str | None = None
@@ -159,13 +168,13 @@ class EngineRepository:
         metisignore_spec = self.load_metisignore()
         include_spec = None
         if self._config.review_code_include_paths:
-            include_spec = pathspec.GitIgnoreSpec.from_lines(
-                self._config.review_code_include_paths
+            include_spec = self._review_path_spec(
+                "include", self._config.review_code_include_paths
             )
         exclude_spec = None
         if self._config.review_code_exclude_paths:
-            exclude_spec = pathspec.GitIgnoreSpec.from_lines(
-                self._config.review_code_exclude_paths
+            exclude_spec = self._review_path_spec(
+                "exclude", self._config.review_code_exclude_paths
             )
         file_list = []
         for root, _, files in os.walk(base_path):
@@ -188,3 +197,15 @@ class EngineRepository:
                     continue
                 file_list.append(full_path)
         return file_list
+
+    def _review_path_spec(self, kind: str, paths: list[str]) -> pathspec.GitIgnoreSpec:
+        patterns = tuple(paths)
+        with self._review_path_lock:
+            cached = self._review_path_specs.get(kind)
+            if cached is None or cached[0] != patterns:
+                cached = (
+                    patterns,
+                    pathspec.GitIgnoreSpec.from_lines(patterns, backend="simple"),
+                )
+                self._review_path_specs[kind] = cached
+            return cached[1]

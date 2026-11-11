@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -389,3 +392,29 @@ def test_for_file_uses_default_repo(tmp_path):
     smap = SourceMap.for_file(str(tmp_path), "g.c")
     assert smap is not None
     assert smap.resolve_snippet("int parse(char *buf, int len) {").start_line == 7
+
+
+def test_source_map_does_not_cache_native_tree_across_threads(tmp_path):
+    SourceRepository.default().clear()
+    (tmp_path / "threaded.c").write_text(
+        "void threaded(void) {}\n",
+        encoding="utf-8",
+    )
+    unraisable: list[str] = []
+    previous_hook = sys.unraisablehook
+    sys.unraisablehook = lambda error: unraisable.append(str(error.exc_value))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            symbol = executor.submit(
+                lambda: SourceMap.for_file(
+                    str(tmp_path),
+                    "threaded.c",
+                ).enclosing_symbol(1)
+            ).result()
+        SourceRepository.default().clear()
+        gc.collect()
+    finally:
+        sys.unraisablehook = previous_hook
+
+    assert symbol == "threaded.c::threaded"
+    assert not any("unsendable" in error for error in unraisable)

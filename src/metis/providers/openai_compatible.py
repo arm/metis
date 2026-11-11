@@ -69,6 +69,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
         params: dict[str, object] = {
             "model": model_name,
             "max_retries": self.max_retries,
+            "request_timeout": 600.0,
             "use_responses_api": True,
         }
         temperature = kwargs.get("temperature")

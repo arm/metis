@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+
+import pathspec
 
 import metis.engine.indexing_service as indexing_service_mod
 from metis.engine import MetisEngine
 
 
-def _build_engine(tmp_path, dummy_backend, dummy_llm):
+def _build_engine(tmp_path, dummy_backend, dummy_llm, **kwargs):
     class _EmbeddingProvider:
         def get_embed_model_code(self, **_kwargs):
             return object()
@@ -26,6 +29,7 @@ def _build_engine(tmp_path, dummy_backend, dummy_llm):
         llama_query_model="gpt-test",
         similarity_top_k=3,
         enabled_tools={"index"},
+        **kwargs,
     )
 
 
@@ -166,3 +170,70 @@ def test_review_patch_respects_metisignore_allowlist(
     assert reviewed == ["src/keep.py"]
     assert [review["file"] for review in result["reviews"]] == ["src/keep.py"]
     assert result["overall_changes"] == "summary"
+
+
+def test_concurrent_review_selection_reuses_compiled_scopes(
+    tmp_path, dummy_backend, dummy_llm, monkeypatch
+):
+    names = [f"selected-{index}.py" for index in range(16)]
+    for name in [*names, "omitted.py"]:
+        (tmp_path / name).touch()
+    (tmp_path / ".metisignore").write_text("/omitted.py\n", encoding="utf-8")
+    includes = [f"/selected-{index}.py" for index in range(1024)]
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        review_code_include_paths=includes,
+        review_code_exclude_paths=["/never.py"],
+    )
+    compiled = []
+    from_lines = pathspec.GitIgnoreSpec.from_lines
+
+    def compile_spec(lines, **kwargs):
+        patterns = tuple(lines)
+        compiled.append(patterns)
+        assert kwargs == {"backend": "simple"}
+        return from_lines(patterns, **kwargs)
+
+    monkeypatch.setattr(pathspec.GitIgnoreSpec, "from_lines", compile_spec)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        inventories = list(
+            pool.map(lambda _: engine.repository.get_code_files(), range(8))
+        )
+
+    expected = sorted(str(tmp_path / name) for name in names)
+    assert all(sorted(files) == expected for files in inventories)
+    assert compiled == [("/omitted.py\n",), tuple(includes), ("/never.py",)]
+
+
+def test_review_scope_cache_observes_ordered_pattern_changes(
+    tmp_path, dummy_backend, dummy_llm
+):
+    names = {"first.py", "second.py", "third.py"}
+    for name in names:
+        (tmp_path / name).touch()
+    engine = _build_engine(
+        tmp_path,
+        dummy_backend,
+        dummy_llm,
+        review_code_include_paths=["*.py", "!second.py"],
+        review_code_exclude_paths=["third.py"],
+    )
+
+    def selected():
+        return {Path(path).name for path in engine.repository.get_code_files()}
+
+    assert selected() == {"first.py"}
+    engine._config.review_code_include_paths.append("second.py")
+    assert selected() == {"first.py", "second.py"}
+    engine._config.review_code_exclude_paths[:] = ["*.py", "!second.py"]
+    assert selected() == {"second.py"}
+    engine._config.review_code_include_paths = ["first.py"]
+    assert selected() == set()
+    engine._config.review_code_exclude_paths = []
+    assert selected() == {"first.py"}
+    engine._config.review_code_include_paths = []
+    assert selected() == names
+    engine._config.review_code_include_paths = ["# comment"]
+    assert selected() == set()
