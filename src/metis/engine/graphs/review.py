@@ -13,7 +13,9 @@ from langgraph.cache.memory import InMemoryCache
 
 from metis.engine.llm_runner import JsonPromptRequest, JsonPromptRunner
 from metis.engine.llm_runner import rendered_prompt_token_count
+from metis.engine.llm_runner import is_model_review_error
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.model_tool_runner import ModelResponseIncompleteError
 from metis.engine.source import SourceMap
 from metis.utils import split_snippet, parse_json_output
 from .schemas import ReviewResponseModel, review_schema_prompt
@@ -121,7 +123,9 @@ def review_node_llm(
     system_prompt = state.get("system_prompt") or ""
     reviews = invoke_review(system_prompt, body_text)
     if reviews is None:
-        raise RuntimeError("Model did not return a valid review after retries")
+        raise ModelResponseIncompleteError(
+            "Model did not return a valid review after retries"
+        )
     new_state: ReviewState = state.copy()
     new_state["parsed_reviews"] = reviews
     return new_state
@@ -342,6 +346,7 @@ class ReviewGraph:
                         ]
                     },
                     [{"file": relative_file or file_path, "message": str(exc)}],
+                    fatal=not is_model_review_error(exc),
                 ) from exc
             chunk_reviews = out.get("parsed_reviews", []) or []
             if chunk_reviews:

@@ -66,11 +66,10 @@ class ReviewIssueModel(BaseModel):
 
 class ReviewResponseModel(BaseModel):
     reviews: list[ReviewIssueModel] = Field(
-        default_factory=list,
         description="Collection of structured security review findings",
     )
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 def review_schema_json():

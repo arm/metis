@@ -8,7 +8,8 @@ from typing_extensions import TypedDict
 
 
 class ReviewIncompleteError(RuntimeError):
-    def __init__(self, results: dict, errors: list[dict]):
+    def __init__(self, results: dict, errors: list[dict], *, fatal: bool = True):
+        self.fatal = fatal
         self.results = {
             **results,
             "review_status": "inconclusive",

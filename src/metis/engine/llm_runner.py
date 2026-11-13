@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import json
 import random
 import ssl
 import time
 from email.utils import parsedate_to_datetime
 from openai.types.responses import ResponseError
+from openai import APIConnectionError
+from openai import APIStatusError
+from openai import APIResponseValidationError
+from pydantic import ValidationError
 from collections.abc import Callable
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
@@ -32,6 +37,40 @@ from metis.engine.model_tool_runner import require_model_input_budget
 
 class ModelProviderConfigurationError(RuntimeError):
     pass
+
+
+_RETRYABLE_RESPONSE_ERROR_CODES = {
+    "server_error",
+    "rate_limit_exceeded",
+    "vector_store_timeout",
+    "failed_to_download_image",
+}
+
+
+def is_model_review_error(error: Exception) -> bool:
+    if isinstance(
+        error,
+        (
+            ModelResponseIncompleteError,
+            APIConnectionError,
+            APIResponseValidationError,
+            ValidationError,
+            json.JSONDecodeError,
+        ),
+    ):
+        return True
+    if isinstance(error, APIStatusError):
+        return getattr(error, "code", None) != "insufficient_quota" and (
+            error.status_code in {408, 409, 429}
+            or error.status_code >= 500
+            or error.response.headers.get("x-should-retry") == "true"
+        )
+    return (
+        isinstance(error, ValueError)
+        and bool(error.args)
+        and isinstance(error.args[0], ResponseError)
+        and error.args[0].code in _RETRYABLE_RESPONSE_ERROR_CODES
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +276,12 @@ class JsonPromptRunner:
                         attempt_failure = (
                             f"structured validation failed: {parsing_error}"
                         )
+                    elif parsed is None and attempt_failure == request.invalid_message:
+                        attempt_failure = (
+                            f"{request.invalid_message}; no usable structured result "
+                            f"(tool_calls={len(getattr(raw_response, 'tool_calls', ()) or ())}, "
+                            f"content_empty={not bool(response_text)})"
+                        )
                 else:
                     if not active_tools:
                         response = (prompt | chat).invoke(request.variables)
@@ -323,7 +368,7 @@ class JsonPromptRunner:
             )
         elif incomplete_response is not None:
             raise incomplete_response
-        request.logger.warning(
+        request.logger.error(
             "%s failed for %d candidates; %s: %s",
             request.label,
             request.batch_size,
@@ -384,12 +429,10 @@ def _provider_retry_delay(error: Exception, default_seconds: float) -> float:
     response_error = (
         error.args[0] if isinstance(error, ValueError) and error.args else None
     )
-    if isinstance(response_error, ResponseError) and response_error.code not in {
-        "server_error",
-        "rate_limit_exceeded",
-        "vector_store_timeout",
-        "failed_to_download_image",
-    }:
+    if (
+        isinstance(response_error, ResponseError)
+        and response_error.code not in _RETRYABLE_RESPONSE_ERROR_CODES
+    ):
         raise error
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", {}) or {}

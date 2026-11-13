@@ -266,9 +266,10 @@ def execute_command(engine, cmd, cmd_args, args):
         with usage_command as command:
             spec.invoke(engine, runtime.command_args, args, runtime)
     except ReviewIncompleteError as exc:
-        if exc.results["reviews"]:
-            _finalize_review_output(engine, exc.results, args, runtime)
-        raise
+        _finalize_review_output(engine, exc.results, args, runtime)
+        if exc.fatal:
+            raise
+        return
 
     record = engine.finalize_usage_command(command)
     print_usage_summary(

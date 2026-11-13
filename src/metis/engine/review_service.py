@@ -15,6 +15,7 @@ from metis.utils import read_file_content
 
 from .graphs.types import ReviewRequest
 from .graphs.types import ReviewIncompleteError
+from .llm_runner import is_model_review_error
 from .helpers import apply_custom_guidance, summarize_changes
 from .repository import EngineRepository
 from .review_reachability import ReachabilityReviewBackend
@@ -114,9 +115,25 @@ class ReviewService:
         file_path,
         progress_callback=None,
     ):
-        return self._finalize_single_review_result(
-            self._review_file_standard(file_path)
-        )
+        try:
+            return self._finalize_single_review_result(
+                self._review_file_standard(file_path)
+            )
+        except ReviewIncompleteError:
+            raise
+        except Exception as exc:
+            if not is_model_review_error(exc):
+                raise
+            raise ReviewIncompleteError(
+                {"reviews": []},
+                [
+                    {
+                        "file": self._repository.normalize_match_path(str(file_path)),
+                        "message": str(exc),
+                    }
+                ],
+                fatal=False,
+            ) from exc
 
     def _get_global_reachability_review_for_file(
         self,
@@ -200,6 +217,7 @@ class ReviewService:
         review_fn = review_file_func or self.review_file
         failures = []
         completed = []
+        fatal = False
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
@@ -219,9 +237,11 @@ class ReviewService:
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
                     if isinstance(e, ReviewIncompleteError):
+                        fatal = fatal or e.fatal
                         completed.extend(e.results["reviews"])
                         failures.extend(e.results["review_errors"])
                     else:
+                        fatal = fatal or not is_model_review_error(e)
                         failures.append(
                             {
                                 "file": self._repository.normalize_match_path(
@@ -238,7 +258,7 @@ class ReviewService:
                 else:
                     yield None
         if failures:
-            raise ReviewIncompleteError({"reviews": completed}, failures)
+            raise ReviewIncompleteError({"reviews": completed}, failures, fatal=fatal)
 
     def review_patch(
         self,
@@ -254,6 +274,7 @@ class ReviewService:
         file_reviews = []
         overall_summaries = []
         failures = []
+        fatal = False
         base_path = os.path.abspath(self._config.codebase_path)
         metisignore_spec = self._repository.load_metisignore()
         for file_diff in diff:
@@ -291,9 +312,11 @@ class ReviewService:
             except Exception as e:
                 logger.error(f"Error processing review for {file_diff.path}: {e}")
                 if isinstance(e, ReviewIncompleteError):
+                    fatal = fatal or e.fatal
                     file_reviews.extend(e.results["reviews"])
                     failures.extend(e.results["review_errors"])
                 else:
+                    fatal = fatal or not is_model_review_error(e)
                     failures.append({"file": relative_path, "message": str(e)})
                 continue
             if review_dict:
@@ -323,5 +346,5 @@ class ReviewService:
         overall_changes = "\n\n".join(overall_summaries)
         result = {"reviews": file_reviews, "overall_changes": overall_changes}
         if failures:
-            raise ReviewIncompleteError(result, failures)
+            raise ReviewIncompleteError(result, failures, fatal=fatal)
         return result

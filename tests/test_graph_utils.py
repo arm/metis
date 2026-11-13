@@ -106,7 +106,14 @@ def test_review_node_llm_keeps_partial_reviews():
 
 @pytest.mark.parametrize(
     "payload",
-    [None, "", {"reviews": None}, {"reviews": "[]"}, {}, ReviewResponseModel()],
+    [
+        None,
+        "",
+        {"reviews": None},
+        {"reviews": "[]"},
+        {},
+        ReviewResponseModel.model_construct(),
+    ],
 )
 def test_review_normalization_rejects_missing_collection(payload):
     assert _normalize_reviews(payload) is None
