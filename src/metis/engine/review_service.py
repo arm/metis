@@ -14,6 +14,7 @@ from metis.usage import submit_with_current_context
 from metis.utils import read_file_content
 
 from .graphs.types import ReviewRequest
+from .graphs.types import ReviewIncompleteError
 from .helpers import apply_custom_guidance, summarize_changes
 from .repository import EngineRepository
 from .review_reachability import ReachabilityReviewBackend
@@ -198,6 +199,7 @@ class ReviewService:
 
         review_fn = review_file_func or self.review_file
         failures = []
+        completed = []
         with ThreadPoolExecutor(max_workers=self._config.max_workers) as executor:
             future_to_path = {
                 submit_with_current_context(
@@ -216,18 +218,27 @@ class ReviewService:
                     raise
                 except Exception as e:
                     logger.error(f"Error reviewing file {path}: {e}")
-                    failures.append(str(path))
+                    if isinstance(e, ReviewIncompleteError):
+                        completed.extend(e.results["reviews"])
+                        failures.extend(e.results["review_errors"])
+                    else:
+                        failures.append(
+                            {
+                                "file": self._repository.normalize_match_path(
+                                    str(path)
+                                ),
+                                "message": str(e),
+                            }
+                        )
                     yield None
                     continue
                 if result:
+                    completed.append(result)
                     yield result
                 else:
                     yield None
         if failures:
-            raise RuntimeError(
-                f"Review failed for {len(failures)} file(s): "
-                + ", ".join(failures[:10])
-            )
+            raise ReviewIncompleteError({"reviews": completed}, failures)
 
     def review_patch(
         self,
@@ -242,6 +253,7 @@ class ReviewService:
             return {"reviews": [], "overall_changes": ""}
         file_reviews = []
         overall_summaries = []
+        failures = []
         base_path = os.path.abspath(self._config.codebase_path)
         metisignore_spec = self._repository.load_metisignore()
         for file_diff in diff:
@@ -274,9 +286,16 @@ class ReviewService:
                     "original_file": original_content or "",
                 }
                 review_dict = self._review_graph_factory().review(req)
+            except CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error processing review for {file_diff.path}: {e}")
-                raise
+                if isinstance(e, ReviewIncompleteError):
+                    file_reviews.extend(e.results["reviews"])
+                    failures.extend(e.results["review_errors"])
+                else:
+                    failures.append({"file": relative_path, "message": str(e)})
+                continue
             if review_dict:
                 file_reviews.append(review_dict)
                 issues = "\n".join(
@@ -302,4 +321,7 @@ class ReviewService:
                 if changes_summary:
                     overall_summaries.append(changes_summary)
         overall_changes = "\n\n".join(overall_summaries)
-        return {"reviews": file_reviews, "overall_changes": overall_changes}
+        result = {"reviews": file_reviews, "overall_changes": overall_changes}
+        if failures:
+            raise ReviewIncompleteError(result, failures)
+        return result

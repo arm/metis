@@ -106,6 +106,19 @@ def generate_sarif(
     }
 
     run = sarif["runs"][0]
+    if results.get("review_errors"):
+        run["invocations"] = [
+            {
+                "executionSuccessful": False,
+                "toolExecutionNotifications": [
+                    {
+                        "level": "error",
+                        "message": {"text": f"{error['file']}: {error['message']}"},
+                    }
+                    for error in results["review_errors"]
+                ],
+            }
+        ]
 
     for review in results.get("reviews", []):
         file_path = review.get("file_path")

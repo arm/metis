@@ -70,7 +70,7 @@ class _TreeSitterLockExtractor(CFamilyAstMixin):
                 by_name_line[(node.name, int(node.line_number or 0))].append(node)
 
             for fn_node in self._iter_function_definitions(
-                parsed.tree.root_node(), include_methods=True
+                parsed.tree.root_node, include_methods=True
             ):
                 name = self._function_name_from_definition(fn_node, source)
                 graph_nodes = by_name_line.get((name, _node_line(fn_node)), [])

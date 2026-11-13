@@ -238,6 +238,10 @@ For GPT-6 models, the OpenAI provider omits unsupported temperature values.
 Missing, invalid, rejected, and token-limited model responses are failures, not
 clean reviews. Exhausted retries make non-interactive review commands exit with
 status `1`; a completed response with an empty findings list remains successful.
+Completed file and chunk findings are saved before an incomplete review exits.
+Partial JSON reports include `review_status` and `review_errors`; SARIF reports
+mark `executionSuccessful: false` and include the file errors.
+C/C++ source anchors use Tree-sitter even in simple LLM review mode.
 Existing YAML files and `--non-interactive --command` invocations remain valid.
 When model tools are enabled, `metis_engine.max_token_length` also bounds the
 rendered prompt and accumulated navigation history. Reviews split source chunks

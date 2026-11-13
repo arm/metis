@@ -64,20 +64,29 @@ class _Node:
         for child in self._fields.values():
             child._parent = self
 
-    def kind(self):
+    @property
+    def type(self):
         return self._type
 
-    def start_position(self):
+    @property
+    def start_point(self):
         return self._start_position
 
-    def end_position(self):
+    @property
+    def end_point(self):
         return self._end_position
 
+    @property
     def start_byte(self):
         return self._start_byte
 
+    @property
     def end_byte(self):
         return self._end_byte
+
+    @property
+    def children(self):
+        return self._children
 
     def child_count(self):
         return len(self._children)
@@ -88,6 +97,7 @@ class _Node:
     def child_by_field_name(self, name):
         return self._fields.get(name)
 
+    @property
     def parent(self):
         return self._parent
 
@@ -96,6 +106,7 @@ class _Tree:
     def __init__(self, root):
         self._root = root
 
+    @property
     def root_node(self):
         return self._root
 

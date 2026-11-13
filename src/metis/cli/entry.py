@@ -13,6 +13,8 @@ from prompt_toolkit.history import InMemoryHistory
 
 from metis.configuration import build_embedding_provider_config, load_runtime_config
 from metis.engine import MetisEngine
+from metis.engine.graphs.types import ReviewIncompleteError
+from .commands import _finalize_review_output
 from metis.engine.tools.selection import INDEX_TOOL, parse_engine_tools, tool_enabled
 from metis.usage import UsageRuntime
 from metis.utils import read_file_content
@@ -256,12 +258,17 @@ def execute_command(engine, cmd, cmd_args, args):
             display_name=spec.usage_display_name(cmd, runtime.command_args),
         )
 
-    if usage_command is None:
-        spec.invoke(engine, runtime.command_args, args, runtime)
-        return
+    try:
+        if usage_command is None:
+            spec.invoke(engine, runtime.command_args, args, runtime)
+            return
 
-    with usage_command as command:
-        spec.invoke(engine, runtime.command_args, args, runtime)
+        with usage_command as command:
+            spec.invoke(engine, runtime.command_args, args, runtime)
+    except ReviewIncompleteError as exc:
+        if exc.results["reviews"]:
+            _finalize_review_output(engine, exc.results, args, runtime)
+        raise
 
     record = engine.finalize_usage_command(command)
     print_usage_summary(

@@ -56,7 +56,7 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
             return ParsedFileGraph(errors=[f"{rel_path}: {type(exc).__name__}: {exc}"])
 
         source = bytes(parsed.text, "utf-8")
-        root = parsed.tree.root_node()
+        root = parsed.tree.root_node
         nodes = self._collect_function_nodes(root, source, rel_path, language)
         global_constructs, global_function_refs = self._collect_globals(
             root, source, rel_path
@@ -118,8 +118,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
                     language=language,
                     calls=calls,
                     end_line=_node_end_line(node),
-                    start_byte=int(node.start_byte()),
-                    end_byte=int(node.end_byte()),
+                    start_byte=int(node.start_byte),
+                    end_byte=int(node.end_byte),
                     is_public_entrypoint=is_public_entrypoint,
                     entrypoint_reason=(
                         "non-static function definition" if is_public_entrypoint else ""
@@ -251,8 +251,8 @@ class CFamilyTreeSitterExtractor(CFamilyAstMixin):
     def _declaration_prefix(self, node, source: bytes) -> str:
         declarator = _node_child_by_field_name(node, "declarator")
         if declarator is not None:
-            start = int(node.start_byte())
-            end = int(declarator.start_byte())
+            start = int(node.start_byte)
+            end = int(declarator.start_byte)
             if end > start:
                 return source[start:end].decode("utf-8", errors="ignore")
         text = _node_text(node, source)

@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import random
+import ssl
 import time
+from email.utils import parsedate_to_datetime
+from openai.types.responses import ResponseError
 from collections.abc import Callable
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
@@ -111,10 +116,18 @@ class JsonPromptRunner:
 
     def invoke(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
-        output_limit_error = None
-        incomplete_response = None
+        confirmed_output_limit = False
+        incomplete_response: ModelResponseIncompleteError | None = None
         tool_evidence: tuple[str, ...] = ()
         tools_complete = False
+        configured_retries = getattr(self._llm_provider, "max_retries", None)
+        max_transport_retries = (
+            max(0, configured_retries)
+            if isinstance(configured_retries, int)
+            else self._max_attempts - 1
+        )
+        transport_retries = 0
+        output_attempts = 0
         token_counter = (
             self._llm_provider.count_tokens
             if request.max_input_tokens is not None
@@ -128,7 +141,12 @@ class JsonPromptRunner:
         prompt = _json_chat_prompt(
             request.system_prompt, request.user_prompt, request.model_tools
         )
-        for attempt in range(self._max_attempts):
+        prompt.invoke(request.variables)
+        for attempt in range(self._max_attempts + max_transport_retries):
+            response_text: Any = None
+            parsed: Any = None
+            attempt_error: Exception | None = None
+            attempt_failure = request.invalid_message
             try:
                 usage_chat_kwargs = (
                     self._usage_runtime.hooks.chat_model_kwargs()
@@ -141,6 +159,7 @@ class JsonPromptRunner:
                     model=request.model,
                     reasoning_effort=request.reasoning_effort,
                 )
+                params["max_retries"] = 0
                 if request.max_tokens is not None:
                     params["max_tokens"] = request.max_tokens
                 if request.temperature is not None:
@@ -148,7 +167,7 @@ class JsonPromptRunner:
                 chat = self._llm_provider.get_chat_model(**params)
                 active_tools = (
                     request.model_tools
-                    if not tool_evidence and not tools_complete
+                    if not tool_evidence and (not tools_complete)
                     else ()
                 )
                 if active_tools:
@@ -195,17 +214,29 @@ class JsonPromptRunner:
                         raise TypeError(
                             "Structured model response did not include raw output"
                         )
+                    raw_response = structured_result.get("raw")
+                    response_text = getattr(raw_response, "content", None)
                     parsing_error = structured_result.get("parsing_error")
                     if isinstance(parsing_error, CancelledError):
                         raise parsing_error
                     require_completed_model_response(
-                        structured_result.get("raw"), tool_evidence=tool_evidence
+                        raw_response, tool_evidence=tool_evidence
                     )
+                    try:
+                        parsed = request.parse(
+                            None
+                            if parsing_error is not None
+                            else structured_result.get("parsed")
+                        )
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        attempt_failure = f"structured validation failed: {exc}"
                     if parsing_error is not None:
-                        raise ValueError(
+                        parsed = None
+                        attempt_failure = (
                             f"structured validation failed: {parsing_error}"
                         )
-                    parsed = request.parse(structured_result.get("parsed"))
                 else:
                     if not active_tools:
                         response = (prompt | chat).invoke(request.variables)
@@ -213,20 +244,24 @@ class JsonPromptRunner:
                             response, tool_evidence=tool_evidence
                         )
                         response_text = StrOutputParser().invoke(response)
-                    parsed = request.parse(response_text)
+                    try:
+                        parsed = request.parse(response_text)
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        attempt_failure = f"response validation failed: {exc}"
                 if parsed is not None:
                     return parsed
-                last_failure = request.invalid_message
             except CancelledError:
                 raise
             except ModelOutputLimitError as exc:
-                output_limit_error = exc
+                confirmed_output_limit = True
+                attempt_failure = str(exc)
                 tool_evidence = exc.tool_evidence
-                last_failure = str(exc)
             except ModelResponseIncompleteError as exc:
                 incomplete_response = exc
+                attempt_failure = str(exc)
                 tool_evidence = exc.tool_evidence
-                last_failure = str(exc)
             except Exception as exc:
                 if isinstance(
                     exc,
@@ -237,24 +272,56 @@ class JsonPromptRunner:
                     ),
                 ):
                     raise
-                last_failure = str(exc)
-            if attempt < self._max_attempts - 1:
-                request.logger.warning(
-                    "%s failed for %d candidates; retrying (attempt %d/%d): %s",
-                    request.label,
-                    request.batch_size,
-                    attempt + 1,
-                    self._max_attempts,
-                    last_failure,
+                if _certificate_verification_failed(exc):
+                    raise ModelProviderConfigurationError(
+                        "TLS certificate verification failed while contacting the model provider. Install the required CA certificate in the Python environment before retrying."
+                    ) from exc
+                attempt_error = exc
+                attempt_failure = str(exc)
+            last_failure = attempt_failure
+            if attempt_error is not None:
+                if transport_retries >= max_transport_retries:
+                    raise attempt_error
+                backoff_seconds = _provider_retry_delay(
+                    attempt_error,
+                    max(
+                        0.0,
+                        min(self._retry_backoff_seconds * 2**transport_retries, 30.0)
+                        * random.uniform(0.75, 1.0),
+                    ),
                 )
-                if self._retry_backoff_seconds > 0:
-                    time.sleep(min(self._retry_backoff_seconds * (2**attempt), 30.0))
-        if output_limit_error is not None:
+                transport_retries += 1
+                retry_kind = "transport retry"
+                retry_count = transport_retries
+                retry_limit = max_transport_retries
+            else:
+                output_attempts += 1
+                if output_attempts >= self._max_attempts:
+                    break
+                backoff_seconds = max(
+                    0.0,
+                    min(self._retry_backoff_seconds * 2 ** (output_attempts - 1), 30.0),
+                )
+                retry_kind = "attempt"
+                retry_count = output_attempts
+                retry_limit = self._max_attempts
+            request.logger.warning(
+                "%s failed for %d candidates; retrying (%s %d/%d): %s",
+                request.label,
+                request.batch_size,
+                retry_kind,
+                retry_count,
+                retry_limit,
+                last_failure,
+            )
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds)
+        if confirmed_output_limit:
             raise ModelOutputLimitError(
-                f"{request.label} reached the model output token limit "
-                f"after {self._max_attempts} attempts"
-            ) from output_limit_error
-        if incomplete_response is not None:
+                f"{request.label} reached the model output token limit after {self._max_attempts} attempts",
+                tool_evidence=tool_evidence,
+            )
+        elif incomplete_response is not None:
             raise incomplete_response
         request.logger.warning(
             "%s failed for %d candidates; %s: %s",
@@ -311,3 +378,72 @@ def invoke_langchain_json_prompt_with_retry(
             max_input_tokens=max_input_tokens,
         )
     )
+
+
+def _provider_retry_delay(error: Exception, default_seconds: float) -> float:
+    response_error = (
+        error.args[0] if isinstance(error, ValueError) and error.args else None
+    )
+    if isinstance(response_error, ResponseError) and response_error.code not in {
+        "server_error",
+        "rate_limit_exceeded",
+        "vector_store_timeout",
+        "failed_to_download_image",
+    }:
+        raise error
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    status_code = getattr(error, "status_code", getattr(response, "status_code", None))
+    if (
+        headers.get("x-should-retry") == "false"
+        or getattr(error, "code", None) == "insufficient_quota"
+        or (
+            isinstance(status_code, int)
+            and status_code not in {408, 409, 429}
+            and 400 <= status_code < 500
+            and headers.get("x-should-retry") != "true"
+        )
+    ):
+        raise error
+    retry_after: float | None = None
+    if headers.get("retry-after-ms") is not None:
+        try:
+            retry_after = float(headers["retry-after-ms"]) / 1000.0
+        except (TypeError, ValueError):
+            pass
+        if retry_after is not None and (
+            not math.isfinite(retry_after) or retry_after < 0
+        ):
+            retry_after = None
+    if retry_after is None and headers.get("retry-after") is not None:
+        value = headers["retry-after"]
+        try:
+            retry_after = float(value)
+        except (TypeError, ValueError):
+            try:
+                retry_after = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                pass
+    if retry_after is not None and math.isfinite(retry_after):
+        if retry_after > 120:
+            raise error
+        if retry_after >= 0:
+            return retry_after
+    return default_seconds
+
+
+def _certificate_verification_failed(error: BaseException) -> bool:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        message = str(current).lower()
+        if (
+            "certificate_verify_failed" in message
+            or "certificate verify failed" in message
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False

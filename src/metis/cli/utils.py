@@ -560,8 +560,15 @@ def check_dir_exists(dir_path, quiet=False):
 
 
 def pretty_print_reviews(results, quiet=False):
+    errors = results.get("review_errors", []) if results else []
+    for error in errors:
+        print_console(
+            f"[yellow]Review incomplete for {escape(error['file'])}: {escape(error['message'])}[/yellow]",
+            quiet,
+        )
     if not results or not results.get("reviews"):
-        print_console("[bold green]No security issues found![/bold green]", quiet)
+        if not errors:
+            print_console("[bold green]No security issues found![/bold green]", quiet)
         return
 
     for file_review in results.get("reviews", []):

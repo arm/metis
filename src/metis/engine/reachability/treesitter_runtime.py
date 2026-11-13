@@ -51,4 +51,4 @@ class TreeSitterRuntime:
 
         text = full.read_text(encoding="utf-8", errors="ignore")
         parser = get_parser(self.language_name)
-        return ParsedUnit(text=text, tree=parser.parse(text))
+        return ParsedUnit(text=text, tree=parser.parse(text.encode("utf-8")))

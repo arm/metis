@@ -7,6 +7,19 @@ from typing_extensions import Required
 from typing_extensions import TypedDict
 
 
+class ReviewIncompleteError(RuntimeError):
+    def __init__(self, results: dict, errors: list[dict]):
+        self.results = {
+            **results,
+            "review_status": "inconclusive",
+            "review_errors": errors,
+        }
+        super().__init__(
+            f"Review failed for {len(errors)} file(s): "
+            + "; ".join(f"{item['file']}: {item['message']}" for item in errors[:10])
+        )
+
+
 class ReviewRequest(TypedDict):
     # Required fields
     file_path: Required[str]

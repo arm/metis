@@ -3,6 +3,7 @@
 
 import logging
 from collections import deque
+from concurrent.futures import CancelledError
 from functools import partial
 from typing import Any
 from typing import cast
@@ -22,6 +23,7 @@ from .utils import (
     sanitize_review_payload,
 )
 from .types import ReviewRequest, ReviewState
+from .types import ReviewIncompleteError
 
 logger = logging.getLogger("metis")
 
@@ -322,7 +324,25 @@ class ReviewGraph:
                     (text, chunk_start + start - 1) for text, start in reversed(parts)
                 )
                 continue
-            out = app.invoke(state)
+            try:
+                out = app.invoke(state)
+            except CancelledError:
+                raise
+            except Exception as exc:
+                if not accumulated:
+                    raise
+                raise ReviewIncompleteError(
+                    {
+                        "reviews": [
+                            {
+                                "file": relative_file or file_path,
+                                "file_path": file_path,
+                                "reviews": accumulated,
+                            }
+                        ]
+                    },
+                    [{"file": relative_file or file_path, "message": str(exc)}],
+                ) from exc
             chunk_reviews = out.get("parsed_reviews", []) or []
             if chunk_reviews:
                 accumulated.extend(chunk_reviews)
