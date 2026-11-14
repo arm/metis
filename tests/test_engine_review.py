@@ -324,6 +324,56 @@ def test_simple_review_uses_profile_bytes_and_anchors_raw_source(engine) -> None
     graph._prompt_runner.invoke.assert_called_once()
 
 
+def test_simple_review_decodes_unprofiled_source_like_source_map(engine) -> None:
+    raw = (
+        b"/* \xbe\xcf */\n"
+        b"void copy(char *dst, const char *input) {\n"
+        b"    strcpy(dst, input);\n"
+        b"}\n"
+    )
+    target = Path(engine.codebase_path) / "legacy.c"
+    target.write_bytes(raw)
+    graph = engine._get_review_graph(None, None)
+    graph.max_token_length = 20_000
+
+    def model_response(request):
+        body = request.variables["body_text"]
+        assert "\ufffd" not in body
+        assert "3:     strcpy(dst, input);" in body
+        return request.parse(
+            {
+                "reviews": [
+                    {
+                        "issue": "Unbounded copy",
+                        "code_snippet": "strcpy(dst, input);",
+                        "start_line": 3,
+                        "end_line": 3,
+                        "reasoning": "The destination size is never checked.",
+                        "mitigation": "Use a bounded copy.",
+                        "confidence": 0.9,
+                        "cwe": "CWE-120",
+                        "severity": "HIGH",
+                    }
+                ]
+            }
+        )
+
+    graph._prompt_runner.invoke = Mock(side_effect=model_response)
+    run = _simple_llm_review(engine).run_files(
+        (str(target),), jobs=engine.execution._jobs
+    )
+
+    assert run.status is ReviewStatus.SUCCEEDED
+    assert run.result is not None
+    finding = run.result.reviews[0].reviews[0].model_dump()
+    expected = SourceMap.for_bytes(target.name, raw).anchor_for_lines(3, 3).to_dict()
+    assert {
+        key: value
+        for key, value in finding["anchor"].items()
+        if not key.endswith("_byte")
+    } == {key: value for key, value in expected.items() if not key.endswith("_byte")}
+
+
 def test_simple_llm_review_resumes_completed_files(engine, tmp_path):
     target = Path(engine.codebase_path) / "supported.c"
     target.write_text("int original(void) { return 0; }\n", encoding="utf-8")
@@ -489,7 +539,9 @@ def test_patch_review_retains_completed_files_after_failure(
     graph = Mock()
     issue = {"reviews": [{"issue": "Check active"}]}
     if failure_kind == "source":
-        (Path(engine.codebase_path) / "second.c").write_bytes(b"\xff")
+        second = Path(engine.codebase_path) / "second.c"
+        second.unlink()
+        second.mkdir()
         graph.review.return_value = issue
     else:
         error = (
@@ -927,8 +979,15 @@ def test_review_patch_parses_and_reviews(engine, monkeypatch, tmp_path, parent_a
             jobs=engine.execution._jobs,
         )
 
-    source.write_bytes(b"\xff")
-    with pytest.raises(UnicodeDecodeError):
+    review_graph = _DummyReviewGraph(None)
+    source.write_bytes(b"print('Old')  # \xbe\xcf\n")
+    _simple_llm_review(engine).review_patch(str(patch_file))
+    (request,) = review_graph.requests
+    assert request["original_file"] == "print('Old')  # \n"
+
+    source.unlink()
+    source.mkdir()
+    with pytest.raises(IsADirectoryError):
         _simple_llm_review(engine).review_patch(str(patch_file))
 
     failed = _simple_llm_review(engine).run_review(
