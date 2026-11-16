@@ -47,15 +47,21 @@ class EngineRepository:
         self._profiled_source = artifact
 
     @property
+    def profiled_source(self) -> ProfiledSourceArtifact | None:
+        return self._profiled_source
+
+    @property
     def profiled_source_fingerprint(self) -> str | None:
         artifact = self._profiled_source
         return artifact.reference.fingerprint if artifact is not None else None
 
-    def source_view_for_path(self, path: str) -> SourceView | None:
+    def source_view_for_path(
+        self, path: str, *, require_language_match: bool = True
+    ) -> SourceView | None:
         artifact = self._profiled_source
-        if (
-            artifact is None
-            or self.get_language_name_for_path(path) not in artifact.languages
+        if artifact is None or (
+            require_language_match
+            and self.get_language_name_for_path(path) not in artifact.languages
         ):
             return None
         view = artifact.view_for_path(self._config.codebase_path, path)

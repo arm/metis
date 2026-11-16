@@ -43,6 +43,7 @@ def builtin_capability_registrations(
             codebase_path=str(context.codebase_path),
             timeout_seconds=parsed.timeout_seconds,
             max_chars=parsed.max_chars,
+            repository=repository,
         )
 
     def build_memory(

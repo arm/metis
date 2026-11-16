@@ -4,6 +4,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
+import json
 import pytest
 import shutil
 import sqlite3
@@ -391,12 +392,28 @@ def test_navigation_registry_lock_obeys_configured_timeout(
     assert runner.cat("source.c") == "1: needle source"
 
 
-def test_python_search_timeout_kills_worker_and_allows_followup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("profiled", [False, True])
+def test_python_search_timeout_kills_worker_and_allows_followup(
+    tmp_path, monkeypatch, profiled
+):
     (tmp_path / "input.txt").write_text("needle\n", encoding="utf-8")
     runner = _build_runner(tmp_path)
     runner.timeout_seconds = 2
+    if profiled:
+        payload = json.dumps({"unused": ["0" * 64, "x" * 1_000_000]})
+        monkeypatch.setattr(runner, "_source_snapshot", lambda: payload)
     processes = []
     popen = subprocess.Popen
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda argv, **kwargs: popen([*argv, "--unexpected"], **kwargs),
+    )
+    with pytest.raises(
+        RuntimeError, match="Unexpected navigation worker profile arguments"
+    ):
+        runner.grep("needle", "input.txt")
 
     def record_process(argv, **kwargs):
         assert argv[0] == sys.executable

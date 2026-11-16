@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
+from io import StringIO
 import re
 from typing import Any
 
@@ -13,8 +15,15 @@ from metis.utils import source_lines
 
 
 class SourceEvidence:
-    def __init__(self, root: str | Path | None, observations: list[dict[str, Any]]):
+    def __init__(
+        self,
+        root: str | Path | None,
+        observations: list[dict[str, Any]],
+        *,
+        source_reader: Callable[[str], str] | None = None,
+    ):
         self.root = Path(root).resolve() if root is not None else None
+        self._source_reader = source_reader
         self.observed: dict[Path, dict[int, frozenset[tuple[str, bool]]]] = {}
         self.errors: list[str] = []
         for observation in observations:
@@ -121,7 +130,12 @@ class SourceEvidence:
             try:
                 if not path.is_file():
                     raise OSError("Cited source is not a regular file")
-                with path.open(encoding="utf-8", errors="ignore") as source:
+                source_input = (
+                    StringIO(self._source_reader(str(path)))
+                    if self._source_reader is not None
+                    else path.open(encoding="utf-8", errors="ignore")
+                )
+                with source_input as source:
                     for line, content in enumerate(source, start=1):
                         if line in needed:
                             actual = content.removesuffix("\n")
@@ -135,7 +149,7 @@ class SourceEvidence:
                                 matched.add(line)
                         if line >= final_line:
                             break
-            except OSError:
+            except (OSError, RuntimeError, ValueError):
                 errors.extend(
                     f"SOURCE_UNAVAILABLE:{citation}" for citation in citations
                 )

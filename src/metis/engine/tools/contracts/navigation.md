@@ -33,9 +33,11 @@ Execution rules:
 - Paths must remain inside the codebase root.
 - Outputs are clipped to configured limits.
 - Tool failures are errors, not evidence.
-- Navigation reads original source files. A branch in retrieved text is not proof
-  that it is active in the selected build; respect supplied compilation-profile
-  and graph evidence and state configuration uncertainty.
+- Canonically profiled files have inactive lines blanked before reads/searches;
+  this includes `.inc` and extensionless includes. Original line numbers remain
+  unchanged. Ambiguous and unprofiled files remain raw reference context. Do not
+  infer build reachability from their visibility; macro semantics and attacker
+  control still require evidence.
 - Text occurrence alone does not prove behavior. Claims require concrete
   file-and-line evidence and a causal explanation.
 - Absence of a `grep` result is not proof of safety unless the searched scope is
