@@ -120,6 +120,7 @@ class TriageWorkflow:
         source_evidence = SourceEvidence(
             getattr(self.toolbox, "codebase_path", None),
             state.get("source_observations", []),
+            source_reader=getattr(self.toolbox, "read_source_text", None),
         )
         decision, model_status = _triage_decision(
             state,

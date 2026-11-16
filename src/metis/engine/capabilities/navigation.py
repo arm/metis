@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+from io import StringIO
 from itertools import islice
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -14,15 +17,23 @@ import sys
 from tempfile import NamedTemporaryFile
 from threading import Lock
 from time import monotonic
+from typing import Annotated
 from typing import Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import TypeAdapter
 
 from metis.engine.source import SourceMap
 from metis.generated_artifacts import generated_artifact_paths
+from metis.json_io import parse_json_object
 from metis.utils import resolve_path_within_root, source_lines
+
+if TYPE_CHECKING:
+    from metis.engine.repository import EngineRepository
+
 
 _PYTHON_REGEX_REWRITES = (
     ("[[:space:]]", r"\s"),
@@ -49,10 +60,14 @@ class NavigationCapability:
         codebase_path: str,
         timeout_seconds: int,
         max_chars: int,
+        repository: EngineRepository | None = None,
     ):
         self.codebase_path = Path(codebase_path).resolve()
         self.timeout_seconds = timeout_seconds
         self.max_chars = max_chars
+        self._repository = repository
+        self._profile_sources: dict[str, tuple[str, str]] | None = None
+        self._profile_cache: tuple[str, str] | None = None
         # Serialize subprocess tools; add a measured FD-aware pool if tool
         # latency becomes material.
         self._subprocess_lock = Lock()
@@ -72,6 +87,55 @@ class NavigationCapability:
                 "+",
             ]
         )
+
+    def _source_snapshot(self) -> str | None:
+        artifact = (
+            self._repository.profiled_source if self._repository is not None else None
+        )
+        if artifact is None:
+            return None
+        fingerprint = artifact.reference.fingerprint
+        cached = self._profile_cache
+        if cached is None or cached[0] != fingerprint:
+            snapshot = {
+                name: (
+                    hashlib.sha256(raw).hexdigest(),
+                    artifact.canonical_sources.get(name, raw)
+                    .decode("utf-8", errors="ignore")
+                    .replace("\r\n", "\n"),
+                )
+                for name, raw in artifact.raw_sources.items()
+            }
+            cached = (fingerprint, json.dumps(snapshot))
+            self._profile_cache = cached
+        return cached[1]
+
+    def _read_text(self, target: Path) -> str:
+        if self._repository is not None:
+            view = self._repository.source_view_for_path(
+                str(target), require_language_match=False
+            )
+            if view is not None and view.raw:
+                return view.canonical.decode("utf-8", errors="ignore").replace(
+                    "\r\n", "\n"
+                )
+        if self._profile_sources is not None:
+            relative = target.relative_to(self.codebase_path).as_posix()
+            record = self._profile_sources.get(relative)
+            if record is not None:
+                source_sha256, text = record
+                if hashlib.sha256(target.read_bytes()).hexdigest() != source_sha256:
+                    raise RuntimeError(
+                        f"Profiled source changed after initialization: {target}"
+                    )
+                return text
+        return target.read_text(encoding="utf-8", errors="ignore")
+
+    def read_source_text(self, path: str) -> str:
+        target = self._resolve_path(path)
+        if not target.is_file():
+            raise FileNotFoundError(str(target))
+        return self._read_text(target)
 
     def _supports_native_tool(
         self, argv: Sequence[str], *, ok_returncodes: tuple[int, ...] = (0,)
@@ -138,6 +202,7 @@ class NavigationCapability:
         ok_returncodes: tuple[int, ...] = (0,),
         deadline: float | None = None,
         nul_records: bool = False,
+        input_text: str | None = None,
     ) -> str:
         deadline = (
             deadline if deadline is not None else monotonic() + self.timeout_seconds
@@ -151,6 +216,7 @@ class NavigationCapability:
             with subprocess.Popen(
                 list(argv),
                 cwd=str(self.codebase_path),
+                stdin=subprocess.PIPE if input_text is not None else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=not nul_records,
@@ -158,7 +224,7 @@ class NavigationCapability:
             ) as proc:
                 try:
                     stdout, stderr = proc.communicate(
-                        timeout=max(0, deadline - monotonic())
+                        input=input_text, timeout=max(0, deadline - monotonic())
                     )
                 except BaseException:
                     try:
@@ -242,9 +308,14 @@ class NavigationCapability:
             self.codebase_path, timeout_seconds=max(0, deadline - monotonic())
         )
         target = self._resolve_path(path, artifacts)
+        snapshot = self._source_snapshot()
         relocated_state = (self.codebase_path / ".metis").is_symlink()
         needs_pruning = relocated_state or bool(artifacts)
-        if self._has_grep and (not needs_pruning or self._has_find):
+        if (
+            snapshot is None
+            and self._has_grep
+            and (not needs_pruning or self._has_find)
+        ):
             relative_path = target.relative_to(self.codebase_path).as_posix()
             if relative_path.startswith("-") or relative_path in {"(", "!"}:
                 relative_path = f"./{relative_path}"
@@ -282,7 +353,9 @@ class NavigationCapability:
             )
 
         self._compile_pattern(pattern)
-        return self._run_python_search("grep", pattern, target, deadline)
+        return self._run_python_search(
+            "grep", pattern, target, deadline, snapshot=snapshot
+        )
 
     def _find_files(self, relative_path: str, artifacts: frozenset[Path]) -> list[str]:
         argv = ["find", relative_path, "(", "-iname", ".metis"]
@@ -297,7 +370,13 @@ class NavigationCapability:
         return [*argv, ")", "-prune", "-o", "-type", "f"]
 
     def _run_python_search(
-        self, operation: str, value: str, target: Path, deadline: float
+        self,
+        operation: str,
+        value: str,
+        target: Path,
+        deadline: float,
+        *,
+        snapshot: str | None = None,
     ) -> str:
         return self._run(
             [
@@ -309,9 +388,11 @@ class NavigationCapability:
                 operation,
                 value,
                 str(target),
+                *(["--profile-stdin"] if snapshot is not None else []),
             ],
             deadline=deadline,
             nul_records=operation == "find",
+            input_text=snapshot,
         )
 
     @staticmethod
@@ -329,7 +410,7 @@ class NavigationCapability:
         lines: list[str] = []
         for file_path in self._iter_files(target):
             rel = file_path.relative_to(self.codebase_path).as_posix()
-            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            text = self._read_text(file_path)
             for lineno, line in enumerate(source_lines(text), start=1):
                 if regex.search(line):
                     lines.append(f"{rel}:{lineno}:{line}")
@@ -372,11 +453,7 @@ class NavigationCapability:
         return results
 
     def cat(self, path: str) -> str:
-        target = self._resolve_path(path)
-        if not target.is_file():
-            raise FileNotFoundError(str(target))
-        text = target.read_text(encoding="utf-8", errors="ignore")
-        return self._clip(SourceMap.number_text(text, 1))
+        return self._clip(SourceMap.number_text(self.read_source_text(path), 1))
 
     def sed(self, path: str, start_line: int, end_line: int) -> str:
         if end_line < start_line:
@@ -385,7 +462,13 @@ class NavigationCapability:
         if not target.is_file():
             raise FileNotFoundError(str(target))
         start_idx = max(0, start_line - 1)
-        with target.open(encoding="utf-8", errors="ignore") as source:
+        source_input = (
+            StringIO(self._read_text(target))
+            if self._repository is not None
+            and self._repository.profiled_source is not None
+            else target.open(encoding="utf-8", errors="ignore")
+        )
+        with source_input as source:
             if end_line < 0:
                 lines = source.readlines()[:end_line]
             else:
@@ -402,6 +485,12 @@ if __name__ == "__main__":
         timeout_seconds=int(sys.argv[2]),
         max_chars=int(sys.argv[3]),
     )
+    if sys.argv[7:]:
+        if sys.argv[7:] != ["--profile-stdin"]:
+            raise ValueError("Unexpected navigation worker profile arguments")
+        navigation._profile_sources = TypeAdapter(
+            dict[str, tuple[Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")], str]]
+        ).validate_python(parse_json_object(sys.stdin.buffer.read()))
     if sys.argv[4] == "grep":
         output = navigation._grep_python(sys.argv[5], Path(sys.argv[6]))
     else:

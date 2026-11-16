@@ -15,8 +15,9 @@ Current operations:
 the codebase root, including when the input path is absolute. Native grep may
 prefix relative paths with `./`.
 
-Navigation uses native `grep` and `find` when they support the required options;
-missing or incompatible tools use the timeout-controlled Python fallback.
+Navigation uses native `grep` and `find` when they support the required options.
+Profiled `grep` and missing or incompatible tools use the timeout-controlled
+Python fallback.
 
 The packaged graph grants navigation to `simple_llm_review` and `triage`.
 Discovery uses it to resolve missing evidence in callers, definitions,
@@ -50,8 +51,10 @@ Execution boundaries:
 - The configured timeout covers waiting for other subprocesses and traversal;
   timed-out searches are killed and drained. Returned text is clipped to the output limit.
 - Tool failures remain visible as errors rather than empty evidence.
-- Navigation returns original source. Retrieved text does not establish that a
-  branch is active in the selected compilation profile.
+- With a compilation profile, reads, searches and triage citations use its
+  line-preserving views, including `.inc` and extensionless includes; inactive
+  lines are blanked. Ambiguous and unprofiled files remain raw reference context,
+  not proof of build reachability.
 - Tool use retains the configured round limit and conversation history.
   Requests with an output schema finalize directly after the tool-round limit,
   without generating an intermediate plain-text answer. Other requests retain

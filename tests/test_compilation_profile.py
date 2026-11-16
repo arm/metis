@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import random
@@ -16,6 +17,12 @@ from unittest.mock import Mock
 import pytest
 
 from metis.engine import MetisEngine
+from metis.engine.capabilities.builtins import builtin_capability_registrations
+from metis.engine.capabilities.contracts import CapabilityContext
+from metis.engine.capabilities.navigation import NavigationCapability
+from metis.engine.capabilities.navigation import NavigationCapabilityConfiguration
+from metis.engine.nodes.triage.workflow import workflow as triage_workflow
+from metis.engine.stages.triage.models import TriageDecisionModel
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.concurrency import JobScheduler
 from metis.engine.nodes.codegraph import CodeGraphService
@@ -27,6 +34,7 @@ from metis.engine.nodes.simple_llm_review.service import SimpleLlmReviewService
 from metis.engine.repository import EngineRepository
 from metis.engine.source import SourceMap
 from metis.plugins.c_family.codegraph import CFamilyCodeGraphProvider
+from metis.plugins.registry import LanguagePluginRegistry
 from metis.sarif.writer import generate_sarif
 
 
@@ -114,10 +122,17 @@ def _node(graph, name: str):
 
 
 @pytest.mark.parametrize("command", (False, True), ids=("arguments", "command"))
+@pytest.mark.parametrize("suffix", [".c", ".cpp"])
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+@pytest.mark.parametrize("final_newline", [False, True])
 def test_real_database_profiles_read_only_project_and_drives_codegraph(
     tmp_path: Path,
     node_jobs,
     command: bool,
+    suffix: str,
+    newline: bytes,
+    final_newline: bool,
+    monkeypatch,
 ) -> None:
     root = tmp_path / "project with spaces"
     build = root / "build dir"
@@ -126,8 +141,8 @@ def test_real_database_profiles_read_only_project_and_drives_codegraph(
     for directory in (build, sources, generated):
         directory.mkdir(parents=True)
     header = generated / "config.h"
-    header.write_text("#define VALUE 7\n")
-    source = sources / "máin file.c"
+    header.write_text("// header\n\n#define VALUE 7\n")
+    source = sources / ("máin file" + suffix)
     source.write_bytes(
         b'const char *line_text = "#line 100"; /* #line 200 \xff\f */\r\n'
         b"// #line 300\r\n"
@@ -137,6 +152,10 @@ def test_real_database_profiles_read_only_project_and_drives_codegraph(
         b"void target(void) {}\r\n"
         b"void active(void) { WRAP(target()); VALUE; }\r\n"
         b"#else\r\nvoid inactive(void) {}\r\n#endif"
+    )
+    source.write_bytes(
+        source.read_bytes().replace(b"\r\n", newline)
+        + (newline if final_newline else b"")
     )
     arguments = (
         "-DFEATURE=1",
@@ -167,16 +186,16 @@ def test_real_database_profiles_read_only_project_and_drives_codegraph(
         "-o",
         "objects/main.o",
     )
-    entry = _entry(build, "../source dir/máin file.c", *arguments, command=command)
+    entry = _entry(build, f"../source dir/{source.name}", *arguments, command=command)
     entry["directory"] = "build dir"
     artifact = _build_profile(root, node_jobs, [entry])
     raw = source.read_bytes()
-    canonical = artifact.canonical_sources["source dir/máin file.c"]
+    canonical = artifact.canonical_sources[source.relative_to(root).as_posix()]
 
     assert len(canonical) == len(raw)
     assert canonical.count(b"\n") == raw.count(b"\n")
     assert canonical.index(b"void active") == raw.index(b"void active")
-    assert b"  value\r\n" in canonical
+    assert b"  value" + newline in canonical
     assert b"WRAP(target())" in canonical
     assert b"void inactive" not in canonical
     assert "generated headers/config.h" in artifact.canonical_sources
@@ -209,6 +228,41 @@ def test_real_database_profiles_read_only_project_and_drives_codegraph(
         "region"
     ]
     assert (region["startLine"], region["endLine"]) == (8, 8)
+    nav = NavigationCapability(
+        codebase_path=str(root),
+        timeout_seconds=8,
+        max_chars=16000,
+        repository=_repository,
+    )
+    path = source.relative_to(root).as_posix()
+    assert "inactive" not in nav.cat(path)
+    assert nav.sed(path, 8, 8) == "8: " + source_map.lines[7]
+    assert nav.grep("void active", path) == f"{path}:8:{source_map.lines[7]}"
+    assert nav.sed("generated headers/config.h", 3, 3) == "3: #define VALUE 7"
+    decision = TriageDecisionModel(
+        status="valid",
+        reason="Coordinate check.",
+        evidence=[f"{path}:6-11"],
+        resolution_chain=["active body"],
+    )
+    monkeypatch.setattr(
+        triage_workflow, "_triage_decision", lambda *a, **kw: (decision, "ok")
+    )
+    workflow = triage_workflow.TriageWorkflow(Mock(), "offline", nav)
+    state = {
+        "source_observations": [
+            {
+                "tool": "sed",
+                "arguments": {"path": path, "start_line": 6, "end_line": 11},
+                "output": nav.sed(path, 6, 11),
+            }
+        ]
+    }
+    assert workflow._decide(state)["decision_source"] == "model"
+    source.write_bytes(raw + b"/* drift */")
+    result = workflow._decide(state)
+    assert result["decision_source"] == "validation_failure"
+    assert result["decision"].status == "inconclusive"
 
 
 def test_compiler_option_values_are_not_treated_as_flags(tmp_path, node_jobs):
@@ -524,6 +578,18 @@ def test_multi_profile_headers_are_ambiguous_and_deterministic(
     assert not graph.nodes
     view = repository.source_view_for_path(str(header))
     assert view is not None and view.canonical == header.read_bytes()
+    (tmp_path / "other.c").write_text("void reference_only(void) {}\n")
+    nav = NavigationCapability(
+        codebase_path=str(tmp_path),
+        timeout_seconds=8,
+        max_chars=16000,
+        repository=repository,
+    )
+    assert "enabled" in nav.cat("variant.h") and "disabled" in nav.cat("variant.h")
+    assert nav.grep("void enabled", "variant.h").startswith("variant.h:2:")
+    assert nav.grep("void disabled", "variant.h").startswith("variant.h:4:")
+    assert "reference_only" in nav.cat("other.c")
+    assert "reference_only" in nav.grep("reference_only", "other.c")
 
     header.write_text(header.read_text() + "/* source drift */\n")
     changed = _build_profile(tmp_path, node_jobs, entries)
@@ -761,3 +827,86 @@ def test_initialize_reuses_stored_graph_until_source_changes(
     assert (
         changed["codegraph"]["fingerprint"] != initialized["codegraph"]["fingerprint"]
     )
+
+
+@pytest.mark.parametrize("name", ["source.c", "source.inc", "source"])
+def test_navigation_factory_tracks_late_profile_install_and_rejects_drift(
+    tmp_path, node_jobs, name
+):
+    source = tmp_path / name
+    source.write_text("#if 0\nvoid inactive(void);\n#endif\nvoid active(void) {}\n")
+    unit = tmp_path / "unit.c"
+    unit.write_text(f'#include "{name}"\n')
+    artifact = _build_profile(tmp_path, node_jobs, [_entry(tmp_path, unit)])
+    repository = EngineRepository(
+        SimpleNamespace(
+            codebase_path=str(tmp_path),
+            language_registry=LanguagePluginRegistry.from_config(),
+        ),
+        SimpleNamespace(),
+    )
+    registration = next(
+        r
+        for r in builtin_capability_registrations(Mock(), Mock(), repository)
+        if r.manifest.name == "navigation"
+    )
+    nav = registration.factory(
+        CapabilityContext(tmp_path, repository, 4, 2048),
+        NavigationCapabilityConfiguration(timeout_seconds=8, max_chars=16000),
+    )
+    assert "inactive" in nav.cat(name)
+    repository.install_profiled_source(artifact)
+    assert (repository.source_view_for_path(str(source)) is None) == (
+        name != "source.c"
+    )
+    assert "inactive" not in nav.cat(name)
+    assert nav.sed(name, -2, -1) == nav.cat(name).rsplit("\n", 1)[0]
+    assert nav.grep("inactive", name) == ""
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert (
+            list(pool.map(lambda _: nav.grep("void active", name), range(4)))
+            == [f"{name}:4:void active(void) {{}}"] * 4
+        )
+    cached = nav._profile_cache
+    assert cached is not None
+    assert nav._source_snapshot() is cached[1]
+    source.write_text(source.read_text() + "void changed(void);\n")
+    for operation in [
+        lambda: nav.cat(name),
+        lambda: nav.sed(name, 1, 4),
+        lambda: nav.grep("active", name),
+    ]:
+        with pytest.raises(RuntimeError, match="changed after initialization"):
+            operation()
+    refreshed = _build_profile(tmp_path, node_jobs, [_entry(tmp_path, unit)])
+    repository.install_profiled_source(refreshed)
+    assert nav.grep("changed", name) == f"{name}:5:void changed(void);"
+    refreshed_cache = nav._profile_cache
+    assert refreshed_cache is not None and refreshed_cache != cached
+    for payload in [
+        '{"source.c": ["bad", "fake"]}',
+        json.dumps({"source.c": ("0" * 64, 123)}),
+        '{"source.c": [], "source.c": []}',
+    ]:
+        nav._profile_cache = (refreshed_cache[0], payload)
+        with pytest.raises(RuntimeError, match="ValidationError|ValueError"):
+            nav.grep("active", name)
+
+
+def test_navigation_profile_filters_before_clipping(tmp_path, node_jobs):
+    source = tmp_path / "source.c"
+    source.write_text(
+        "#if 0\n" + "void inactive(void);\n" * 100 + "#endif\nvoid active(void) {}\n"
+    )
+    artifact = _build_profile(tmp_path, node_jobs, [_entry(tmp_path, source)])
+    repository, _, _ = _graph(tmp_path, [source], artifact)
+    nav = NavigationCapability(
+        codebase_path=str(tmp_path),
+        timeout_seconds=8,
+        max_chars=80,
+        repository=repository,
+    )
+    assert nav.grep("void", ".") == "source.c:103:void active(void) {}"
+    assert nav.sed("source.c", 103, 103) == "103: void active(void) {}"
+    assert nav.sed("source.c", 103, 10**30) == "103: void active(void) {}"
+    assert nav.sed("source.c", 10**30, 10**30) == ""
