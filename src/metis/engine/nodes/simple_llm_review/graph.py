@@ -532,7 +532,34 @@ class ReviewGraph:
                 "chunk_start": chunk_start,
                 "chunk_end": chunk_end,
             }
-            if input_tokens(state) > self.max_token_length:
+            needs_split = input_tokens(state) > self.max_token_length
+            if not needs_split:
+                try:
+                    with runlog.span(
+                        "workflow",
+                        "simple_llm_review",
+                        {
+                            "nodes": ["build_prompt", "review", "parse"],
+                            "edges": [
+                                ["__start__", "build_prompt"],
+                                ["build_prompt", "review"],
+                                ["review", "parse"],
+                                ["parse", "__end__"],
+                            ],
+                            "chunk": {
+                                "file_path": file_path,
+                                "start_line": chunk_start,
+                                "end_line": chunk_end,
+                            },
+                            "initial_state": state,
+                        },
+                    ) as workflow_span:
+                        runlog.bump("workflow_runs")
+                        out = app.invoke(state)
+                        workflow_span.end(attributes={"final_state": out})
+                except ModelInputLimitError:
+                    needs_split = True
+            if needs_split:
                 parts = split_snippet(chunk, max(1, len(chunk) // 2), len)
                 if len(parts) == 1:
                     raise ModelInputLimitError(
@@ -542,28 +569,6 @@ class ReviewGraph:
                     (text, chunk_start + start - 1) for text, start in reversed(parts)
                 )
                 continue
-            with runlog.span(
-                "workflow",
-                "simple_llm_review",
-                {
-                    "nodes": ["build_prompt", "review", "parse"],
-                    "edges": [
-                        ["__start__", "build_prompt"],
-                        ["build_prompt", "review"],
-                        ["review", "parse"],
-                        ["parse", "__end__"],
-                    ],
-                    "chunk": {
-                        "file_path": file_path,
-                        "start_line": chunk_start,
-                        "end_line": chunk_end,
-                    },
-                    "initial_state": state,
-                },
-            ) as workflow_span:
-                runlog.bump("workflow_runs")
-                out = app.invoke(state)
-                workflow_span.end(attributes={"final_state": out})
             chunk_reviews = out.get("parsed_reviews", []) or []
             if navigation_evidence is not None:
                 navigation_evidence = out["navigation_evidence"]

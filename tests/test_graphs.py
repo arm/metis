@@ -282,3 +282,43 @@ def test_simple_review_without_tools_bounds_complete_prompts():
     with pytest.raises(ModelInputLimitError, match="prompt context exceeds"):
         graph.review(request)
     graph._prompt_runner.invoke.assert_not_called()
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_review_rechunks_after_navigation_overflow(recover):
+    provider = Mock()
+    provider.count_tokens.side_effect = lambda text, **_: len(text)
+    graph = ReviewGraph(
+        provider, {}, None, "", "test-model", 4000, model_tools=(object(),)
+    )
+    accepted = []
+
+    def respond(request):
+        lines = [
+            line.strip()
+            for line in request.variables["body_text"].splitlines()
+            if ": value_" in line
+        ]
+        if not recover or len(lines) > 2:
+            raise ModelInputLimitError("Model input exceeds max_input_tokens=4000")
+        accepted.extend(lines)
+        return []
+
+    graph._prompt_runner.invoke = Mock(side_effect=respond)
+    request = {
+        "file_path": "target.py",
+        "snippet": "".join(f"value_{index} = {index}\n" for index in range(8)),
+        "language_prompts": {
+            "security_review_file": "Review. [[REVIEW_SCHEMA_FIELDS]]",
+            "security_review_checks": "Check.",
+        },
+    }
+    if recover:
+        assert graph.review(request)["reviews"] == []
+        assert accepted == [
+            f"{index + 1}: value_{index} = {index}" for index in range(8)
+        ]
+    else:
+        with pytest.raises(ModelInputLimitError):
+            graph.review(request)
+        assert graph._prompt_runner.invoke.call_count < 20
