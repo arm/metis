@@ -368,7 +368,7 @@ class SimpleLlmReviewService:
         file_path = str(source_path)
         source_view = self._repository.source_view_for_path(file_path)
         if source_view is None:
-            snippet = source_path.read_text(encoding="utf-8")
+            snippet = source_path.read_text(encoding="utf-8", errors="ignore")
             anchor_source_hash = None
         else:
             snippet = source_view.canonical.decode("utf-8", errors="ignore")
@@ -529,7 +529,7 @@ class SimpleLlmReviewService:
                 if self._repository.is_metisignored(abs_path, spec=metisignore_spec):
                     continue
                 original_content = (
-                    source_path.read_text(encoding="utf-8")
+                    source_path.read_text(encoding="utf-8", errors="ignore")
                     if source_path.exists()
                     else ""
                 )
