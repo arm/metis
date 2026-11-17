@@ -13,6 +13,26 @@
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 
 
+## [2.1.0](https://github.com/arm/metis/compare/metis-v2.0.0...metis-v2.1.0) (2026-11-17)
+
+
+### Features
+
+* **index:** accept explicit input inventories ([#389](https://github.com/arm/metis/issues/389)) ([221da89](https://github.com/arm/metis/commit/221da898af1ed77cf72b9b3b6d86edc6efa66b14))
+* **review:** improve state and resource discovery guidance ([#380](https://github.com/arm/metis/issues/380)) ([a607518](https://github.com/arm/metis/commit/a607518cf3baf35d5078e3eef826cc806a11fb78))
+
+
+### Bug Fixes
+
+* **ci:** replace retired macOS 14 runners ([#383](https://github.com/arm/metis/issues/383)) ([c81e53d](https://github.com/arm/metis/commit/c81e53daee9b51c503c6407b4e726c0bd9e3a449))
+* **index:** preserve static notebook source and identity ([#386](https://github.com/arm/metis/issues/386)) ([9f7e7fa](https://github.com/arm/metis/commit/9f7e7fa821bf67fe807aa00ddaf360df0e621aaa))
+* **llm:** enforce structured final responses after tool use ([#378](https://github.com/arm/metis/issues/378)) ([2a2fc0d](https://github.com/arm/metis/commit/2a2fc0d82e5a7ae6d7acbbd1b3cf0db66e8bf00a))
+* **navigation:** respect compilation profiles during source lookup ([#384](https://github.com/arm/metis/issues/384)) ([1e78877](https://github.com/arm/metis/commit/1e78877918927d46ff7df817db672d742a22f220))
+* **review:** expose incomplete deduplication outcomes ([#387](https://github.com/arm/metis/issues/387)) ([67fdd71](https://github.com/arm/metis/commit/67fdd71988e3f1cb5df3c20d2f1ed18f2ae48271))
+* **review:** retry smaller chunks after navigation overflow ([#390](https://github.com/arm/metis/issues/390)) ([eb42c43](https://github.com/arm/metis/commit/eb42c43d2d9d89fcd028f41be86072315f6a1032))
+* **review:** review source files that are not valid UTF-8 ([#382](https://github.com/arm/metis/issues/382)) ([47737bb](https://github.com/arm/metis/commit/47737bb59f364974c4d613f50cf4abe553d44c57))
+* **triage:** propagate checkpoint write failures ([#385](https://github.com/arm/metis/issues/385)) ([6393fa9](https://github.com/arm/metis/commit/6393fa9c5941070812886aafb4a0066cb83137f2))
+
 ## [2.0.0](https://github.com/arm/metis/compare/metis-v1.5.0...metis-v2.0.0) (2026-10-30)
 
 
