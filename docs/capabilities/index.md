@@ -39,6 +39,17 @@ retrieval errors. Retrieved passages are context candidates rather than proof;
 review remains grounded in the current source and concrete file-and-line
 evidence.
 
+## Explicit indexing inputs
+
+`engine.indexing.count_index_items()` and
+`engine.indexing.index_prepare_nodes_iter()` accept an optional keyword-only
+`input_files: list[str] | None`. `None` keeps native discovery. A list replaces
+discovery and ignore matching with exactly those files, as the full input set
+rather than an incremental change; an empty list selects none. Entries must be
+codebase-relative paths to existing supported regular files, spelled as on
+disk, without duplicates or symlink components. Invalid inventories raise
+`ValueError` before embedding models are initialized.
+
 ## Configuration
 
 The selected `metis.yaml` owns model-tool and retrieval limits. This is the
