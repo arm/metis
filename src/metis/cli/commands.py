@@ -305,8 +305,13 @@ def run_init(engine, args, runtime: CommandRuntime):
     index_status = results.get("index")
     if threat_model is not None:
         source_text = ", ".join(threat_model["authoritative_sources"]) or "none"
+        label = (
+            "[yellow]Threat model initialization incomplete.[/yellow] "
+            if threat_model.get("status") == "inconclusive"
+            else "[green]Threat model initialized.[/green] "
+        )
         print_console(
-            "[green]Threat model initialized.[/green] "
+            f"{label}"
             f"Records: {threat_model['records_written']}; "
             f"authoritative sources: {escape(source_text)}",
             args.quiet,
