@@ -107,7 +107,7 @@ _PROGRESS_EXPLANATIONS = {
     "reachability_code_review_done": "Reachability review finished for the selected code scope.",
     "findings_finalization_start": "Final validation and deduplication began for the collected candidate findings.",
     "findings_finalization_progress": "Progress through candidate validation or representative adjudication.",
-    "findings_finalization_done": "Final validation and deduplication finished; attributes show kept and removed findings.",
+    "findings_finalization_done": "Final validation and deduplication finished; attributes show status, reported adjudication failures, and kept and removed findings.",
 }
 
 
