@@ -144,7 +144,7 @@ def test_initialize_threat_model_memory_preserves_source_on_invalid_model_respon
         ("repo", "threat_model", "authoritative"),
         "SECURITY.md",
     )
-    assert result["status"] == "ok"
+    assert result["status"] == "inconclusive"
     assert record is not None
     assert record.body_json["distilled_claims"] == []
     assert "Firmware images are untrusted." in record.summary_text
@@ -555,7 +555,7 @@ def test_failed_history_refresh_preserves_snapshot_and_retries(
     monkeypatch.setattr(
         threat_context,
         "_model_reduce_source_claim_group",
-        lambda _config, claims: claims,
+        lambda _config, claims, **_kwargs: claims,
     )
     monkeypatch.setattr(threat_context, "repo_fingerprint", lambda _root: "git:repo")
     git_failure = {

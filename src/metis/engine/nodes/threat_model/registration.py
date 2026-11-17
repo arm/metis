@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from copy import copy
+from concurrent.futures import CancelledError
 from typing import Literal
 from typing import cast
 from typing import TYPE_CHECKING
@@ -14,6 +15,8 @@ from pydantic import ConfigDict
 from .service import initialize_threat_model_memory
 
 from metis.engine.execution.contracts import EmptyNodeConfiguration
+from metis.engine.execution.contracts import ExecutionDiagnostic
+from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import CapabilityRequirement
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
 
 
 class InitializedThreatModelResult(BaseModel):
-    status: Literal["ok"]
+    status: Literal["ok", "inconclusive"]
     records_written: int
     records_deleted: int
     authoritative_sources: list[str]
@@ -46,18 +49,34 @@ def create_node(
         )
         node_config = copy(engine_config)
         node_config.llama_query_model = invocation.context.runtime.model
-        result = InitializedThreatModelResult.model_validate(
-            initialize_threat_model_memory(
+        diagnostics: list[ExecutionDiagnostic] = []
+        try:
+            initialized = initialize_threat_model_memory(
                 node_config,
                 repository,
                 memory_service,
+                diagnostics=diagnostics,
             )
-        )
+        except CancelledError:
+            raise
+        except Exception:
+            if not any(
+                item.code == "threat_model.history_inconclusive" for item in diagnostics
+            ):
+                raise
+            return NodeResult(
+                {}, status=ExecutionStatus.ERROR, diagnostics=tuple(diagnostics)
+            )
+        result = InitializedThreatModelResult.model_validate(initialized)
         runlog.event(
             "artifact",
             {"kind": "threat_model_snapshot", "payload": result},
         )
-        return NodeResult({"threat_model": result})
+        return NodeResult(
+            {"threat_model": result},
+            status=ExecutionStatus(result.status),
+            diagnostics=tuple(diagnostics),
+        )
 
     return NodeRegistration(
         name="threat_model",

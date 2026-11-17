@@ -7,6 +7,7 @@ import json
 import logging
 import subprocess
 from collections import deque
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from pydantic import Field
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
+from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.memory import MemoryService
 from metis.memory.fingerprints import input_fingerprint
@@ -49,6 +51,8 @@ def write_history_records(
     service: MemoryService,
     repo_root: Path,
     repo_fp: str,
+    *,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> None:
     history_config = config.threat_model_config.get("history")
     if (
@@ -60,7 +64,22 @@ def write_history_records(
     commits = _git_history(repo_root, int(history_config["max_commits"]))
     if not commits:
         return
-    lessons = _distill_history(config, commits)
+    try:
+        lessons = _distill_history(config, commits)
+    except CancelledError:
+        raise
+    except Exception as exc:
+        if diagnostics is not None:
+            logger.error("Git-history threat-model distillation failed: %s", exc)
+            diagnostics.append(
+                ExecutionDiagnostic(
+                    "threat_model.history_inconclusive",
+                    "Git-history threat-model distillation did not complete; "
+                    "the previous snapshot was preserved.",
+                    "error",
+                )
+            )
+        raise
     for index, lesson in enumerate(lessons):
         source_commits = [commits[item] for item in lesson["source_commit_indexes"]]
         body = {

@@ -25,6 +25,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from metis import runlog
+from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
@@ -125,7 +126,11 @@ def initialize_threat_model_memory(
     config,
     repository: EngineRepository | None = None,
     memory_service: MemoryService | None = None,
+    *,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> dict[str, Any]:
+    diagnostics = diagnostics if diagnostics is not None else []
+    diagnostics_start = len(diagnostics)
     service = memory_service or config.memory_service
     if service is None:
         raise RuntimeError("Repository memory service is not configured")
@@ -179,13 +184,7 @@ def initialize_threat_model_memory(
     previous_records = list(service.iter_records(THREAT_MODEL_NAMESPACE))
     if previous_records and all(
         record.metadata.get("snapshot_fingerprint") == snapshot_fp
-        and (
-            record.artifact_type != "threat_model_authoritative"
-            or (
-                isinstance(record.body_json, dict)
-                and bool(record.body_json.get("distilled_claims"))
-            )
-        )
+        and record.metadata.get("snapshot_status") == "ok"
         for record in previous_records
     ):
         return {
@@ -200,7 +199,10 @@ def initialize_threat_model_memory(
         repo_root,
         repo_fp,
         threat_sources,
+        diagnostics=diagnostics,
     )
+    current_diagnostics = diagnostics[diagnostics_start:]
+    status = "inconclusive" if current_diagnostics else "ok"
     if not candidate_records:
         candidate_records.append(
             MemoryRecord.create(
@@ -215,9 +217,10 @@ def initialize_threat_model_memory(
         )
     for record in candidate_records:
         record.metadata["snapshot_fingerprint"] = snapshot_fp
+        record.metadata["snapshot_status"] = status
     records_deleted = service.replace_records(THREAT_MODEL_NAMESPACE, candidate_records)
     return {
-        "status": "ok",
+        "status": status,
         "records_written": len(candidate_records),
         "records_deleted": records_deleted,
         "authoritative_sources": authoritative_sources,
@@ -230,6 +233,8 @@ def _build_threat_model_snapshot(
     repo_root: Path,
     repo_fp: str,
     threat_sources: list[ThreatSource],
+    *,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> list[MemoryRecord]:
     candidate_service = MemoryService(
         InMemoryStore(),
@@ -256,6 +261,7 @@ def _build_threat_model_snapshot(
                 fallback_token_limit=max(
                     1, int(config.max_token_length) // (4 * len(threat_sources))
                 ),
+                diagnostics=diagnostics,
             )
             if prepared is None:
                 raise RuntimeError(
@@ -292,13 +298,18 @@ def _build_threat_model_snapshot(
     _write_authoritative_contract_record(
         candidate_service,
         repo_fp,
-        authoritative_claims=_model_reduce_source_claim_group(config, claims),
+        authoritative_claims=_model_reduce_source_claim_group(
+            config,
+            claims,
+            diagnostics=diagnostics,
+        ),
     )
     write_history_records(
         config,
         candidate_service,
         repo_root,
         repo_fp,
+        diagnostics=diagnostics,
     )
     return list(candidate_service.iter_records(THREAT_MODEL_NAMESPACE))
 
@@ -345,6 +356,7 @@ def _prepare_threat_source(
     threat_source: ThreatSource,
     *,
     fallback_token_limit: int,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> PreparedThreatSource | None:
     try:
         text = threat_source.path.read_text(encoding="utf-8")
@@ -355,6 +367,7 @@ def _prepare_threat_source(
         config,
         rel_path=rel_path,
         text=text,
+        diagnostics=diagnostics,
     )
     summary = "; ".join(claim["statement"] for claim in distilled_claims)
     if not summary:
@@ -503,6 +516,7 @@ def _model_distilled_source_claims(
     *,
     rel_path: str,
     text: str,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> list[dict[str, Any]]:
     llm_provider = config.llm_provider
     model = config.llama_query_model
@@ -569,6 +583,15 @@ def _model_distilled_source_claims(
                 chat_model_kwargs=config.chat_model_kwargs,
             )
             if batch_records is None:
+                if diagnostics is not None:
+                    diagnostics.append(
+                        ExecutionDiagnostic(
+                            "threat_model.distillation_inconclusive",
+                            "Threat-model source distillation did not complete; "
+                            "source text was retained without distilled claims.",
+                            "warning",
+                        )
+                    )
                 logger.warning(
                     "Threat-model source distillation returned no valid response "
                     "for %s; preserving source text",
@@ -591,6 +614,8 @@ def _model_distilled_source_claims(
 def _model_reduce_source_claim_group(
     config,
     claims: list[dict[str, Any]],
+    *,
+    diagnostics: list[ExecutionDiagnostic] | None = None,
 ) -> list[dict[str, Any]]:
     claims = _dedupe_distilled_claims(claims)
     if not claims:
@@ -635,15 +660,33 @@ def _model_reduce_source_claim_group(
         raise
     except Exception as exc:
         logger.warning("Threat-model source claim deduplication failed: %s", exc)
-        return claims
+        records = None
 
     if not records:
+        if diagnostics is not None:
+            diagnostics.append(
+                ExecutionDiagnostic(
+                    "threat_model.reduction_inconclusive",
+                    "Threat-model claim reduction did not complete; "
+                    "unreduced claims were retained.",
+                    "warning",
+                )
+            )
         return claims
 
     referenced_indexes = {
         index for record in records for index in record["source_claim_indexes"]
     }
     if referenced_indexes != set(range(len(claims))):
+        if diagnostics is not None:
+            diagnostics.append(
+                ExecutionDiagnostic(
+                    "threat_model.reduction_inconclusive",
+                    "Threat-model claim reduction returned incomplete provenance; "
+                    "unreduced claims were retained.",
+                    "warning",
+                )
+            )
         logger.warning(
             "Threat-model source claim deduplication returned incomplete provenance; "
             "keeping unreduced source claims"
