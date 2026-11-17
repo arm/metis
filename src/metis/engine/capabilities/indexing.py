@@ -110,9 +110,14 @@ class IndexingService:
     def _get_supported_input_files(
         self,
         docs_supported_exts: list[str],
+        input_files: list[str] | None = None,
     ) -> list[str]:
         base_path = os.path.abspath(self._config.codebase_path)
         docs_supported = {ext.lower() for ext in docs_supported_exts}
+        if input_files is not None:
+            return self._get_explicit_input_files(
+                base_path, docs_supported, input_files
+            )
         metisignore_spec = self._repository.load_metisignore()
         selected = []
 
@@ -133,6 +138,58 @@ class IndexingService:
 
         return selected
 
+    def _get_explicit_input_files(
+        self, base_path: str, docs_supported: set[str], input_files: list[str]
+    ) -> list[str]:
+        if not isinstance(input_files, list):
+            raise ValueError("Index inputs must be a list of relative paths")
+        selected = []
+        seen = set()
+        directory_entries: dict[Path, set[str]] = {}
+        for relative in input_files:
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or "\x00" in relative
+                or os.path.isabs(relative)
+                or os.path.splitdrive(relative)[0]
+            ):
+                raise ValueError("Index input must be a safe relative file path")
+            parts = relative.replace(os.sep, "/").split("/")
+            if any(part in {"", ".", ".."} for part in parts):
+                raise ValueError("Index input must be a safe relative file path")
+            path = Path(base_path)
+            for part in parts:
+                parent = path
+                path /= part
+                if parent not in directory_entries:
+                    try:
+                        directory_entries[parent] = set(os.listdir(parent))
+                    except OSError as exc:
+                        raise ValueError(
+                            "Index input must be an existing regular file"
+                        ) from exc
+                if part not in directory_entries[parent]:
+                    raise ValueError(
+                        "Index input must use the existing on-disk path spelling"
+                    )
+                if path.is_symlink() or path.is_junction():
+                    raise ValueError("Index input must not contain symlink components")
+            key = os.path.normcase(relative)
+            if key in seen:
+                raise ValueError("Index input inventory contains a duplicate path")
+            seen.add(key)
+            if not path.is_file():
+                raise ValueError("Index input must be an existing regular file")
+            ext = path.suffix.lower()
+            if (
+                ext not in docs_supported
+                and self._repository.get_language_name_for_path(str(path)) is None
+            ):
+                raise ValueError("Index input has an unsupported file type")
+            selected.append(str(path))
+        return selected
+
     def index_codebase(self) -> None:
         pending_before = self._state.pending_nodes
         try:
@@ -142,13 +199,13 @@ class IndexingService:
             if self._state.pending_nodes is not pending_before:
                 self._state.pending_nodes = None
 
-    def count_index_items(self) -> int:
+    def count_index_items(self, *, input_files: list[str] | None = None) -> int:
         docs_exts = self._config.plugin_config.get("docs", {}).get(
             "supported_extensions", [".md"]
         )
-        return len(self._get_supported_input_files(docs_exts))
+        return len(self._get_supported_input_files(docs_exts, input_files))
 
-    def index_prepare_nodes_iter(self):
+    def index_prepare_nodes_iter(self, *, input_files: list[str] | None = None):
         """Prepare nodes for this thread's next finalize call without changing the index."""
         if self._closed:
             raise RuntimeError("Index capability is closed")
@@ -156,7 +213,8 @@ class IndexingService:
             raise RuntimeError(
                 "Finish the pending index preparation before preparing again"
             )
-        self._get_embedding_models()
+        if input_files is None:
+            self._get_embedding_models()
         docs_supported_exts = [
             ext.lower()
             for ext in self._config.plugin_config.get("docs", {}).get(
@@ -165,12 +223,16 @@ class IndexingService:
         ]
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
-        input_files = self._get_supported_input_files(docs_supported_exts)
-        if not input_files:
+        selected_files = self._get_supported_input_files(
+            docs_supported_exts, input_files
+        )
+        if not selected_files:
             self._state.pending_nodes = ([], [])
             return
+        if input_files is not None:
+            self._get_embedding_models()
         reader = SimpleDirectoryReader(
-            input_files=input_files,
+            input_files=selected_files,
             filename_as_id=True,
             file_extractor={".ipynb": (notebook_reader := _NotebookJsonReader())},
         )
