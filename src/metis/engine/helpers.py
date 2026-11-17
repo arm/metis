@@ -96,8 +96,9 @@ def prepare_nodes_iter(
     nodes_docs = []
 
     for d in code_docs:
-        ext = os.path.splitext(d.id_)[1].lower()
-        plugin = get_plugin_for_path(d.id_)
+        file_path = d.metadata.get("file_path") or d.id_
+        ext = os.path.splitext(file_path)[1].lower()
+        plugin = get_plugin_for_path(file_path)
         if plugin:
             try:
                 splitter = get_splitter_cached(plugin)

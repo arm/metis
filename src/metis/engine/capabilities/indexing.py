@@ -8,10 +8,12 @@ import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import CancelledError
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import unidiff
 from llama_index.core import SimpleDirectoryReader
+from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 
 from metis.engine.diff_utils import extract_content_from_diff
@@ -25,6 +27,25 @@ from metis.vector_store.node_projection import project_index_node
 from metis.vector_store.node_projection import project_index_nodes
 
 logger = logging.getLogger("metis")
+
+
+class _NotebookJsonReader(BaseReader):
+    def __init__(self) -> None:
+        self.read_error: OSError | None = None
+
+    def load_data(
+        self,
+        file: Path,
+        extra_info: dict[str, Any] | None = None,
+    ) -> list[Document]:
+        try:
+            text = file.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            # SimpleDirectoryReader skips files whose reader raises.
+            if self.read_error is None:
+                self.read_error = exc
+            return []
+        return [Document(text=text, metadata=extra_info or {})]
 
 
 class IndexingService:
@@ -151,8 +172,11 @@ class IndexingService:
         reader = SimpleDirectoryReader(
             input_files=input_files,
             filename_as_id=True,
+            file_extractor={".ipynb": (notebook_reader := _NotebookJsonReader())},
         )
         documents = reader.load_data()
+        if notebook_reader.read_error is not None:
+            raise notebook_reader.read_error
         logger.info(
             f"Loaded {len(documents)} documents from {self._config.codebase_path}"
         )
@@ -165,7 +189,8 @@ class IndexingService:
         for doc in documents:
             file_path = doc.metadata.get("file_path") or doc.id_
             ext = os.path.splitext(file_path)[1].lower()
-            new_id = os.path.relpath(doc.id_, parent_dir)
+            source_id = file_path if ext == ".ipynb" else doc.id_
+            new_id = os.path.relpath(source_id, parent_dir)
             doc.doc_id = new_id
             doc.id_ = new_id
 
