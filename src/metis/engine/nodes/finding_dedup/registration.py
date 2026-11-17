@@ -26,6 +26,7 @@ from metis.engine.stages.review.execution import combine_review_runs
 from metis.engine.stages.review.models import REVIEW_DEDUP_FAILED
 from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import PatchReviewResult
+from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
@@ -179,6 +180,8 @@ def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
         progress(
             {
                 "event": "findings_finalization_done",
+                "status": "inconclusive" if diagnostics else "ok",
+                "failures": len(diagnostics),
                 "raw_findings": candidate_count,
                 "deduped_findings": kept_count,
                 "removed_findings": candidate_count - kept_count,
@@ -190,7 +193,11 @@ def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
                 ReviewRun(
                     ReviewStatus.INCONCLUSIVE if diagnostics else combined.status,
                     deduped,
-                    combined.diagnostics,
+                    combined.diagnostics
+                    + tuple(
+                        ReviewDiagnostic(item.code, item.message, item.severity)
+                        for item in diagnostics
+                    ),
                 )
             )
         },

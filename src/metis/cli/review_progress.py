@@ -288,9 +288,10 @@ class ReviewCodeProgressReporter:
         )
 
     def _findings_finalization_done(self, event: Mapping[str, Any]):
+        status = "incomplete" if event.get("status") == "inconclusive" else "complete"
         self._set_summary(
             "finding_dedup",
-            "Dedup complete: "
+            f"Dedup {status}: "
             f"{event.get('deduped_findings', 0)} kept, "
             f"{event.get('removed_findings', 0)} removed from "
             f"{event.get('raw_findings', 0)} candidates",
