@@ -44,6 +44,11 @@ class TriageService:
         except Exception:
             pass
 
+    @staticmethod
+    def _invoke_checkpoint(callback, *args) -> None:
+        if callable(callback):
+            callback(*args)
+
     def _emit_triage_progress(
         self, progress_callback, total: int, event: str, **kwargs
     ):
@@ -251,7 +256,7 @@ class TriageService:
             )
 
         processed += 1
-        self._invoke_callback(checkpoint_callback, triaged_payload, processed, total)
+        self._invoke_checkpoint(checkpoint_callback, triaged_payload, processed, total)
         return processed, True
 
     def _triage_findings_parallel(
@@ -363,7 +368,7 @@ class TriageService:
                     and processed > progress_base
                     and (failure is not None or processed < total)
                 ):
-                    self._invoke_callback(
+                    self._invoke_checkpoint(
                         checkpoint_callback, triaged_payload, processed, processed
                     )
             except BaseException as checkpoint_error:
@@ -417,12 +422,16 @@ class TriageService:
         finally:
             if store.processed and (failure is not None or store.processed < total):
                 try:
-                    self._invoke_callback(
+                    self._invoke_checkpoint(
                         checkpoint_callback, store, store.processed, store.processed
                     )
-                except BaseException:
+                except BaseException as checkpoint_error:
                     if failure is None:
                         raise
+                    logger.warning(
+                        "Unable to checkpoint completed triage decisions: %s",
+                        checkpoint_error,
+                    )
         return processed
 
     def triage_run(
