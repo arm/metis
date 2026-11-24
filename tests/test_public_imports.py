@@ -42,7 +42,6 @@ def test_public_contracts_import_concurrently_without_loading_engine(order):
                 with ThreadPoolExecutor(max_workers=6) as executor:
                     modules = list(executor.map(load, sys.argv[1:]))
 
-                assert "metis.engine.core" not in sys.modules
                 for module in modules:
                     namespace = {}
                     exec(f"from {module.__name__} import *", namespace)
@@ -50,10 +49,17 @@ def test_public_contracts_import_concurrently_without_loading_engine(order):
                     for name in module.__all__:
                         assert namespace[name] is getattr(module, name)
 
+                assert "metis.engine.core" not in sys.modules
+                assert "metis.engine.llm_runner" not in sys.modules
+                assert "metis.engine.capabilities.index" not in sys.modules
+
                 from metis.engine import ExecutionGraphError, MetisEngine, TriageOptions
                 from metis.engine import core
+                from metis.engine import llm_runner
+                from metis.execution_nodes import JsonPromptRequest
                 from metis.runtime_settings import TriageOptions as RuntimeTriageOptions
 
+                assert JsonPromptRequest is llm_runner.JsonPromptRequest
                 assert ExecutionGraphError is core.ExecutionGraphError
                 assert MetisEngine is core.MetisEngine
                 assert TriageOptions is RuntimeTriageOptions
@@ -76,6 +82,23 @@ def test_public_contracts_import_concurrently_without_loading_engine(order):
         timeout=30,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_capability_package_exports_resolve_to_their_implementations():
+    from metis.engine import capabilities
+    from metis.engine.capabilities import catalog
+    from metis.engine.capabilities.index import IndexCapability
+    from metis.engine.capabilities.navigation import NavigationCapability
+
+    assert capabilities.IndexCapability is IndexCapability
+    assert capabilities.NavigationCapability is NavigationCapability
+    assert (
+        capabilities.get_builtin_capability_manifests
+        is catalog.get_builtin_capability_manifests
+    )
+    assert capabilities.get_capability_manifest is catalog.get_capability_manifest
+    assert capabilities.get_capability_contract is catalog.get_capability_contract
+    assert not hasattr(capabilities, "missing_extension_contract")
 
 
 @pytest.mark.parametrize("order", [("output", "utils"), ("utils", "output")])

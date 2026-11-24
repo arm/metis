@@ -42,7 +42,7 @@ from pydantic_core import core_schema
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import CodeGraphDiagnostic
 from metis.engine.codegraph import CodeGraphReference
-from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.prompt_request import JsonPromptRequest
 from metis.utils import count_tokens
 
 if TYPE_CHECKING:
