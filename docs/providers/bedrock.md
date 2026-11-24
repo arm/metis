@@ -19,7 +19,9 @@ Metis does not automatically load repository-local configuration.
 llm_provider:
   name: "bedrock"
   region: "us-east-1"
-  model: "us.anthropic.claude-opus-4-8-v1:0"
+  model: "us.anthropic.claude-opus-4-8"
+  # Optional; use an effort supported by the selected model:
+  # reasoning_effort: "high"
 
 embedding_provider:
   name: "bedrock"
@@ -40,10 +42,19 @@ embedding_provider:
 | `aws_session_token`     | no       | Optional session token for temporary credentials.                  |
 | `endpoint_url`          | no       | Override Bedrock endpoint (e.g. VPC interface endpoint).           |
 | `supports_temperature`  | no       | Set `true` only if the target model accepts `temperature`.         |
+| `reasoning_effort`       | no       | Model-supported effort level; `query.reasoning_effort` overrides. |
 
 ¹ Required under `embedding_provider` only when the Index capability cannot
 reuse embedding models supplied by the vector backend.
 ² Only required under `llm_provider`.
+
+Reasoning effort is forwarded to `ChatBedrockConverse`, which validates the level
+and translates it into the model's native request fields. For supported Claude
+models, this sets `output_config.effort` and enables adaptive thinking through
+`additionalModelRequestFields`. Omit the setting to leave model defaults unchanged.
+Support follows the installed `langchain-aws` model catalog: an unsupported or
+unrecognized model emits an SDK warning and ignores the effort. Use the exact
+model or inference-profile ID; Opus 4.8 IDs do not have a `-v1:0` suffix.
 
 ## Credentials
 

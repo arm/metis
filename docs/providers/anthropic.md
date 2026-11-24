@@ -19,6 +19,8 @@ llm_provider:
   name: "anthropic"
   model: "<claude-model-id>"
   api_key_env: "ANTHROPIC_API_KEY"
+  # Optional; use an effort supported by the selected model:
+  # reasoning_effort: "high"
 
 # Optional — needed when the Index capability cannot reuse backend embeddings.
 embedding_provider:
@@ -37,6 +39,11 @@ query:
 - `model` must be a Claude model ID accepted by the Anthropic API.
 - Temperature is omitted by default. For models that support it, set
   `llm_provider.supports_temperature: true` and `query.temperature`.
+- Set `llm_provider.reasoning_effort`, or override it with
+  `query.reasoning_effort`, to control Claude's `output_config.effort`. The native
+  SDK handles adaptive thinking for supported models. Use a level supported by
+  the selected model (`low`, `medium`, `high`, `xhigh`, or `max`); omit the setting
+  to leave model defaults unchanged.
 - The Anthropic API key is resolved from `llm_provider.api_key`, then
   `llm_provider.api_key_env`, then `ANTHROPIC_API_KEY`.
 - Embeddings can be supplied via a separate `embedding_provider` block (any

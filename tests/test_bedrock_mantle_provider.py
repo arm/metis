@@ -5,6 +5,7 @@ import asyncio
 import json
 
 import pytest
+import yaml
 
 pytest.importorskip("langchain_anthropic")
 pytest.importorskip("anthropic")
@@ -13,6 +14,8 @@ pytest.importorskip("langchain_aws")
 import httpx2 as httpx
 from langchain_aws import ChatAnthropicMantle
 from langchain_core.messages import HumanMessage
+
+from metis.configuration import load_runtime_config
 
 from metis.providers.bedrock_mantle import BedrockMantleProvider
 from metis.providers.bedrock_mantle import ChatBedrockMantle
@@ -48,10 +51,14 @@ def test_chat_model_does_not_default_to_a_specific_region():
     assert llm.aws_region is None
 
 
+@pytest.mark.parametrize(
+    ("provider_effort", "query_effort"),
+    [(None, None), ("high", None), ("high", "low")],
+)
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("profile", [None, "example-profile"])
 def test_native_transport_preserves_connection_and_authentication(
-    tmp_path, monkeypatch, asynchronous, profile
+    tmp_path, monkeypatch, asynchronous, profile, provider_effort, query_effort
 ):
     credentials = tmp_path / "credentials"
     credentials.write_text(
@@ -76,6 +83,7 @@ def test_native_transport_preserves_connection_and_authentication(
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
     requests = []
+    model_name = "anthropic.claude-opus-4-8"
 
     def respond(request):
         requests.append(request)
@@ -86,7 +94,7 @@ def test_native_transport_preserves_connection_and_authentication(
                 "id": "msg-test",
                 "type": "message",
                 "role": "assistant",
-                "model": "anthropic.claude-example",
+                "model": model_name,
                 "content": [{"type": "text", "text": "ok"}],
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 1, "output_tokens": 1},
@@ -107,13 +115,27 @@ def test_native_transport_preserves_connection_and_authentication(
             lambda _client, request, **_kwargs: transport.handle_request(request),
         )
     endpoint = "https://configured.invalid/anthropic" if profile else None
-    model = BedrockMantleProvider(
-        _config(
-            aws_profile=profile,
-            base_url=endpoint,
-            default_headers={"x-metis-test": "kept"},
-        )
-    ).get_chat_model(max_tokens=128, max_retries=0, timeout=7)
+    config_path = tmp_path / "metis.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "llm_provider": _config(
+                    name="bedrock_mantle",
+                    model=model_name,
+                    aws_profile=profile,
+                    base_url=endpoint,
+                    default_headers={"x-metis-test": "kept"},
+                    reasoning_effort=provider_effort,
+                ),
+                "query": {"max_tokens": 128, "reasoning_effort": query_effort},
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = load_runtime_config(config_path)
+    model = BedrockMantleProvider(runtime["llm_provider"]).get_chat_model(
+        **runtime["chat_model_kwargs"], max_retries=0, timeout=7
+    )
     messages = [HumanMessage(content="Reply with ok.")]
     if asynchronous:
 
@@ -141,6 +163,13 @@ def test_native_transport_preserves_connection_and_authentication(
         assert request.headers["Authorization"] == "Bearer environment-bearer"
     assert request.extensions["timeout"]["read"] == 7
     payload = json.loads(request.content)
-    assert payload["model"] == "anthropic.claude-example"
+    assert payload["model"] == model_name
     assert payload["max_tokens"] == 128
     assert "temperature" not in payload
+    assert "reasoning_effort" not in payload
+    assert "effort" not in payload
+    effort = query_effort or provider_effort
+    if effort is None:
+        assert "output_config" not in payload
+    else:
+        assert payload["output_config"]["effort"] == effort

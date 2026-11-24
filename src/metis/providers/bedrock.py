@@ -142,6 +142,7 @@ class BedrockProvider(ChatProvider):
             "max_retries",
             "top_p",
             "stop",
+            "reasoning_effort",
         ):
             if optional_key in kwargs:
                 params[optional_key] = kwargs[optional_key]

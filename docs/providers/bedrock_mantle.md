@@ -26,6 +26,8 @@ llm_provider:
   model: "anthropic.<claude-model-id>"
   aws_profile: "<aws-profile>"
   aws_region: "<aws-region>"
+  # Optional; use an effort supported by the selected model:
+  # reasoning_effort: "high"
 ```
 
 Notes:
@@ -36,6 +38,11 @@ Notes:
   the environment, but setting it explicitly in `metis.yaml` is recommended.
 - `temperature` is not sent by default. If your target model supports
   temperature, set `supports_temperature: true` under `llm_provider`.
+- Set `llm_provider.reasoning_effort`, or override it with
+  `query.reasoning_effort`, to control Claude's `output_config.effort`. Metis
+  forwards the value to the native SDK, which handles adaptive thinking for
+  supported models. Use a level supported by the selected model (`low`, `medium`,
+  `high`, `xhigh`, or `max`); omit the setting to leave model defaults unchanged.
 - Mantle is chat-only. If you enable the `index` tool, configure a separate
   [`embedding_provider`](embedding-provider.md) (e.g. `bedrock` for Titan
   embeddings using the same AWS credentials, or `openai`).

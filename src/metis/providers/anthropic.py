@@ -46,6 +46,7 @@ def claude_chat_model_kwargs(
         "top_k",
         "top_p",
         "stop_sequences",
+        "reasoning_effort",
     ):
         if optional_key in options:
             params[optional_key] = options[optional_key]

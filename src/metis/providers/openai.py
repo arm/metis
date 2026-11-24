@@ -12,7 +12,7 @@ class OpenAIProvider(OpenAICompatibleChatProvider):
         display_name="OpenAI",
         required_keys=("model",),
         api_key=ApiKeySources(required=True, env_vars=("OPENAI_API_KEY",)),
-        copy_keys=("base_url", "default_headers", "model"),
+        copy_keys=("base_url", "default_headers", "model", "access_programs"),
     )
 
     def __init__(self, config):

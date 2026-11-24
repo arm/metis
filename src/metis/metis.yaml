@@ -101,6 +101,9 @@ memory:
 llm_provider:
   name: "openai"
   model: "gpt-5.5"
+  # Optional Responses API programs enabled for your project:
+  # access_programs:
+  #   cyber: "approved-program"
   # Optional for reasoning-capable models: use a value supported by the
   # configured provider/model. Can be overridden under query.
   # reasoning_effort: "medium"

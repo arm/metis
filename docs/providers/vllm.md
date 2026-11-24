@@ -112,6 +112,9 @@ llm_provider:
   name: "vllm"
   base_url: "http://<llm-host-ip>:8888/v1"
   model: "<chat-model-id>"
+  # Optional, when enabled for this endpoint and project:
+  # access_programs:
+  #   cyber: "approved-program"
 
 embedding_provider:
   name: "vllm"
@@ -134,6 +137,12 @@ Then run Metis:
 ```bash
 uv run metis --config metis.yaml <options>
 ```
+
+For OpenAI or a compatible gateway with program access, set
+`llm_provider.access_programs` to a mapping of non-empty category/program strings.
+Metis includes it as the top-level `access_programs` Responses request field.
+Missing or empty mappings request no access program. This setting does not affect
+embeddings; omit it for endpoints that do not support access programs.
 
 ## Troubleshooting
 
