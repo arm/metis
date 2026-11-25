@@ -12,7 +12,10 @@ from metis.sarif.triage import METIS_FINDING_ID_KEY
 from metis.sarif.triage import METIS_URI_ENCODING_KEY
 from metis.sarif.triage import _apply_triage_properties
 from metis.version import __version__ as TOOL_VERSION
-from metis.sarif.utils import anchor_fingerprint, create_fingerprint, read_file_lines
+from metis.sarif.utils import anchor_fingerprint
+from metis.sarif.utils import create_fingerprint
+from metis.sarif.utils import normalise_line_number
+from metis.sarif.utils import read_file_lines
 
 DEFAULT_CONTEXT_LINES = 3
 SARIF_VERSION = "2.1.0"
@@ -160,27 +163,21 @@ RULES = [
 ]
 
 
-def _normalise_line_number(raw_line):
-    try:
-        value = int(raw_line)
-        return value if value > 0 else 1
-    except Exception:
-        return 1
+_normalise_line_number = normalise_line_number
+
+_SEVERITY_LEVELS = {
+    "critical": "error",
+    "high": "error",
+    "medium": "warning",
+    "low": "note",
+}
 
 
 def _severity_to_level(severity: str | None) -> str:
+    default_level = RULES[0]["defaultConfiguration"]["level"]
     if not severity or not isinstance(severity, str):
-        return RULES[0]["defaultConfiguration"]["level"]
-
-    lowered = severity.strip().lower()
-    if lowered in {"critical", "high"}:
-        return "error"
-    if lowered == "medium":
-        return "warning"
-    if lowered == "low":
-        return "note"
-
-    return RULES[0]["defaultConfiguration"]["level"]
+        return default_level
+    return _SEVERITY_LEVELS.get(severity.strip().lower(), default_level)
 
 
 def generate_sarif(
@@ -334,25 +331,16 @@ def iter_sarif_results(
                 METIS_URI_ENCODING_KEY: "percent",
             }
             _apply_triage_properties(properties, issue)
-            cwe_id = issue.get("cwe")
-            if isinstance(cwe_id, str) and cwe_id.strip():
-                properties["cwe"] = cwe_id.strip()
-
+            for key in ("cwe", "severity"):
+                value = issue.get(key)
+                if isinstance(value, str) and value.strip():
+                    properties[key] = value.strip()
             severity = issue.get("severity")
-            if isinstance(severity, str) and severity.strip():
-                properties["severity"] = severity.strip()
 
-            reasoning = issue.get("reasoning")
-            if reasoning:
-                properties["reasoning"] = str(reasoning)
-
-            why = issue.get("why")
-            if why:
-                properties["why"] = str(why)
-
-            mitigation = issue.get("mitigation")
-            if mitigation:
-                properties["mitigation"] = str(mitigation)
+            for key in ("reasoning", "why", "mitigation"):
+                value = issue.get(key)
+                if value:
+                    properties[key] = str(value)
 
             confidence = issue.get("confidence")
             if confidence is not None:
