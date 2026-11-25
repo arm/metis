@@ -84,6 +84,12 @@ def output_path_identity(output_file: str | Path) -> Path:
     return Path(normalize("NFC", identity) if normalizes_unicode else identity)
 
 
+def generated_results_base(prefix: str, suffix: str = "") -> Path:
+    """Return a fresh timestamped, unique path under ``results/``."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("results") / f"{prefix}_{timestamp}_{uuid4().hex}{suffix}"
+
+
 def output_files_for_formats(
     output_files: list[str] | None,
     formats: tuple[str, ...],
@@ -98,8 +104,7 @@ def output_files_for_formats(
     if provided:
         base = Path(provided[0])
     else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
+        base = generated_results_base(command)
 
     selected = [] if generated_output else provided
     selected_paths = {output_path_identity(path) for path in selected}
@@ -121,8 +126,7 @@ def output_files_for_formats(
         identity = output_path_identity(candidate)
         if identity in reserved:
             if fallback_base is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fallback_base = Path("results") / f"{command}_{timestamp}_{uuid4().hex}"
+                fallback_base = generated_results_base(command)
             candidate = fallback_base.with_suffix(f".{format_name}")
             identity = output_path_identity(candidate)
         if identity in reserved or identity in selected_paths:
@@ -137,9 +141,8 @@ def _generated_stage_output_base(output_files, stage, generated_bases):
         if generated_bases is None:
             return []
         if stage not in generated_bases:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             generated_bases[stage] = str(
-                Path("results") / f"graph_{stage}_{timestamp}_{uuid4().hex}.json"
+                generated_results_base(f"graph_{stage}", ".json")
             )
         return [generated_bases[stage]]
     base = Path(output_files[0])

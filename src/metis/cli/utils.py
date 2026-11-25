@@ -37,6 +37,7 @@ from .output import output_files_for_formats as output_files_for_formats
 from .output import output_format as output_format
 from .output import output_path_identity as output_path_identity
 from .output import save_output as save_output
+from .review_checkpoints import review_checkpoint_callbacks
 from metis.vector_store.retrievers import retriever_query_config
 from metis.json_io import JsonSnapshot
 from metis.sarif.triage import _to_finding
@@ -55,6 +56,29 @@ except ImportError:
 def print_execution_diagnostic(diagnostic, quiet):
     color = "yellow" if diagnostic.severity == "warning" else "red"
     print_console(f"[{color}]{escape(diagnostic.message)}[/{color}]", quiet)
+
+
+def print_error(exc, quiet):
+    print_console(f"[bold red]Error:[/bold red] {escape(str(exc))}", quiet)
+
+
+def execution_callbacks(args, *, codebase_path, stage_completed_callback=None):
+    """Build the CLI callback mapping shared by graph and review execution."""
+    callbacks: dict[str, object] = {
+        "diagnostic_callback": lambda diagnostic: print_execution_diagnostic(
+            diagnostic,
+            args.quiet,
+        )
+    }
+    if stage_completed_callback is not None:
+        callbacks["stage_completed_callback"] = stage_completed_callback
+    callbacks.update(
+        review_checkpoint_callbacks(
+            codebase_path=codebase_path,
+            enabled=getattr(args, "_review_checkpoints_enabled", True),
+        )
+    )
+    return callbacks
 
 
 def configure_logger(logger, args):
@@ -301,18 +325,19 @@ def count_index_items(engine):
     return engine.indexing.count_index_items()
 
 
-def check_file_exists(file_path, quiet=False):
-    if not Path(file_path).is_file():
-        print_console(f"[red]File not found:[/red] {escape(file_path)}", quiet)
+def _check_path(path, exists, label, quiet):
+    if not exists(Path(path)):
+        print_console(f"[red]{label} not found:[/red] {escape(path)}", quiet)
         return False
     return True
+
+
+def check_file_exists(file_path, quiet=False):
+    return _check_path(file_path, Path.is_file, "File", quiet)
 
 
 def check_dir_exists(dir_path, quiet=False):
-    if not Path(dir_path).is_dir():
-        print_console(f"[red]Directory not found:[/red] {escape(dir_path)}", quiet)
-        return False
-    return True
+    return _check_path(dir_path, Path.is_dir, "Directory", quiet)
 
 
 def _file_review_groups(snapshot, sarif):
