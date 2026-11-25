@@ -312,13 +312,12 @@ def normalize_engine_config(
         engine_cfg.get("pgvector_use_halfvec", "auto"),
         runtime["embed_dim"],
     )
-    runtime["metisignore_file"] = engine_cfg.get("metisignore_file", None)
-    runtime["review_code_include_paths"] = engine_cfg.get(
-        "review_code_include_paths", []
-    )
-    runtime["review_code_exclude_paths"] = engine_cfg.get(
-        "review_code_exclude_paths", []
-    )
+    for name in (
+        "metisignore_file",
+        "review_code_include_paths",
+        "review_code_exclude_paths",
+    ):
+        runtime[name] = engine_cfg[name]
     runtime["capability_settings"] = capability_settings
     runtime["memory"] = memory_config
     runtime["threat_model_config"] = threat_model_config
@@ -326,20 +325,21 @@ def normalize_engine_config(
     runtime["execution_config"] = execution_config
     runtime["codegraph_config"] = dict(engine_cfg["codegraph"])
     runtime["reachability_config"] = dict(engine_cfg["reachability"])
-    if query_cfg.get("temperature") is not None:
-        runtime["llama_query_temperature"] = query_cfg["temperature"]
-    runtime["llama_query_max_tokens"] = query_cfg.get("max_tokens")
-    runtime["llama_query_reasoning_effort"] = query_cfg.get(
-        "reasoning_effort"
-    ) or cfg.get("llm_provider", {}).get("reasoning_effort")
-    runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
+    max_tokens = query_cfg.get("max_tokens")
+    reasoning_effort = query_cfg.get("reasoning_effort") or cfg.get(
+        "llm_provider", {}
+    ).get("reasoning_effort")
     chat_model_kwargs: dict[str, object] = {}
-    if runtime.get("llama_query_temperature") is not None:
-        chat_model_kwargs["temperature"] = runtime["llama_query_temperature"]
-    if runtime["llama_query_max_tokens"] is not None:
-        chat_model_kwargs["max_tokens"] = runtime["llama_query_max_tokens"]
-    if runtime["llama_query_reasoning_effort"]:
-        chat_model_kwargs["reasoning_effort"] = runtime["llama_query_reasoning_effort"]
+    if temperature is not None:
+        runtime["llama_query_temperature"] = temperature
+        chat_model_kwargs["temperature"] = temperature
+    runtime["llama_query_max_tokens"] = max_tokens
+    runtime["llama_query_reasoning_effort"] = reasoning_effort
+    runtime["similarity_top_k"] = query_cfg.get("similarity_top_k", 5)
+    if max_tokens is not None:
+        chat_model_kwargs["max_tokens"] = max_tokens
+    if reasoning_effort:
+        chat_model_kwargs["reasoning_effort"] = reasoning_effort
     runtime["chat_model_kwargs"] = chat_model_kwargs
 
     return deepcopy(runtime)
@@ -548,35 +548,19 @@ def _threat_model_config(value: object) -> dict[str, object]:
 
 
 def load_execution_config(value: object = None) -> dict[str, Any]:
-    return _load_engine_mapping("execution", value)
-
-
-def _load_engine_mapping(name: str, value: object) -> dict[str, Any]:
     if value is not None and not isinstance(value, dict):
-        raise ValueError(f"metis_engine.{name} must be a mapping")
+        raise ValueError("metis_engine.execution must be a mapping")
     if isinstance(value, dict):
         return dict(value)
-    return dict(_packaged_engine_config()[name])
+    return dict(_packaged_engine_config()["execution"])
 
 
 def _packaged_engine_config() -> dict[str, Any]:
-    resource = files("metis") / "metis.yaml"
-    with as_file(resource) as real_path:
-        return load_yaml(real_path)["metis_engine"]
+    return load_metis_config()["metis_engine"]
 
 
 def load_plugin_config(plugins_path: str | Path | None = None):
-    if plugins_path is not None:
-        plugins_path = Path(plugins_path)
-        if not plugins_path.is_file():
-            raise FileNotFoundError(f"Config not found: {plugins_path}")
-        logger.info(f"Loading {plugins_path.name} from {plugins_path}")
-        return load_yaml(plugins_path)
-
-    resource = files("metis.plugins.config") / "global.yaml"
-    with as_file(resource) as real_path:
-        logger.info("Loading default plugin config")
-        return load_yaml(real_path)
+    return config_path_fallback("global.yaml", "metis.plugins.config", plugins_path)
 
 
 def load_metis_config(config_path: str | Path | None = None):
