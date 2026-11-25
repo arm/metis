@@ -68,18 +68,15 @@ class TriageProgressReporter:
             decision = event.get("decision") or {}
             normalized = str(decision.get("status", "unknown")).lower()
             self._statuses[normalized] += 1
-            self._progress.update(
-                self._task,
-                completed=self._completed,
-                description=self._progress_description(),
-            )
         elif kind == "error":
             self._statuses["error"] += 1
-            self._progress.update(
-                self._task,
-                completed=self._completed,
-                description=self._progress_description(),
-            )
+        else:
+            return
+        self._progress.update(
+            self._task,
+            completed=self._completed,
+            description=self._progress_description(),
+        )
 
     def _progress_description(self) -> str:
         return f"[cyan]Triaging findings {self._completed}/{self._total or '?'}[/cyan]"

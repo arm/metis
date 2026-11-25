@@ -24,7 +24,6 @@ class FixedClock(datetime):
 @pytest.mark.parametrize("kind", ["command", "graph", "graph_fallback"])
 def test_generated_cli_paths_preserve_successive_outputs(monkeypatch, tmp_path, kind):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(entry, "datetime", FixedClock)
     monkeypatch.setattr(cli_output, "datetime", FixedClock)
     saved = []
     for iteration in range(2):

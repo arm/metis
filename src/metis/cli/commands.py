@@ -19,7 +19,6 @@ from .output import graph_output_files
 from .output import output_format
 from .output import save_output
 from .output import streaming_output_files
-from .review_checkpoints import review_checkpoint_callbacks
 from .review_progress import ReviewCodeProgressReporter
 from metis.utils import read_file_content, safe_decode_unicode
 from metis.utils import resolve_path_within_root
@@ -30,12 +29,12 @@ from .triage_cli import run_triage_action
 from .utils import (
     check_file_exists,
     build_standard_progress,
+    execution_callbacks,
     with_spinner,
     with_timer,
     iterate_with_progress,
     count_index_items,
     print_console,
-    print_execution_diagnostic,
 )
 
 
@@ -96,9 +95,25 @@ def run_review(engine, patch_file, args, runtime: CommandRuntime):
     )
 
 
+def _codebase_target(engine, relative):
+    target = str(Path(engine.codebase_path).absolute() / relative)
+    resolve_path_within_root(engine.codebase_path, target)
+    return target
+
+
+def _partial_stage_outputs(exc, stage, keys):
+    """Return usable partial outputs for ``stage`` carried by ``exc``, else None."""
+    partial = getattr(exc, "result", None)
+    if not isinstance(partial, ExecutionResult):
+        return None
+    outputs = partial.outputs.get(stage)
+    if outputs is None or not any(outputs.get(name) is not None for name in keys):
+        return None
+    return outputs
+
+
 def run_file_review(engine, file_path, args, runtime: CommandRuntime):
-    review_file_path = str(Path(engine.codebase_path).absolute() / file_path)
-    resolve_path_within_root(engine.codebase_path, review_file_path)
+    review_file_path = _codebase_target(engine, file_path)
     if not Path(review_file_path).is_file():
         raise FileNotFoundError(f"Review file not found: {review_file_path}")
     return _run_review_command(
@@ -111,8 +126,7 @@ def run_file_review(engine, file_path, args, runtime: CommandRuntime):
 
 
 def run_dir_review(engine, dir_path, args, runtime: CommandRuntime):
-    review_dir_path = str(Path(engine.codebase_path).absolute() / dir_path)
-    resolve_path_within_root(engine.codebase_path, review_dir_path)
+    review_dir_path = _codebase_target(engine, dir_path)
     if not Path(review_dir_path).is_dir():
         raise NotADirectoryError(f"Review directory not found: {review_dir_path}")
     return _run_review_command(
@@ -147,16 +161,12 @@ def _run_review_command(engine, mode, target, args, spinner_text):
                 export_directory=export_directory,
             )
         except BaseException as execution_error:
-            partial = getattr(execution_error, "result", None)
-            outputs = (
-                partial.outputs.get("review")
-                if isinstance(partial, ExecutionResult)
-                else None
+            outputs = _partial_stage_outputs(
+                execution_error,
+                "review",
+                ("findings", "sarif", "json_path", "sarif_path"),
             )
-            if outputs is None or not any(
-                outputs.get(name) is not None
-                for name in ("findings", "sarif", "json_path", "sarif_path")
-            ):
+            if outputs is None:
                 raise
             pending_error = execution_error
         outputs = dict(outputs)
@@ -204,17 +214,8 @@ def _execute_review(
     *,
     export_directory,
 ):
-    callbacks = {
-        "diagnostic_callback": lambda diagnostic: print_execution_diagnostic(
-            diagnostic,
-            args.quiet,
-        )
-    }
-    callbacks.update(
-        review_checkpoint_callbacks(
-            codebase_path=getattr(engine, "codebase_path", "."),
-            enabled=getattr(args, "_review_checkpoints_enabled", True),
-        )
+    callbacks = execution_callbacks(
+        args, codebase_path=getattr(engine, "codebase_path", ".")
     )
     kwargs = {
         "target": target,
@@ -465,14 +466,10 @@ def run_triage(engine, findings_path, args, runtime: CommandRuntime):
                 spinner_text="Triaging findings...",
             )
         except BaseException as exc:
-            partial = getattr(exc, "result", None)
-            if not isinstance(partial, ExecutionResult):
-                raise
-            triage = partial.outputs.get("triage", {})
-            if not any(
-                triage.get(name) is not None
-                for name in ("sarif", "json_path", "sarif_path")
-            ):
+            triage = _partial_stage_outputs(
+                exc, "triage", ("sarif", "json_path", "sarif_path")
+            )
+            if triage is None:
                 raise
             pending_error = exc
         filename = triage.get("filename") or filename

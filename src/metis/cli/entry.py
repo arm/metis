@@ -4,14 +4,12 @@
 import argparse
 from concurrent.futures import CancelledError
 from copy import copy
-from datetime import datetime
 import logging
 from pathlib import Path
 import shlex
 from tempfile import TemporaryDirectory
 from typing import Any
 from typing import cast
-from uuid import uuid4
 
 from rich.markup import escape
 from prompt_toolkit import prompt
@@ -41,9 +39,9 @@ except ImportError:
 
 from .command_registry import COMMANDS, completer
 from .command_runtime import CommandRuntime
-from .review_checkpoints import review_checkpoint_callbacks
 from .review_checkpoints import stage_checkpoint_callback
 from .review_progress import ExecutionGraphProgressReporter
+from .output import generated_results_base
 from .output import graph_output_files
 from .output import save_graph_outputs
 from .output import streaming_output_files
@@ -54,8 +52,9 @@ from .utils import (
     build_chroma_backend,
     build_qdrant_backend,
     build_standard_progress,
+    execution_callbacks,
     print_console,
-    print_execution_diagnostic,
+    print_error,
     print_usage_summary,
     print_final_usage_summary,
     check_dir_exists,
@@ -66,6 +65,12 @@ logging.captureWarnings(True)
 logging.getLogger().setLevel(logging.ERROR)
 logger = logging.getLogger("metis")
 EXIT_REQUESTED = object()
+_EXECUTION_STATUS_MESSAGES = {
+    ExecutionStatus.OK: "[green]Execution graph complete.[/green]",
+    ExecutionStatus.INCONCLUSIVE: (
+        "[yellow]Execution graph finished with inconclusive results.[/yellow]"
+    ),
+}
 
 
 def _execute_graph_with_progress(
@@ -135,23 +140,12 @@ def determine_output_file(cmd, args, cmd_args):
         overrides.append(cmd_args[idx + 1])
         del cmd_args[idx : idx + 2]
 
-    if overrides:
-        args.output_file = overrides
+    if overrides or cmd == "triage" or existing_outputs:
+        args.output_file = overrides or existing_outputs
         args._metis_generated_output = False
         return
 
-    if cmd == "triage":
-        args.output_file = existing_outputs
-        args._metis_generated_output = False
-        return
-
-    if existing_outputs:
-        args.output_file = existing_outputs
-        args._metis_generated_output = False
-        return
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.output_file = [f"results/{cmd}_{timestamp}_{uuid4().hex}.json"]
+    args.output_file = [str(generated_results_base(cmd, ".json"))]
     args._metis_generated_output = True
 
 
@@ -343,7 +337,7 @@ def run_interactive_loop(engine, args, vector_backend):
         except CancelledError:
             raise
         except Exception as e:
-            print_console(f"[bold red]Error:[/bold red] {escape(str(e))}", args.quiet)
+            print_error(e, args.quiet)
 
 
 def main():
@@ -467,7 +461,7 @@ def main():
         configure_logger(logger, args)
         _run_cli(args)
     except (OSError, ValueError, YAMLError) as exc:
-        print_console(f"[bold red]Error:[/bold red] {escape(str(exc))}", args.quiet)
+        print_error(exc, args.quiet)
         raise SystemExit(1) from None
 
 
@@ -511,26 +505,16 @@ def _run_cli(args):
                     generated_bases: dict[str, str] = {}
                     try:
                         determine_output_file("graph", args, [])
-                        callbacks: dict[str, object] = {
-                            "diagnostic_callback": (
-                                lambda diagnostic: print_execution_diagnostic(
-                                    diagnostic, args.quiet
-                                )
-                            )
-                        }
-                        if args._review_checkpoints_enabled:
-                            callbacks["stage_completed_callback"] = (
+                        callbacks = execution_callbacks(
+                            args,
+                            codebase_path=args.codebase_path,
+                            stage_completed_callback=(
                                 stage_checkpoint_callback(
                                     codebase_path=args.codebase_path,
                                 )
-                            )
-                        callbacks.update(
-                            review_checkpoint_callbacks(
-                                codebase_path=args.codebase_path,
-                                enabled=getattr(
-                                    args, "_review_checkpoints_enabled", True
-                                ),
-                            )
+                                if args._review_checkpoints_enabled
+                                else None
+                            ),
                         )
                         pending_error = None
                         try:
@@ -580,29 +564,17 @@ def _run_cli(args):
                         raise
                     except Exception as exc:
                         command_span.end(status="error", exc=exc)
-                        print_console(
-                            f"[bold red]Error:[/bold red] {escape(str(exc))}",
-                            args.quiet,
-                        )
+                        print_error(exc, args.quiet)
                         exit_code = 1
                     else:
                         command_span.end(status=result.status.value)
                         if runlog_session is not None:
                             runlog_session.set_outcome(result.status.value)
-                        if result.status is ExecutionStatus.OK:
-                            print_console(
-                                "[green]Execution graph complete.[/green]", args.quiet
-                            )
-                        elif result.status is ExecutionStatus.INCONCLUSIVE:
-                            print_console(
-                                "[yellow]Execution graph finished with inconclusive results.[/yellow]",
-                                args.quiet,
-                            )
-                        else:
-                            print_console(
-                                "[red]Execution graph failed.[/red]", args.quiet
-                            )
+                        message = _EXECUTION_STATUS_MESSAGES.get(result.status)
+                        if message is None:
+                            message = "[red]Execution graph failed.[/red]"
                             exit_code = 1
+                        print_console(message, args.quiet)
             else:
                 farewell = run_interactive_loop(engine, args, vector_backend)
         finally:

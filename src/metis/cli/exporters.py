@@ -22,6 +22,17 @@ from metis.sarif.triage import extract_findings
 from metis.sarif.writer import generate_sarif
 from metis.severity import SEVERITY_PRIORITY
 
+_CSV_COLUMNS = (
+    ("File", "file"),
+    ("Line", "line"),
+    ("Severity", "severity"),
+    ("CWE", "cwe"),
+    ("Issue", "issue"),
+    ("Reasoning", "reasoning"),
+    ("Mitigation", "mitigation"),
+    ("Confidence", "confidence"),
+)
+
 
 def export_html(
     report_data, output_path: Path, template: str, metis_version: str
@@ -54,31 +65,9 @@ def export_csv(report_data, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with atomic_text_writer(output_path, newline="") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(
-            [
-                "File",
-                "Line",
-                "Severity",
-                "CWE",
-                "Issue",
-                "Reasoning",
-                "Mitigation",
-                "Confidence",
-            ]
-        )
+        writer.writerow([header for header, _key in _CSV_COLUMNS])
         for issue in issues:
-            writer.writerow(
-                [
-                    issue.get("file", ""),
-                    issue.get("line", ""),
-                    issue.get("severity", ""),
-                    issue.get("cwe", ""),
-                    issue.get("issue", ""),
-                    issue.get("reasoning", ""),
-                    issue.get("mitigation", ""),
-                    issue.get("confidence", ""),
-                ]
-            )
+            writer.writerow([issue.get(key, "") for _header, key in _CSV_COLUMNS])
     return output_path
 
 

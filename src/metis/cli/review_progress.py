@@ -103,45 +103,35 @@ class ReviewCodeProgressReporter:
         total = self._file_totals[node] or current
         completed = min(current, total)
         if node == "reachability":
-            self._progress.update(
-                self._tasks[node],
-                total=total,
-                completed=completed,
-                description=(
-                    f"[cyan]Reachability fallback complete: {total} files[/cyan]"
-                    if completed >= total
-                    else (
-                        "[cyan]Reviewing reachability fallback "
-                        f"{completed}/{total} files[/cyan]"
-                    )
-                ),
+            description = (
+                f"[cyan]Reachability fallback complete: {total} files[/cyan]"
+                if completed >= total
+                else (
+                    "[cyan]Reviewing reachability fallback "
+                    f"{completed}/{total} files[/cyan]"
+                )
             )
-            return
-        if completed >= total:
-            self._progress.update(
-                self._tasks[node],
-                total=total,
-                completed=completed,
-                description=(
-                    f"[cyan]Resumed {self._file_resumed[node]}/{total} reviewed "
-                    "files; finalizing...[/cyan]"
-                    if self._file_resumed[node]
-                    else "[cyan]Finalizing review results...[/cyan]"
-                ),
+        elif completed >= total:
+            description = (
+                f"[cyan]Resumed {self._file_resumed[node]}/{total} reviewed "
+                "files; finalizing...[/cyan]"
+                if self._file_resumed[node]
+                else "[cyan]Finalizing review results...[/cyan]"
             )
-            return
-        self._progress.update(
-            self._tasks[node],
-            total=total,
-            completed=completed,
-            description=(
+        else:
+            description = (
                 (
                     f"[cyan]Resumed {self._file_resumed[node]} files; review progress "
                     f"{current}/{total}[/cyan]"
                 )
                 if self._file_resumed[node]
                 else f"[cyan]Collecting review results {current}/{total}[/cyan]"
-            ),
+            )
+        self._progress.update(
+            self._tasks[node],
+            total=total,
+            completed=completed,
+            description=description,
         )
 
     def _execution_stage_start(self, event: Mapping[str, Any]):
