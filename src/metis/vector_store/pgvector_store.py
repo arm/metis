@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 from concurrent.futures import CancelledError
+from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.core import StorageContext
 from llama_index.vector_stores.postgres import PGVectorStore
@@ -161,7 +163,10 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
             close_fn = getattr(store, "close", None)
             if callable(close_fn):
                 try:
-                    close_fn()
+                    closing = close_fn()
+                    if asyncio.iscoroutine(closing):
+                        with ThreadPoolExecutor(max_workers=1) as executor:
+                            executor.submit(asyncio.run, closing).result()
                 except Exception as e:
                     logger.warning(f"Error closing PG vector store '{attr}': {e}")
             for engine_attr in ("_engine", "engine"):
