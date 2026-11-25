@@ -9,6 +9,8 @@
 * **config:** Stop automatically loading working-directory or repository `metis.yaml` / `metis.yml`, preventing untrusted repository configuration from redirecting authenticated model requests. Custom configuration now requires `--config PATH`; otherwise Metis uses packaged defaults.
 * **source:** Avoid repeated source-prefix scans and line hashing when resolving chunk anchors in minified or repetitive files, preserving source locations and anchor identities.
 * **providers:** Omit `temperature` from OpenAI Responses requests for every `gpt-6*` model, not only `gpt-6-astra`.
+* **providers:** Preserve `llm_provider.access_programs` for OpenAI and vLLM chat providers, validate category/program strings, and send the mapping as a top-level Responses API body field instead of silently dropping it.
+* **providers:** Forward configured reasoning effort to the native Bedrock, Bedrock Mantle, and Anthropic SDKs, preserving query overrides and SDK validation. Correct the Bedrock Claude Opus 4.8 example model ID.
 * **review:** Treat tokenizer special-token strings in source code as ordinary text during token counting.
 * **reachability:** Reuse a graph-wide reverse-call index during finding annotation and bound backward source-path searches by visited functions.
 

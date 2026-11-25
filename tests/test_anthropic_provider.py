@@ -137,6 +137,25 @@ def test_chat_model_forwards_optional_temperature(
         assert payload["temperature"] == options["temperature"]
 
 
+@pytest.mark.parametrize("effort", ["low", "high"])
+def test_chat_model_sends_reasoning_effort_in_output_config(effort):
+    model = AnthropicProvider(_config(model="claude-opus-4-8")).get_chat_model(
+        reasoning_effort=effort
+    )
+    payload = model._get_request_payload([HumanMessage(content="Review code.")])
+
+    assert payload["output_config"]["effort"] == effort
+    assert "reasoning_effort" not in payload
+    assert "effort" not in payload
+
+
+@pytest.mark.parametrize("provider_type", (AnthropicProvider, BedrockMantleProvider))
+def test_chat_model_rejects_invalid_reasoning_effort(provider_type):
+    provider = provider_type(_config())
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        provider.get_chat_model(reasoning_effort="invalid")
+
+
 def test_provider_requires_api_key():
     with pytest.raises(ValueError) as exc_info:
         AnthropicProvider(_config(api_key=""))

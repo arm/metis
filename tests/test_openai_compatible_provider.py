@@ -360,3 +360,104 @@ def test_single_text_embeddings_use_document_mode() -> None:
     assert asyncio.run(adapter.aget_text_embedding("text")) == [2.0]
     client.embed_documents.assert_called_once_with(["text"])
     client.aembed_documents.assert_awaited_once_with(["text"])
+
+
+@pytest.mark.parametrize("provider_name", ["openai", "vllm"])
+@pytest.mark.parametrize("programs", [None, {}, {"cyber": "daybreak_blue"}])
+def test_access_programs_reach_the_top_level_responses_body(
+    monkeypatch, provider_name, programs
+) -> None:
+    from functools import partial
+    import json
+
+    import httpx
+
+    from metis.providers import openai_compatible
+    from metis.providers.config import build_provider_config
+    from metis.providers.openai import OpenAIProvider
+
+    requests = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert request.url.path == "/v1/responses"
+        assert "access_programs" not in request.headers
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": payload["model"],
+                "error": None,
+                "output": [
+                    {
+                        "id": "msg_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "OK", "annotations": []}
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                },
+            },
+        )
+
+    provider_cls = OpenAIProvider if provider_name == "openai" else VLLMProvider
+    raw_config = {
+        "model": "gpt-6-sol",
+        "base_url": "https://provider.test/v1",
+        "api_key": "test-key",
+    }
+    if programs is not None:
+        raw_config["access_programs"] = programs
+    config = build_provider_config(
+        provider_name=provider_name,
+        provider_cls=provider_cls,
+        raw_config=raw_config,
+        section="llm_provider",
+    )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(
+            openai_compatible, "ChatOpenAI", partial(ChatOpenAI, http_client=client)
+        )
+        model = provider_cls(config).get_chat_model(max_retries=0)
+        try:
+            model.invoke("Reply with OK.")
+        finally:
+            model.root_client.close()
+            asyncio.run(model.root_async_client.close())
+
+    assert len(requests) == 1
+    assert requests[0]["model"] == "gpt-6-sol"
+    assert "extra_body" not in requests[0]
+    if programs:
+        assert requests[0]["access_programs"] == programs
+    else:
+        assert "access_programs" not in requests[0]
+
+
+@pytest.mark.parametrize(
+    "programs",
+    [
+        "invalid",
+        ["cyber"],
+        {1: "approved-program"},
+        {"cyber": 1},
+        {"cyber": " "},
+        {" ": "approved-program"},
+    ],
+)
+def test_access_programs_reject_invalid_configuration(programs) -> None:
+    with pytest.raises(ValueError, match="access_programs"):
+        OpenAICompatibleChatProvider(_chat_config(access_programs=programs))

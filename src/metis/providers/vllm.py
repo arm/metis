@@ -14,7 +14,7 @@ class VLLMProvider(OpenAICompatibleChatProvider):
         display_name="vLLM",
         required_keys=("base_url", "model"),
         api_key=ApiKeySources(required=False, env_vars=("VLLM_API_KEY",)),
-        copy_keys=("base_url", "default_headers", "model"),
+        copy_keys=("base_url", "default_headers", "model", "access_programs"),
     )
 
     def __init__(self, config):

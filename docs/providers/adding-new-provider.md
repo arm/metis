@@ -34,7 +34,7 @@ class MyProvider(OpenAICompatibleChatProvider):
         display_name="My Provider",
         required_keys=("base_url", "model"),
         api_key=ApiKeySources(required=True, env_vars=("MY_PROVIDER_API_KEY",)),
-        copy_keys=("base_url", "default_headers", "model"),
+        copy_keys=("base_url", "default_headers", "model", "access_programs"),
     )
 
 
@@ -53,6 +53,11 @@ class MyEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
         ),
     )
 ```
+
+The shared chat base validates `access_programs` as a mapping of non-empty
+category/program strings and forwards it through `ChatOpenAI.extra_body` as the
+top-level Responses API body field. Omit it from `copy_keys` when the endpoint
+does not support access programs; it is not an embedding setting.
 
 Examples: `openai.py`, `ollama.py`, `vllm.py`, `llamacpp.py`.
 

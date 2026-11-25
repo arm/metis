@@ -25,6 +25,7 @@ class OpenAICompatibleChatConfig(TypedDict, total=False):
     default_headers: Mapping[str, str]
     model: Required[str]
     max_retries: int
+    access_programs: Mapping[str, str]
 
 
 class OpenAICompatibleEmbeddingConfig(TypedDict, total=False):
@@ -54,6 +55,18 @@ class OpenAICompatibleChatProvider(ChatProvider):
         self.default_headers = dict(config.get("default_headers") or {})
         self.default_model = config.get("model")
         self.max_retries = int(config.get("max_retries", 5))
+        access_programs = config.get("access_programs", {})
+        if not isinstance(access_programs, Mapping) or any(
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(program, str)
+            or not program.strip()
+            for name, program in access_programs.items()
+        ):
+            raise ValueError(
+                "access_programs must map non-empty strings to non-empty strings"
+            )
+        self.access_programs = dict(access_programs)
 
         if not self.default_model:
             raise ValueError("Missing chat model configuration")
@@ -100,6 +113,8 @@ class OpenAICompatibleChatProvider(ChatProvider):
             params["openai_api_base"] = self.base_url
         if self.default_headers:
             params["default_headers"] = self.default_headers
+        if self.access_programs:
+            params["extra_body"] = {"access_programs": dict(self.access_programs)}
         if callbacks is not None:
             params["callbacks"] = callbacks
 

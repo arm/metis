@@ -206,6 +206,12 @@ explicit config is an error, not a request to fall back to packaged defaults.
 Only select configuration you trust: it controls provider endpoints and
 credential environment-variable selection.
 
+Set `llm_provider.reasoning_effort` for reasoning-capable chat models;
+`query.reasoning_effort` overrides it. Supported levels depend on the provider
+and model. See [Bedrock](docs/providers/bedrock.md),
+[Bedrock Mantle](docs/providers/bedrock_mantle.md), and
+[Anthropic](docs/providers/anthropic.md) for their native request handling.
+
 A selected document does not inherit packaged `llm_provider`,
 `embedding_provider`, or `query` sections; `llm_provider` is required and the
 others have runtime fallbacks. Shared `metis_engine` settings inherit packaged

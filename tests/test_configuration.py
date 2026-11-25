@@ -255,6 +255,8 @@ llm_provider:
   base_url: https://example.test/openai/v1
   default_headers:
     X-Test-Header: test
+  access_programs:
+    cyber: daybreak_blue
 query:
   reasoning_effort: high
 """,
@@ -268,6 +270,7 @@ query:
         "api_key": "chat-key",
         "base_url": "https://example.test/openai/v1",
         "default_headers": {"X-Test-Header": "test"},
+        "access_programs": {"cyber": "daybreak_blue"},
         "model": "gpt-test",
         "max_retries": 5,
     }
