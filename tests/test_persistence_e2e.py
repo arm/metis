@@ -191,7 +191,7 @@ def test_checkpoint_session_defers_reentrant_writes_and_preserves_failures(
     assert not worker.is_alive()
     assert session.get("key") == {"revision": 2}
     reopened = ReviewCheckpointSession("fixture", _checkpoint_callbacks(tmp_path))
-    if failure_type is CancelledError:
+    if failure_type is not None:
         assert errors == [failure]
         assert attempts == [1]
         assert reopened.get("key") is None
@@ -201,7 +201,7 @@ def test_checkpoint_session_defers_reentrant_writes_and_preserves_failures(
         assert reopened.get("key") == {"revision": 2}
 
     session.put("key", {"revision": 3})
-    assert attempts == ([1, 3] if failure_type is CancelledError else [1, 2, 3])
+    assert attempts == ([1, 3] if failure_type is not None else [1, 2, 3])
     assert ReviewCheckpointSession("fixture", _checkpoint_callbacks(tmp_path)).get(
         "key"
     ) == {"revision": 3}
