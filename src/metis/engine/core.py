@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from collections.abc import Collection
 import contextlib
 import logging
 from dataclasses import replace
@@ -289,29 +291,20 @@ class MetisEngine:
         callbacks: dict[str, object] | None = None,
         output_path: str | Path | None = None,
     ) -> dict[str, object]:
-        with (
-            self._execution_span("review", {"mode": mode, "target": target}) as span,
-            StreamingOutput(
-                self.codebase_path,
-                streaming_stages(self.execution._stages, "review"),
-                review_path=output_path,
-            ) as output,
-        ):
-            result = output.export(
-                self.execution.execute_review(
-                    ReviewCommand(mode=mode, target=target),
-                    callbacks=output.callbacks(callbacks),
-                    output=output,
-                )
-            )
-            if any(item.code in REVIEW_FAILURE_CODES for item in result.diagnostics):
-                raise ExecutionGraphError(result)
-            review = _require_execution_outputs(result)["review"]
-            span.end(
-                status=result.status.value,
-                attributes={"outputs": review, "diagnostics": result.diagnostics},
-            )
-            return _execution_value(review)
+        return self._execute_streaming(
+            "review",
+            {"mode": mode, "target": target},
+            streaming_stages(self.execution._stages, "review"),
+            run=lambda output: self.execution.execute_review(
+                ReviewCommand(mode=mode, target=target),
+                callbacks=output.callbacks(callbacks),
+                output=output,
+            ),
+            finish=lambda _result, review: _execution_value(review),
+            failure_codes=REVIEW_FAILURE_CODES,
+            output_key="review",
+            review_path=output_path,
+        )
 
     def execute_graph(
         self,
@@ -331,30 +324,21 @@ class MetisEngine:
                 )
 
             callbacks["stage_completed_callback"] = publish_stage
-        with (
-            self._execution_span(
-                "configured_graph", {"include_triaged": include_triaged}
-            ) as span,
-            StreamingOutput(
-                self.codebase_path,
-                streaming_stages(self.execution._stages),
-                review_path=output_path,
-                triage_path=triage_output_path,
-            ) as output,
-        ):
-            result = output.export(
-                self.execution.execute_graph(
-                    include_triaged=include_triaged,
-                    callbacks=output.callbacks(callbacks),
-                    output=output,
-                )
-            )
-            outputs = _require_execution_outputs(result)
-            span.end(
-                status=result.status.value,
-                attributes={"outputs": outputs, "diagnostics": result.diagnostics},
-            )
-            return replace(result, outputs=_execution_value(dict(outputs)))
+        return self._execute_streaming(
+            "configured_graph",
+            {"include_triaged": include_triaged},
+            streaming_stages(self.execution._stages),
+            run=lambda output: self.execution.execute_graph(
+                include_triaged=include_triaged,
+                callbacks=output.callbacks(callbacks),
+                output=output,
+            ),
+            finish=lambda result, outputs: replace(
+                result, outputs=_execution_value(dict(outputs))
+            ),
+            review_path=output_path,
+            triage_path=triage_output_path,
+        )
 
     def usage_command(
         self,
@@ -476,35 +460,26 @@ class MetisEngine:
         options: TriageOptions | None = None,
     ) -> dict:
         options = options or self._triage_options
-        with (
-            self._execution_span(
-                "triage", {"include_triaged": options.include_triaged}
-            ) as span,
-            StreamingOutput(
-                self.codebase_path,
-                streaming_stages(self.execution._stages, "triage"),
-            ) as output,
-        ):
-            result = output.export(
-                self.execution.execute_triage(
-                    payload,
-                    codegraph=codegraph,
-                    include_triaged=options.include_triaged,
-                    callbacks=output.callbacks(
-                        {
-                            "progress_callback": progress_callback,
-                            "debug_callback": debug_callback,
-                            "checkpoint_callback": checkpoint_callback,
-                        }
-                    ),
-                    output=output,
-                )
-            )
-            if any(item.code == TRIAGE_FINDING_FAILED for item in result.diagnostics):
-                raise ExecutionGraphError(result)
-            triage = _require_execution_outputs(result)["triage"]
-            span.end(status=result.status.value, attributes={"outputs": triage})
-            return _execution_value(triage)
+        return self._execute_streaming(
+            "triage",
+            {"include_triaged": options.include_triaged},
+            streaming_stages(self.execution._stages, "triage"),
+            run=lambda output: self.execution.execute_triage(
+                payload,
+                codegraph=codegraph,
+                include_triaged=options.include_triaged,
+                callbacks=output.callbacks(
+                    _triage_callbacks(
+                        progress_callback, debug_callback, checkpoint_callback
+                    )
+                ),
+                output=output,
+            ),
+            finish=lambda _result, triage: _execution_value(triage),
+            failure_codes=(TRIAGE_FINDING_FAILED,),
+            output_key="triage",
+            span_diagnostics=False,
+        )
 
     def execute_triage_file(
         self,
@@ -525,47 +500,70 @@ class MetisEngine:
                 "File triage requires a compatible built-in triage stage"
             )
         options = options or self._triage_options
-        with (
-            self._execution_span("triage_file") as span,
-            StreamingOutput(
-                self.codebase_path,
-                {"triage"},
-                triage_path=destination,
-                source=source,
-            ) as output,
-        ):
-            result = output.export(
-                self.execution._execute_stages(
-                    ("triage",),
-                    overrides={
-                        "triage": {
-                            "sarif": SarifPayload(version="2.1.0", runs=()),
-                            "codegraph": codegraph,
-                        }
-                    },
-                    include_triaged=options.include_triaged,
-                    callbacks=output.callbacks(
-                        {
-                            "progress_callback": progress_callback,
-                            "debug_callback": debug_callback,
-                            "checkpoint_callback": checkpoint_callback,
-                        }
-                    ),
-                    output=output,
-                )
-            )
-            if any(item.code == TRIAGE_FINDING_FAILED for item in result.diagnostics):
-                raise ExecutionGraphError(result)
-            triage = _require_execution_outputs(result)["triage"]
-            span.end(
-                status=result.status.value,
-                attributes={"outputs": triage, "diagnostics": result.diagnostics},
-            )
-            return {
+        return self._execute_streaming(
+            "triage_file",
+            None,
+            {"triage"},
+            run=lambda output: self.execution._execute_stages(
+                ("triage",),
+                overrides={
+                    "triage": {
+                        "sarif": SarifPayload(version="2.1.0", runs=()),
+                        "codegraph": codegraph,
+                    }
+                },
+                include_triaged=options.include_triaged,
+                callbacks=output.callbacks(
+                    _triage_callbacks(
+                        progress_callback, debug_callback, checkpoint_callback
+                    )
+                ),
+                output=output,
+            ),
+            finish=lambda _result, triage: {
                 name: value
                 for name, value in triage.items()
                 if name not in {"formats", "filename"}
-            }
+            },
+            failure_codes=(TRIAGE_FINDING_FAILED,),
+            output_key="triage",
+            triage_path=destination,
+            source=source,
+        )
+
+    def _execute_streaming[T](
+        self,
+        span_name: str,
+        span_attributes: dict[str, object] | None,
+        stages,
+        *,
+        run: Callable[[StreamingOutput], ExecutionResult],
+        finish: Callable[[ExecutionResult, Any], T],
+        failure_codes: Collection[str] = (),
+        output_key: str | None = None,
+        span_diagnostics: bool = True,
+        **output_kwargs,
+    ) -> T:
+        """Run one streamed execution inside its run-log span and output scope.
+
+        ``run`` receives the opened ``StreamingOutput``; ``finish`` converts the
+        validated result and the selected outputs into the caller's return value
+        while the span and output are still open.
+        """
+        with (
+            self._execution_span(span_name, span_attributes) as span,
+            StreamingOutput(self.codebase_path, stages, **output_kwargs) as output,
+        ):
+            result = output.export(run(output))
+            if any(item.code in failure_codes for item in result.diagnostics):
+                raise ExecutionGraphError(result)
+            outputs = _require_execution_outputs(result)
+            selected = outputs if output_key is None else outputs[output_key]
+            attributes: dict[str, object] = {"outputs": selected}
+            if span_diagnostics:
+                attributes["diagnostics"] = result.diagnostics
+            span.end(status=result.status.value, attributes=attributes)
+            return finish(result, selected)
 
     def close(self):
         execution = getattr(self, "execution", None)
@@ -591,6 +589,16 @@ class MetisEngine:
                     first_error = exc
         if first_error is not None:
             raise first_error
+
+
+def _triage_callbacks(
+    progress_callback, debug_callback, checkpoint_callback
+) -> dict[str, object]:
+    return {
+        "progress_callback": progress_callback,
+        "debug_callback": debug_callback,
+        "checkpoint_callback": checkpoint_callback,
+    }
 
 
 def _execution_value(value, *, strict: bool = True):
