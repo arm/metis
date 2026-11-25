@@ -255,14 +255,22 @@ def write_json_stream_atomic(
         else:
             yield "value", value
 
+    with _atomic_json_output(path, publication) as output:
+        _write_json_events(output, events(payload))
+
+
+def _atomic_json_output(path, publication):
+    """Create parents, then return the private-mode atomic writer for ``path``."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_text_writer(
-        target,
-        mode=0o600,
-        publication=publication,
-    ) as output:
-        _write_json_events(output, events(payload))
+    return atomic_text_writer(target, mode=0o600, publication=publication)
+
+
+def _compact_json_line(value) -> str:
+    return (
+        json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+        + "\n"
+    )
 
 
 _JSON_JOURNAL_BUFFER_BYTES = 8 * 1024 * 1024
@@ -370,12 +378,7 @@ class JsonJournal:
         if not isinstance(record, dict):
             raise ValueError("JSON journal records must be objects")
         validate_json_tree(record)
-        data = (
-            json.dumps(
-                record, ensure_ascii=True, allow_nan=False, separators=(",", ":")
-            )
-            + "\n"
-        ).encode("ascii")
+        data = _compact_json_line(record).encode("ascii")
         size = sys.getsizeof(data)
         with self._condition:
             self._condition.wait_for(
@@ -431,15 +434,7 @@ def sorted_json_records(
             with path.open("w", encoding="ascii") as output:
                 for value in values:
                     check_cancelled()
-                    output.write(
-                        json.dumps(
-                            value,
-                            ensure_ascii=True,
-                            allow_nan=False,
-                            separators=(",", ":"),
-                        )
-                        + "\n"
-                    )
+                    output.write(_compact_json_line(value))
             return path
 
         def read_run(path):
@@ -740,13 +735,7 @@ class JsonSnapshot:
         """Stream the snapshot to a new file, optionally transforming selected values."""
         if (at is None) != (transform is None):
             raise ValueError("JSON transform requires both a path and a function")
-        target = Path(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with atomic_text_writer(
-            target,
-            mode=0o600,
-            publication=publication,
-        ) as output:
+        with _atomic_json_output(target, publication) as output:
             if transform is None:
                 with self._reader() as source:
                     while chunk := source.read(1024 * 1024):
