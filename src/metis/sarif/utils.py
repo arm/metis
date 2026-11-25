@@ -12,6 +12,15 @@ def read_file_lines(file_path):
         return ["<source unavailable>"]
 
 
+def normalise_line_number(raw_line):
+    """Coerce a SARIF line value to a positive int, defaulting to 1."""
+    try:
+        value = int(raw_line)
+        return value if value > 0 else 1
+    except Exception:
+        return 1
+
+
 def create_fingerprint(file_path, line_number, rule_id):
     key = f"{file_path}:{line_number}:{rule_id}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()

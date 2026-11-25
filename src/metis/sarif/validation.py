@@ -20,13 +20,11 @@ from metis.sarif.triage import METIS_THREAT_MODEL_POLICY_KEY
 from metis.sarif.triage import METIS_TRIAGED_KEY
 from metis.sarif.triage import METIS_TRIAGE_DECISION_SOURCE_KEY
 from metis.sarif.triage import METIS_TRIAGE_EVIDENCE_KEY
-from metis.sarif.triage import METIS_TRIAGE_REASON_KEY
 from metis.sarif.triage import METIS_TRIAGE_RESOLUTION_CHAIN_KEY
-from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
-from metis.sarif.triage import METIS_TRIAGE_TIMESTAMP_KEY
 from metis.sarif.triage import METIS_TRIAGE_UNRESOLVED_HOPS_KEY
 from metis.sarif.triage import METIS_TRIAGE_VALIDATION_ERRORS_KEY
 from metis.sarif.triage import TRIAGE_DECISION_SOURCES
+from metis.sarif.triage import TRIAGE_TEXT_KEYS
 from metis.sarif.writer import SARIF_VERSION
 
 
@@ -226,11 +224,7 @@ def _validate_triage_properties(properties: dict[str, Any], prefix: str) -> None
         and type(properties[METIS_TRIAGED_KEY]) is not bool
     ):
         raise ValueError(f"{prefix} {METIS_TRIAGED_KEY} must be a boolean")
-    for key in (
-        METIS_TRIAGE_STATUS_KEY,
-        METIS_TRIAGE_REASON_KEY,
-        METIS_TRIAGE_TIMESTAMP_KEY,
-    ):
+    for key in TRIAGE_TEXT_KEYS:
         if key in properties and not isinstance(properties[key], str):
             raise ValueError(f"{prefix} {key} must be a string")
     for key in (

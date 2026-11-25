@@ -17,6 +17,7 @@ from urllib.request import url2pathname
 
 from metis.json_io import load_json_object_file
 from metis.json_io import write_json_atomic
+from metis.sarif.utils import normalise_line_number
 
 TriageDecisionSource = Literal[
     "model", "validation_failure", "execution_failure", "policy"
@@ -38,6 +39,12 @@ METIS_EVIDENCE_REQUIREMENTS_KEY = "metisEvidenceRequirements"
 METIS_EVIDENCE_COVERAGE_KEY = "metisEvidenceCoverage"
 METIS_MISSING_EVIDENCE_KEY = "metisMissingEvidence"
 METIS_THREAT_MODEL_POLICY_KEY = "metisThreatModelPolicy"
+
+TRIAGE_TEXT_KEYS = (
+    METIS_TRIAGE_STATUS_KEY,
+    METIS_TRIAGE_REASON_KEY,
+    METIS_TRIAGE_TIMESTAMP_KEY,
+)
 
 TRIAGE_ANNOTATION_KEYS = frozenset(
     {
@@ -234,13 +241,7 @@ def _to_finding(
                             pass
                 region = physical.get("region")
                 if isinstance(region, dict):
-                    raw_line = region.get("startLine")
-                    try:
-                        parsed_line = int(raw_line)
-                        if parsed_line > 0:
-                            line = parsed_line
-                    except Exception:
-                        line = 1
+                    line = normalise_line_number(region.get("startLine"))
                     snippet_obj = region.get("snippet")
                     if isinstance(snippet_obj, dict):
                         snippet = str(snippet_obj.get("text") or "")
@@ -347,49 +348,30 @@ def _apply_triage_metadata(
     else:
         properties.pop(METIS_TRIAGE_DECISION_SOURCE_KEY, None)
 
-    evidence_requirements = metadata.get("evidence_requirements")
-    if isinstance(evidence_requirements, list):
-        properties[METIS_EVIDENCE_REQUIREMENTS_KEY] = [
-            str(item) for item in evidence_requirements if str(item or "").strip()
-        ]
-    else:
-        properties.pop(METIS_EVIDENCE_REQUIREMENTS_KEY, None)
-
-    evidence_coverage = metadata.get("evidence_coverage")
-    if isinstance(evidence_coverage, dict):
-        properties[METIS_EVIDENCE_COVERAGE_KEY] = dict(evidence_coverage)
-    else:
-        properties.pop(METIS_EVIDENCE_COVERAGE_KEY, None)
-
-    missing_evidence = metadata.get("missing_evidence")
-    if isinstance(missing_evidence, list):
-        properties[METIS_MISSING_EVIDENCE_KEY] = [
-            str(item) for item in missing_evidence if str(item or "").strip()
-        ]
-    else:
-        properties.pop(METIS_MISSING_EVIDENCE_KEY, None)
-
-    threat_model_policy = metadata.get("threat_model_policy")
-    if isinstance(threat_model_policy, dict):
-        properties[METIS_THREAT_MODEL_POLICY_KEY] = dict(threat_model_policy)
-    else:
-        properties.pop(METIS_THREAT_MODEL_POLICY_KEY, None)
+    for field, key, expected_type in (
+        ("evidence_requirements", METIS_EVIDENCE_REQUIREMENTS_KEY, list),
+        ("evidence_coverage", METIS_EVIDENCE_COVERAGE_KEY, dict),
+        ("missing_evidence", METIS_MISSING_EVIDENCE_KEY, list),
+        ("threat_model_policy", METIS_THREAT_MODEL_POLICY_KEY, dict),
+    ):
+        value = metadata.get(field)
+        if expected_type is list and isinstance(value, list):
+            properties[key] = [str(item) for item in value if str(item or "").strip()]
+        elif expected_type is dict and isinstance(value, dict):
+            properties[key] = dict(value)
+        else:
+            properties.pop(key, None)
 
 
 def _apply_triage_properties(issue: dict[str, Any], properties: dict[str, Any]) -> None:
     if METIS_TRIAGED_KEY in properties:
         issue[METIS_TRIAGED_KEY] = _is_already_triaged(properties)
-    text_keys = (
-        METIS_TRIAGE_STATUS_KEY,
-        METIS_TRIAGE_REASON_KEY,
-        METIS_TRIAGE_TIMESTAMP_KEY,
-    )
     for key in sorted(TRIAGE_ANNOTATION_KEYS - {METIS_TRIAGED_KEY}):
         if key in properties:
             issue[key] = (
                 str(properties[key] or "")
-                if key in text_keys
+                if key in TRIAGE_TEXT_KEYS
                 else deepcopy(properties[key])
             )
-        elif key not in text_keys:
+        elif key not in TRIAGE_TEXT_KEYS:
             issue.pop(key, None)
