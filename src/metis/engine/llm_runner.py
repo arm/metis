@@ -433,6 +433,13 @@ def _provider_retry_delay(error: Exception, default_seconds: float) -> float:
     }:
         raise error
     response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        error_details = response.get("Error")
+        if isinstance(error_details, dict) and error_details.get("Code") in {
+            "ValidationException",
+            "ValidationError",
+        }:
+            raise error
     headers = getattr(response, "headers", {}) or {}
     status_code = getattr(error, "status_code", getattr(response, "status_code", None))
     if (
