@@ -66,12 +66,7 @@ class ReviewCheckpointSession:
             try:
                 while self._pending:
                     checkpoint, count = self._pending[0]
-                    try:
-                        self._callback(checkpoint, count, count)
-                    except CancelledError:
-                        raise
-                    except Exception:
-                        pass
+                    self._callback(checkpoint, count, count)
                     self._pending.popleft()
             finally:
                 self._pending.clear()

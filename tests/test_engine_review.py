@@ -478,11 +478,12 @@ def test_simple_llm_review_resumes_completed_files(engine, tmp_path):
     assert graph.review.call_count == 3
 
 
-def test_review_checkpoint_callback_failures_are_best_effort():
+def test_review_resume_callback_failures_are_best_effort():
+    checkpoint = Mock()
     session = ReviewCheckpointSession(
         "simple_llm_review",
         NodeCallbacks(
-            checkpoint=Mock(side_effect=RuntimeError("write failed")),
+            checkpoint=checkpoint,
             resume=Mock(side_effect=RuntimeError("read failed")),
         ),
     )
@@ -490,6 +491,44 @@ def test_review_checkpoint_callback_failures_are_best_effort():
     session.put("file:key", {"reviews": []})
 
     assert session.get("file:key") == {"reviews": []}
+    checkpoint.assert_called_once()
+
+
+def test_simple_review_reports_failed_checkpoint_writes(engine):
+    first = Path(engine.codebase_path) / "first.c"
+    second = Path(engine.codebase_path) / "second.c"
+    first.write_text("int first;\n", encoding="utf-8")
+    second.write_text("int second;\n", encoding="utf-8")
+    graph = Mock()
+    graph.checkpoint_key.side_effect = lambda request: request["file_path"]
+    graph.review.side_effect = lambda request, **_kwargs: {
+        "file": Path(request["file_path"]).name,
+        "file_path": request["file_path"],
+        "reviews": [{"issue": "finding"}],
+    }
+
+    def checkpoint(payload, *_counts):
+        if payload["key"] == f"file:{first}":
+            raise OSError("disk full")
+
+    service = SimpleLlmReviewService(
+        engine._config, engine.repository, lambda _index, _model: graph
+    )
+
+    run = service.run_files(
+        (str(first), str(second)),
+        jobs=engine.execution._jobs,
+        checkpoint_session=ReviewCheckpointSession(
+            "simple_llm_review", NodeCallbacks(checkpoint=checkpoint)
+        ),
+    )
+
+    assert run.status is ReviewStatus.INCONCLUSIVE
+    assert [(item.code, item.message) for item in run.diagnostics] == [
+        ("review.file_failed", f"Review failed for {first}: disk full")
+    ]
+    assert run.result is not None
+    assert [group.file for group in run.result.reviews] == ["second.c"]
 
 
 def test_patch_review_uses_simple_llm_review(engine):

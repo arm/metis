@@ -279,6 +279,30 @@ def test_reachability_review_resumes_validated_packets(tmp_path: Path, node_jobs
     reviewer._runner.invoke.assert_called_once()
 
 
+def test_reachability_review_propagates_failed_checkpoint_writes(
+    tmp_path: Path, node_jobs
+):
+    (tmp_path / "graph.c").write_text(
+        "void root(void) {}\n",
+        encoding="utf-8",
+    )
+    reviewer = _reviewer(tmp_path)
+    reviewer._runner.invoke = Mock(
+        side_effect=lambda request: request.parse({"reviews": []})
+    )
+    session = ReviewCheckpointSession(
+        "reachability",
+        NodeCallbacks(checkpoint=Mock(side_effect=OSError("disk full"))),
+    )
+
+    with raises(OSError, match="disk full"):
+        reviewer.review(
+            _graph(_function("root", 1, source=True)),
+            jobs=node_jobs,
+            options=ReachabilityReviewOptions(checkpoint_session=session),
+        )
+
+
 def test_default_review_prompt_has_no_domain_hints(tmp_path: Path) -> None:
     prompt = _reviewer(tmp_path)._system_prompt("graph.c", ReachabilityReviewOptions())
 
