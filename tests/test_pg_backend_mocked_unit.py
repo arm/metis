@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from unittest.mock import Mock
 
 import pytest
@@ -65,6 +67,38 @@ def test_pg_vectorstore_setup_failure_is_not_marked_initialized(
         backend.init()
 
     assert backend._initialized is False
+
+
+@pytest.mark.parametrize(
+    ("close", "running_loop"),
+    [(Mock, False), (AsyncMock, False), (AsyncMock, True)],
+    ids=["sync", "async", "async-in-running-loop"],
+)
+def test_pg_vectorstore_close_completes_store_close(monkeypatch, close, running_loop):
+    pgvector_store = pytest.importorskip("metis.vector_store.pgvector_store")
+    stores = [Mock(close=close()), Mock(close=close())]
+    monkeypatch.setattr(
+        pgvector_store.PGVectorStore, "from_params", Mock(side_effect=stores)
+    )
+    monkeypatch.setattr(pgvector_store.StorageContext, "from_defaults", Mock())
+    backend = pgvector_store.PGVectorStoreImpl(
+        "postgresql://localhost/metis_test", "test_schema", Mock(), Mock(), 3
+    )
+    backend.init()
+
+    if running_loop:
+
+        async def close_backend():
+            backend.close()
+
+        asyncio.run(close_backend())
+    else:
+        backend.close()
+
+    for store in stores:
+        store.close.assert_called_once_with()
+        if close is AsyncMock:
+            store.close.assert_awaited_once_with()
 
 
 def test_pg_vectorstore_passes_halfvec_and_rewrites_hnsw_dist_method(monkeypatch):
