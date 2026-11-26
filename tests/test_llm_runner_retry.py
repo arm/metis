@@ -862,6 +862,163 @@ def review_request():
 
 
 @pytest.fixture
+def bedrock_transport(monkeypatch):
+    sdk = pytest.importorskip("langchain_aws")
+    from botocore.stub import Stubber
+
+    from metis.providers.bedrock import BedrockProvider
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    provider = BedrockProvider(
+        {
+            "region": "ap-southeast-4",
+            "model": "global.anthropic.claude-fable-5-2",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            "max_retries": 2,
+        }
+    )
+    model = provider.get_chat_model(max_retries=0)
+    converse = Mock(wraps=model.client.converse)
+    monkeypatch.setattr(model.client, "converse", converse)
+    monkeypatch.setattr(
+        "metis.providers.bedrock.ChatBedrockConverse",
+        lambda **kwargs: sdk.ChatBedrockConverse(
+            client=model.client, bedrock_client=model.bedrock_client, **kwargs
+        ),
+    )
+    try:
+        with Stubber(model.client) as stubber:
+            yield provider, stubber, converse
+            stubber.assert_no_pending_responses()
+    finally:
+        model.client.close()
+        model.bedrock_client.close()
+
+
+@pytest.mark.parametrize("reasoning_effort", [None, "high"])
+def test_fable_structured_review_uses_automatic_tool_choice(
+    bedrock_transport, review_request, reasoning_effort
+):
+    provider, stubber, converse = bedrock_transport
+    finding = {
+        "issue": "Unbounded copy into a fixed-size buffer",
+        "code_snippet": "strcpy(buffer, input);",
+        "start_line": 3,
+        "end_line": 3,
+        "reasoning": "Attacker-controlled input can exceed the buffer capacity.",
+        "mitigation": "Check the input length before copying.",
+        "confidence": 0.95,
+        "cwe": "CWE-120",
+        "severity": "HIGH",
+    }
+    stubber.add_response(
+        "converse",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "review-tool-call",
+                                "name": "ReviewResponseModel",
+                                "input": {"reviews": [finding]},
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30},
+            "metrics": {"latencyMs": 1},
+        },
+    )
+    request = replace(
+        review_request,
+        model=provider.default_model,
+        reasoning_effort=reasoning_effort,
+    )
+
+    result = JsonPromptRunner(provider, retry_backoff_seconds=0).invoke(request)
+
+    assert result is not None
+    assert [review["issue"] for review in result] == [finding["issue"]]
+    assert result[0]["cwe"] == "CWE-120"
+    converse.assert_called_once()
+    tool_config = converse.call_args.kwargs["toolConfig"]
+    assert tool_config.get("toolChoice") in (None, {"auto": {}})
+    assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == [
+        "ReviewResponseModel"
+    ]
+
+
+@pytest.mark.parametrize("code", ["ValidationException", "ValidationError"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_bedrock_request_validation_fails_without_retry(
+    bedrock_transport, review_request, monkeypatch, code, structured
+):
+    from botocore.exceptions import ClientError
+
+    provider, stubber, converse = bedrock_transport
+    stubber.add_client_error(
+        "converse",
+        service_error_code=code,
+        service_message="The requested tool choice is not supported.",
+        http_status_code=400,
+    )
+    sleep = Mock()
+    monkeypatch.setattr("metis.engine.llm_runner.time.sleep", sleep)
+    request = replace(
+        review_request,
+        model=provider.default_model,
+        response_model=ReviewResponseModel if structured else None,
+    )
+
+    with pytest.raises(ClientError) as raised:
+        JsonPromptRunner(provider).invoke(request)
+
+    assert raised.value.response["Error"]["Code"] == code
+    converse.assert_called_once()
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("ThrottlingException", 429),
+        ("ModelTimeoutException", 408),
+        ("ServiceUnavailableException", 503),
+    ],
+)
+def test_bedrock_transient_failures_keep_transport_retry_budget(
+    bedrock_transport, review_request, monkeypatch, code, status
+):
+    from botocore.exceptions import ClientError
+
+    provider, stubber, converse = bedrock_transport
+    for _ in range(provider.max_retries + 1):
+        stubber.add_client_error(
+            "converse",
+            service_error_code=code,
+            service_message="Temporary provider failure.",
+            http_status_code=status,
+        )
+    sleep = Mock()
+    monkeypatch.setattr("metis.engine.llm_runner.time.sleep", sleep)
+    request = replace(review_request, model=provider.default_model)
+
+    with pytest.raises(ClientError) as raised:
+        JsonPromptRunner(provider).invoke(request)
+
+    assert raised.value.response["Error"]["Code"] == code
+    assert converse.call_count == provider.max_retries + 1
+    assert sleep.call_count == provider.max_retries
+
+
+@pytest.fixture
 def openai_transport(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")

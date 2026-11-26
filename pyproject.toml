@@ -21,7 +21,7 @@ dependencies = [
   "chromadb>=1.5.9",
   "ijson>=3.4,<4",
   "langchain==1.4.7",
-  "langchain-core==1.7.0",
+  "langchain-core==1.8.4",
   "langchain-openai==1.7.2",
   "langgraph==1.2.16",
   "langsmith==0.14.12",
@@ -46,12 +46,12 @@ optional-dependencies.anthropic = [
 optional-dependencies.azure = []
 optional-dependencies.bedrock = [
   "boto3>=1.43.118",
-  "langchain-aws>=1.9.0",
+  "langchain-aws>=1.10.0",
 ]
 optional-dependencies.bedrock-mantle = [
   "anthropic>=1.17.0",
   "boto3>=1.43.118",
-  "langchain-aws[anthropic]>=1.9.0",
+  "langchain-aws[anthropic]>=1.10.0",
 ]
 optional-dependencies.dev = [
   "metis[all-providers]",
