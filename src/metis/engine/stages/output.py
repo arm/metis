@@ -14,6 +14,7 @@ from .review.models import PatchReviewResult
 from .review.models import StandardReviewResult
 from .review.storage import ReviewOutput
 from .triage.storage import TriageStore
+from .triage.storage import materialized_checkpoint
 
 
 class StreamingOutput:
@@ -96,12 +97,9 @@ class StreamingOutput:
             )
         checkpoint = callbacks.get("checkpoint_callback")
         if callable(checkpoint) and self.materialize and "triage" in self.stages:
-
-            def publish(store, processed, total):
-                store.publish(self.triage_path)
-                checkpoint(load_json_object_file(self.triage_path), processed, total)
-
-            callbacks["checkpoint_callback"] = publish
+            callbacks["checkpoint_callback"] = materialized_checkpoint(
+                self.triage_path, checkpoint
+            )
         return callbacks
 
     def reference(self, stage):

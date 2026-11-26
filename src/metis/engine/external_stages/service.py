@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from typing import Literal
 from uuid import uuid4
 
 from metis.engine.execution.contracts import _sorted_names
@@ -113,19 +114,13 @@ class ExternalStageService:
         scope: list[str] | None = None,
         run_dir: str | Path | None = None,
     ) -> ExternalAnalysisResult:
-        stage = self._analysis_stage(name)
+        stage = self._stage("analysis", name)
         _validate_bindings(
             name, stage, label="analysis", required={"codebase_path", "output_sarif"}
         )
-        resolved_run_dir = _resolve_run_dir(run_dir)
-        resolved_run_dir.mkdir(parents=True, exist_ok=True)
-        codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
+        resolved_run_dir, codebase = self._prepare_run(run_dir, codebase_path)
         output_sarif = resolved_run_dir / "analysis.sarif"
-        if output_sarif.exists():
-            raise FileExistsError(
-                f"External stage output already exists: {output_sarif}"
-            )
-        request_path = resolved_run_dir / "analysis-request.json"
+        request_path = _reserve_outputs("analysis", resolved_run_dir, output_sarif)
         request = AnalysisRequestModel(
             run_id=resolved_run_dir.name,
             codebase_path=str(codebase),
@@ -165,24 +160,21 @@ class ExternalStageService:
         codebase_path: str | Path | None = None,
         run_dir: str | Path | None = None,
     ) -> ExternalValidationResult:
-        stage = self._validation_stage(name)
+        stage = self._stage("validation", name)
         _validate_bindings(
             name,
             stage,
             label="validation",
             required={"codebase_path", "input_sarif", "output_decision"},
         )
-        resolved_run_dir = _resolve_run_dir(run_dir)
-        resolved_run_dir.mkdir(parents=True, exist_ok=True)
-        codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
+        resolved_run_dir, codebase = self._prepare_run(run_dir, codebase_path)
         input_sarif_path = Path(input_sarif).resolve()
         load_metis_sarif_file(input_sarif_path)
         output_decision = resolved_run_dir / "validation-decision.json"
         validated_sarif = resolved_run_dir / "validated.sarif"
-        for output in (output_decision, validated_sarif):
-            if output.exists():
-                raise FileExistsError(f"External stage output already exists: {output}")
-        request_path = resolved_run_dir / "validation-request.json"
+        request_path = _reserve_outputs(
+            "validation", resolved_run_dir, output_decision, validated_sarif
+        )
         request = ValidationRequestModel(
             run_id=resolved_run_dir.name,
             codebase_path=str(codebase),
@@ -233,23 +225,35 @@ class ExternalStageService:
             process=process,
         )
 
-    def _analysis_stage(self, name: str) -> ExternalStageCommandModel:
+    def _stage(
+        self, kind: Literal["analysis", "validation"], name: str
+    ) -> ExternalStageCommandModel:
+        stages = getattr(self.config, kind)
         try:
-            return self.config.analysis[name]
+            return stages[name]
         except KeyError as exc:
-            available = _sorted_names(self.config.analysis) or "<none>"
+            available = _sorted_names(stages) or "<none>"
             raise ValueError(
-                f"Unknown external analysis stage {name!r}; available: {available}"
+                f"Unknown external {kind} stage {name!r}; available: {available}"
             ) from exc
 
-    def _validation_stage(self, name: str) -> ExternalStageCommandModel:
-        try:
-            return self.config.validation[name]
-        except KeyError as exc:
-            available = _sorted_names(self.config.validation) or "<none>"
-            raise ValueError(
-                f"Unknown external validation stage {name!r}; available: {available}"
-            ) from exc
+    def _prepare_run(
+        self, run_dir: str | Path | None, codebase_path: str | Path | None
+    ) -> tuple[Path, Path]:
+        resolved_run_dir = _resolve_run_dir(run_dir)
+        resolved_run_dir.mkdir(parents=True, exist_ok=True)
+        codebase = _resolve_codebase_path(codebase_path or self.codebase_path)
+        return resolved_run_dir, codebase
+
+
+def _reserve_outputs(
+    kind: Literal["analysis", "validation"], run_dir: Path, *outputs: Path
+) -> Path:
+    """Reject pre-existing stage outputs and return the stage request path."""
+    for output in outputs:
+        if output.exists():
+            raise FileExistsError(f"External stage output already exists: {output}")
+    return run_dir / f"{kind}-request.json"
 
 
 def _validate_bindings(
