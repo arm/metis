@@ -21,6 +21,7 @@ from langchain_core.runnables import RunnableLambda
 
 from metis.engine import MetisEngine
 from metis.engine.concurrency import JobScheduler
+from metis.engine.execution import ExecutionDiagnostic
 from metis.engine.execution import ExecutionResult
 from metis.engine.execution import ExecutionStatus
 from metis.engine.execution.catalog import NodeCatalog
@@ -35,6 +36,7 @@ from metis.engine.execution.runner import run_stage
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
 from metis.engine.model_tool_runner import invoke_model_with_tools
+from metis.engine.stages.service import _node_callbacks
 from metis.execution_nodes import EmptyNodeConfiguration
 from metis.runlog.langchain import RUNLOG_CALLBACK_HANDLER
 from metis.runlog.langchain import RunLogCallbackHandler
@@ -53,6 +55,32 @@ def _records(session: runlog.RunLogSession) -> list[dict]:
 
 def _exact_config(tmp_path: Path, **kwargs) -> runlog.RunLogConfig:
     return runlog.RunLogConfig(path=tmp_path / "trace.ndjson", **kwargs)
+
+
+def test_logged_node_callbacks_accept_keyword_arguments(tmp_path):
+    debug, checkpoint, diagnostic = Mock(), Mock(), Mock()
+    payload = {"value": 1}
+    warning = ExecutionDiagnostic("example.warning", "Example warning")
+
+    with runlog.open_runlog(_exact_config(tmp_path)) as session:
+        callbacks = _node_callbacks(
+            "triage",
+            {
+                "debug_callback": debug,
+                "checkpoint_callback": checkpoint,
+                "diagnostic_callback": diagnostic,
+            },
+        )
+        callbacks.debug(payload=payload)
+        callbacks.checkpoint(payload=payload, processed=1, total=2)
+        callbacks.diagnostic(diagnostic=warning)
+
+    debug.assert_called_once_with(payload)
+    checkpoint.assert_called_once_with(payload, 1, 2)
+    diagnostic.assert_called_once_with(warning)
+    assert [
+        record["name"] for record in _records(session) if record["record"] == "event"
+    ] == ["debug", "checkpoint", "diagnostic"]
 
 
 def test_disabled_helpers_do_not_evaluate_lazy_attributes(tmp_path):

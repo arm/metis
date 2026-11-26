@@ -200,10 +200,19 @@ class IndexingService:
                 self._state.pending_nodes = None
 
     def count_index_items(self, *, input_files: list[str] | None = None) -> int:
-        docs_exts = self._config.plugin_config.get("docs", {}).get(
-            "supported_extensions", [".md"]
+        return len(
+            self._get_supported_input_files(
+                self._docs_supported_extensions(), input_files
+            )
         )
-        return len(self._get_supported_input_files(docs_exts, input_files))
+
+    def _docs_supported_extensions(self) -> list[str]:
+        return [
+            ext.lower()
+            for ext in self._config.plugin_config.get("docs", {}).get(
+                "supported_extensions", [".md"]
+            )
+        ]
 
     def index_prepare_nodes_iter(self, *, input_files: list[str] | None = None):
         """Prepare nodes for this thread's next finalize call without changing the index."""
@@ -215,12 +224,7 @@ class IndexingService:
             )
         if input_files is None:
             self._get_embedding_models()
-        docs_supported_exts = [
-            ext.lower()
-            for ext in self._config.plugin_config.get("docs", {}).get(
-                "supported_extensions", [".md"]
-            )
-        ]
+        docs_supported_exts = self._docs_supported_extensions()
 
         logger.info(f"Indexing codebase at: {self._config.codebase_path}")
         selected_files = self._get_supported_input_files(

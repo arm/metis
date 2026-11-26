@@ -16,6 +16,7 @@ from metis.json_io import JsonArray
 from metis.json_io import JsonJournal
 from metis.json_io import sorted_json_records
 from metis.json_io import JsonSnapshot
+from metis.json_io import load_json_object_file
 from metis.json_io import write_json_stream_atomic
 from metis.sarif.triage import SarifFinding
 from metis.sarif.triage import TRIAGE_ANNOTATION_KEYS
@@ -47,6 +48,16 @@ def is_sarif_file(snapshot: JsonSnapshot) -> bool:
             if path == ("runs",) and event == "start_array":
                 has_runs = True
     return has_runs
+
+
+def materialized_checkpoint(path: Path, callback):
+    """Publish the store to ``path`` and hand the written JSON to ``callback``."""
+
+    def publish(store: TriageStore, processed: int, total: int) -> None:
+        store.publish(path)
+        callback(load_json_object_file(path), processed, total)
+
+    return publish
 
 
 class TriageStore:

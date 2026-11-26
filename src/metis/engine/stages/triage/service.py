@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from concurrent.futures import CancelledError
 from contextlib import closing
+from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 from itertools import batched
 import logging
@@ -21,6 +22,7 @@ from metis.sarif.models import SarifPayload
 from metis.json_io import load_json_object_file
 from metis.json_io import write_json_atomic
 from .storage import TriageStore
+from .storage import materialized_checkpoint
 from metis.sarif.triage import apply_triage_result
 from metis.sarif.utils import create_fingerprint
 from metis import runlog
@@ -48,6 +50,20 @@ class TriageService:
     def _invoke_checkpoint(callback, *args) -> None:
         if callable(callback):
             callback(*args)
+
+    @staticmethod
+    @contextmanager
+    def _checkpoint_failures(failure: BaseException | None):
+        """Re-raise checkpoint errors unless a triage failure is already propagating."""
+        try:
+            yield
+        except BaseException as checkpoint_error:
+            if failure is None:
+                raise
+            logger.warning(
+                "Unable to checkpoint completed triage decisions: %s",
+                checkpoint_error,
+            )
 
     def _emit_triage_progress(
         self, progress_callback, total: int, event: str, **kwargs
@@ -348,7 +364,7 @@ class TriageService:
             failure = exc
             raise
         finally:
-            try:
+            with self._checkpoint_failures(failure):
                 for idx, finding, decision, error in tuple(outcomes.values()):
                     processed, was_handled = self._handle_finding_result(
                         triaged_payload=triaged_payload,
@@ -371,13 +387,6 @@ class TriageService:
                     self._invoke_checkpoint(
                         checkpoint_callback, triaged_payload, processed, processed
                     )
-            except BaseException as checkpoint_error:
-                if failure is None:
-                    raise
-                logger.warning(
-                    "Unable to checkpoint completed triage decisions: %s",
-                    checkpoint_error,
-                )
         return processed, handled
 
     def triage_file(
@@ -421,16 +430,9 @@ class TriageService:
             raise
         finally:
             if store.processed and (failure is not None or store.processed < total):
-                try:
+                with self._checkpoint_failures(failure):
                     self._invoke_checkpoint(
                         checkpoint_callback, store, store.processed, store.processed
-                    )
-                except BaseException as checkpoint_error:
-                    if failure is None:
-                        raise
-                    logger.warning(
-                        "Unable to checkpoint completed triage decisions: %s",
-                        checkpoint_error,
                     )
         return processed
 
@@ -456,17 +458,6 @@ class TriageService:
                 indent=4,
             )
             with TriageStore(source, destination=destination) as store:
-                callback = checkpoint_callback
-                if callable(callback):
-
-                    def materialized_checkpoint(
-                        current: TriageStore, processed: int, total: int
-                    ) -> None:
-                        current.publish(destination)
-                        callback(load_json_object_file(destination), processed, total)
-
-                else:
-                    materialized_checkpoint = None
                 processed, handled = self._triage_findings_parallel(
                     findings=run.remaining,
                     triaged_payload=store,
@@ -476,7 +467,11 @@ class TriageService:
                     memory_service=memory_service,
                     progress_callback=progress_callback,
                     debug_callback=debug_callback,
-                    checkpoint_callback=materialized_checkpoint,
+                    checkpoint_callback=(
+                        materialized_checkpoint(destination, checkpoint_callback)
+                        if callable(checkpoint_callback)
+                        else None
+                    ),
                     processed=run.processed,
                 )
                 remaining = tuple(

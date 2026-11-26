@@ -558,16 +558,19 @@ def _node_callbacks(
     )
 
 
+def _log_and_forward(name: str, attributes: Mapping[str, object], callback, *args):
+    runlog.event(name, attributes)
+    if callable(callback):
+        callback(*args)
+
+
 def _mapping_callback(name: str, callback):
     if not runlog.is_enabled():
         return callback
 
     def invoke(payload):
-        runlog.event(
-            name, payload if isinstance(payload, Mapping) else {"value": payload}
-        )
-        if callable(callback):
-            callback(payload)
+        attributes = payload if isinstance(payload, Mapping) else {"value": payload}
+        _log_and_forward(name, attributes, callback, payload)
 
     return invoke
 
@@ -577,12 +580,14 @@ def _checkpoint_callback(callback):
         return callback
 
     def invoke(payload, processed, total):
-        runlog.event(
+        _log_and_forward(
             "checkpoint",
             {"processed": processed, "total": total, "payload": payload},
+            callback,
+            payload,
+            processed,
+            total,
         )
-        if callable(callback):
-            callback(payload, processed, total)
 
     return invoke
 
@@ -592,9 +597,7 @@ def _diagnostic_callback(callback):
         return callback
 
     def invoke(diagnostic):
-        runlog.event("diagnostic", {"diagnostic": diagnostic})
-        if callable(callback):
-            callback(diagnostic)
+        _log_and_forward("diagnostic", {"diagnostic": diagnostic}, callback, diagnostic)
 
     return invoke
 
