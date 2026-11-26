@@ -11,6 +11,7 @@ from metis.configuration import load_plugin_config
 from metis.plugins.aarch64_assembly_plugin import AArch64AssemblyPlugin
 from metis.plugins.ipynb_plugin import IpynbPlugin
 from metis.plugins.registry import LanguagePluginRegistry
+from metis.plugins.systemverilog_plugin import SystemVerilogPlugin
 
 
 @pytest.mark.parametrize("parser_available", (True, False))
@@ -109,3 +110,22 @@ def test_builtin_code_splitters_use_compatible_treesitter_parser(
 
     assert nodes
     assert nodes[0].text.strip()
+
+
+def test_systemverilog_splitter_keeps_declarations_intact():
+    plugin = SystemVerilogPlugin(
+        plugin_config={"plugins": {"systemverilog": {"splitting": {"max_chars": 120}}}}
+    )
+    source = (
+        "module alu #(parameter config_pkg::cfg_t Cfg = config_pkg::Empty) (\n"
+        "  input  logic [Cfg.XLEN-1:0] operand_a_i,\n"
+        "  output logic [$clog2(Cfg.XLEN)-1:0] count_o\n"
+        ");\n"
+        "  assign count_o = '0;\n"
+        "endmodule\n"
+    )
+
+    chunks = plugin.get_splitter().split_text(source)
+
+    assert chunks[0].startswith("module alu #(parameter")
+    assert any(chunk.startswith("assign count_o") for chunk in chunks)
