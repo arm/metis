@@ -148,7 +148,7 @@ use simple review.
 3. Add a plugin class and `implementation` manifest field only when the language
    needs custom runtime behavior. The config-backed default passes the manifest
    name to `tree_sitter_language_pack`; when that is not the installed grammar
-   key, follow `src/metis/plugins/systemverilog_plugin.py` and override
+   key, follow `src/metis/plugins/aarch64_assembly_plugin.py` and override
    `get_splitter()` with `build_code_splitter(...)`. This splitter serves Index
    chunking, not CodeGraph parsing.
 4. For CodeGraph construction, set `capabilities.codegraph: true`, implement the

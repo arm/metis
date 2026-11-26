@@ -50,7 +50,7 @@ Metis includes support for the following languages:
 | Go | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | TableGen | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | Verilog | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
-| SystemVerilog | Language-plugin simple LLM review | Navigation-assisted LLM | Verilog Tree-sitter code splitting |
+| SystemVerilog | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | JavaScript | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | Kotlin | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
 | Perl | Language-plugin simple LLM review | Navigation-assisted LLM | Tree-sitter code splitting |
