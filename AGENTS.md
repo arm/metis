@@ -87,8 +87,12 @@ or entry-point changes. Pre-commit includes mutating hooks, so run it only on
 task-owned files:
 
 ```bash
-SKIP='Test Coverage' uv run --no-sync pre-commit run --files src/metis/configuration.py tests/test_configuration.py
+uv run --no-sync pre-commit run --files src/metis/configuration.py tests/test_configuration.py
 ```
+
+Full coverage runs only at the `manual` hook stage and is invoked explicitly by
+CI. Normal commits and focused hook runs do not need `SKIP`; setting it in an
+isolated tool process does not configure a separate commit process.
 
 Use [CONTRIBUTION.md](CONTRIBUTION.md) for the full repository check. Inspect
 changes made by hooks and rerun. Report checks that could not be run.
