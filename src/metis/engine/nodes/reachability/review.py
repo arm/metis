@@ -22,6 +22,7 @@ from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.execution import combine_review_runs
+from metis.engine.stages.review.execution import empty_review_run
 from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewDiagnostic
@@ -50,11 +51,7 @@ NODE_NAME = "reachability"
 def create_node(review_service: ReachabilityReviewService) -> NodeRegistration:
     def execute(invocation: NodeInvocation) -> NodeResult:
         callbacks = invocation.context.callbacks
-        checkpoint_session = (
-            ReviewCheckpointSession(NODE_NAME, callbacks)
-            if callbacks.checkpoint is not None or callbacks.resume is not None
-            else None
-        )
+        checkpoint_session = ReviewCheckpointSession.for_callbacks(NODE_NAME, callbacks)
         reference = cast(CodeGraphReference, invocation.inputs["codegraph"])
         review = review_service.run_review(
             cast(ReviewCommand, invocation.inputs["request"]),
@@ -132,9 +129,8 @@ class ReachabilityReviewService:
         checkpoint_session: ReviewCheckpointSession | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
-            return ReviewRun(
+            return empty_review_run(
                 ReviewStatus.INCONCLUSIVE,
-                StandardReviewResult(reviews=[]),
                 (
                     ReviewDiagnostic(
                         "review.reachability_patch_unsupported",
@@ -220,13 +216,7 @@ class ReachabilityReviewService:
                 )
             )
         elif diagnostics:
-            reviews.append(
-                ReviewRun(
-                    ReviewStatus.INCONCLUSIVE,
-                    StandardReviewResult(reviews=[]),
-                    tuple(diagnostics),
-                )
-            )
+            reviews.append(empty_review_run(ReviewStatus.INCONCLUSIVE, diagnostics))
         if fallback and self._simple_llm_review is not None:
             reviews.append(
                 self._simple_llm_review.run_files(
@@ -241,9 +231,8 @@ class ReachabilityReviewService:
                 )
             )
         if not reviews:
-            return ReviewRun(
-                ReviewStatus.SUCCEEDED if fallback else ReviewStatus.INCONCLUSIVE,
-                StandardReviewResult(reviews=[]),
+            return empty_review_run(
+                ReviewStatus.SUCCEEDED if fallback else ReviewStatus.INCONCLUSIVE
             )
         return combine_review_runs(tuple(reviews))
 

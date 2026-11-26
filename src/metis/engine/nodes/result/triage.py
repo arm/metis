@@ -10,12 +10,12 @@ from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import ResultFormat
+from metis.engine.nodes.result import _emit_result_artifact
 from metis.engine.stages.triage.models import TRIAGE_FINDING_FAILED
 from metis.engine.stages.triage.models import TriageRun
 from metis.sarif.models import SarifPayload
 from metis.sarif.triage import METIS_TRIAGE_DECISION_SOURCE_KEY
 from metis.sarif.triage import METIS_TRIAGE_STATUS_KEY
-from metis import runlog
 
 
 def execute(invocation: NodeInvocation) -> NodeResult:
@@ -77,16 +77,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
         status=status,
         diagnostics=tuple(diagnostics),
     )
-    runlog.event(
-        "artifact",
-        {
-            "kind": "triage_result",
-            "formats": invocation.formats or (),
-            "payload": stream.reference("triage")
-            if stream is not None and stream.triage is not None
-            else output.outputs,
-        },
-    )
+    _emit_result_artifact("triage_result", "triage", invocation, output)
     return output
 
 

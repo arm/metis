@@ -11,7 +11,7 @@ from .finding_adapter import review_sort_key
 def group_findings_as_reviews(findings, *, codebase_path):
     by_file = {}
     for finding in findings:
-        primary_file = finding.primary_file or finding.sink_file or finding.source_file
+        primary_file = finding.primary_file
         if primary_file:
             by_file.setdefault(primary_file, []).append(finding)
 

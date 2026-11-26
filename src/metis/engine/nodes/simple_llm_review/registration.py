@@ -9,11 +9,11 @@ from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
+from metis.engine.stages.review.execution import empty_review_run
 from metis.engine.stages.review.execution import review_node_result
 from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
-from metis.engine.stages.review.models import StandardReviewResult
 from metis.engine.stages.review.checkpoints import ReviewCheckpointSession
 from metis.engine.stages.review.scope import select_review_targets
 
@@ -49,8 +49,10 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
                 "begin_patch_entry": output.begin_patch_entry,
                 "files": files,
             }
-        elif callbacks.checkpoint is not None or callbacks.resume is not None:
-            checkpoint_session = ReviewCheckpointSession(NODE_NAME, callbacks)
+        else:
+            checkpoint_session = ReviewCheckpointSession.for_callbacks(
+                NODE_NAME, callbacks
+            )
         memory = cast(
             "MemoryService | None", invocation.context.capabilities.get("memory")
         )
@@ -73,11 +75,7 @@ def create_node(service: SimpleLlmReviewService) -> NodeRegistration:
             **options,
         )
         if review.result is None and output is not None and output.count:
-            review = ReviewRun(
-                ReviewStatus.INCONCLUSIVE,
-                StandardReviewResult(reviews=[]),
-                review.diagnostics,
-            )
+            review = empty_review_run(ReviewStatus.INCONCLUSIVE, review.diagnostics)
         return review_node_result(review)
 
     return NodeRegistration(

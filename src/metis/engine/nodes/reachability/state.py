@@ -17,6 +17,7 @@ from metis.engine.codegraph import CodeExpression
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import ControlCondition
 from metis.engine.codegraph import FunctionNode
+from metis.engine.codegraph import NullFact
 from metis.engine.codegraph.queries import _build_reverse_edges
 
 from .graph_utils import _node_sort_key
@@ -175,6 +176,15 @@ def augment_function_contracts(
     return augmented
 
 
+def _null_branch(condition: ControlCondition, taken: bool) -> tuple[NullFact, ...]:
+    """Null facts proven when ``condition`` evaluates to ``taken``."""
+    null_condition = condition.null_condition
+    assert null_condition is not None
+    if bool(condition.truth) is taken:
+        return null_condition.when_true
+    return null_condition.when_false
+
+
 def _callsite_must_null_literals(
     owner: FunctionNode,
     callsite: CallSite,
@@ -185,13 +195,9 @@ def _callsite_must_null_literals(
     }
     literals: set[FactLiteral] = set()
     for condition in callsite.must_conditions:
-        null_condition = condition.null_condition
-        if null_condition is None:
+        if condition.null_condition is None:
             continue
-        selected = (
-            null_condition.when_true if condition.truth else null_condition.when_false
-        )
-        for fact in selected:
+        for fact in _null_branch(condition, True):
             name = fact.value.direct_identifier
             if not name or name not in owner_parameters:
                 continue
@@ -261,14 +267,10 @@ def _return_exclusion_requirements(
         if parameter.name
     }
     for condition in conditions:
-        null_condition = condition.null_condition
-        if null_condition is None:
+        if condition.null_condition is None:
             continue
-        opposite = (
-            null_condition.when_false if condition.truth else null_condition.when_true
-        )
         requirements: list[FactLiteral] = []
-        for fact in opposite:
+        for fact in _null_branch(condition, False):
             parameter_index = parameter_indexes.get(fact.value.direct_identifier)
             if parameter_index is None:
                 requirements = []
@@ -408,15 +410,10 @@ def _fatal_null_branch_proves_nonnull(
     if target_contract is None or target_contract.normal_exit.status != "impossible":
         return False
     condition = callsite.conditions[0]
-    null_condition = condition.null_condition
-    if null_condition is None:
+    if condition.null_condition is None:
         return False
-    selected = (
-        null_condition.when_true if condition.truth else null_condition.when_false
-    )
-    opposite = (
-        null_condition.when_false if condition.truth else null_condition.when_true
-    )
+    selected = _null_branch(condition, True)
+    opposite = _null_branch(condition, False)
     return bool(
         len(selected) == 1
         and len(opposite) == 1

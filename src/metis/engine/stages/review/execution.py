@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.execution.contracts import ExecutionStatus
 from metis.engine.execution.contracts import NodeResult
 
@@ -13,17 +12,19 @@ from .models import ReviewStatus
 from .models import StandardReviewResult
 
 
+def empty_review_run(status: ReviewStatus, diagnostics=()) -> ReviewRun:
+    return ReviewRun(status, StandardReviewResult(reviews=[]), tuple(diagnostics))
+
+
 def review_node_result(review: ReviewRun) -> NodeResult:
     status = (
         ExecutionStatus.OK
         if review.status is ReviewStatus.SUCCEEDED
         else ExecutionStatus.INCONCLUSIVE
     )
-    diagnostics = tuple(
-        ExecutionDiagnostic(item.code, item.message, item.severity)
-        for item in review.diagnostics
+    return NodeResult(
+        {"review": review}, status=status, diagnostics=tuple(review.diagnostics)
     )
-    return NodeResult({"review": review}, status=status, diagnostics=diagnostics)
 
 
 def combine_review_runs(reviews: tuple[ReviewRun, ...]) -> ReviewRun:

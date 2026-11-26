@@ -20,13 +20,13 @@ from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.llm_runner import JsonPromptRequest
+from metis.engine.llm_runner import coerce_response_model
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.stages.review.execution import combine_review_runs
 from metis.engine.stages.review.models import REVIEW_DEDUP_FAILED
 from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import PatchReviewResult
-from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
@@ -43,14 +43,7 @@ USER_PROMPT = "Candidate findings JSON:\n{candidate_findings}"
 
 
 def _parse_decision(raw: object) -> DeduplicationDecision | None:
-    if isinstance(raw, DeduplicationDecision):
-        return raw
-    if isinstance(raw, dict):
-        try:
-            return DeduplicationDecision.model_validate(raw)
-        except ValueError:
-            return None
-    return None
+    return coerce_response_model(raw, DeduplicationDecision)
 
 
 def adjudication(context, diagnostics):
@@ -114,14 +107,14 @@ def adjudication(context, diagnostics):
 def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
     if output is None and invocation.context.output is not None:
         output = invocation.context.output.review
+    reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
+    combined = combine_review_runs(reviews)
     if output is None:
-        reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
-        combined = combine_review_runs(reviews)
         if combined.result is None or isinstance(combined.result, PatchReviewResult):
             return NodeResult({"review": FinalReviewRun(combined)})
         with TemporaryDirectory(prefix="metis-dedup-") as directory:
             with ReviewOutput(Path(directory) / "review.json", ()) as output:
-                finalized = execute(invocation, output=output)
+                finalized = _execute_with_output(invocation, combined, output)
                 review = finalized.outputs["review"].review
                 findings = StandardReviewResult.model_validate(
                     load_json_object_file(output.target)
@@ -132,8 +125,12 @@ def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
                         "review": FinalReviewRun(replace(review, result=findings))
                     },
                 )
-    reviews = cast(tuple[ReviewRun, ...], invocation.inputs["reviews"])
-    combined = combine_review_runs(reviews)
+    return _execute_with_output(invocation, combined, output)
+
+
+def _execute_with_output(
+    invocation: NodeInvocation, combined: ReviewRun, output: ReviewOutput
+) -> NodeResult:
     result = combined.result
     if result is not None:
         for group in result.reviews:
@@ -149,14 +146,10 @@ def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
     candidate_count = output.count
     context = invocation.context
     progress = context.report_progress
-    if progress is not None:
-        progress(
-            {"event": "findings_finalization_start", "candidates": candidate_count}
-        )
+    progress({"event": "findings_finalization_start", "candidates": candidate_count})
 
     def report_progress(payload: dict[str, object]) -> None:
-        if progress is not None:
-            progress({"event": "findings_finalization_progress", **payload})
+        progress({"event": "findings_finalization_progress", **payload})
 
     diagnostics: list[ExecutionDiagnostic] = []
     adjudicate, packet_fits = adjudication(context, diagnostics)
@@ -176,28 +169,23 @@ def execute(invocation: NodeInvocation, *, output=None) -> NodeResult:
                 records, check_cancelled=_cancellation_checkpoint
             )
     deduped = result
-    if progress is not None:
-        progress(
-            {
-                "event": "findings_finalization_done",
-                "status": "inconclusive" if diagnostics else "ok",
-                "failures": len(diagnostics),
-                "raw_findings": candidate_count,
-                "deduped_findings": kept_count,
-                "removed_findings": candidate_count - kept_count,
-            }
-        )
+    progress(
+        {
+            "event": "findings_finalization_done",
+            "status": "inconclusive" if diagnostics else "ok",
+            "failures": len(diagnostics),
+            "raw_findings": candidate_count,
+            "deduped_findings": kept_count,
+            "removed_findings": candidate_count - kept_count,
+        }
+    )
     return NodeResult(
         {
             "review": FinalReviewRun(
                 ReviewRun(
                     ReviewStatus.INCONCLUSIVE if diagnostics else combined.status,
                     deduped,
-                    combined.diagnostics
-                    + tuple(
-                        ReviewDiagnostic(item.code, item.message, item.severity)
-                        for item in diagnostics
-                    ),
+                    combined.diagnostics + tuple(diagnostics),
                 )
             )
         },

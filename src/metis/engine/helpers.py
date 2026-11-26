@@ -127,6 +127,11 @@ def prepare_nodes_iter(
     return nodes_code, nodes_docs
 
 
+def emit_progress(callback, event, **payload):
+    if callback:
+        callback({"event": event, **payload})
+
+
 def apply_custom_guidance(base_prompt, custom_guidance, precedence_note):
     """Prepend precedence note and custom guidance to a base prompt.
 

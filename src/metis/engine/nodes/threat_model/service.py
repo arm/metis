@@ -27,9 +27,7 @@ from pydantic import Field
 from metis import runlog
 from metis.engine.execution.contracts import ExecutionDiagnostic
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
-from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
-from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineState
 from metis.memory import MemoryRecord
@@ -42,20 +40,14 @@ from metis.utils import split_snippet
 from metis.utils import string_list
 
 from .history import write_history_records
-from .parsing import parse_records as _parse_distilled_records
+from .parsing import parse_records as _parse_distilled_records  # noqa: F401
+from .prompting import _PROMPTS
+from .prompting import invoke_prompt as _invoke_prompt
+from .prompting import prompt_fits as _prompt_fits
 
 logger = logging.getLogger("metis")
 
 THREAT_MODEL_NAMESPACE = ("repo", "threat_model")
-_PROMPTS = get_engine_prompts(
-    "threat_context",
-    required=(
-        "source_distillation_system",
-        "source_distillation_user",
-        "source_reduction_system",
-        "source_reduction_user",
-    ),
-)
 
 
 @dataclass(frozen=True)
@@ -314,18 +306,27 @@ def _build_threat_model_snapshot(
     return list(candidate_service.iter_records(THREAT_MODEL_NAMESPACE))
 
 
+def _first_by_key(
+    items: list[dict[str, Any]],
+    key: Callable[[dict[str, Any]], Any],
+) -> list[dict[str, Any]]:
+    by_key: dict[Any, dict[str, Any]] = {}
+    for item in items:
+        by_key.setdefault(key(item), item)
+    return list(by_key.values())
+
+
 def _dedupe_scope_clauses(clauses: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_key: dict[tuple[str, str, str, tuple[str, ...], str], dict[str, Any]] = {}
-    for clause in clauses:
-        key = (
+    return _first_by_key(
+        clauses,
+        lambda clause: (
             clause["claim_type"],
             clause["disposition"],
             clause["reason"],
             tuple(clause["applies_to"]),
             clause["source_path"],
-        )
-        by_key.setdefault(key, clause)
-    return list(by_key.values())
+        ),
+    )
 
 
 def _repo_file_source(
@@ -504,11 +505,25 @@ def _write_authoritative_contract_record(
 
 
 def _dedupe_source_refs(source_refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for source in source_refs:
-        key = (source["kind"], source["path"])
-        by_key.setdefault(key, source)
-    return list(by_key.values())
+    return _first_by_key(source_refs, lambda source: (source["kind"], source["path"]))
+
+
+def _note_inconclusive(
+    diagnostics: list[ExecutionDiagnostic] | None, code: str, message: str
+) -> None:
+    if diagnostics is not None:
+        diagnostics.append(ExecutionDiagnostic(code, message, "warning"))
+
+
+def _distillation_variables(
+    rel_path: str, batch_index: int, total_batches: int, evidence: str
+) -> dict[str, Any]:
+    return {
+        "path": rel_path,
+        "batch_index": batch_index,
+        "total_batches": total_batches,
+        "evidence": evidence,
+    }
 
 
 def _model_distilled_source_claims(
@@ -528,18 +543,13 @@ def _model_distilled_source_claims(
         evidence_chunks = next_chunks
         next_chunks = []
         for batch_index, evidence in enumerate(evidence_chunks, start=1):
-            prompt_tokens = rendered_prompt_token_count(
-                lambda value: llm_provider.count_tokens(value, model=model),
-                system_prompt=_PROMPTS["source_distillation_system"],
-                user_prompt=_PROMPTS["source_distillation_user"],
-                variables={
-                    "path": rel_path,
-                    "batch_index": batch_index,
-                    "total_batches": len(evidence_chunks),
-                    "evidence": evidence,
-                },
-            )
-            if prompt_tokens <= config.max_token_length:
+            if _prompt_fits(
+                config,
+                "source_distillation",
+                _distillation_variables(
+                    rel_path, batch_index, len(evidence_chunks), evidence
+                ),
+            ):
                 next_chunks.append(evidence)
                 continue
             parts = split_snippet(evidence, max(1, len(evidence) // 2), len)
@@ -557,41 +567,26 @@ def _model_distilled_source_claims(
                 batch_index,
                 len(evidence_chunks),
             )
-            batch_records = invoke_langchain_json_prompt_with_retry(
-                llm_provider,
-                config.usage_runtime,
-                model=model,
-                system_prompt=_PROMPTS["source_distillation_system"],
-                user_prompt=_PROMPTS["source_distillation_user"],
-                variables={
-                    "path": rel_path,
-                    "batch_index": batch_index,
-                    "total_batches": len(evidence_chunks),
-                    "evidence": evidence,
-                },
-                parse=lambda raw: _parse_distilled_records(
-                    raw,
-                    response_model=_ThreatSourceClaimResponseModel,
+            batch_records = _invoke_prompt(
+                config,
+                "source_distillation",
+                _distillation_variables(
+                    rel_path, batch_index, len(evidence_chunks), evidence
                 ),
-                logger=logger,
+                _ThreatSourceClaimResponseModel,
                 label="threat-model source distillation",
                 batch_size=1,
                 invalid_message="invalid threat-model distillation response",
                 final_keep_message="returning no distilled source claims",
-                response_model=_ThreatSourceClaimResponseModel,
-                max_input_tokens=int(config.max_token_length),
-                chat_model_kwargs=config.chat_model_kwargs,
+                invoke=invoke_langchain_json_prompt_with_retry,
             )
             if batch_records is None:
-                if diagnostics is not None:
-                    diagnostics.append(
-                        ExecutionDiagnostic(
-                            "threat_model.distillation_inconclusive",
-                            "Threat-model source distillation did not complete; "
-                            "source text was retained without distilled claims.",
-                            "warning",
-                        )
-                    )
+                _note_inconclusive(
+                    diagnostics,
+                    "threat_model.distillation_inconclusive",
+                    "Threat-model source distillation did not complete; "
+                    "source text was retained without distilled claims.",
+                )
                 logger.warning(
                     "Threat-model source distillation returned no valid response "
                     "for %s; preserving source text",
@@ -626,35 +621,18 @@ def _model_reduce_source_claim_group(
     if llm_provider is None or not model:
         return claims
     try:
-        if (
-            rendered_prompt_token_count(
-                lambda value: llm_provider.count_tokens(value, model=model),
-                system_prompt=_PROMPTS["source_reduction_system"],
-                user_prompt=_PROMPTS["source_reduction_user"],
-                variables={"evidence": evidence},
-            )
-            > config.max_token_length
-        ):
+        if not _prompt_fits(config, "source_reduction", {"evidence": evidence}):
             return claims
-        records = invoke_langchain_json_prompt_with_retry(
-            llm_provider,
-            config.usage_runtime,
-            model=model,
-            system_prompt=_PROMPTS["source_reduction_system"],
-            user_prompt=_PROMPTS["source_reduction_user"],
-            variables={"evidence": evidence},
-            parse=lambda raw: _parse_distilled_records(
-                raw,
-                response_model=_ThreatSourceClaimReductionResponseModel,
-            ),
-            logger=logger,
+        records = _invoke_prompt(
+            config,
+            "source_reduction",
+            {"evidence": evidence},
+            _ThreatSourceClaimReductionResponseModel,
             label="threat-model source claim deduplication",
             batch_size=len(claims),
             invalid_message="invalid threat-model source claim deduplication response",
             final_keep_message="keeping unreduced source claims",
-            response_model=_ThreatSourceClaimReductionResponseModel,
-            max_input_tokens=int(config.max_token_length),
-            chat_model_kwargs=config.chat_model_kwargs,
+            invoke=invoke_langchain_json_prompt_with_retry,
         )
     except CancelledError:
         raise
@@ -663,30 +641,24 @@ def _model_reduce_source_claim_group(
         records = None
 
     if not records:
-        if diagnostics is not None:
-            diagnostics.append(
-                ExecutionDiagnostic(
-                    "threat_model.reduction_inconclusive",
-                    "Threat-model claim reduction did not complete; "
-                    "unreduced claims were retained.",
-                    "warning",
-                )
-            )
+        _note_inconclusive(
+            diagnostics,
+            "threat_model.reduction_inconclusive",
+            "Threat-model claim reduction did not complete; "
+            "unreduced claims were retained.",
+        )
         return claims
 
     referenced_indexes = {
         index for record in records for index in record["source_claim_indexes"]
     }
     if referenced_indexes != set(range(len(claims))):
-        if diagnostics is not None:
-            diagnostics.append(
-                ExecutionDiagnostic(
-                    "threat_model.reduction_inconclusive",
-                    "Threat-model claim reduction returned incomplete provenance; "
-                    "unreduced claims were retained.",
-                    "warning",
-                )
-            )
+        _note_inconclusive(
+            diagnostics,
+            "threat_model.reduction_inconclusive",
+            "Threat-model claim reduction returned incomplete provenance; "
+            "unreduced claims were retained.",
+        )
         logger.warning(
             "Threat-model source claim deduplication returned incomplete provenance; "
             "keeping unreduced source claims"

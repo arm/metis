@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from collections.abc import Iterable
 from codecs import escape_decode
 from concurrent.futures import CancelledError
 from dataclasses import dataclass
@@ -23,10 +24,10 @@ from pydantic import ValidationError
 from metis import runlog
 from metis.engine.execution.contracts import NodeJobs
 from metis.engine.helpers import apply_custom_guidance
+from metis.engine.helpers import emit_progress
 from metis.engine.helpers import summarize_changes
 from metis.engine.llm_runner import ModelProviderConfigurationError
 from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
-from metis.engine.nodes.reachability.progress import emit_progress
 from metis.engine.repository import EngineRepository
 from metis.engine.runtime import EngineConfig
 from metis.engine.source import SourceMap
@@ -37,7 +38,6 @@ from metis.engine.stages.review.models import ReviewCommand
 from metis.engine.stages.review.models import ReviewDiagnostic
 from metis.engine.stages.review.models import ReviewGroup
 from metis.engine.stages.review.models import ReviewRequest
-from metis.engine.stages.review.models import ReviewResult
 from metis.engine.stages.review.models import ReviewRun
 from metis.engine.stages.review.models import ReviewStatus
 from metis.engine.stages.review.models import StandardReviewResult
@@ -95,8 +95,7 @@ class SimpleLlmReviewService:
         files: tuple[str, ...] | None = None,
     ) -> ReviewRun:
         if command.mode == "patch":
-            graph_kwargs = {"navigation": navigation} if navigation is not None else {}
-            review_graph = self._review_graph_factory(index, model, **graph_kwargs)
+            review_graph = self._review_graph(index, model, navigation)
             failures: list[ReviewFileFailure] = []
             emitted = False
 
@@ -131,13 +130,7 @@ class SimpleLlmReviewService:
                 if failures
                 else ReviewStatus.SUCCEEDED,
                 result=result if has_result or not failures else None,
-                diagnostics=tuple(
-                    ReviewDiagnostic(
-                        code=REVIEW_FILE_FAILED,
-                        message=f"Review failed for {failure.path}: {failure.message}",
-                    )
-                    for failure in failures
-                ),
+                diagnostics=_failure_diagnostics(failures),
             )
 
         if files is None:
@@ -172,55 +165,35 @@ class SimpleLlmReviewService:
         checkpoint_session: ReviewCheckpointSession | None = None,
         emit=None,
     ) -> ReviewRun:
-        graph_kwargs = {"navigation": navigation} if navigation is not None else {}
-        return self._run_traditional_review(
-            files,
-            progress_callback,
-            jobs=jobs,
-            memory_service=memory_service,
-            review_graph=self._review_graph_factory(index, model, **graph_kwargs),
-            checkpoint_session=checkpoint_session,
-            emit=emit,
-        )
-
-    def _run_traditional_review(
-        self,
-        files: tuple[str, ...],
-        progress_callback,
-        *,
-        jobs: NodeJobs,
-        memory_service: MemoryService | None,
-        review_graph: Any,
-        checkpoint_session: ReviewCheckpointSession | None,
-        emit=None,
-    ) -> ReviewRun:
         outcome = self.execute_standard_review_with_outcome(
             files,
             jobs=jobs,
             progress_callback=progress_callback,
             memory_service=memory_service,
-            review_graph=review_graph,
+            review_graph=self._review_graph(index, model, navigation),
             checkpoint_session=checkpoint_session,
             emit=emit,
         )
-        diagnostics = tuple(
-            ReviewDiagnostic(
-                code=REVIEW_FILE_FAILED,
-                message=f"Review failed for {failure.path}: {failure.message}",
-            )
-            for failure in outcome.failures
-        )
+        diagnostics = _failure_diagnostics(outcome.failures)
         if outcome.failures and not outcome.completed_files:
             return ReviewRun(
                 status=ReviewStatus.FAILED,
                 result=None,
                 diagnostics=diagnostics,
             )
-        status = (
-            ReviewStatus.INCONCLUSIVE if outcome.failures else ReviewStatus.SUCCEEDED
+        return ReviewRun(
+            status=(
+                ReviewStatus.INCONCLUSIVE
+                if outcome.failures
+                else ReviewStatus.SUCCEEDED
+            ),
+            result=StandardReviewResult.model_validate(outcome.result),
+            diagnostics=diagnostics,
         )
-        result = StandardReviewResult.model_validate(outcome.result)
-        return _review_run(result, status=status, diagnostics=diagnostics)
+
+    def _review_graph(self, index, model, navigation) -> Any:
+        graph_kwargs = {"navigation": navigation} if navigation is not None else {}
+        return self._review_graph_factory(index, model, **graph_kwargs)
 
     def execute_standard_review_with_outcome(
         self,
@@ -408,32 +381,24 @@ class SimpleLlmReviewService:
             and checkpoint_session is not None
         ):
             cached = checkpoint_session.get(f"file:{checkpoint_key}")
-            if cached is not None and isinstance(cached.get("reviews"), list):
-                try:
-                    group = ReviewGroup.model_validate(cached)
-                except ValidationError:
-                    pass
-                else:
-                    if graph.checkpoint_evidence_valid(cached):
-                        return _review_group_payload(
-                            group,
-                            relative_path=relative_path,
-                            file_path=file_path,
-                        )
+            group = _cached_group(cached)
+            if group is not None and graph.checkpoint_evidence_valid(cached):
+                return _review_group_payload(
+                    group,
+                    relative_path=relative_path,
+                    file_path=file_path,
+                )
         if cache_only:
             return None
 
         if source_view is None:
-            result = graph.review(
-                req,
-                collect_navigation_evidence=checkpoint_key is not None,
-                **({"emit": emit} if emit is not None else {}),
-            )
+            result = _graph_review(graph, req, checkpoint_key=checkpoint_key, emit=emit)
         else:
-            result = graph.review(
+            result = _graph_review(
+                graph,
                 req,
-                collect_navigation_evidence=checkpoint_key is not None,
-                **({"emit": emit} if emit is not None else {}),
+                checkpoint_key=checkpoint_key,
+                emit=emit,
                 source_map=SourceMap(
                     relative_path,
                     snippet,
@@ -456,14 +421,12 @@ class SimpleLlmReviewService:
             checkpoint_key is not None
             and checkpoint_session is not None
             and result
-            and (navigation_evidence is None or None not in navigation_evidence)
+            and _checkpoint_navigation_ok(navigation_evidence)
         ):
             checkpoint_session.put(
                 f"file:{checkpoint_key}",
                 {
-                    "reviews": [
-                        review.model_dump(mode="json") for review in group.reviews
-                    ],
+                    "reviews": _checkpoint_reviews(group),
                     "navigation_evidence": navigation_evidence,
                 },
             )
@@ -570,13 +533,10 @@ class SimpleLlmReviewService:
                 try:
                     if "review" not in cached or "summary" not in cached:
                         raise ValueError("incomplete patch checkpoint record")
-                    cached_review = cached["review"]
                     cached_summary = cached["summary"]
-                    if not isinstance(cached_review, dict) or not isinstance(
-                        cached_review.get("reviews"), list
-                    ):
+                    group = _cached_group(cached["review"])
+                    if group is None:
                         raise ValueError("invalid patch checkpoint review")
-                    group = ReviewGroup.model_validate(cached_review)
                     review_dict = _review_group_payload(
                         group,
                         relative_path=relative_path,
@@ -595,10 +555,8 @@ class SimpleLlmReviewService:
             if cached is None:
                 checkpoint_group: ReviewGroup | None = None
                 try:
-                    review_dict = graph.review(
-                        req,
-                        collect_navigation_evidence=checkpoint_key is not None,
-                        **({"emit": emit} if emit is not None else {}),
+                    review_dict = _graph_review(
+                        graph, req, checkpoint_key=checkpoint_key, emit=emit
                     )
                     navigation_evidence = (
                         review_dict.get("navigation_evidence") if review_dict else None
@@ -648,16 +606,13 @@ class SimpleLlmReviewService:
                     checkpoint_key is not None
                     and checkpoint_session is not None
                     and checkpoint_group is not None
-                    and (navigation_evidence is None or None not in navigation_evidence)
+                    and _checkpoint_navigation_ok(navigation_evidence)
                 ):
                     checkpoint_session.put(
                         f"patch-file:{checkpoint_key}",
                         {
                             "review": {
-                                "reviews": [
-                                    review.model_dump(mode="json")
-                                    for review in checkpoint_group.reviews
-                                ]
+                                "reviews": _checkpoint_reviews(checkpoint_group)
                             },
                             "summary": changes_summary,
                             "navigation_evidence": navigation_evidence,
@@ -694,14 +649,40 @@ def _review_group_payload(
     }
 
 
-def _review_run(
-    result: ReviewResult,
-    *,
-    status: ReviewStatus = ReviewStatus.SUCCEEDED,
-    diagnostics=(),
-) -> ReviewRun:
-    return ReviewRun(
-        status=status,
-        result=result,
-        diagnostics=tuple(diagnostics),
+def _failure_diagnostics(
+    failures: Iterable[ReviewFileFailure],
+) -> tuple[ReviewDiagnostic, ...]:
+    return tuple(
+        ReviewDiagnostic(
+            code=REVIEW_FILE_FAILED,
+            message=f"Review failed for {failure.path}: {failure.message}",
+        )
+        for failure in failures
+    )
+
+
+def _cached_group(record: object) -> ReviewGroup | None:
+    if not isinstance(record, dict) or not isinstance(record.get("reviews"), list):
+        return None
+    try:
+        return ReviewGroup.model_validate(record)
+    except ValidationError:
+        return None
+
+
+def _checkpoint_navigation_ok(navigation_evidence) -> bool:
+    return navigation_evidence is None or None not in navigation_evidence
+
+
+def _checkpoint_reviews(group: ReviewGroup) -> list[dict[str, Any]]:
+    return [review.model_dump(mode="json") for review in group.reviews]
+
+
+def _graph_review(graph: Any, req: ReviewRequest, *, checkpoint_key, emit, **extra):
+    # Omit ``emit`` entirely when unset so graphs without that parameter still work.
+    return graph.review(
+        req,
+        collect_navigation_evidence=checkpoint_key is not None,
+        **({"emit": emit} if emit is not None else {}),
+        **extra,
     )

@@ -107,7 +107,7 @@ class CodeGraphService:
                     continue
                 completed = self._last_materialization
                 if completed is not None:
-                    _replay_diagnostics(completed, diagnostic_callback)
+                    _replay_diagnostics(completed.diagnostics, diagnostic_callback)
                     return completed
             self._materialize_active = True
         completed = None
@@ -147,7 +147,7 @@ class CodeGraphService:
                 codebase_path=self._config.codebase_path,
             )
             if reference is not None and not reference.failed_files:
-                _replay_diagnostics(reference, diagnostic_callback)
+                _replay_diagnostics(reference.diagnostics, diagnostic_callback)
                 if progress_callback is not None:
                     progress_callback({"event": CODEGRAPH_REUSED})
                 return reference
@@ -166,9 +166,7 @@ class CodeGraphService:
                 annotation_settings=self._annotation_settings,
                 progress_callback=progress_callback,
             )
-            for diagnostic in semantics_diagnostics:
-                if diagnostic_callback is not None:
-                    diagnostic_callback(diagnostic)
+            _replay_diagnostics(semantics_diagnostics, diagnostic_callback)
             current_files = self._selected_files()
             if (
                 current_files != selected_files
@@ -226,6 +224,22 @@ class CodeGraphService:
         if progress_callback is not None:
             progress_callback({"event": CODEGRAPH_START, "total": total_files})
         completed_files = 0
+
+        def fail_requested(
+            requested_files: tuple[str, ...], message: str, *, log: bool
+        ) -> None:
+            nonlocal completed_files
+            failed_files.extend(requested_files)
+            provider_diagnostics = tuple(
+                CodeGraphDiagnostic(path, message) for path in requested_files
+            )
+            diagnostics.extend(provider_diagnostics)
+            if diagnostic_callback is not None:
+                _replay_diagnostics(provider_diagnostics, diagnostic_callback)
+            elif log:
+                logger.warning("%s", message)
+            completed_files += len(requested_files)
+
         for provider_name in sorted(provider_files):
             requested_files = tuple(provider_files[provider_name])
 
@@ -250,16 +264,7 @@ class CodeGraphService:
                 provider = None
                 provider_error = exc
             if provider is None:
-                failed_files.extend(requested_files)
-                provider_diagnostics = tuple(
-                    CodeGraphDiagnostic(path, str(provider_error))
-                    for path in requested_files
-                )
-                diagnostics.extend(provider_diagnostics)
-                if diagnostic_callback is not None:
-                    for diagnostic in provider_diagnostics:
-                        diagnostic_callback(diagnostic)
-                completed_files += len(requested_files)
+                fail_requested(requested_files, str(provider_error), log=False)
                 continue
             try:
                 with self._provider_lock(provider_name):
@@ -271,17 +276,7 @@ class CodeGraphService:
                     )
                 graph.merge(result.graph)
             except (RuntimeError, ValueError) as exc:
-                failed_files.extend(requested_files)
-                provider_diagnostics = tuple(
-                    CodeGraphDiagnostic(path, str(exc)) for path in requested_files
-                )
-                diagnostics.extend(provider_diagnostics)
-                if diagnostic_callback is not None:
-                    for diagnostic in provider_diagnostics:
-                        diagnostic_callback(diagnostic)
-                else:
-                    logger.warning("%s", exc)
-                completed_files += len(requested_files)
+                fail_requested(requested_files, str(exc), log=True)
                 continue
             processed_files.extend(result.processed_files)
             failed_files.extend(result.failed_files)
@@ -549,11 +544,11 @@ class CodeGraphService:
 
 
 def _replay_diagnostics(
-    reference: CodeGraphReference,
+    diagnostics: Iterable[CodeGraphDiagnostic],
     callback: Callable[[CodeGraphDiagnostic], None] | None,
 ) -> None:
     if callback is not None:
-        for diagnostic in reference.diagnostics:
+        for diagnostic in diagnostics:
             callback(diagnostic)
 
 

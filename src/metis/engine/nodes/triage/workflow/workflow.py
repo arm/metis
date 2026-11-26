@@ -9,11 +9,11 @@ from metis import runlog
 from metis.engine.concurrency import _cancellation_checkpoint
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.llm_runner import coerce_response_model
 from metis.engine.stages.triage.models import TriageDecisionModel
 from metis.engine.stages.triage.models import TriageRequest
 from metis.engine.stages.triage.models import TriageState
 from metis.runlog.workflow import traced_step
-from metis.utils import parse_json_output
 
 from .nodes import triage_node_collect_evidence
 from .llm import _triage_decision
@@ -260,15 +260,9 @@ def _normalize_triage_decision(
 ) -> TriageDecisionModel | None:
     if source_evidence is not None:
         source_evidence.errors = []
-    payload = raw
-    if isinstance(raw, str):
-        payload = parse_json_output(raw)
-    if isinstance(payload, (dict, TriageDecisionModel)):
-        try:
-            decision = TriageDecisionModel.model_validate(payload)
-        except Exception:
-            return None
-        if source_evidence is not None and source_evidence.validate(decision):
-            return None
-        return decision
-    return None
+    decision = coerce_response_model(raw, TriageDecisionModel)
+    if decision is None:
+        return None
+    if source_evidence is not None and source_evidence.validate(decision):
+        return None
+    return decision

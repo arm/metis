@@ -15,6 +15,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from openai.types.responses import ResponseError
+from pydantic import BaseModel
 
 from metis import runlog
 from metis.chat_model_options import merge_chat_model_kwargs
@@ -33,6 +34,7 @@ from metis.engine.model_tool_runner import require_max_tool_rounds
 from metis.engine.model_tool_runner import require_model_input_budget
 from metis.engine.prompt_request import JsonPromptRequest
 from metis.runlog.langchain import ensure_runlog_callback
+from metis.utils import parse_json_output
 
 
 class ModelProviderConfigurationError(RuntimeError):
@@ -127,6 +129,12 @@ class JsonPromptRunner:
             )
             _cancellation_checkpoint()
             return parsed
+
+    def _backoff(self, exponent: int, jitter: float = 1.0) -> float:
+        return max(
+            0.0,
+            min(self._retry_backoff_seconds * (2**exponent), 30.0) * jitter,
+        )
 
     def _invoke_attempts(self, request: JsonPromptRequest):
         last_failure = "unknown failure"
@@ -345,11 +353,7 @@ class JsonPromptRunner:
                     raise attempt_error
                 backoff_seconds = _provider_retry_delay(
                     attempt_error,
-                    max(
-                        0.0,
-                        min(self._retry_backoff_seconds * (2**transport_retries), 30.0)
-                        * random.uniform(0.75, 1.0),
-                    ),
+                    self._backoff(transport_retries, random.uniform(0.75, 1.0)),
                 )
                 transport_retries += 1
                 retry_kind = "transport retry"
@@ -359,12 +363,7 @@ class JsonPromptRunner:
                 output_attempts += 1
                 if output_attempts >= self._max_attempts:
                     break
-                backoff_seconds = max(
-                    0.0,
-                    min(
-                        self._retry_backoff_seconds * (2 ** (output_attempts - 1)), 30.0
-                    ),
-                )
+                backoff_seconds = self._backoff(output_attempts - 1)
                 retry_kind = "attempt"
                 retry_count = output_attempts
                 retry_limit = self._max_attempts
@@ -419,6 +418,25 @@ class JsonPromptRunner:
         )
         _cancellation_checkpoint()
         return None
+
+
+def coerce_response_model[ResponseModelT: BaseModel](
+    raw: object,
+    response_model: type[ResponseModelT],
+) -> ResponseModelT | None:
+    try:
+        if isinstance(raw, response_model):
+            return raw
+        payload: object = raw
+        if hasattr(raw, "model_dump"):
+            payload = raw.model_dump()
+        elif isinstance(raw, str):
+            payload = parse_json_output(raw)
+        if isinstance(payload, dict):
+            return response_model.model_validate(payload)
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def _provider_retry_delay(error: Exception, default_seconds: float) -> float:
@@ -501,44 +519,9 @@ def invoke_langchain_json_prompt_with_retry(
     llm_provider,
     usage_runtime=None,
     *,
-    model,
-    system_prompt,
-    user_prompt,
-    variables,
-    parse,
-    logger,
-    label,
-    batch_size,
-    invalid_message,
-    final_keep_message,
-    max_tokens=None,
-    temperature=None,
-    response_model=None,
-    reasoning_effort=None,
-    chat_model_kwargs=None,
     model_tools=(),
-    max_tool_rounds=None,
-    max_input_tokens=None,
+    **request,
 ):
     return JsonPromptRunner(llm_provider, usage_runtime).invoke(
-        JsonPromptRequest(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            variables=variables,
-            parse=parse,
-            logger=logger,
-            label=label,
-            batch_size=batch_size,
-            invalid_message=invalid_message,
-            final_keep_message=final_keep_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            response_model=response_model,
-            reasoning_effort=reasoning_effort,
-            chat_model_kwargs=chat_model_kwargs,
-            model_tools=tuple(model_tools or ()),
-            max_tool_rounds=max_tool_rounds,
-            max_input_tokens=max_input_tokens,
-        )
+        JsonPromptRequest(model_tools=tuple(model_tools or ()), **request)
     )
