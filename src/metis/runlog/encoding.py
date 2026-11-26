@@ -8,13 +8,13 @@ import dataclasses
 import hashlib
 import json
 import math
-import os
-import tempfile
 from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from metis.json_io import atomic_text_writer
 
 from .schema import PREVIEW_CHARS
 from .schema import RunLogConfig
@@ -236,26 +236,8 @@ class PayloadEncoder:
         self._blobs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._blobs_dir / f"{digest}.{extension}"
         if not path.exists():
-            fd, temporary = tempfile.mkstemp(
-                dir=self._blobs_dir,
-                prefix=f".{digest}.",
-                suffix=".tmp",
-            )
-            try:
-                os.fchmod(fd, 0o600)
-                with os.fdopen(fd, "wb") as handle:
-                    handle.write(raw)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, path)
-                path.chmod(0o600)
-            except Exception:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-                Path(temporary).unlink(missing_ok=True)
-                raise
+            with atomic_text_writer(path, mode=0o600) as handle:
+                handle.buffer.write(raw)
         reference["$ref"] = path.relative_to(self._blobs_dir.parent).as_posix()
         return reference
 

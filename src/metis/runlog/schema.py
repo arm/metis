@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from typing import get_args
 
 SCHEMA_VERSION = 1
 DEFAULT_BLOB_THRESHOLD = 8 * 1024
@@ -15,6 +16,8 @@ PREVIEW_CHARS = 200
 
 ContentMode = Literal["full", "metadata"]
 SpanStatus = Literal["ok", "error", "cancelled", "inconclusive"]
+CONTENT_MODES: frozenset[str] = frozenset(get_args(ContentMode))
+SPAN_STATUSES: frozenset[str] = frozenset(get_args(SpanStatus))
 
 _SPAN_KIND_EXPLANATIONS = {
     "run": "The complete Metis run, from startup through shutdown, including aggregate activity and totals.",
@@ -161,7 +164,7 @@ class RunLogConfig:
     max_collection_items: int = DEFAULT_MAX_COLLECTION_ITEMS
 
     def __post_init__(self) -> None:
-        if self.content not in {"full", "metadata"}:
+        if self.content not in CONTENT_MODES:
             raise ValueError("Run-log content must be 'full' or 'metadata'")
         if self.blob_threshold < 1:
             raise ValueError("Run-log blob threshold must be positive")

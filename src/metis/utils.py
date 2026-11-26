@@ -331,3 +331,9 @@ def read_file_content(file_path):
             return f.read()
     except Exception:
         return ""
+
+
+def positive_int(value: Any) -> int:
+    """Coerce ``value`` to an int, treating unparsable or negative values as 0."""
+    parsed = safe_int(value, 0)
+    return parsed if parsed > 0 else 0
