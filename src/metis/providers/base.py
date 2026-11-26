@@ -39,6 +39,16 @@ class ChatProvider(ABC):
         """Return a LangChain chat model instance."""
         pass
 
+    def _resolve_model_name(
+        self, args: tuple[str, ...], kwargs: dict[str, object]
+    ) -> object:
+        """Pop ``model`` from ``kwargs``; fall back to ``args[0]``, then ``default_model``."""
+        requested_model = kwargs.pop("model", None)
+        positional_model = args[0] if args else None
+        return (
+            requested_model or positional_model or getattr(self, "default_model", None)
+        )
+
     def count_tokens(self, text: str, model: str | None = None) -> int:
         """Estimate token count for ``text`` under this provider's tokenizer.
 

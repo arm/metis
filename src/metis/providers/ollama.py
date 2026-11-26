@@ -13,6 +13,7 @@ import logging
 
 from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
+from metis.providers.openai_compatible import OPENAI_COMPATIBLE_EMBEDDING_COPY_KEYS
 from metis.providers.config import ProviderConfigSpec
 from metis.utils import count_tokens as count_tokens_for_model
 
@@ -52,12 +53,5 @@ class OllamaEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
     CONFIG_SPEC = ProviderConfigSpec(
         display_name="Ollama embeddings",
         required_keys=("code_embedding_model", "docs_embedding_model"),
-        copy_keys=(
-            "base_url",
-            "default_headers",
-            "code_embedding_model",
-            "docs_embedding_model",
-            "code_extra_kwargs",
-            "docs_extra_kwargs",
-        ),
+        copy_keys=OPENAI_COMPATIBLE_EMBEDDING_COPY_KEYS,
     )

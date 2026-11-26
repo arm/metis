@@ -95,9 +95,7 @@ class BedrockMantleProvider(ChatProvider):
                 "Bedrock Mantle provider requires the bedrock-mantle extra: "
                 "pip install 'metis[bedrock-mantle]'"
             )
-        requested_model = kwargs.pop("model", None)
-        positional_model = args[0] if args else None
-        model_name = requested_model or positional_model or self.default_model
+        model_name = self._resolve_model_name(args, kwargs)
         params = claude_chat_model_kwargs(
             kwargs,
             model=model_name,

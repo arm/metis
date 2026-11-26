@@ -38,6 +38,16 @@ class OpenAICompatibleEmbeddingConfig(TypedDict, total=False):
     docs_extra_kwargs: Mapping[str, object]
 
 
+OPENAI_COMPATIBLE_EMBEDDING_COPY_KEYS = (
+    "base_url",
+    "default_headers",
+    "code_embedding_model",
+    "docs_embedding_model",
+    "code_extra_kwargs",
+    "docs_extra_kwargs",
+)
+
+
 def _rejects_temperature(model_name: object) -> bool:
     # GPT-6 models (sol, luna, astra) reject the temperature parameter for every
     # value, including 0, so it must be omitted from the request.
@@ -89,9 +99,7 @@ class OpenAICompatibleChatProvider(ChatProvider):
         callbacks: Callbacks = None,
         **kwargs: object,
     ) -> ChatOpenAI:
-        requested_model = kwargs.pop("model", None)
-        positional_model = args[0] if args else None
-        model_name = requested_model or positional_model or self.default_model
+        model_name = self._resolve_model_name(args, kwargs)
         if not model_name:
             raise ValueError("Missing chat model configuration")
 

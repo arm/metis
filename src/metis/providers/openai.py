@@ -3,6 +3,7 @@
 
 from metis.providers.openai_compatible import OpenAICompatibleChatProvider
 from metis.providers.openai_compatible import OpenAICompatibleEmbeddingProvider
+from metis.providers.openai_compatible import OPENAI_COMPATIBLE_EMBEDDING_COPY_KEYS
 from metis.providers.config import ApiKeySources
 from metis.providers.config import ProviderConfigSpec
 
@@ -28,14 +29,7 @@ class OpenAIEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
         display_name="OpenAI embeddings",
         required_keys=("code_embedding_model", "docs_embedding_model"),
         api_key=ApiKeySources(required=True, env_vars=("OPENAI_API_KEY",)),
-        copy_keys=(
-            "base_url",
-            "default_headers",
-            "code_embedding_model",
-            "docs_embedding_model",
-            "code_extra_kwargs",
-            "docs_extra_kwargs",
-        ),
+        copy_keys=OPENAI_COMPATIBLE_EMBEDDING_COPY_KEYS,
     )
 
     def __init__(self, config):
