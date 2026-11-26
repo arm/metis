@@ -9,12 +9,7 @@ from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from .collector import UsageCollector
 from .context import current_operation, current_scope
 from metis.utils import count_tokens
-from metis.utils import safe_int
-
-
-def _as_int(value: Any) -> int:
-    parsed = safe_int(value, 0)
-    return parsed if parsed > 0 else 0
+from metis.utils import positive_int
 
 
 def _extract_counts(payload: dict[str, Any] | None) -> tuple[int, int, int]:
@@ -26,9 +21,9 @@ def _extract_counts(payload: dict[str, Any] | None) -> tuple[int, int, int]:
     additional_kwargs = getattr(response, "additional_kwargs", None) or {}
     if not isinstance(additional_kwargs, dict):
         return 0, 0, 0
-    input_tokens = _as_int(additional_kwargs.get("prompt_tokens"))
-    output_tokens = _as_int(additional_kwargs.get("completion_tokens"))
-    total_tokens = _as_int(additional_kwargs.get("total_tokens"))
+    input_tokens = positive_int(additional_kwargs.get("prompt_tokens"))
+    output_tokens = positive_int(additional_kwargs.get("completion_tokens"))
+    total_tokens = positive_int(additional_kwargs.get("total_tokens"))
     if total_tokens <= 0:
         total_tokens = input_tokens + output_tokens
     return input_tokens, output_tokens, total_tokens

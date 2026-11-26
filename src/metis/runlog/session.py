@@ -108,13 +108,8 @@ class Span:
     def activate(self) -> Iterator[Span]:
         if self._ended:
             raise RuntimeError("Cannot activate an ended run-log span")
-        session_token = _current_session.set(self._session)
-        span_token = _current_span.set(self.span_id)
-        try:
+        with _bound(self._session, self.span_id):
             yield self
-        finally:
-            _current_span.reset(span_token)
-            _current_session.reset(session_token)
 
     def event(
         self,
@@ -313,11 +308,7 @@ class RunLogSession:
             return _NULL_SPAN
         parent = parent_span_id
         if parent is None:
-            parent = (
-                _current_span.get()
-                if _current_session.get() is self
-                else self.root_span_id
-            )
+            parent = self._active_span_id()
         span_name = name or kind
         resolved_explanation = explanation or span_explanation(kind, span_name)
         span_id = uuid.uuid4().hex[:16]
@@ -354,11 +345,7 @@ class RunLogSession:
             return
         owner = span_id
         if owner is None:
-            owner = (
-                _current_span.get()
-                if _current_session.get() is self
-                else self.root_span_id
-            )
+            owner = self._active_span_id()
         self._write_record(
             "event",
             span_id=owner or self.root_span_id,
@@ -399,6 +386,12 @@ class RunLogSession:
                 except Exception as exc:
                     self._disable_after_failure(exc)
             self._reset_context()
+
+    def _active_span_id(self) -> str | None:
+        """Return the span bound in this context, or the root span otherwise."""
+        if _current_session.get() is self:
+            return _current_span.get()
+        return self.root_span_id
 
     def _reset_context(self) -> None:
         if self._span_token is not None:
@@ -553,6 +546,18 @@ class RunLogSession:
 
 
 @contextlib.contextmanager
+def _bound(session: RunLogSession, span_id: str) -> Iterator[None]:
+    """Bind ``session`` and ``span_id`` to the current context for the block."""
+    session_token = _current_session.set(session)
+    span_token = _current_span.set(span_id)
+    try:
+        yield
+    finally:
+        _current_span.reset(span_token)
+        _current_session.reset(session_token)
+
+
+@contextlib.contextmanager
 def bind_runlog(session: RunLogSession | None) -> Iterator[RunLogSession | None]:
     if session is None:
         yield None
@@ -560,13 +565,8 @@ def bind_runlog(session: RunLogSession | None) -> Iterator[RunLogSession | None]
     if _current_session.get() is session:
         yield session
         return
-    session_token = _current_session.set(session)
-    span_token = _current_span.set(session.root_span_id)
-    try:
+    with _bound(session, session.root_span_id):
         yield session
-    finally:
-        _current_span.reset(span_token)
-        _current_session.reset(session_token)
 
 
 def open_runlog(
