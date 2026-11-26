@@ -19,18 +19,21 @@ def current_operation() -> str | None:
 
 
 @contextmanager
-def usage_scope(scope_id: str) -> Iterator[None]:
-    token: Token[str | None] = _scope_var.set(scope_id)
+def _set(var: ContextVar[str | None], value: str) -> Iterator[None]:
+    token: Token[str | None] = var.set(value)
     try:
         yield
     finally:
-        _scope_var.reset(token)
+        var.reset(token)
+
+
+@contextmanager
+def usage_scope(scope_id: str) -> Iterator[None]:
+    with _set(_scope_var, scope_id):
+        yield
 
 
 @contextmanager
 def usage_operation(operation: str) -> Iterator[None]:
-    token: Token[str | None] = _operation_var.set(operation)
-    try:
+    with _set(_operation_var, operation):
         yield
-    finally:
-        _operation_var.reset(token)

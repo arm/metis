@@ -7,6 +7,7 @@ from collections import defaultdict
 from contextlib import closing
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from itertools import batched
 from itertools import groupby
 from typing import Literal
@@ -66,12 +67,16 @@ def consolidate_records(
     workers,
     progress_callback=None,
 ):
+    sort_records = partial(
+        sorted_json_records,
+        directory=directory,
+        check_cancelled=_cancellation_checkpoint,
+    )
+
     def unique_records():
-        with sorted_json_records(
+        with sort_records(
             records,
             key=lambda record: (_identity(record), record["position"]),
-            directory=directory,
-            check_cancelled=_cancellation_checkpoint,
         ) as ordered:
             previous = None
             for record in ordered:
@@ -82,11 +87,8 @@ def consolidate_records(
 
     current = directory / "candidates.jsonl"
     with (
-        sorted_json_records(
-            unique_records(),
-            key=lambda record: record["position"],
-            directory=directory,
-            check_cancelled=_cancellation_checkpoint,
+        sort_records(
+            unique_records(), key=lambda record: record["position"]
         ) as ordered,
         JsonJournal(current) as candidates,
     ):
@@ -162,11 +164,8 @@ def consolidate_records(
         with (
             closing(JsonJournal.records(current))
             if scope == "function"
-            else sorted_json_records(
-                JsonJournal.records(current),
-                key=lambda record: record["index"],
-                directory=directory,
-                check_cancelled=_cancellation_checkpoint,
+            else sort_records(
+                JsonJournal.records(current), key=lambda record: record["index"]
             )
         ) as ordered:
             batch = whole_packet(ordered)
@@ -176,11 +175,9 @@ def consolidate_records(
             return
         output_path = directory / f"dedup-{scope}.jsonl"
         with (
-            sorted_json_records(
+            sort_records(
                 JsonJournal.records(current),
                 key=lambda record: _payload_sort_key(payload(record)),
-                directory=directory,
-                check_cancelled=_cancellation_checkpoint,
             ) as ordered,
             JsonJournal(output_path) as output,
         ):

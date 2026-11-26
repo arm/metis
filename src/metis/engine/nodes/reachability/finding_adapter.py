@@ -28,15 +28,13 @@ def finding_to_review_item(
     *,
     codebase_path: str,
 ) -> dict[str, Any]:
-    line_number = int(
-        finding.primary_line or finding.sink_line or finding.source_line or 0
-    )
+    line_number = int(finding.primary_line)
     vtype = normalize_sink_type(finding.vulnerability_type)
-    primary_fn = finding.primary_function or finding.sink_function
+    primary_fn = finding.primary_function
     issue = (
         str(finding.description).strip() or f"{vtype.replace('_', ' ')} in {primary_fn}"
     )
-    primary_file = finding.primary_file or finding.sink_file or finding.source_file
+    primary_file = finding.primary_file
     smap = SourceMap.for_file(codebase_path, primary_file) if primary_file else None
     item = {
         "id": finding.id,

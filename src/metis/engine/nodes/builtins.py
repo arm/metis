@@ -76,32 +76,23 @@ def build_builtin_execution(
     simple_llm_review = None
     simple_review_selected = ("review", "simple_llm_review") in selected_nodes
     reachability_selected = ("review", "reachability") in selected_nodes
-    if {
-        ("review", "simple_llm_review"),
-        ("review", "reachability"),
-    } & selected_nodes:
+    if simple_review_selected or reachability_selected:
         simple_llm_review = SimpleLlmReviewService(
             engine_config,
             repository,
             review_graph_factory=review_graph_factory,
         )
-    if simple_review_selected:
-        assert simple_llm_review is not None
-        registrations.append(simple_llm_review_node.create_node(simple_llm_review))
+        if simple_review_selected:
+            registrations.append(simple_llm_review_node.create_node(simple_llm_review))
 
-    reachability = (
-        ReachabilityService(
+    if reachability_selected:
+        reachability = ReachabilityService(
             config=engine_config,
             repository=repository,
             llm_provider=engine_config.llm_provider,
             usage_runtime=engine_config.usage_runtime,
             navigation_manifest=capabilities.manifest("navigation"),
         )
-        if reachability_selected
-        else None
-    )
-    if reachability_selected:
-        assert reachability is not None
         reachability_review = ReachabilityReviewService(
             engine_config,
             repository,

@@ -23,6 +23,25 @@ from test_execution_graph import _node_context
 from test_threat_context import _config
 
 
+def test_history_parser_revalidates_structured_response():
+    response = history._HistoryLessonResponseModel.model_validate(
+        {
+            "records": [
+                {
+                    "statement": "Keep signing keys private.",
+                    "applies_to": ["repository"],
+                    "source_commit_indexes": [0],
+                }
+            ]
+        }
+    )
+    assert history._parse_history_lessons(response) == response.model_dump()["records"]
+
+    response.records[0].source_commit_indexes.clear()
+
+    assert history._parse_history_lessons(response) is None
+
+
 @pytest.fixture
 def threat_node(tmp_path, node_jobs):
     config = _config(tmp_path, with_model=True)

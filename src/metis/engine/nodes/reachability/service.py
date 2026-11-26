@@ -64,43 +64,39 @@ class ReachabilityService:
         navigation: NavigationCapability | None = None,
     ):
         abs_target, relative_target = self._normalize_target_file(file_path)
-        if codegraph.node_count() == 0:
+
+        def unreviewable(code: str, message: str) -> ReachabilityAnalysis:
             if diagnostic_callback is not None:
                 diagnostic_callback(
                     CodeGraphDiagnostic(
                         relative_target,
-                        "Reachability could not review the target because the "
-                        "canonical CodeGraph is empty.",
+                        message,
                         severity="warning",
-                        code="codegraph.empty",
+                        code=code,
                     )
                 )
             return ReachabilityAnalysis(
                 findings=(),
                 target_file=relative_target,
                 target_path=abs_target,
-                codegraph_failures=(f"codegraph.empty:{relative_target}",),
+                codegraph_failures=(f"{code}:{relative_target}",),
+            )
+
+        if codegraph.node_count() == 0:
+            return unreviewable(
+                "codegraph.empty",
+                "Reachability could not review the target because the "
+                "canonical CodeGraph is empty.",
             )
         focus = FileFocusBuilder(
             codegraph,
             max_path_length=options.max_path_length,
         ).build(relative_target)
         if not focus.target_nodes:
-            if diagnostic_callback is not None:
-                diagnostic_callback(
-                    CodeGraphDiagnostic(
-                        relative_target,
-                        "Reachability could not review the target because it has no "
-                        "function node in the canonical CodeGraph.",
-                        severity="warning",
-                        code="codegraph.target_missing",
-                    )
-                )
-            return ReachabilityAnalysis(
-                findings=(),
-                target_file=relative_target,
-                target_path=abs_target,
-                codegraph_failures=(f"codegraph.target_missing:{relative_target}",),
+            return unreviewable(
+                "codegraph.target_missing",
+                "Reachability could not review the target because it has no "
+                "function node in the canonical CodeGraph.",
             )
         analysis_graph = _copy_graph_nodes(codegraph, focus.node_names)
         outcome, prepared, raw_count = self._review_findings(
@@ -184,14 +180,14 @@ class ReachabilityService:
                     len(ordered_files),
                 )
             analysis_graph = _copy_graph_nodes(codegraph, focus_nodes)
+        target_missing = tuple(
+            f"codegraph.target_missing:{file_path}"
+            for file_path in missing_selected_files
+        )
         if analysis_graph.node_count() == 0:
             return ReachabilityAnalysis(
                 findings=(),
-                codegraph_failures=tuple(
-                    f"codegraph.target_missing:{file_path}"
-                    for file_path in missing_selected_files
-                )
-                or ("codegraph.scope_empty",),
+                codegraph_failures=target_missing or ("codegraph.scope_empty",),
             )
         outcome, prepared, _ = self._review_findings(
             analysis_graph,
@@ -212,19 +208,12 @@ class ReachabilityService:
             planned_nodes=outcome.stats.planned_node_count,
             reviewed_nodes=outcome.stats.reviewed_node_count,
             files=len(
-                {
-                    finding.primary_file or finding.sink_file or finding.source_file
-                    for finding in prepared
-                    if finding.primary_file or finding.sink_file or finding.source_file
-                }
+                {finding.primary_file for finding in prepared if finding.primary_file}
             ),
         )
         return ReachabilityAnalysis(
             findings=tuple(prepared),
-            codegraph_failures=tuple(
-                f"codegraph.target_missing:{file_path}"
-                for file_path in missing_selected_files
-            ),
+            codegraph_failures=target_missing,
             review_failures=outcome.failures,
         )
 
@@ -276,7 +265,7 @@ class ReachabilityService:
         context_by_file: dict[str, list[dict[str, Any]]] = {}
         kept: list[VulnerabilityFinding] = []
         for finding in findings:
-            file_path = finding.primary_file or finding.sink_file or finding.source_file
+            file_path = finding.primary_file
             if file_path not in context_by_file:
                 context_by_file[file_path] = get_threat_model_context(
                     memory_service,

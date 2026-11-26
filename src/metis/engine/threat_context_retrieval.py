@@ -49,13 +49,7 @@ def _get_threat_model_context(
     records = []
     if contract is not None:
         records.append(
-            {
-                "summary": contract.summary_text,
-                "metadata": {
-                    "authority": contract.authority,
-                    "scope_clauses": contract.metadata["scope_clauses"],
-                },
-            }
+            _context_record(contract, scope_clauses=contract.metadata["scope_clauses"])
         )
     for source in service.iter_records(THREAT_MODEL_NAMESPACE):
         if source.artifact_type != "threat_model_authoritative":
@@ -64,28 +58,22 @@ def _get_threat_model_context(
             "distilled_claims"
         ):
             continue
-        records.append(
-            {
-                "summary": source.summary_text,
-                "metadata": {
-                    "authority": source.authority,
-                    "scope_clauses": [],
-                },
-            }
-        )
+        records.append(_context_record(source))
     for lesson in service.iter_records((*THREAT_MODEL_NAMESPACE, "history")):
         applies_to = lesson.metadata["applies_to"]
         if _scope_applies_to_path(applies_to, path):
-            records.append(
-                {
-                    "summary": lesson.summary_text,
-                    "metadata": {
-                        "authority": lesson.authority,
-                        "scope_clauses": [],
-                    },
-                }
-            )
+            records.append(_context_record(lesson))
     return records
+
+
+def _context_record(record, *, scope_clauses: Any = None) -> dict[str, Any]:
+    return {
+        "summary": record.summary_text,
+        "metadata": {
+            "authority": record.authority,
+            "scope_clauses": [] if scope_clauses is None else scope_clauses,
+        },
+    }
 
 
 def format_threat_model_context(records: list[dict[str, Any]]) -> str:
@@ -114,6 +102,17 @@ def threat_model_review_scope_guidance(records: list[dict[str, Any]]) -> str:
         "Treat applicable authoritative threat-model scope as binding. Apply "
         "path-scoped clauses only when their applies_to pattern matches the FILE."
     )
+
+
+def threat_model_prompt_sections(records: list[dict[str, Any]]) -> tuple[str, ...]:
+    context = format_threat_model_context(records)
+    guidance = threat_model_review_scope_guidance(records)
+    sections: list[str] = []
+    if context:
+        sections.extend(("THREAT_MODEL_CONTEXT:", context, ""))
+    if guidance:
+        sections.extend(("THREAT_MODEL_SCOPE_GUIDANCE:", guidance, ""))
+    return tuple(sections)
 
 
 def threat_model_scope_policy(

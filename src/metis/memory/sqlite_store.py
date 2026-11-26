@@ -216,7 +216,7 @@ class SQLiteMemoryStore(BaseStore):
                 continue
             matches.append(_search_item_from_row(row, value=value))
         matches.sort(key=lambda item: (item.namespace, item.key))
-        return matches[max(0, offset) : max(0, offset) + max(0, limit)]
+        return _page(matches, offset, limit)
 
     def _candidate_rows(
         self,
@@ -225,7 +225,7 @@ class SQLiteMemoryStore(BaseStore):
     ) -> list[sqlite3.Row]:
         if not query:
             return self._records.rows(conn)
-        fts_query = _fts_query(query)
+        fts_query = " ".join(term.lower() for term in re.findall(r"\w+", query))
         if not fts_query:
             return []
         if not self._fts_enabled:
@@ -251,17 +251,27 @@ class SQLiteMemoryStore(BaseStore):
                 namespace = namespace[: max(0, int(max_depth))]
             namespaces.add(namespace)
         ordered = sorted(namespaces)
-        return ordered[max(0, offset) : max(0, offset) + max(0, limit)]
+        return _page(ordered, offset, limit)
+
+
+def _page[T](items: list[T], offset: int, limit: int) -> list[T]:
+    start = max(0, offset)
+    return items[start : start + max(0, limit)]
+
+
+def _row_fields(row: sqlite3.Row, *, value: Any = None) -> dict[str, Any]:
+    """Decode the shared Item/SearchItem fields; ``value`` skips JSON decoding."""
+    return {
+        "namespace": _decode_namespace(str(row["namespace"])),
+        "key": str(row["key"]),
+        "value": json.loads(str(row["value_json"])) if value is None else value,
+        "created_at": _parse_datetime(str(row["created_at"])),
+        "updated_at": _parse_datetime(str(row["updated_at"])),
+    }
 
 
 def _item_from_row(row: sqlite3.Row) -> Item:
-    return Item(
-        namespace=_decode_namespace(str(row["namespace"])),
-        key=str(row["key"]),
-        value=json.loads(str(row["value_json"])),
-        created_at=_parse_datetime(str(row["created_at"])),
-        updated_at=_parse_datetime(str(row["updated_at"])),
-    )
+    return Item(**_row_fields(row))
 
 
 def _search_item_from_row(
@@ -269,14 +279,7 @@ def _search_item_from_row(
     *,
     value: dict[str, Any],
 ) -> SearchItem:
-    return SearchItem(
-        namespace=_decode_namespace(str(row["namespace"])),
-        key=str(row["key"]),
-        value=value,
-        created_at=_parse_datetime(str(row["created_at"])),
-        updated_at=_parse_datetime(str(row["updated_at"])),
-        score=None,
-    )
+    return SearchItem(**_row_fields(row, value=value), score=None)
 
 
 def _encode_namespace(namespace: tuple[str, ...]) -> str:
@@ -325,14 +328,6 @@ def _value_at_path(value: Any, path: list[str]) -> Any:
             return None
         current = current[part]
     return current
-
-
-def _fts_query(query: str) -> str:
-    return " ".join(_query_terms(query))
-
-
-def _query_terms(query: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"\w+", query)]
 
 
 def _parse_datetime(value: str) -> datetime:

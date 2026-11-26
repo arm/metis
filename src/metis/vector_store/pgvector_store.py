@@ -73,32 +73,8 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
             return
         try:
             url = make_url(self.connection_string)
-            db_name = url.database
-
-            self.vector_store_code = PGVectorStore.from_params(
-                database=db_name,
-                host=url.host,
-                password=url.password,
-                port=url.port,
-                user=url.username,
-                table_name="code",
-                schema_name=self.project_schema,
-                embed_dim=self.embed_dim,
-                hnsw_kwargs=copy_hnsw_kwargs(self.hnsw_kwargs),
-                use_halfvec=self.use_halfvec,
-            )
-            self.vector_store_docs = PGVectorStore.from_params(
-                database=db_name,
-                host=url.host,
-                password=url.password,
-                port=url.port,
-                user=url.username,
-                table_name="docs",
-                schema_name=self.project_schema,
-                embed_dim=self.embed_dim,
-                hnsw_kwargs=copy_hnsw_kwargs(self.hnsw_kwargs),
-                use_halfvec=self.use_halfvec,
-            )
+            self.vector_store_code = self._build_vector_store(url, "code")
+            self.vector_store_docs = self._build_vector_store(url, "docs")
 
             self.storage_context_code = StorageContext.from_defaults(
                 vector_store=self.vector_store_code
@@ -123,6 +99,20 @@ class PGVectorStoreImpl(LlamaIndexVectorBackend):
         except Exception as e:
             logger.error(f"Error initializing PGVectorStore: {e}")
             raise VectorStoreInitError()
+
+    def _build_vector_store(self, url, table_name):
+        return PGVectorStore.from_params(
+            database=url.database,
+            host=url.host,
+            password=url.password,
+            port=url.port,
+            user=url.username,
+            table_name=table_name,
+            schema_name=self.project_schema,
+            embed_dim=self.embed_dim,
+            hnsw_kwargs=copy_hnsw_kwargs(self.hnsw_kwargs),
+            use_halfvec=self.use_halfvec,
+        )
 
     def check_project_schema_exists(self):
         engine = None

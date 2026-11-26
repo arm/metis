@@ -3,7 +3,6 @@
 
 from typing import cast
 
-from metis import runlog
 from metis.engine.codegraph import CodeGraphReference
 from metis.engine.execution.contracts import EmptyNodeConfiguration
 from metis.engine.execution.contracts import ExecutionStatus
@@ -11,6 +10,7 @@ from metis.engine.execution.contracts import NodeInvocation
 from metis.engine.execution.contracts import NodeRegistration
 from metis.engine.execution.contracts import NodeResult
 from metis.engine.execution.contracts import ResultFormat
+from metis.engine.nodes.result import _emit_result_artifact
 from metis.engine.stages.review.models import FinalReviewRun
 from metis.engine.stages.review.models import ReviewResult
 from metis.engine.stages.review.models import ReviewStatus
@@ -41,17 +41,7 @@ def execute(invocation: NodeInvocation) -> NodeResult:
             else ExecutionStatus.OK
         ),
     )
-    stream = invocation.context.output
-    runlog.event(
-        "artifact",
-        {
-            "kind": "review_result",
-            "formats": invocation.formats or (),
-            "payload": stream.reference("review")
-            if stream is not None and stream.review is not None
-            else result.outputs,
-        },
-    )
+    _emit_result_artifact("review_result", "review", invocation, result)
     return result
 
 

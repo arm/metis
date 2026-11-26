@@ -40,6 +40,14 @@ class ReviewCheckpointSession:
         except Exception:
             return
 
+    @classmethod
+    def for_callbacks(
+        cls, producer: str, callbacks: NodeCallbacks
+    ) -> ReviewCheckpointSession | None:
+        if callbacks.checkpoint is None and callbacks.resume is None:
+            return None
+        return cls(producer, callbacks)
+
     def get(self, key: str) -> Mapping[str, Any] | None:
         with self._lock:
             record = self._records.get(key)

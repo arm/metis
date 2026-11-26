@@ -9,6 +9,8 @@ import os
 from collections import defaultdict
 from collections import deque
 from collections.abc import Callable
+from collections.abc import Iterable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -22,7 +24,6 @@ from typing import cast
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import ValidationError
 
 from metis.engine.codegraph import CodeGraph
 from metis.engine.codegraph import FunctionNode
@@ -30,20 +31,19 @@ from metis.engine.codegraph.queries import function_for_location
 from metis.engine.execution.contracts import NodeJobs
 from metis.engine.llm_runner import JsonPromptRequest
 from metis.engine.llm_runner import JsonPromptRunner
+from metis.engine.llm_runner import coerce_response_model
 from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
-from metis.engine.nodes.simple_llm_review.prompt import build_review_system_prompt
+from metis.engine.nodes.simple_llm_review.prompt import review_system_prompt
 from metis.engine.nodes.simple_llm_review.schema import ReviewIssueModel
 from metis.engine.nodes.simple_llm_review.schema import review_schema_prompt
 from metis.engine.prompt_catalog import get_engine_prompts
 from metis.engine.source import SourceMap
-from metis.engine.threat_context_retrieval import format_threat_model_context
 from metis.engine.threat_context_retrieval import get_threat_model_context
-from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
+from metis.engine.threat_context_retrieval import threat_model_prompt_sections
 from metis.engine.tools.navigation import navigation_model_tools
 from metis.memory.fingerprints import stable_json_hash
 from metis.usage import usage_operation
-from metis.utils import parse_json_output
 
 from . import finding_admission
 from . import prompt_evidence
@@ -156,6 +156,25 @@ class _FrontierResponses:
 @dataclass(frozen=True, slots=True)
 class _PacketAnalysis:
     reviews: tuple[dict[str, Any], ...]
+
+
+def _packet_call_result_entries(
+    packet: _FrontierPacket,
+) -> tuple[tuple[TrackedObjectSubject, tuple[str, int]], ...]:
+    return prompt_evidence._call_result_entries(
+        packet.graph,
+        tuple(node.unique_name for node in packet.nodes),
+        shown_lines=packet.shown_lines,
+    )
+
+
+def _review_failures(
+    kind: FrontierReviewFailureKind,
+    node_ids: Iterable[str],
+) -> Iterator[FrontierReviewFailure]:
+    return (
+        FrontierReviewFailure(function_id=node_id, kind=kind) for node_id in node_ids
+    )
 
 
 def _unique_packet_schedule(
@@ -569,10 +588,9 @@ class IncrementalGraphReviewer:
                         file_path,
                         group_nodes[0].unique_name,
                     )
-                    failures.add(
-                        FrontierReviewFailure(
-                            function_id=group_nodes[0].unique_name,
-                            kind="context_overflow",
+                    failures.update(
+                        _review_failures(
+                            "context_overflow", (group_nodes[0].unique_name,)
                         )
                     )
                     continue
@@ -603,11 +621,10 @@ class IncrementalGraphReviewer:
                             len(chunk_nodes),
                         )
                         failures.update(
-                            FrontierReviewFailure(
-                                function_id=node.unique_name,
-                                kind="context_overflow",
+                            _review_failures(
+                                "context_overflow",
+                                (node.unique_name for node in chunk_nodes),
                             )
-                            for node in chunk_nodes
                         )
                         continue
                     cache_key = self._cache_key(
@@ -640,12 +657,14 @@ class IncrementalGraphReviewer:
             )
         failed_node_ids = {failure.function_id for failure in failures}
         failures.update(
-            FrontierReviewFailure(
-                function_id=node_id,
-                kind="missing_source",
+            _review_failures(
+                "missing_source",
+                (
+                    node_id
+                    for node_id in candidate_node_ids - scheduled_node_ids
+                    if node_id not in failed_node_ids
+                ),
             )
-            for node_id in candidate_node_ids - scheduled_node_ids
-            if node_id not in failed_node_ids
         )
         return packets, failures
 
@@ -658,14 +677,10 @@ class IncrementalGraphReviewer:
         plugin = self._repository.get_plugin_for_path(absolute_path)
         if plugin is None:
             raise RuntimeError(f"No review prompt is available for {file_path}")
-        language_prompts = plugin.get_prompts()
-        report_prompt = self._config.plugin_config.get("general_prompts", {}).get(
-            "security_review_report", ""
-        )
-        review_prompt = build_review_system_prompt(
-            language_prompts,
+        review_prompt = review_system_prompt(
+            self._config.plugin_config,
+            plugin.get_prompts(),
             "security_review_file",
-            report_prompt,
             self._config.custom_prompt_text,
             self._config.custom_guidance_precedence,
             self._schema_prompt,
@@ -683,15 +698,9 @@ class IncrementalGraphReviewer:
         memory_service: MemoryService | None,
         file_path: str,
     ) -> tuple[str, ...]:
-        records = get_threat_model_context(memory_service, path=file_path)
-        context = format_threat_model_context(records)
-        guidance = threat_model_review_scope_guidance(records)
-        sections: list[str] = []
-        if context:
-            sections.extend(("THREAT_MODEL_CONTEXT:", context, ""))
-        if guidance:
-            sections.extend(("THREAT_MODEL_SCOPE_GUIDANCE:", guidance, ""))
-        return tuple(sections)
+        return threat_model_prompt_sections(
+            get_threat_model_context(memory_service, path=file_path)
+        )
 
     def _source_token_budget(
         self,
@@ -844,13 +853,7 @@ class IncrementalGraphReviewer:
         )
         if discovery_response is None:
             return None
-        call_result_count = len(
-            prompt_evidence._call_result_entries(
-                packet.graph,
-                tuple(node.unique_name for node in packet.nodes),
-                shown_lines=packet.shown_lines,
-            )
-        )
+        call_result_count = len(_packet_call_result_entries(packet))
         reviews = tuple(
             item.model_dump(mode="json")
             for item in discovery_response.reviews
@@ -950,6 +953,7 @@ class IncrementalGraphReviewer:
             ]
         ] = []
         source_maps: dict[tuple[str, bytes, bytes], SourceMap] = {}
+        call_result_entries = _packet_call_result_entries(packet)
         for review_index, raw_item in enumerate(reviews):
             item = dict(raw_item)
             resolved = self._review_anchor(packet, item, source_maps=source_maps)
@@ -967,11 +971,6 @@ class IncrementalGraphReviewer:
             anchor = replace(anchor, symbol=node.unique_name)
             finding_id = f"local-{packet.cache_key[:12]}-{review_index}"
             path = [node.unique_name]
-            call_result_entries = prompt_evidence._call_result_entries(
-                packet.graph,
-                tuple(node.unique_name for node in packet.nodes),
-                shown_lines=packet.shown_lines,
-            )
             necessary_alternatives = tuple(
                 finding_admission._GroundedNecessaryAlternative(
                     sink_call_index=cast(int, alternative["sink_call_index"]),
@@ -1039,23 +1038,7 @@ class IncrementalGraphReviewer:
         return stable_json_hash(payload)
 
 
-def _parse_review_response[ResponseModelT: BaseModel](
-    raw: object,
-    response_model: type[ResponseModelT],
-) -> ResponseModelT | None:
-    try:
-        if isinstance(raw, response_model):
-            return raw
-        payload: object = raw
-        if hasattr(raw, "model_dump"):
-            payload = raw.model_dump()
-        elif isinstance(raw, str):
-            payload = parse_json_output(raw)
-        if isinstance(payload, dict):
-            return response_model.model_validate(payload)
-    except (TypeError, ValueError, ValidationError):
-        return None
-    return None
+_parse_review_response = coerce_response_model
 
 
 def _valid_necessary_condition_alternatives(

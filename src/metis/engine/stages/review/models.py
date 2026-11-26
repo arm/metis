@@ -17,6 +17,8 @@ from pydantic import Field
 from pydantic import model_validator
 from typing_extensions import TypedDict
 
+from metis.engine.execution.contracts import ExecutionDiagnostic
+
 REVIEW_FILE_FAILED = "review.file_failed"
 REVIEW_DEDUP_FAILED = "review.dedup_failed"
 REVIEW_FAILURE_CODES = frozenset({REVIEW_FILE_FAILED, REVIEW_DEDUP_FAILED})
@@ -101,11 +103,7 @@ class ReviewStatus(str, Enum):
     FAILED = "failed"
 
 
-@dataclass(frozen=True, slots=True)
-class ReviewDiagnostic:
-    code: str
-    message: str
-    severity: Literal["warning", "error"] = "error"
+ReviewDiagnostic = ExecutionDiagnostic
 
 
 @dataclass(frozen=True, slots=True)

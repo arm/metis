@@ -7,6 +7,7 @@ import importlib
 import logging
 import sys
 import types
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -578,6 +579,20 @@ def test_language_manifest_rejects_malformed_raw_fields(tmp_path, invalid_field)
 
     with pytest.raises(ValueError):
         registry_module.LanguagePluginManifest.from_mapping(load_yaml(path))
+
+
+def test_language_override_accepts_manifest_subclass():
+    @dataclass(frozen=True, slots=True)
+    class ExternalManifest(registry_module.LanguagePluginManifest):
+        distribution_label: str = "example"
+
+    manifest = ExternalManifest(name="example", config_resource="config.yaml")
+
+    assert manifest.with_overrides({"priority": 4}) == (
+        registry_module.LanguagePluginManifest(
+            name="example", config_resource="config.yaml", priority=4
+        )
+    )
 
 
 def test_language_override_uses_manifest_name_normalization(tmp_path):

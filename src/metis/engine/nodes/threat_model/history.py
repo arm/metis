@@ -16,20 +16,16 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from metis.engine.llm_runner import invoke_langchain_json_prompt_with_retry
-from metis.engine.llm_runner import rendered_prompt_token_count
 from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.execution.contracts import ExecutionDiagnostic
-from metis.engine.prompt_catalog import get_engine_prompts
 from metis.memory import MemoryService
 from metis.memory.fingerprints import input_fingerprint
 
 from .parsing import parse_records
+from .prompting import invoke_prompt as _invoke_prompt
+from .prompting import prompt_fits as _prompt_fits
 
 logger = logging.getLogger("metis")
-_PROMPTS = get_engine_prompts(
-    "threat_context",
-    required=("history_distillation_system", "history_distillation_user"),
-)
 
 
 class _HistoryLessonModel(BaseModel):
@@ -168,15 +164,7 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
         evidence = "\n".join(
             json.dumps(record, separators=(",", ":")) for record in batch
         )
-        if (
-            rendered_prompt_token_count(
-                lambda value: llm_provider.count_tokens(value, model=model),
-                system_prompt=_PROMPTS["history_distillation_system"],
-                user_prompt=_PROMPTS["history_distillation_user"],
-                variables={"evidence": evidence},
-            )
-            > config.max_token_length
-        ):
+        if not _prompt_fits(config, "history_distillation", {"evidence": evidence}):
             if len(batch) > 1:
                 midpoint = len(batch) // 2
                 batches.extendleft(reversed([batch[:midpoint], batch[midpoint:]]))
@@ -205,22 +193,16 @@ def _distill_history(config, commits: list[dict[str, Any]]) -> list[dict[str, An
             batches.extendleft([part] for part in reversed(parts))
             continue
         supplied_indexes = {record["index"] for record in batch}
-        records = invoke_langchain_json_prompt_with_retry(
-            llm_provider,
-            config.usage_runtime,
-            model=model,
-            system_prompt=_PROMPTS["history_distillation_system"],
-            user_prompt=_PROMPTS["history_distillation_user"],
-            variables={"evidence": evidence},
-            parse=_parse_history_lessons,
-            logger=logger,
+        records = _invoke_prompt(
+            config,
+            "history_distillation",
+            {"evidence": evidence},
+            _HistoryLessonResponseModel,
             label="git-history threat-model distillation",
             batch_size=1,
             invalid_message="invalid git-history distillation response",
             final_keep_message="returning no git-history lessons",
-            response_model=_HistoryLessonResponseModel,
-            max_input_tokens=int(config.max_token_length),
-            chat_model_kwargs=config.chat_model_kwargs,
+            invoke=invoke_langchain_json_prompt_with_retry,
         )
         if records is None:
             raise RuntimeError("Git-history distillation returned no valid response")

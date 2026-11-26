@@ -146,17 +146,8 @@ class LanguagePluginManifest:
 
     def with_overrides(self, data: Mapping[str, Any]) -> "LanguagePluginManifest":
         merged = {
-            "name": self.name,
-            "implementation": self.implementation,
-            "extensions": self.extensions,
-            "source_extensions": self.source_extensions,
-            "header_extensions": self.header_extensions,
-            "filename_patterns": self.filename_patterns,
-            "aliases": self.aliases,
-            "capabilities": self.capabilities,
-            "config_resource": self.config_resource,
-            "prompt_profile": self.prompt_profile,
-            "priority": self.priority,
+            item.name: getattr(self, item.name)
+            for item in fields(LanguagePluginManifest)
         }
         merged.update(data)
         return LanguagePluginManifest.from_mapping(merged)

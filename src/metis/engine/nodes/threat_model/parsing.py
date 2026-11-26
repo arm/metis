@@ -7,22 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from metis.utils import parse_json_output
+from metis.engine.llm_runner import coerce_response_model
 
 
 def parse_records(
     raw: Any, *, response_model: type[BaseModel]
 ) -> list[dict[str, Any]] | None:
     if isinstance(raw, BaseModel):
-        data = raw.model_dump()
-    elif isinstance(raw, dict):
-        data = raw
-    elif isinstance(raw, str):
-        data = parse_json_output(raw)
-    else:
-        return None
-
-    try:
-        return response_model.model_validate(data).model_dump()["records"]
-    except (TypeError, ValueError):
-        return None
+        raw = raw.model_dump()
+    model = coerce_response_model(raw, response_model)
+    return None if model is None else model.model_dump()["records"]

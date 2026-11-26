@@ -394,21 +394,26 @@ def _marker_paths(
     return resolved, relative
 
 
-def _read_sources(root: Path, paths: set[str]) -> dict[str, bytes]:
+def _read_validated(paths_by_key: Mapping[str, Path], error: str) -> dict[str, bytes]:
     try:
-        sources = {path: (root / path).read_bytes() for path in paths}
+        sources = {key: path.read_bytes() for key, path in paths_by_key.items()}
     except OSError as exc:
-        raise RuntimeError("Unable to snapshot profiled source") from exc
+        raise RuntimeError(error) from exc
     _validate_sources(sources)
     return sources
 
 
+def _read_sources(root: Path, paths: set[str]) -> dict[str, bytes]:
+    return _read_validated(
+        {path: root / path for path in paths}, "Unable to snapshot profiled source"
+    )
+
+
 def _validate_source_paths(paths: set[Path], root: Path) -> None:
-    try:
-        sources = {_display_path(path, root): path.read_bytes() for path in paths}
-    except OSError as exc:
-        raise RuntimeError("Unable to verify included source") from exc
-    _validate_sources(sources)
+    _read_validated(
+        {_display_path(path, root): path for path in paths},
+        "Unable to verify included source",
+    )
 
 
 def _validate_sources(sources: Mapping[str, bytes]) -> None:

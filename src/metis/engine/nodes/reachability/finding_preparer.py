@@ -73,7 +73,7 @@ def annotate_findings_with_source_paths(
     annotators = {}
     reverse_edges = None
     for finding in findings:
-        target_file = finding.primary_file or finding.sink_file or finding.source_file
+        target_file = finding.primary_file
         if not target_file:
             annotated.append(finding)
             continue

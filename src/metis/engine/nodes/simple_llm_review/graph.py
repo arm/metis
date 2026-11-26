@@ -11,9 +11,6 @@ from pathlib import Path
 from typing import Any
 from typing import cast
 
-from langgraph.cache.memory import InMemoryCache
-from langgraph.graph import END
-from langgraph.graph import StateGraph
 from pydantic import validate_call
 
 from metis import runlog
@@ -26,11 +23,11 @@ from metis.engine.model_tool_runner import ModelInputLimitError
 from metis.engine.nodes.simple_llm_review.prompt import build_review_system_prompt
 from metis.engine.nodes.simple_llm_review.prompt import normalize_review_fields
 from metis.engine.nodes.simple_llm_review.prompt import sanitize_review_payload
+from metis.engine.nodes.simple_llm_review.prompt import security_review_report_prompt
 from metis.engine.source import SourceMap
 from metis.engine.stages.review.models import ReviewRequest
 from metis.engine.stages.review.models import ReviewState
-from metis.engine.threat_context_retrieval import format_threat_model_context
-from metis.engine.threat_context_retrieval import threat_model_review_scope_guidance
+from metis.engine.threat_context_retrieval import threat_model_prompt_sections
 from metis.memory.fingerprints import stable_json_hash
 from metis.runlog.workflow import traced_step
 from metis.usage import usage_operation
@@ -84,14 +81,9 @@ def _build_body_text(state: ReviewState) -> str:
     """
     snippet = state.get("snippet", "") or ""
     mode = state.get("mode", "file")
-    threat_records = state.get("threat_model_context", [])
-    threat_model_context = format_threat_model_context(threat_records)
-    scope_guidance = threat_model_review_scope_guidance(threat_records)
-    threat_sections = []
-    if threat_model_context:
-        threat_sections.extend(["THREAT_MODEL_CONTEXT:", threat_model_context, ""])
-    if scope_guidance:
-        threat_sections.extend(["THREAT_MODEL_SCOPE_GUIDANCE:", scope_guidance, ""])
+    threat_sections = threat_model_prompt_sections(
+        state.get("threat_model_context", [])
+    )
 
     if mode == "file":
         file_path = state.get("file_path", "") or ""
@@ -200,6 +192,14 @@ def review_node_parse(state: ReviewState) -> ReviewState:
     return new_state
 
 
+def _ordered_state(state: ReviewState) -> ReviewState:
+    """Materialize the state in ReviewState field order with only present keys."""
+    return cast(
+        ReviewState,
+        {key: state[key] for key in ReviewState.__annotations__ if key in state},
+    )
+
+
 class ReviewGraph:
     def __init__(
         self,
@@ -228,9 +228,7 @@ class ReviewGraph:
         )
         self._schema_prompt_section = review_schema_prompt()
 
-        self.report_prompt = self.plugin_config.get("general_prompts", {}).get(
-            "security_review_report", ""
-        )
+        self.report_prompt = security_review_report_prompt(self.plugin_config)
 
         get_chat_model = getattr(self.llm_provider, "get_chat_model", None)
         if not callable(get_chat_model):
@@ -238,7 +236,6 @@ class ReviewGraph:
                 "Unable to create review runnable; LangChain chat provider required."
             )
         self._prompt_runner = JsonPromptRunner(self.llm_provider)
-        self._app_cache: dict[tuple[int, str], Any] = {}
 
     def _invoke_review_model(
         self, system_prompt, body_text, *, navigation_evidence=None
@@ -287,34 +284,20 @@ class ReviewGraph:
                 )
             )
 
-    def _build_app(self, language_prompts, default_prompt_key, build_prompt):
-        cache_key = (id(language_prompts), default_prompt_key)
-        cached = self._app_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        graph = StateGraph(cast(Any, ReviewState))
-        review = partial(
-            review_node_llm,
-            invoke_review=self._invoke_review_model,
-        )
-        parse = review_node_parse
-
-        graph.add_node(
-            "build_prompt",
+    def _run_steps(self, state: ReviewState, build_prompt) -> ReviewState:
+        steps = (
             traced_step("simple_llm_review", "build_prompt", build_prompt),
+            traced_step(
+                "simple_llm_review",
+                "review",
+                partial(review_node_llm, invoke_review=self._invoke_review_model),
+            ),
+            traced_step("simple_llm_review", "parse", review_node_parse),
         )
-        graph.add_node("review", traced_step("simple_llm_review", "review", review))
-        graph.add_node("parse", traced_step("simple_llm_review", "parse", parse))
-
-        graph.set_entry_point("build_prompt")
-        graph.add_edge("build_prompt", "review")
-        graph.add_edge("review", "parse")
-        graph.add_edge("parse", END)
-
-        compiled = graph.compile(cache=InMemoryCache())
-        self._app_cache[cache_key] = compiled
-        return compiled
+        out = state
+        for step in steps:
+            out = step(_ordered_state(out))
+        return _ordered_state(out)
 
     def checkpoint_key(self, request: ReviewRequest) -> str | None:
         navigation_tools = self._navigation_tools()
@@ -511,7 +494,6 @@ class ReviewGraph:
             )
         chunks = deque(self._chunks(snippet))
         accumulated: list[dict] = []
-        app = self._build_app(language_prompts, default_prompt_key, build_prompt)
 
         def log_findings(group):
             runlog.event(
@@ -555,7 +537,7 @@ class ReviewGraph:
                         },
                     ) as workflow_span:
                         runlog.bump("workflow_runs")
-                        out = app.invoke(state)
+                        out = self._run_steps(state, build_prompt)
                         workflow_span.end(attributes={"final_state": out})
                 except ModelInputLimitError:
                     needs_split = True
@@ -578,7 +560,7 @@ class ReviewGraph:
                     accumulated.extend(chunk_reviews)
                 else:
                     group = {
-                        "file": relative_file or file_path,
+                        "file": rel_path,
                         "file_path": file_path,
                         "reviews": [
                             normalize_review_fields(review) for review in chunk_reviews
@@ -587,9 +569,8 @@ class ReviewGraph:
                     emit(group)
                     log_findings(group)
 
-        file_display = relative_file if relative_file else file_path
         result: dict[str, Any] = {
-            "file": file_display,
+            "file": rel_path,
             "file_path": file_path,
             "reviews": accumulated,
         }

@@ -5,14 +5,20 @@ from threading import Lock
 from typing import Any
 
 
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
+
+
+def _empty_bucket() -> dict[str, int]:
+    return dict.fromkeys(_TOKEN_KEYS, 0)
+
+
 def _empty_summary() -> dict[str, Any]:
-    return {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "by_model": {},
-        "by_operation": {},
-    }
+    return {**_empty_bucket(), "by_model": {}, "by_operation": {}}
+
+
+def _add(bucket: dict[str, Any], tokens: dict[str, int]) -> None:
+    for key in _TOKEN_KEYS:
+        bucket[key] += tokens[key]
 
 
 def _increment(summary: dict[str, Any], event: dict[str, Any]) -> None:
@@ -21,34 +27,18 @@ def _increment(summary: dict[str, Any], event: dict[str, Any]) -> None:
     total_tokens = int(event.get("total_tokens") or (input_tokens + output_tokens))
     model_name = str(event.get("model") or "unknown")
     operation = str(event.get("operation") or "llm")
+    tokens = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
 
-    summary["input_tokens"] += input_tokens
-    summary["output_tokens"] += output_tokens
-    summary["total_tokens"] += total_tokens
-
-    model_summary = summary["by_model"].setdefault(
-        model_name,
-        {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-        },
-    )
-    model_summary["input_tokens"] += input_tokens
-    model_summary["output_tokens"] += output_tokens
-    model_summary["total_tokens"] += total_tokens
-
-    operation_summary = summary["by_operation"].setdefault(
-        operation,
-        {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-        },
-    )
-    operation_summary["input_tokens"] += input_tokens
-    operation_summary["output_tokens"] += output_tokens
-    operation_summary["total_tokens"] += total_tokens
+    for bucket in (
+        summary,
+        summary["by_model"].setdefault(model_name, _empty_bucket()),
+        summary["by_operation"].setdefault(operation, _empty_bucket()),
+    ):
+        _add(bucket, tokens)
 
 
 class UsageCollector:

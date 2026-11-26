@@ -106,6 +106,29 @@ def sanitize_review_payload(payload):
     return sanitized
 
 
+def security_review_report_prompt(plugin_config) -> str:
+    return plugin_config.get("general_prompts", {}).get("security_review_report", "")
+
+
+def review_system_prompt(
+    plugin_config,
+    language_prompts,
+    default_prompt_key,
+    custom_prompt_text,
+    custom_guidance_precedence,
+    schema_prompt_section,
+):
+    """Compose the review system prompt using the plugin configuration's report prompt."""
+    return build_review_system_prompt(
+        language_prompts,
+        default_prompt_key,
+        security_review_report_prompt(plugin_config),
+        custom_prompt_text,
+        custom_guidance_precedence,
+        schema_prompt_section,
+    )
+
+
 def build_review_system_prompt(
     language_prompts,
     default_prompt_key,
