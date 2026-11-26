@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -723,6 +724,16 @@ def test_validator_accepts_complete_trace_and_blobs(tmp_path):
     assert summary.events == 1
     assert summary.blobs >= 1
     assert summary.status == "ok"
+
+
+def test_large_collection_limit_keeps_trace_complete(tmp_path):
+    config = _exact_config(tmp_path, max_collection_items=sys.maxsize + 1)
+    data = {"a": 1, "b": 2}
+    with runlog.open_runlog(config) as session:
+        runlog.event("payload", {"data": data})
+
+    assert runlog.validate_runlog(session.ndjson_path).events == 1
+    assert _records(session)[1]["attributes"]["data"] == data
 
 
 def test_ended_span_rejects_new_activity(tmp_path):

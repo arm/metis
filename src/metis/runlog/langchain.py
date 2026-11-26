@@ -10,7 +10,7 @@ from typing import Any
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
 
-from metis.utils import safe_int
+from metis.utils import positive_int
 
 from .session import Span
 from .session import bump
@@ -35,12 +35,7 @@ class RunLogCallbackHandler(BaseCallbackHandler):
         self._start(
             run_id,
             serialized,
-            {
-                "messages": messages,
-                "invocation": kwargs.get("invocation_params") or {},
-                "tags": kwargs.get("tags") or [],
-                "metadata": kwargs.get("metadata") or {},
-            },
+            {"messages": messages, **_start_attributes(kwargs)},
         )
         return None
 
@@ -55,12 +50,7 @@ class RunLogCallbackHandler(BaseCallbackHandler):
         self._start(
             run_id,
             serialized,
-            {
-                "prompts": prompts,
-                "invocation": kwargs.get("invocation_params") or {},
-                "tags": kwargs.get("tags") or [],
-                "metadata": kwargs.get("metadata") or {},
-            },
+            {"prompts": prompts, **_start_attributes(kwargs)},
         )
         return None
 
@@ -159,13 +149,13 @@ def extract_response_usage(response: Any) -> dict[str, int]:
     token_usage = llm_output.get("token_usage") if isinstance(llm_output, dict) else {}
     if not isinstance(token_usage, dict):
         token_usage = {}
-    input_tokens = _positive_int(
+    input_tokens = positive_int(
         token_usage.get("prompt_tokens") or token_usage.get("input_tokens")
     )
-    output_tokens = _positive_int(
+    output_tokens = positive_int(
         token_usage.get("completion_tokens") or token_usage.get("output_tokens")
     )
-    total_tokens = _positive_int(token_usage.get("total_tokens"))
+    total_tokens = positive_int(token_usage.get("total_tokens"))
     if not any((input_tokens, output_tokens, total_tokens)):
         for generation_list in getattr(response, "generations", None) or []:
             if not isinstance(generation_list, Iterable):
@@ -175,9 +165,9 @@ def extract_response_usage(response: Any) -> dict[str, int]:
                 metadata = getattr(message, "usage_metadata", None) or {}
                 if not isinstance(metadata, dict):
                     continue
-                input_tokens += _positive_int(metadata.get("input_tokens"))
-                output_tokens += _positive_int(metadata.get("output_tokens"))
-                total_tokens += _positive_int(metadata.get("total_tokens"))
+                input_tokens += positive_int(metadata.get("input_tokens"))
+                output_tokens += positive_int(metadata.get("output_tokens"))
+                total_tokens += positive_int(metadata.get("total_tokens"))
     if total_tokens <= 0:
         total_tokens = input_tokens + output_tokens
     if not any((input_tokens, output_tokens, total_tokens)):
@@ -232,6 +222,9 @@ def _response_payload(response: Any) -> dict[str, Any]:
     }
 
 
-def _positive_int(value: Any) -> int:
-    parsed = safe_int(value or 0, 0)
-    return parsed if parsed > 0 else 0
+def _start_attributes(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "invocation": kwargs.get("invocation_params") or {},
+        "tags": kwargs.get("tags") or [],
+        "metadata": kwargs.get("metadata") or {},
+    }

@@ -8,10 +8,19 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from typing import TypeGuard
 
+from .schema import CONTENT_MODES
 from .schema import SCHEMA_VERSION
+from .schema import SPAN_STATUSES
 
-_SPAN_STATUSES = {"ok", "error", "cancelled", "inconclusive"}
+
+def _is_int(value: Any) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> TypeGuard[int | float]:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 class TraceValidationError(ValueError):
@@ -61,16 +70,13 @@ def validate_runlog(path: str | Path, *, verify_blobs: bool = True) -> TraceSumm
             _require(record.get("seq") == record_count, line_number, "sequence")
             _required_string(record, "ts", line_number)
             _require(
-                isinstance(record.get("mono_ns"), int)
-                and not isinstance(record.get("mono_ns"), bool)
-                and record["mono_ns"] >= 0,
+                _is_int(record.get("mono_ns")) and record["mono_ns"] >= 0,
                 line_number,
                 "non-negative mono_ns",
             )
             _required_string(record, "thread", line_number)
             _require(
-                isinstance(record.get("thread_id"), int)
-                and not isinstance(record.get("thread_id"), bool),
+                _is_int(record.get("thread_id")),
                 line_number,
                 "integer thread_id",
             )
@@ -140,12 +146,10 @@ def validate_runlog(path: str | Path, *, verify_blobs: bool = True) -> TraceSumm
                     "stable explanation",
                 )
                 status = _required_string(record, "status", line_number)
-                _require(status in _SPAN_STATUSES, line_number, "known span status")
+                _require(status in SPAN_STATUSES, line_number, "known span status")
                 duration = record.get("duration_ms")
                 _require(
-                    isinstance(duration, (int, float))
-                    and not isinstance(duration, bool)
-                    and duration >= 0,
+                    _is_number(duration) and duration >= 0,
                     line_number,
                     "non-negative duration_ms",
                 )
@@ -230,8 +234,8 @@ def _validate_meta(trace_path: Path, run_id: str) -> str:
     _meta_require(metadata.get("run_id") == run_id, "metadata run_id")
     _meta_require(metadata.get("complete") is True, "complete metadata")
     status = metadata.get("status")
-    _meta_require(status in _SPAN_STATUSES, "known metadata status")
-    _meta_require(metadata.get("content") in {"full", "metadata"}, "content mode")
+    _meta_require(status in SPAN_STATUSES, "known metadata status")
+    _meta_require(metadata.get("content") in CONTENT_MODES, "content mode")
     _meta_require(isinstance(metadata.get("started_at"), str), "started_at")
     _meta_require(isinstance(metadata.get("ended_at"), str), "ended_at")
     _meta_require(isinstance(metadata.get("metadata"), dict), "metadata payload")
@@ -272,11 +276,7 @@ def _validate_blob(base: Path, reference: str, metadata: dict[str, Any]) -> None
     if not path.is_file():
         raise TraceValidationError(f"Blob reference does not exist: {reference}")
     expected_bytes = metadata.get("bytes")
-    if (
-        not isinstance(expected_bytes, int)
-        or isinstance(expected_bytes, bool)
-        or expected_bytes < 0
-    ):
+    if not _is_int(expected_bytes) or expected_bytes < 0:
         raise TraceValidationError(f"Blob byte count is invalid: {reference}")
     expected_digest = metadata.get("sha256")
     if not isinstance(expected_digest, str) or len(expected_digest) != 64:
