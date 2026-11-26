@@ -134,13 +134,18 @@ def _tiktoken_encoding_for(model: str | None):
     return tiktoken.get_encoding(_DEFAULT_TIKTOKEN_ENCODING)
 
 
-def _chars_per_token_for(model: str | None) -> float:
+def _family_chars_per_token(model: str | None) -> float | None:
     if model:
         lowered = model.lower()
         for markers, ratio in _MODEL_FAMILY_CHARS_PER_TOKEN:
             if any(m in lowered for m in markers):
                 return ratio
-    return _HEURISTIC_CHARS_PER_TOKEN
+    return None
+
+
+def _chars_per_token_for(model: str | None) -> float:
+    ratio = _family_chars_per_token(model)
+    return _HEURISTIC_CHARS_PER_TOKEN if ratio is None else ratio
 
 
 def heuristic_token_count(
@@ -181,11 +186,9 @@ def count_tokens(text: str, model: str | None = None) -> int:
     """
     if _is_anthropic_model(model):
         return anthropic_token_count(text)
-    if model:
-        lowered = model.lower()
-        for markers, ratio in _MODEL_FAMILY_CHARS_PER_TOKEN:
-            if any(m in lowered for m in markers):
-                return heuristic_token_count(text, ratio)
+    ratio = _family_chars_per_token(model)
+    if ratio is not None:
+        return heuristic_token_count(text, ratio)
     return tiktoken_token_count(text, model)
 
 
