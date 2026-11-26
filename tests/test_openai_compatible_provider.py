@@ -189,6 +189,28 @@ def test_chat_model_temperature_uses_resolved_model(
         assert "temperature" not in payload
 
 
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    [(("explicit-model",), {}), (("positional-model",), {"model": "explicit-model"})],
+)
+def test_chat_model_override_skips_default_lookup(monkeypatch, args, kwargs):
+    provider = OpenAICompatibleChatProvider(_chat_config())
+    read_default = Mock(side_effect=RuntimeError("Default model unavailable"))
+    monkeypatch.setattr(
+        OpenAICompatibleChatProvider,
+        "default_model",
+        property(read_default),
+        raising=False,
+    )
+    chat_model = Mock()
+    monkeypatch.setattr("metis.providers.openai_compatible.ChatOpenAI", chat_model)
+
+    provider.get_chat_model(*args, **kwargs)
+
+    assert chat_model.call_args.kwargs["model"] == "explicit-model"
+    read_default.assert_not_called()
+
+
 class _PayloadRecordingProvider(OpenAICompatibleChatProvider):
     def __init__(self, config: OpenAICompatibleChatConfig) -> None:
         super().__init__(config)

@@ -90,9 +90,7 @@ class AnthropicProvider(ChatProvider):
                 "Anthropic provider requires the langchain-anthropic extra."
             ) from exc
 
-        requested_model = kwargs.pop("model", None)
-        positional_model = args[0] if args else None
-        model_name = requested_model or positional_model or self.default_model
+        model_name = self._resolve_model_name(args, kwargs)
         params = claude_chat_model_kwargs(
             kwargs,
             model=model_name,
