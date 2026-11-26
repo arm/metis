@@ -32,6 +32,7 @@ from .contracts import NodeInvocation
 from .contracts import NodeRegistration
 from .contracts import NodeResult
 from .contracts import StageName
+from .contracts import _raise_if_cancelled
 from .contracts import annotation_allows_none
 from .contracts import annotation_adapter
 
@@ -75,8 +76,7 @@ def run_stage(
         completed: set[str] = set()
         pending = {node.name for node in planned.nodes}
         stage_started = perf_counter()
-        if context.runtime.is_cancelled():
-            raise CancelledError("Execution stage was cancelled")
+        _raise_if_cancelled(context.runtime, "Execution stage was cancelled")
         stage_context = replace(context, runtime=context.runtime._with_cancellation())
         _progress(
             stage_context,
@@ -92,8 +92,9 @@ def run_stage(
         failure: BaseException | None = None
         try:
             while pending or running:
-                if stage_context.runtime.is_cancelled():
-                    raise CancelledError("Execution stage was cancelled")
+                _raise_if_cancelled(
+                    stage_context.runtime, "Execution stage was cancelled"
+                )
                 for node in planned.nodes:
                     if node.name not in pending or not node.dependencies <= completed:
                         continue
@@ -137,8 +138,7 @@ def run_stage(
                         and status is ExecutionStatus.OK
                     ):
                         status = ExecutionStatus.INCONCLUSIVE
-            if stage_context.runtime.is_cancelled():
-                raise CancelledError("Execution stage was cancelled")
+            _raise_if_cancelled(stage_context.runtime, "Execution stage was cancelled")
         except BaseException as exc:
             failure = exc
         finally:
@@ -208,14 +208,12 @@ def run_stage(
                 "duration_seconds": perf_counter() - stage_started,
             },
         )
-        if stage_context.runtime.is_cancelled():
-            raise CancelledError("Execution stage was cancelled")
+        _raise_if_cancelled(stage_context.runtime, "Execution stage was cancelled")
         stage_span.end(
             status=status.value,
             attributes={"outputs": stage_outputs, "diagnostics": diagnostics},
         )
-        if stage_context.runtime.is_cancelled():
-            raise CancelledError("Execution stage was cancelled")
+        _raise_if_cancelled(stage_context.runtime, "Execution stage was cancelled")
         return StageRun(status, stage_outputs, tuple(diagnostics))
 
 
@@ -263,8 +261,7 @@ def _run_node(
         node_error: Exception | None = None
         diagnostics: tuple[ExecutionDiagnostic, ...] = ()
         try:
-            if context.runtime.is_cancelled():
-                raise CancelledError("Execution stage was cancelled")
+            _raise_if_cancelled(context.runtime, "Execution stage was cancelled")
             inputs = _resolve_inputs(node, outputs, initial_inputs)
             progress = context.callbacks.progress
             node_context = replace(
@@ -329,8 +326,9 @@ def _run_node(
                     node.registration,
                     result.outputs,
                 )
-                if node_context.runtime.is_cancelled():
-                    raise CancelledError("Execution node was cancelled")
+                _raise_if_cancelled(
+                    node_context.runtime, "Execution node was cancelled"
+                )
         except CancelledError:
             raise
         except Exception as exc:
@@ -357,11 +355,8 @@ def _run_node(
             for diagnostic in diagnostics:
                 context.callbacks.diagnostic(diagnostic)
         # Job failures also signal their scope; preserve those as node errors.
-        if (
-            node_status is not ExecutionStatus.ERROR
-            and node_context.runtime.is_cancelled()
-        ):
-            raise CancelledError("Execution node was cancelled")
+        if node_status is not ExecutionStatus.ERROR:
+            _raise_if_cancelled(node_context.runtime, "Execution node was cancelled")
         node_span.end(
             status=node_status.value,
             attributes={
@@ -371,11 +366,8 @@ def _run_node(
             },
             exc=node_error,
         )
-        if (
-            node_status is not ExecutionStatus.ERROR
-            and node_context.runtime.is_cancelled()
-        ):
-            raise CancelledError("Execution node was cancelled")
+        if node_status is not ExecutionStatus.ERROR:
+            _raise_if_cancelled(node_context.runtime, "Execution node was cancelled")
         return NodeResult(node_outputs, node_status, diagnostics)
 
 

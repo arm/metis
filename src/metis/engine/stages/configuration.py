@@ -22,6 +22,8 @@ from metis.sarif.models import SarifPayload
 from ..execution.contracts import BUILTIN_STAGE_NAMES
 from ..execution.contracts import ResultFormat
 from ..execution.contracts import StageName
+from ..execution.contracts import _freeze_mappings
+from ..execution.contracts import _require_none
 from ..execution.contracts import annotation_allows_none
 from ..execution.compiler import _annotations_compatible
 from ..execution.graph import StageConfiguration
@@ -41,21 +43,7 @@ class _ResolvedStageContract:
     required_outputs: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "initial_inputs",
-            MappingProxyType(dict(self.initial_inputs)),
-        )
-        object.__setattr__(
-            self,
-            "stage_inputs",
-            MappingProxyType(dict(self.stage_inputs)),
-        )
-        object.__setattr__(
-            self,
-            "required_outputs",
-            MappingProxyType(dict(self.required_outputs)),
-        )
+        _freeze_mappings(self, "initial_inputs", "stage_inputs", "required_outputs")
 
 
 BUILTIN_STAGE_CONTRACTS: Mapping[StageName, _ResolvedStageContract] = MappingProxyType(
@@ -165,17 +153,16 @@ class ExecutionConfiguration(BaseModel):
             contract = contracts[name]
             unknown_inputs = set(stage.inputs) - set(contract.stage_inputs)
             required_inputs = required_stage_inputs[name]
-            missing_inputs = required_inputs - set(stage.inputs)
-            if missing_inputs:
-                raise ValueError(
-                    f"Execution stage {name!r} requires inputs: "
-                    f"{', '.join(sorted(missing_inputs))}"
-                )
-            if unknown_inputs:
-                raise ValueError(
-                    f"Execution stage {name!r} does not accept inputs: "
-                    f"{', '.join(sorted(unknown_inputs))}"
-                )
+            _require_none(
+                required_inputs - set(stage.inputs),
+                lambda names: f"Execution stage {name!r} requires inputs: {names}",
+            )
+            _require_none(
+                unknown_inputs,
+                lambda names: (
+                    f"Execution stage {name!r} does not accept inputs: {names}"
+                ),
+            )
             missing_execution_inputs = {
                 input_name
                 for input_name in contract.required_execution_inputs
@@ -186,13 +173,13 @@ class ExecutionConfiguration(BaseModel):
                 raise ValueError(
                     f"Execution input {input_name!r} is required by {name}"
                 )
-            missing = set(stage.depends_on) - enabled
-            if missing:
-                unavailable = ", ".join(sorted(missing))
-                raise ValueError(
+            _require_none(
+                set(stage.depends_on) - enabled,
+                lambda unavailable: (
                     f"Execution stage {name!r} depends on unavailable stages: "
                     f"{unavailable}"
-                )
+                ),
+            )
         for name, stage in configured_stages:
             configured_filenames = [
                 node_name
@@ -246,12 +233,10 @@ class ExecutionConfiguration(BaseModel):
                     raise ValueError(
                         f"Execution stage {name!r} has invalid input source {source!r}"
                     )
-        unknown_config_stages = set(self.node_configuration) - enabled
-        if unknown_config_stages:
-            names = ", ".join(sorted(unknown_config_stages))
-            raise ValueError(
-                f"Node configuration refers to unavailable stages: {names}"
-            )
+        _require_none(
+            set(self.node_configuration) - enabled,
+            lambda names: f"Node configuration refers to unavailable stages: {names}",
+        )
         self.stage_order()
         return self
 

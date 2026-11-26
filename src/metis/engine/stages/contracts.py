@@ -6,10 +6,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
-from types import MappingProxyType
 from typing import Any
 
-from ..execution.contracts import annotation_adapter
+from ..execution.contracts import _freeze_mappings
+from ..execution.contracts import _validate_ports
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,27 +18,12 @@ class StageContract:
     required_outputs: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for port in (*self.inputs, *self.required_outputs):
-            if not isinstance(port, str) or not port.isidentifier():
-                raise ValueError(f"Execution stage contract has invalid port {port!r}")
-        for port, annotation in (*self.inputs.items(), *self.required_outputs.items()):
-            try:
-                annotation_adapter(annotation)
-            except Exception as exc:
-                raise TypeError(
-                    f"Execution stage contract port {port!r} has an unsupported "
-                    f"annotation: {annotation!r}"
-                ) from exc
-        object.__setattr__(
-            self,
-            "inputs",
-            MappingProxyType(dict(self.inputs)),
+        _validate_ports(
+            (*self.inputs.items(), *self.required_outputs.items()),
+            owner="Execution stage contract",
+            describe=lambda port: f"Execution stage contract port {port!r}",
         )
-        object.__setattr__(
-            self,
-            "required_outputs",
-            MappingProxyType(dict(self.required_outputs)),
-        )
+        _freeze_mappings(self, "inputs", "required_outputs")
 
 
 @dataclass(frozen=True, slots=True)

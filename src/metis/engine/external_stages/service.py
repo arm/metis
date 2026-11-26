@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from metis.engine.execution.contracts import _sorted_names
 from metis.sarif.triage import apply_triage_result
 from metis.json_io import load_json_object_file
 from metis.sarif.validation import load_metis_sarif_file
@@ -236,7 +237,7 @@ class ExternalStageService:
         try:
             return self.config.analysis[name]
         except KeyError as exc:
-            available = ", ".join(sorted(self.config.analysis)) or "<none>"
+            available = _sorted_names(self.config.analysis) or "<none>"
             raise ValueError(
                 f"Unknown external analysis stage {name!r}; available: {available}"
             ) from exc
@@ -245,7 +246,7 @@ class ExternalStageService:
         try:
             return self.config.validation[name]
         except KeyError as exc:
-            available = ", ".join(sorted(self.config.validation)) or "<none>"
+            available = _sorted_names(self.config.validation) or "<none>"
             raise ValueError(
                 f"Unknown external validation stage {name!r}; available: {available}"
             ) from exc
