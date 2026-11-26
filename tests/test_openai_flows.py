@@ -3,6 +3,7 @@
 
 import csv
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -18,8 +19,23 @@ from metis.configuration import load_metis_config
 from metis.sarif.triage import extract_findings
 
 
+def _git(*arguments, cwd, env=None):
+    return subprocess.run(
+        ["git", "-c", "core.hooksPath=/dev/null", *arguments],
+        cwd=cwd,
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    ).stdout
+
+
 @pytest.fixture
 def openai_cli(tmp_path, monkeypatch):
+    # Isolate both setup commands and Metis from an enclosing commit hook.
+    for variable in _git("rev-parse", "--local-env-vars", cwd=tmp_path).splitlines():
+        monkeypatch.delenv(variable, raising=False)
     root = tmp_path / "repository [literal] # ü"
     root.mkdir()
     source = root / "literal # %2F ü.c"
@@ -151,6 +167,35 @@ def openai_cli(tmp_path, monkeypatch):
         return requests
 
     return root, source, config, run
+
+
+@pytest.mark.parametrize("hook_environment", ["private-index", "repository"])
+def test_openai_cli_preserves_enclosing_repository(
+    tmp_path, monkeypatch, request, hook_environment
+):
+    outer = tmp_path / "enclosing repository"
+    outer.mkdir()
+    (outer / "outside.c").write_text("int outside;\n")
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    _git("init", cwd=outer, env=environment)
+    _git("add", "--", "outside.c", cwd=outer, env=environment)
+    index = outer / ".git" / "index"
+    original_index = index.read_bytes()
+    monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+    if hook_environment == "repository":
+        for variable in ("GIT_DIR", "GIT_COMMON_DIR"):
+            monkeypatch.setenv(variable, str(outer / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(outer))
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(outer / ".git" / "objects"))
+
+    root, source, _config, _run = request.getfixturevalue("openai_cli")
+    _git("init", cwd=root)
+    _git("add", "--", source.name, cwd=root)
+
+    assert _git("ls-files", "-z", cwd=root) == f"{source.name}\0"
+    assert index.read_bytes() == original_index
 
 
 def review_response(source):
@@ -309,13 +354,7 @@ def test_combined_cli_refreshes_and_reuses_repository_context(
                 "Require buffer bounds checks",
             ],
         ):
-            subprocess.run(
-                ["git", "-c", "core.hooksPath=/dev/null", *arguments],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+            _git(*arguments, cwd=root)
     reviews = review_response(source)
     decisions = [
         (None, reviews),

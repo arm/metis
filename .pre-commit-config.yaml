@@ -41,6 +41,7 @@ repos:
     hooks:
       - id: Test Coverage
         name: test+coverage
+        stages: [manual]
         entry: uv run --no-sync pytest --cov=src --cov-report=term --cov-fail-under=20
         language: system
         types: [python]

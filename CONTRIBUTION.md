@@ -59,13 +59,25 @@ uv run --no-sync ruff check src/metis/configuration.py tests/test_configuration.
 uv run --no-sync ruff format --check src/metis/configuration.py tests/test_configuration.py
 ```
 
-Replace those paths with the files for your change. Before submitting when the
-worktree contains no unrelated changes, run the full local pre-commit suite:
+Replace those paths with the files for your change. Commit hooks run lint and
+hygiene checks only; the full test suite and coverage run explicitly at the
+`manual` stage. No `SKIP` setting is needed for normal commits or focused hook
+runs.
+
+Before submitting when the worktree contains no unrelated changes, run both
+commands below. CI runs these as separate steps:
 
 ```bash
 uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+uv run --no-sync pre-commit run --hook-stage manual 'Test Coverage' --all-files --show-diff-on-failure
 ```
 
 The configured hooks and CI workflow are the authority for current checks and
 supported test environments. Some hooks modify files; inspect the diff and
 rerun. CodeQL provides additional security analysis.
+
+Temporary-repository fixtures must clear inherited repository-local Git variables
+before running Git or Metis. The `openai_cli` fixture uses
+`git rev-parse --local-env-vars` to isolate its repository from enclosing hooks,
+including hooks that use a private index. Git stderr remains visible in pytest
+failure output.

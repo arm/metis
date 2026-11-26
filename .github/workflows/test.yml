@@ -47,3 +47,7 @@ jobs:
       - name: Run pre-commit checks
         run: |
           uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run tests with coverage
+        run: |
+          uv run --no-sync pre-commit run --hook-stage manual 'Test Coverage' --all-files --show-diff-on-failure
