@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from collections.abc import Collection
+from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from concurrent.futures import CancelledError
@@ -435,6 +437,53 @@ def _not_cancelled() -> bool:
     return False
 
 
+def _freeze_mappings(instance: object, *names: str) -> None:
+    """Replace the named mapping fields of a frozen dataclass with read-only copies."""
+    for name in names:
+        object.__setattr__(
+            instance, name, MappingProxyType(dict(getattr(instance, name)))
+        )
+
+
+def _validate_ports(
+    ports: Iterable[tuple[Any, Any]],
+    *,
+    describe: Callable[[Any], str],
+    owner: str | None = None,
+) -> None:
+    """Check port names (when ``owner`` is given) and port annotations.
+
+    ``describe(port)`` names the port in the unsupported-annotation error.
+    """
+    ports = tuple(ports)
+    if owner is not None:
+        for port, _annotation in ports:
+            if not isinstance(port, str) or not port.isidentifier():
+                raise ValueError(f"{owner} has invalid port {port!r}")
+    for port, annotation in ports:
+        try:
+            annotation_adapter(annotation)
+        except Exception as exc:
+            raise TypeError(
+                f"{describe(port)} has an unsupported annotation: {annotation!r}"
+            ) from exc
+
+
+def _sorted_names(items: Iterable[str]) -> str:
+    return ", ".join(sorted(items))
+
+
+def _require_none(items: Collection[str], message: Callable[[str], str]) -> None:
+    """Raise ``ValueError`` built from the sorted, comma-joined ``items`` if any."""
+    if items:
+        raise ValueError(message(_sorted_names(items)))
+
+
+def _raise_if_cancelled(runtime: NodeRuntime, message: str) -> None:
+    if runtime.is_cancelled():
+        raise CancelledError(message)
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
     status: ExecutionStatus
@@ -455,11 +504,7 @@ class NodeRuntime:
     is_cancelled: Callable[[], bool] = _not_cancelled
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "chat_model_kwargs",
-            MappingProxyType(dict(self.chat_model_kwargs)),
-        )
+        _freeze_mappings(self, "chat_model_kwargs")
 
     def _with_cancellation(self) -> NodeRuntime:
         """Own a child signal shared by the runtime and its job handle."""
@@ -491,11 +536,7 @@ class NodeContext:
     output: StreamingOutput | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "capabilities",
-            MappingProxyType(dict(self.capabilities)),
-        )
+        _freeze_mappings(self, "capabilities")
 
     @property
     def jobs(self) -> NodeJobs:
@@ -504,8 +545,7 @@ class NodeContext:
         return self.runtime.jobs
 
     def report_progress(self, event: Mapping[str, object]) -> None:
-        if self.runtime.is_cancelled():
-            raise CancelledError("Execution stage was cancelled")
+        _raise_if_cancelled(self.runtime, "Execution stage was cancelled")
         if self.callbacks.progress is not None:
             self.callbacks.progress(event)
 
@@ -562,19 +602,11 @@ class NodeRegistration:
             raise TypeError(
                 "Execution node inputs, outputs and capabilities must be mappings"
             )
-        for port in (*self.inputs, *self.outputs):
-            if not isinstance(port, str) or not port.isidentifier():
-                raise ValueError(
-                    f"Execution node {self.name!r} has invalid port {port!r}"
-                )
-        for port, annotation in (*self.inputs.items(), *self.outputs.items()):
-            try:
-                annotation_adapter(annotation)
-            except Exception as exc:
-                raise TypeError(
-                    f"Execution node {self.name!r} port {port!r} has an unsupported "
-                    f"annotation: {annotation!r}"
-                ) from exc
+        _validate_ports(
+            (*self.inputs.items(), *self.outputs.items()),
+            owner=f"Execution node {self.name!r}",
+            describe=lambda port: f"Execution node {self.name!r} port {port!r}",
+        )
         if isinstance(self.required_when_bound, (str, bytes)):
             raise TypeError("Required-when-bound ports must be a collection of names")
         required_when_bound = frozenset(self.required_when_bound)
@@ -592,10 +624,4 @@ class NodeRegistration:
                     f"Execution node {self.name!r} capability {capability!r} has "
                     f"invalid requirement {requirement!r}"
                 )
-        object.__setattr__(self, "inputs", MappingProxyType(dict(self.inputs)))
-        object.__setattr__(self, "outputs", MappingProxyType(dict(self.outputs)))
-        object.__setattr__(
-            self,
-            "capabilities",
-            MappingProxyType(dict(self.capabilities)),
-        )
+        _freeze_mappings(self, "inputs", "outputs", "capabilities")

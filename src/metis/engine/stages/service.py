@@ -39,6 +39,7 @@ from ..execution.contracts import NodeContext
 from ..execution.contracts import NodeRegistration
 from ..execution.contracts import NodeRuntime
 from ..execution.contracts import StageName
+from ..execution.contracts import _require_none
 from ..execution.contracts import annotation_allows_none
 from ..execution.runner import run_stage
 from ..execution.runner import _validate_value
@@ -432,12 +433,12 @@ class ExecutionGraphService:
             if not plan.output_annotations:
                 raise ValueError(f"Execution stage {stage_name!r} must declare outputs")
             required_outputs = contract.required_outputs
-            missing_outputs = set(required_outputs) - set(plan.output_annotations)
-            if missing_outputs:
-                names = ", ".join(sorted(missing_outputs))
-                raise ValueError(
+            _require_none(
+                set(required_outputs) - set(plan.output_annotations),
+                lambda names: (
                     f"Execution stage {stage_name!r} must declare outputs: {names}"
-                )
+                ),
+            )
             expected_outputs = dict(required_outputs)
             if (
                 stage_name in {"review", "triage"}

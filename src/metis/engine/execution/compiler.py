@@ -21,8 +21,9 @@ from .catalog import NodeCatalog
 from .contracts import CapabilityRequirement
 from .contracts import NodeRegistration
 from .contracts import StageName
+from .contracts import _require_none
+from .contracts import _validate_ports
 from .contracts import annotation_allows_none
-from .contracts import annotation_adapter
 from .contracts import annotation_members
 from .contracts import collection_item_annotation
 from .graph import ConfiguredNode
@@ -59,21 +60,19 @@ def compile_stage(
     initial_inputs: Mapping[str, Any],
     capabilities: Mapping[str, object] | None = None,
 ) -> StagePlan:
-    for input_name, annotation in initial_inputs.items():
-        try:
-            annotation_adapter(annotation)
-        except Exception as exc:
-            raise TypeError(
-                f"Execution stage {stage_name!r} input {input_name!r} has an "
-                f"unsupported annotation: {annotation!r}"
-            ) from exc
+    _validate_ports(
+        initial_inputs.items(),
+        describe=lambda input_name: (
+            f"Execution stage {stage_name!r} input {input_name!r}"
+        ),
+    )
     available_capabilities = capabilities or MappingProxyType({})
-    unknown_configuration = set(configuration) - set(stage.nodes)
-    if unknown_configuration:
-        names = ", ".join(sorted(unknown_configuration))
-        raise ValueError(
+    _require_none(
+        set(configuration) - set(stage.nodes),
+        lambda names: (
             f"Configuration provided for unavailable {stage_name} nodes: {names}"
-        )
+        ),
+    )
     registrations = {name: catalog.resolve(stage_name, name) for name in stage.nodes}
     planned: dict[str, _PlannedNode] = {}
     predecessors: dict[str, set[str]] = {}
@@ -81,41 +80,41 @@ def compile_stage(
         registration = registrations[name]
         configured_capabilities = set(definition.capabilities)
         declared_capabilities = set(registration.capabilities)
-        unsupported_capabilities = configured_capabilities - declared_capabilities
-        if unsupported_capabilities:
-            names = ", ".join(sorted(unsupported_capabilities))
-            raise ValueError(
+        _require_none(
+            configured_capabilities - declared_capabilities,
+            lambda names: (
                 f"Execution node {stage_name}.{name} does not declare "
                 f"capabilities: {names}"
-            )
-        missing_capabilities = {
-            capability
-            for capability, requirement in registration.capabilities.items()
-            if requirement is CapabilityRequirement.REQUIRED
-            and capability not in configured_capabilities
-        }
-        if missing_capabilities:
-            names = ", ".join(sorted(missing_capabilities))
-            raise ValueError(
+            ),
+        )
+        _require_none(
+            {
+                capability
+                for capability, requirement in registration.capabilities.items()
+                if requirement is CapabilityRequirement.REQUIRED
+                and capability not in configured_capabilities
+            },
+            lambda names: (
                 f"Execution node {stage_name}.{name} requires capabilities: {names}"
-            )
-        unavailable_capabilities = configured_capabilities - set(available_capabilities)
-        if unavailable_capabilities:
-            names = ", ".join(sorted(unavailable_capabilities))
-            raise ValueError(
+            ),
+        )
+        _require_none(
+            configured_capabilities - set(available_capabilities),
+            lambda names: (
                 f"Execution node {stage_name}.{name} requested unavailable "
                 f"capabilities: {names}"
-            )
+            ),
+        )
         configuration_values = deepcopy(dict(configuration.get(name, {})))
         node_configuration = registration.configuration.model_validate(
             deepcopy(configuration_values)
         )
-        unknown_inputs = set(definition.inputs) - set(registration.inputs)
-        if unknown_inputs:
-            ports = ", ".join(sorted(unknown_inputs))
-            raise ValueError(
+        _require_none(
+            set(definition.inputs) - set(registration.inputs),
+            lambda ports: (
                 f"Execution node {stage_name}.{name} has unknown inputs: {ports}"
-            )
+            ),
+        )
         input_bindings = _infer_input_bindings(
             stage_name,
             name,
@@ -123,21 +122,21 @@ def compile_stage(
             registrations,
             initial_inputs,
         )
-        missing_inputs = {
-            input_name
-            for input_name, annotation in registration.inputs.items()
-            if input_name not in input_bindings
-            and (
-                input_name not in initial_inputs
-                or initial_inputs[input_name] is type(None)
-            )
-            and not annotation_allows_none(annotation)
-        }
-        if missing_inputs:
-            ports = ", ".join(sorted(missing_inputs))
-            raise ValueError(
+        _require_none(
+            {
+                input_name
+                for input_name, annotation in registration.inputs.items()
+                if input_name not in input_bindings
+                and (
+                    input_name not in initial_inputs
+                    or initial_inputs[input_name] is type(None)
+                )
+                and not annotation_allows_none(annotation)
+            },
+            lambda ports: (
                 f"Execution node {stage_name}.{name} has unbound inputs: {ports}"
-            )
+            ),
+        )
         for input_name in (set(registration.inputs) - set(input_bindings)) & set(
             initial_inputs
         ):
@@ -202,13 +201,13 @@ def compile_stage(
         )
         predecessors[name] = dependencies
     for name, dependencies in predecessors.items():
-        missing = dependencies - set(stage.nodes)
-        if missing:
-            names = ", ".join(sorted(missing))
-            raise ValueError(
+        _require_none(
+            dependencies - set(stage.nodes),
+            lambda names: (
                 f"Execution node {stage_name}.{name} depends on unavailable "
                 f"nodes: {names}"
-            )
+            ),
+        )
         for input_name, binding in planned[name].input_bindings.items():
             for source in _sources(binding):
                 if source.startswith("$inputs."):
